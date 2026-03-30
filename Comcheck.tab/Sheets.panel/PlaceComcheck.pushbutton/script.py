@@ -77,8 +77,6 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             y = SHEET_ORIGIN_Y + (ROWS - 1 - row) * (CELL_H + GAP)
             origin = XYZ(x, y, 0)
 
-            # WARNING: passing 0 for ImageTypeSource - only accepted value per error
-            # WARNING: page_num is 0-based here - if pages are off by 1 change to page_num + 1
             img_opts = ImageTypeOptions(pdf_path, 0, page_num)
             img_opts.Resolution = 150
             img_type_id = ImageType.Create(doc, img_opts)
@@ -86,9 +84,6 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             place_opts = ImagePlacementOptions()
             place_opts.PlacementPoint = BoxPlacement.TopLeft
             place_opts.Location = origin
-            place_opts.FitBoundingBox = True
-            place_opts.WidthScale = CELL_W
-            place_opts.HeightScale = CELL_H
 
             ImageInstance.Create(doc, sheet, img_type_id, place_opts)
 
