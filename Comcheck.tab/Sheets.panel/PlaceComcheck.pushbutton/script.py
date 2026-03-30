@@ -79,7 +79,7 @@ with revit.Transaction("Place Comcheck PDF Pages"):
 
             # THIS IS THE CORRECTED METHOD - ImageTypeOptions is the real API class
             # PageNumber is 1-based (page 1 = first page)
-            img_opts = ImageTypeOptions(pdf_path, False, page_num + 1)
+            img_opts = ImageTypeOptions(pdf_path, ImageTypeSource.Import, page_num + 1)
 
             # WARNING: Resolution is set to 150dpi - change to 72, 150, or 300 if needed
             img_opts.Resolution = 150
