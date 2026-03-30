@@ -77,8 +77,9 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             y = SHEET_ORIGIN_Y + (ROWS - 1 - row) * (CELL_H + GAP)
             origin = XYZ(x, y, 0)
 
-            # FIXED: create options with just the path, then set properties separately
-            img_opts = ImageTypeOptions(pdf_path)
+            # FIXED: path + False (use absolute path) are the 2 required arguments
+            # PageNumber and Resolution set as properties after
+            img_opts = ImageTypeOptions(pdf_path, False)
             # WARNING: PageNumber is 1-based - page 1 = first page
             img_opts.PageNumber = page_num + 1
             img_opts.Resolution = 150
