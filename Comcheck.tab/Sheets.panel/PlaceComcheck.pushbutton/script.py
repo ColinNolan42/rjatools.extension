@@ -11,7 +11,7 @@ from Autodesk.Revit.DB import *
 from Autodesk.Revit.UI import *
 from pyrevit import forms, revit
 import System
-from System import Type, Array
+from System import Array
 
 doc = revit.doc
 uidoc = revit.uidoc
@@ -57,11 +57,9 @@ tb_id = tb_types[0].Id
 # 5. Calculate Sheet Count
 num_sheets = (page_count + PAGES_PER_SHEET - 1) // PAGES_PER_SHEET
 
-# FIXED: use reflection to force the correct constructor overload
-# IronPython keeps picking the wrong one so we call it directly via .NET reflection
-ito_type = System.Type.GetType(
-    "Autodesk.Revit.DB.ImageTypeOptions, RevitAPI"
-)
+# FIXED: get the type directly from the ImageTypeOptions class itself
+# rather than via string lookup which was returning None
+ito_type = ImageTypeOptions.GetType()
 ctor = ito_type.GetConstructor(
     Array[System.Type]([System.String, System.Boolean])
 )
@@ -88,7 +86,6 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             y = SHEET_ORIGIN_Y + (ROWS - 1 - row) * (CELL_H + GAP)
             origin = XYZ(x, y, 0)
 
-            # invoke the constructor directly via reflection
             img_opts = ctor.Invoke(Array[System.Object]([pdf_path, False]))
             img_opts.PageNumber = page_num + 1
             img_opts.Resolution = 150
