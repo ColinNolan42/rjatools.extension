@@ -10,10 +10,8 @@ clr.AddReference('RevitAPIUI')
 from Autodesk.Revit.DB import *
 from Autodesk.Revit.UI import *
 from pyrevit import forms, revit
-
-# FIXED: import System.String so we can explicitly cast the path
 import System
-from System import String
+from System import Type, Array
 
 doc = revit.doc
 uidoc = revit.uidoc
@@ -59,6 +57,15 @@ tb_id = tb_types[0].Id
 # 5. Calculate Sheet Count
 num_sheets = (page_count + PAGES_PER_SHEET - 1) // PAGES_PER_SHEET
 
+# FIXED: use reflection to force the correct constructor overload
+# IronPython keeps picking the wrong one so we call it directly via .NET reflection
+ito_type = System.Type.GetType(
+    "Autodesk.Revit.DB.ImageTypeOptions, RevitAPI"
+)
+ctor = ito_type.GetConstructor(
+    Array[System.Type]([System.String, System.Boolean])
+)
+
 # 6. Create Sheets and Place Pages
 with revit.Transaction("Place Comcheck PDF Pages"):
     for sheet_idx in range(num_sheets):
@@ -81,9 +88,8 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             y = SHEET_ORIGIN_Y + (ROWS - 1 - row) * (CELL_H + GAP)
             origin = XYZ(x, y, 0)
 
-            # FIXED: explicitly cast path to System.String so IronPython
-            # picks the correct constructor overload (String, Boolean)
-            img_opts = ImageTypeOptions(String(pdf_path), False)
+            # invoke the constructor directly via reflection
+            img_opts = ctor.Invoke(Array[System.Object]([pdf_path, False]))
             img_opts.PageNumber = page_num + 1
             img_opts.Resolution = 150
 
