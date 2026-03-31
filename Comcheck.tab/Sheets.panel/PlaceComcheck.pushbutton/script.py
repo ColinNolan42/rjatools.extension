@@ -68,7 +68,35 @@ sheet_name = forms.ask_for_string(
 if not sheet_name:
     script.exit()
 
-# 6. Layout Settings
+# 6. Titleblock picker
+tb_collector = FilteredElementCollector(doc)\
+    .OfCategory(BuiltInCategory.OST_TitleBlocks)\
+    .WhereElementIsElementType()
+tb_types = list(tb_collector)
+if not tb_types:
+    forms.alert("No titleblock types found in project.", exitscript=True)
+
+# Build a dictionary of name -> element for the picker
+tb_dict = {}
+for tb in tb_types:
+    family_name = tb.Family.Name
+    type_name = tb.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM).AsString()
+    display_name = "{} : {}".format(family_name, type_name)
+    tb_dict[display_name] = tb
+
+# Show picker dialog
+selected_tb_name = forms.SelectFromList.show(
+    sorted(tb_dict.keys()),
+    title='Select Titleblock',
+    prompt='Choose a titleblock for the Comcheck sheets:',
+    multiselect=False
+)
+if not selected_tb_name:
+    script.exit()
+
+tb_id = tb_dict[selected_tb_name].Id
+
+# 7. Layout Settings
 # WARNING: ALL MEASUREMENTS ARE IN FEET
 # WARNING: ADJUST CELL_W, CELL_H, ORIGIN TO MATCH YOUR TITLEBLOCK
 PAGES_PER_SHEET = 6
@@ -79,17 +107,6 @@ SHEET_ORIGIN_Y = 2.25
 CELL_W = 0.725
 CELL_H = 0.95
 GAP = 0.08
-
-# 7. Find Titleblock
-tb_collector = FilteredElementCollector(doc)\
-    .OfCategory(BuiltInCategory.OST_TitleBlocks)\
-    .WhereElementIsElementType()
-tb_types = list(tb_collector)
-if not tb_types:
-    forms.alert("No titleblock types found in project.", exitscript=True)
-
-# WARNING: GRABS FIRST TITLEBLOCK - MAY NOT BE THE RIGHT ONE
-tb_id = tb_types[0].Id
 
 # 8. Calculate Sheet Count
 num_sheets = (page_count + PAGES_PER_SHEET - 1) // PAGES_PER_SHEET
