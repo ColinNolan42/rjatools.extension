@@ -46,14 +46,11 @@ page_count = int(page_count)
 PAGES_PER_SHEET = 6
 COLS = 3
 ROWS = 2
-# WARNING: SHEET_ORIGIN is the TOP LEFT starting point of the grid
-# Revit Y is measured from bottom up so higher Y = higher on sheet
-# Adjusted to push pages toward top left corner
-SHEET_ORIGIN_X = 0.05    # very close to left edge
-SHEET_ORIGIN_Y = 1.55    # pushed up toward top of sheet
+SHEET_ORIGIN_X = 0.05    # close to left edge
+SHEET_ORIGIN_Y = 1.85    # pushed higher up the sheet
 CELL_W = 0.725
 CELL_H = 0.95
-GAP = 0.02
+GAP = 0.08               # more space between rows
 
 # WARNING: CHANGE THESE SHEET NUMBERS TO MATCH YOUR COMPANY CONVENTION
 SHEET_NUMBER_PREFIX = "M"
@@ -99,7 +96,6 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             row = i // COLS
 
             x = SHEET_ORIGIN_X + col * (CELL_W + GAP)
-            # row 0 = top row, Revit Y goes up so top row has highest Y
             y = SHEET_ORIGIN_Y - row * (CELL_H + GAP)
             origin = XYZ(x, y, 0)
 
