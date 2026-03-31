@@ -106,7 +106,7 @@ ROWS = 2
 if sheet_size == '24 x 36':
     sheet_w       = 3.0
     sheet_h       = 2.0
-    MARGIN_LEFT   = 0.18     # shifted more right
+    MARGIN_LEFT   = 0.25     # shifted more right
     MARGIN_TOP    = 0.10
     MARGIN_RIGHT  = 0.70
     MARGIN_BOTTOM = 0.20
