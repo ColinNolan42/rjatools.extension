@@ -42,8 +42,6 @@ if not page_count:
 page_count = int(page_count)
 
 # 3. Ask for full sheet number and name in one box
-# Example input: M005 - COMCHECK
-# Script will parse the number and increment it for additional sheets
 first_sheet_full = forms.ask_for_string(
     prompt='Enter full sheet number and name (e.g. M005 - COMCHECK)\nAdditional sheets will auto increment the number.',
     title='Sheet Number and Name',
@@ -52,8 +50,6 @@ first_sheet_full = forms.ask_for_string(
 if not first_sheet_full:
     script.exit()
 
-# Parse the input - split on first space to get number vs name
-# Handles formats like: M005 - COMCHECK, M005-COMCHECK, M005 COMCHECK
 match = re.match(r'^([A-Za-z]+)(\d+)\s*[-\s]?\s*(.+)$', first_sheet_full.strip())
 if not match:
     forms.alert(
@@ -61,10 +57,10 @@ if not match:
         exitscript=True
     )
 
-sheet_prefix  = match.group(1).upper()        # e.g. M
-sheet_start   = int(match.group(2))            # e.g. 5
-sheet_name    = match.group(3).strip().upper() # e.g. COMCHECK
-zero_pad      = len(match.group(2))            # preserve zero padding length
+sheet_prefix  = match.group(1).upper()
+sheet_start   = int(match.group(2))
+sheet_name    = match.group(3).strip().upper()
+zero_pad      = len(match.group(2))
 
 # 4. Titleblock picker
 tb_collector = FilteredElementCollector(doc)\
@@ -110,18 +106,18 @@ ROWS = 2
 if sheet_size == '24 x 36':
     sheet_w       = 3.0
     sheet_h       = 2.0
-    MARGIN_LEFT   = 0.05
+    MARGIN_LEFT   = 0.18     # shifted more right
     MARGIN_TOP    = 0.10
     MARGIN_RIGHT  = 0.70
     MARGIN_BOTTOM = 0.20
     GAP_COL       = 0.04
     GAP_ROW       = 0.06
 else:
-    # 30 x 42 - shifted slightly more left and down
+    # 30 x 42
     sheet_w       = 3.5
     sheet_h       = 2.5
-    MARGIN_LEFT   = 0.03     # more left
-    MARGIN_TOP    = 0.15     # more down from top
+    MARGIN_LEFT   = 0.03
+    MARGIN_TOP    = 0.15
     MARGIN_RIGHT  = 0.85
     MARGIN_BOTTOM = 0.25
     GAP_COL       = 0.05
@@ -146,7 +142,6 @@ with revit.Transaction("Place Comcheck PDF Pages"):
 
         sheet = ViewSheet.Create(doc, tb_id)
 
-        # Increment the number, preserve zero padding
         sheet_number = "{}{}".format(
             sheet_prefix,
             str(sheet_start + sheet_idx).zfill(zero_pad)
