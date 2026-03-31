@@ -95,37 +95,34 @@ if not selected_tb_name:
 selected_tb = tb_dict[selected_tb_name]
 tb_id = selected_tb.Id
 
-# 7. Auto detect sheet size and set layout accordingly
-tb_width_param  = selected_tb.get_Parameter(BuiltInParameter.SHEET_WIDTH)
-tb_height_param = selected_tb.get_Parameter(BuiltInParameter.SHEET_HEIGHT)
-
-if tb_width_param and tb_height_param:
-    sheet_w = tb_width_param.AsDouble()
-    sheet_h = tb_height_param.AsDouble()
-else:
-    sheet_w = 3.0
-    sheet_h = 2.0
-    forms.alert(
-        "Could not read sheet size from titleblock. Defaulting to 24x36.",
-        title="Sheet Size Warning"
-    )
+# 7. User picks sheet size since titleblock parameters are not reliably readable
+sheet_size = forms.SelectFromList.show(
+    ['24 x 36', '30 x 42'],
+    title='Select Sheet Size',
+    prompt='Choose your sheet size:',
+    multiselect=False
+)
+if not sheet_size:
+    script.exit()
 
 PAGES_PER_SHEET = 6
 COLS = 3
 ROWS = 2
 
-# Margins in feet - adjusted per sheet size
-# 24x36 = sheet_w ~3.0ft, 30x42 = sheet_w ~3.5ft
-if sheet_w <= 3.0:
-    # 24x36 settings
+if sheet_size == '24 x 36':
+    # All values in feet
+    sheet_w       = 3.0      # 36 inches
+    sheet_h       = 2.0      # 24 inches
     MARGIN_LEFT   = 0.05
     MARGIN_TOP    = 0.10
-    MARGIN_RIGHT  = 0.70   # titleblock on right
+    MARGIN_RIGHT  = 0.70     # right titleblock strip
     MARGIN_BOTTOM = 0.20
     GAP_COL       = 0.04
     GAP_ROW       = 0.06
 else:
-    # 30x42 settings
+    # 30 x 42
+    sheet_w       = 3.5      # 42 inches
+    sheet_h       = 2.5      # 30 inches
     MARGIN_LEFT   = 0.05
     MARGIN_TOP    = 0.10
     MARGIN_RIGHT  = 0.80
@@ -133,7 +130,7 @@ else:
     GAP_COL       = 0.05
     GAP_ROW       = 0.08
 
-# Auto calculate cell sizes to fit perfectly
+# Auto calculate cell sizes based on available space
 available_w = sheet_w - MARGIN_LEFT - MARGIN_RIGHT - (GAP_COL * (COLS - 1))
 available_h = sheet_h - MARGIN_TOP - MARGIN_BOTTOM - (GAP_ROW * (ROWS - 1))
 
@@ -186,14 +183,20 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             place_opts.PlacementPoint = BoxPlacement.TopLeft
             place_opts.Location = origin
 
-            ImageInstance.Create(doc, sheet, img_type.Id, place_opts)
+            img_instance = ImageInstance.Create(doc, sheet, img_type.Id, place_opts)
+
+            # RESIZE the image to fit the calculated cell size
+            # WARNING: not 100% sure if Width/Height are the correct
+            # property names - may error and need adjustment
+            img_instance.Width = CELL_W
+            img_instance.Height = CELL_H
 
 forms.alert(
-    "Done! {} sheet(s) created: {}{} to {}{}\nSheet size detected: {:.0f} x {:.0f} inches".format(
+    "Done! {} sheet(s) created: {}{} to {}{}\nSheet size: {}".format(
         num_sheets,
         sheet_prefix, str(sheet_start).zfill(3),
         sheet_prefix, str(sheet_start + num_sheets - 1).zfill(3),
-        sheet_w * 12, sheet_h * 12
+        sheet_size
     ),
     title="Comcheck Importer"
 )
