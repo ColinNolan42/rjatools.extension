@@ -122,178 +122,10 @@ def get_project_levels():
 # ============================================================================
 # ROBUST INPUT PARSERS
 # ============================================================================
-def _clean(text):
-    """Strip symbols, normalize whitespace."""
-    return text.strip().replace('\u2019', "'").replace('\u201c', '"').replace('\u201d', '"')
-
-
-def parse_pipe_size(raw):
-    """Parse pipe size input. Returns diameter in FEET or None.
-
-    Accepts virtually any reasonable input:
-      Inches (no unit = assumed inches):
-        1/2   0.5   3/4   1-1/2   1.5   2
-      Inches with symbol:
-        1/2"  0.5"  3/4"  1-1/2"
-      Feet explicit (only sensible if someone types ft or '):
-        0.0417'  (= 1/2 inch)
-      Mixed feet-inches (unlikely for pipe size but handled):
-        0'1/2"
-    Returns None with a reason string on failure.
-    """
-    t = _clean(raw)
-    if not t:
-        return None, "Empty input."
-
-    # Strip trailing inch symbol to get bare number/fraction
-    has_inch_sym = t.endswith('"')
-    has_ft_sym   = t.endswith("'") or t.lower().endswith('ft') or t.lower().endswith('feet')
-
-    t_bare = t.rstrip('"').rstrip("'")
-    t_bare = re.sub(r'(?i)(feet|ft)\s*$', '', t_bare).strip()
-
-    # Feet-inches format: 0'6" or 0 ft 6 in
-    ft_in = re.match(
-        r"^(\d+(?:\.\d+)?)\s*['\u2019ft]+\s*(\d+(?:[\/\-]\d+)?(?:\.\d+)?)\s*\"?$",
-        t, re.IGNORECASE
-    )
-    if ft_in:
-        try:
-            feet_part   = float(ft_in.group(1))
-            inches_part = _eval_fraction(ft_in.group(2))
-            if inches_part is None:
-                return None, "Could not parse inches portion: {}".format(ft_in.group(2))
-            total_inches = feet_part * 12.0 + inches_part
-            if total_inches <= 0 or total_inches > 12:
-                return None, "Pipe size out of range (0-12 inches)."
-            return total_inches / 12.0, None
-        except Exception:
-            pass
-
-    # Explicit feet only (e.g. 0.0417ft or 0.0417')
-    if has_ft_sym and not has_inch_sym:
-        try:
-            feet = float(t_bare)
-            inches = feet * 12.0
-            if inches <= 0 or inches > 12:
-                return None, "Pipe size out of range."
-            return feet, None
-        except Exception:
-            pass
-
-    # Standard: bare number or fraction, assumed inches
-    inches = _eval_mixed(t_bare)
-    if inches is None:
-        return None, (
-            'Could not understand "{}". '
-            'Try: 1/2  or  3/4  or  1-1/2  or  0.75'.format(raw)
-        )
-    if inches <= 0 or inches > 12:
-        return None, "Pipe size out of range (0 to 12 inches)."
-    return inches / 12.0, None
-
-
-def parse_aff(raw):
-    """Parse AFF height input. Returns height in FEET or None + error string.
-
-    No upper range cap - supports any ceiling height including tall warehouses,
-    stadiums, or projects with elevated base levels. The only physical limit
-    (AFF below main pipe) is validated later in calculate_takeoff_geometry.
-
-    Accepts:
-      Bare number assumed inches if > 12, also inches if <= 12
-      (use ft/feet/' suffix if you mean feet for small values):
-        36   48   360   6
-      Inch symbol:
-        36"  48"  360"
-      Feet explicit:
-        3'   30'   3ft   30ft   3.5feet
-      Feet-inches:
-        3'0"   2'10"   30'-6"   30 ft 6 in
-    """
-    t = _clean(raw)
-    if not t:
-        return None, "Empty input."
-
-    # Feet-inches: 3'4"  or  3'-4"  or  30'6"  or  30 ft 6 in
-    ft_in = re.match(
-        r"^(\d+(?:\.\d+)?)\s*['’][\-\s]*(\d+(?:[\/\-]\d+)?(?:\.\d+)?)\s*"?(?:\s*in)?$",
-        t, re.IGNORECASE
-    )
-    if ft_in:
-        try:
-            feet_part   = float(ft_in.group(1))
-            inches_part = _eval_fraction(ft_in.group(2))
-            if inches_part is None:
-                return None, "Could not parse inches portion: {}".format(ft_in.group(2))
-            total_ft = feet_part + inches_part / 12.0
-            if total_ft < 0:
-                return None, "AFF must be positive."
-            return total_ft, None
-        except Exception:
-            pass
-
-    # Explicit feet only: 3'  30'  3ft  30ft  3.5feet
-    ft_only = re.match(r"^(\d+(?:\.\d+)?)\s*(?:'|ft|feet)$", t, re.IGNORECASE)
-    if ft_only:
-        try:
-            feet = float(ft_only.group(1))
-            if feet < 0:
-                return None, "AFF must be positive."
-            return feet, None
-        except Exception:
-            pass
-
-    # Explicit inches: 36"  360"
-    inch_only = re.match(r'^(\d+(?:\.\d+)?)"$', t)
-    if inch_only:
-        try:
-            inches = float(inch_only.group(1))
-            if inches < 0:
-                return None, "AFF must be positive."
-            return inches / 12.0, None
-        except Exception:
-            pass
-
-    # Bare number - > 12 is unambiguously inches (36, 48, 360...)
-    # <= 12 is treated as inches too since a bare "3" for AFF almost
-    # certainly means 3 inches, not 3 feet. Use ft/' for feet.
-    try:
-        val = float(t)
-        if val < 0:
-            return None, "AFF must be positive."
-        return val / 12.0, None
-    except Exception:
-        pass
-
-    return None, (
-        'Could not understand "{}". '
-        'Try: 36  or  36"  or  3'  or  3'0"  or  30ft'.format(raw)
-    )
-
-
-def _eval_mixed(text):
-    """Parse whole+fraction like 1-1/2 or bare fraction 3/4 or decimal. Returns float inches or None."""
-    t = text.strip()
-    # Mixed: 1-1/2
-    m = re.match(r'^(\d+)\s*[\-]\s*(\d+\s*/\s*\d+)$', t)
-    if m:
-        whole = _eval_fraction(m.group(1))
-        frac  = _eval_fraction(m.group(2))
-        if whole is not None and frac is not None:
-            return whole + frac
-    # Fraction: 1/2
-    if '/' in t:
-        return _eval_fraction(t)
-    # Decimal or whole
-    try:
-        return float(t)
-    except Exception:
-        return None
+import re as _re
 
 
 def _eval_fraction(text):
-    """Evaluate a/b fraction or plain number. Returns float or None."""
     t = text.strip()
     try:
         if '/' in t:
@@ -302,6 +134,106 @@ def _eval_fraction(text):
         return float(t)
     except Exception:
         return None
+
+
+def _eval_mixed(text):
+    t = text.strip()
+    m = _re.match(r'^(\d+)\s*-\s*(\d+\s*/\s*\d+)$', t)
+    if m:
+        whole = _eval_fraction(m.group(1))
+        frac  = _eval_fraction(m.group(2))
+        if whole is not None and frac is not None:
+            return whole + frac
+    if '/' in t:
+        return _eval_fraction(t)
+    try:
+        return float(t)
+    except Exception:
+        return None
+
+
+def _clean(text):
+    return text.strip()
+
+
+def parse_pipe_size(raw):
+    t = _clean(raw).strip()
+    if not t:
+        return None, 'Empty input.'
+    t_bare = t.rstrip('"').strip()
+    ft_in = _re.match(r'^(\d+(?:\.\d+)?)\s*[\x27]\s*(\d+(?:[/\-]\d+)?(?:\.\d+)?)\s*"?$', t)
+    if ft_in:
+        try:
+            feet_part   = float(ft_in.group(1))
+            inches_part = _eval_fraction(ft_in.group(2))
+            if inches_part is None:
+                return None, 'Could not parse inches portion.'
+            total_inches = feet_part * 12.0 + inches_part
+            if total_inches <= 0:
+                return None, 'Pipe size must be positive.'
+            return total_inches / 12.0, None
+        except Exception:
+            pass
+    ft_only = _re.match(r'^(\d+(?:\.\d+)?)\s*(?:[\x27]|ft|feet)$', t, _re.IGNORECASE)
+    if ft_only:
+        try:
+            feet = float(ft_only.group(1))
+            if feet <= 0:
+                return None, 'Pipe size must be positive.'
+            return feet, None
+        except Exception:
+            pass
+    inches = _eval_mixed(t_bare)
+    if inches is None:
+        return None, 'Could not understand pipe size. Try: 1/2 or 3/4 or 1-1/2 or 0.75'
+    if inches <= 0:
+        return None, 'Pipe size must be positive.'
+    return inches / 12.0, None
+
+
+def parse_aff(raw):
+    t = _clean(raw).strip()
+    if not t:
+        return None, 'Empty input.'
+    ft_in = _re.match(r'^(\d+(?:\.\d+)?)\s*[\x27]\s*-?\s*(\d+(?:[/\-]\d+)?(?:\.\d+)?)\s*"?$', t)
+    if ft_in:
+        try:
+            feet_part   = float(ft_in.group(1))
+            inches_part = _eval_fraction(ft_in.group(2))
+            if inches_part is None:
+                return None, 'Could not parse inches portion.'
+            total_ft = feet_part + inches_part / 12.0
+            if total_ft <= 0:
+                return None, 'AFF must be positive.'
+            return total_ft, None
+        except Exception:
+            pass
+    ft_only = _re.match(r'^(\d+(?:\.\d+)?)\s*(?:[\x27]|ft|feet)$', t, _re.IGNORECASE)
+    if ft_only:
+        try:
+            feet = float(ft_only.group(1))
+            if feet <= 0:
+                return None, 'AFF must be positive.'
+            return feet, None
+        except Exception:
+            pass
+    inch_only = _re.match(r'^(\d+(?:\.\d+)?)"$', t)
+    if inch_only:
+        try:
+            inches = float(inch_only.group(1))
+            if inches <= 0:
+                return None, 'AFF must be positive.'
+            return inches / 12.0, None
+        except Exception:
+            pass
+    try:
+        val = float(t)
+        if val <= 0:
+            return None, 'AFF must be positive.'
+        return val / 12.0, None
+    except Exception:
+        pass
+    return None, 'Could not understand AFF. Try: 36 or 36" or 3ft or 3\'0"'
 
 
 # ============================================================================
