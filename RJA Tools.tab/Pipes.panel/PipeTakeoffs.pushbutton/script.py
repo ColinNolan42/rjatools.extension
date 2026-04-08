@@ -61,6 +61,7 @@ from pyrevit import revit, DB, UI, script, forms
 ENVVAR_ACTIVE       = "PIPE_TAKEOFFS_ACTIVE"
 ENVVAR_FIXTURE      = "PIPE_TAKEOFFS_FIXTURE"
 ENVVAR_CUSTOM_SIZE  = "PIPE_TAKEOFFS_CUSTOM_SIZE_RAW"
+ENVVAR_LEVEL        = "PIPE_TAKEOFFS_LEVEL_ID"
 ENVVAR_CUSTOM_AFF   = "PIPE_TAKEOFFS_CUSTOM_AFF_RAW"
 
 RISE_HEIGHT       = 0.5
@@ -106,6 +107,23 @@ output = script.get_output()
 
 
 # ============================================================================
+# LEVEL COLLECTOR
+# ============================================================================
+def get_project_levels():
+    """Return list of (name, elevation_ft) tuples sorted by elevation."""
+    from Autodesk.Revit.DB import FilteredElementCollector, Level
+    levels = FilteredElementCollector(doc).OfClass(Level).ToElements()
+    result = []
+    for lvl in levels:
+        try:
+            result.append((lvl.Name, lvl.Elevation, lvl.Id.IntegerValue))
+        except Exception:
+            pass
+    result.sort(key=lambda x: x[1])
+    return result
+
+
+# ============================================================================
 # FIXTURE PICKER WPF DIALOG
 # ============================================================================
 class FixturePickerDialog(Window):
@@ -124,16 +142,20 @@ class FixturePickerDialog(Window):
     CLR_BTN       = Color.FromRgb(0,   100, 180)
     CLR_BTN_TEXT  = Color.FromRgb(255, 255, 255)
 
-    def __init__(self, saved_fixture, saved_custom_size, saved_custom_aff):
+    def __init__(self, saved_fixture, saved_custom_size, saved_custom_aff, levels, saved_level_idx):
         self.result_fixture     = None
         self.result_dia_ft      = None
         self.result_aff_ft      = None
+        self.result_level_elev  = 0.0
         self._saved_fixture     = saved_fixture
         self._saved_custom_size = saved_custom_size
         self._saved_custom_aff  = saved_custom_aff
+        self._levels            = levels  # list of (name, elev_ft, id_int)
+        self._saved_level_idx   = saved_level_idx
         self._radio_buttons      = {}
         self._custom_size_input  = None
         self._custom_aff_input   = None
+        self._level_combo        = None
         self._build_ui()
 
     def _brush(self, color):
@@ -158,6 +180,35 @@ class FixturePickerDialog(Window):
         title_lbl.FontWeight = FontWeights.Bold
         title_lbl.Margin     = Thickness(0, 0, 0, 10)
         outer.Children.Add(title_lbl)
+
+        # Level selector
+        level_panel = StackPanel()
+        level_panel.Orientation = System.Windows.Controls.Orientation.Horizontal
+        level_panel.Margin = Thickness(0, 0, 0, 10)
+
+        level_lbl = Label()
+        level_lbl.Content    = "Finished Floor Level:"
+        level_lbl.Foreground = self._brush(self.CLR_TEXT)
+        level_lbl.FontSize   = 11
+        level_lbl.Padding    = Thickness(0, 3, 8, 0)
+        level_lbl.VerticalContentAlignment = VerticalAlignment.Center
+        level_panel.Children.Add(level_lbl)
+
+        level_cb = ComboBox()
+        level_cb.FontSize = 11
+        level_cb.MinWidth = 220
+        for (name, elev_ft, id_int) in self._levels:
+            item = ComboBoxItem()
+            elev_in = elev_ft * 12.0
+            if elev_in >= 0:
+                item.Content = "{}  (+{:.0f}\")".format(name, elev_in)
+            else:
+                item.Content = "{}  ({:.0f}\")".format(name, elev_in)
+            level_cb.Items.Add(item)
+        level_cb.SelectedIndex = max(0, min(self._saved_level_idx, len(self._levels) - 1))
+        level_panel.Children.Add(level_cb)
+        outer.Children.Add(level_panel)
+        self._level_combo = level_cb
 
         # Table header
         header = self._make_row(
@@ -433,6 +484,17 @@ class FixturePickerDialog(Window):
                     self.result_dia_ft  = dia_in / 12.0
                     self.result_aff_ft  = aff_in / 12.0
 
+                # Read level elevation and add to AFF
+                lvl_idx = self._level_combo.SelectedIndex if self._level_combo else 0
+                if 0 <= lvl_idx < len(self._levels):
+                    lvl_elev_ft = self._levels[lvl_idx][1]
+                    script.set_envvar(ENVVAR_LEVEL, str(lvl_idx))
+                else:
+                    lvl_elev_ft = 0.0
+                # result_aff_ft is now absolute elevation = level elev + aff offset
+                self.result_aff_ft  = lvl_elev_ft + self.result_aff_ft
+                self.result_level_elev = lvl_elev_ft
+
                 self.DialogResult = True
                 self.Close()
                 return
@@ -502,6 +564,7 @@ class FixturePickerDialog(Window):
         return None
 
 
+
 def pick_fixture():
     """Show the fixture picker dialog. Returns (name, dia_ft, aff_ft) or None."""
     saved_fixture     = script.get_envvar(ENVVAR_FIXTURE)     or DEFAULT_FIXTURE
@@ -511,7 +574,20 @@ def pick_fixture():
     if saved_fixture not in FIXTURES and not saved_fixture.startswith('Custom'):
         saved_fixture = DEFAULT_FIXTURE
 
-    dlg = FixturePickerDialog(saved_fixture, saved_custom_size, saved_custom_aff)
+    levels = get_project_levels()
+    if not levels:
+        levels = [("Project Base Point", 0.0, -1)]
+
+    saved_level_idx = 0
+    try:
+        saved_level_idx = int(script.get_envvar(ENVVAR_LEVEL) or 0)
+    except Exception:
+        saved_level_idx = 0
+
+    dlg = FixturePickerDialog(
+        saved_fixture, saved_custom_size, saved_custom_aff,
+        levels, saved_level_idx
+    )
     return dlg.show()
 
 
