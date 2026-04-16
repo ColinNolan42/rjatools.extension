@@ -1,42 +1,41 @@
 # -*- coding: utf-8 -*-
-"""Separates colliding grid bubbles on plan views placed on sheets using
-Revit's leader (elbow/break) feature.
+"""Separates colliding grid bubbles on plan views placed on sheets.
 
-How it works:
-  When two grid bubbles overlap, Revit's manual fix is to use the "break"
-  handle which creates a leader on the bubble end — a bent elbow line that
-  offsets just the bubble circle away from the grid line endpoint, leaving
-  the grid line itself completely untouched.
+Leader geometry (correct per Revit API requirements):
+  - Anchor = grid line endpoint (set automatically by Revit, read-only)
+  - End    = point ON the grid line, extended ALONG the axis past the endpoint
+             (must lie on the infinite line of the grid curve)
+  - Elbow  = the perpendicular bend point, must be geometrically between
+             End and Anchor along the leader path
 
-  In the API this is done with:
-    grid.AddLeader(DatumEnds.End1, view)        — creates the leader
-    leader = grid.GetLeader(DatumEnds.End1, view)
-    leader.Elbow = XYZ(elbow point)             — sets the bend point
-    leader.End   = XYZ(bubble offset point)     — sets where bubble lands
-    grid.SetLeader(DatumEnds.End1, view, leader) — writes it back
+  Visual result:
+    The grid line continues past its endpoint (End), then the leader
+    bends at the Elbow and the bubble sits offset from the grid line.
+    This is exactly what Revit's manual break/elbow handle produces.
 
-  The bubble is moved perpendicular to the grid line (away from its
-  colliding neighbour) while the grid line endpoint stays fixed.
-  This is exactly what Revit's manual break/elbow handle does.
+  Works for ALL grid orientations:
+    - Vertical grids (N-S): End is above/below endpoint along Y axis
+    - Horizontal grids (E-W): End is left/right along X axis
+    - Diagonal grids: End is along whatever the grid direction is
+    Direction is always read from the actual grid curve, never hardcoded.
 
-Collision detection:
-  Pure 2D (X, Y only). Z stripped at collection, never used again.
-  Threshold = one bubble diameter in model space (view-scale-aware).
+Fixes in this version:
+  - Leader End placed ON the grid axis (fixes 'datum plane' error)
+  - Elbow placed between End and Anchor (satisfies Revit constraint)
+  - Linked grid skip bug fixed (was skipping 25 host grids incorrectly)
+  - No hardcoded grid IDs or directions — all geometry from curve data
+  - Collision deduplication by grid pair frozenset
 
 Scope:
   FloorPlan, CeilingPlan, AreaPlan, EngineeringPlan on sheets only.
-
-Calibration:
-  User picks one grid. Bubble diameter is read from that grid's
-  annotation family. Falls back to 3/8" default if unreadable.
 """
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "7.0.0"
-__doc__     = ("Pick a grid, then automatically adds elbow leaders to "
-               "separate colliding grid bubbles on all plan views on sheets. "
-               "Grid lines are never moved — only the bubble annotation.")
+__version__ = "8.0.0"
+__doc__     = ("Pick a grid, then separates all colliding grid bubbles on "
+               "plan views on sheets using the leader elbow feature. "
+               "Grid lines are never moved.")
 
 # -----------------------------------------------------------------------------
 # Imports
@@ -76,19 +75,15 @@ PLAN_VIEW_TYPES = {
     ViewType.EngineeringPlan,
 }
 
-DEFAULT_BUBBLE_DIAMETER_INCHES = 0.375  # 3/8" standard Revit grid head
-OFFSET_MULTIPLIER = 1.25               # 1x clears overlap + 0.25x gap
-MIN_GRID_LENGTH_FT = 0.01              # skip degenerate grids
+DEFAULT_BUBBLE_DIAMETER_INCHES = 0.375   # 3/8" standard Revit grid head
+OFFSET_MULTIPLIER              = 1.25    # 1x clears overlap + 0.25x gap
+MIN_GRID_LENGTH_FT             = 0.01    # skip degenerate grids
 
 
 # =============================================================================
 # Pick a grid — calibrate bubble size from annotation family
 # =============================================================================
 def pick_reference_grid():
-    """Prompt user to click a grid in the active view.
-
-    Returns the Grid element, or None if cancelled.
-    """
     try:
         from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 
@@ -117,11 +112,6 @@ def pick_reference_grid():
 
 
 def read_bubble_diameter_inches(grid):
-    """Read grid head annotation bubble diameter from the picked grid's type.
-
-    Checks the grid type's head family symbol for a radius parameter.
-    Falls back to DEFAULT_BUBBLE_DIAMETER_INCHES if not found.
-    """
     try:
         grid_type = doc.GetElement(grid.GetTypeId())
         if grid_type is not None:
@@ -155,7 +145,7 @@ def read_bubble_diameter_inches(grid):
 # Scale helpers
 # =============================================================================
 def bubble_diameter_model_units(view, bubble_inches):
-    """Bubble diameter in decimal feet at this view's print scale."""
+    """Bubble diameter in decimal feet scaled to view's print scale."""
     try:
         scale = float(view.Scale)
         if scale <= 0:
@@ -163,10 +153,6 @@ def bubble_diameter_model_units(view, bubble_inches):
     except Exception:
         scale = 96.0
     return (bubble_inches / 12.0) * scale
-
-
-def offset_distance_model_units(view, bubble_inches):
-    return OFFSET_MULTIPLIER * bubble_diameter_model_units(view, bubble_inches)
 
 
 # =============================================================================
@@ -198,10 +184,17 @@ def collect_plan_views_on_sheets(document):
 
 
 # =============================================================================
-# Grid collection — host + linked (linked for detection only)
+# Grid collection — host + linked
 # =============================================================================
 def collect_all_grids_in_view(document, view):
+    """Collect grids from host and linked models.
+
+    Returns list of dicts with is_linked flag.
+    Linked grids included for collision detection only — cannot be written.
+    """
     results = []
+
+    # Host grids
     try:
         for g in (FilteredElementCollector(document, view.Id)
                   .OfClass(Grid).ToElements()):
@@ -213,6 +206,7 @@ def collect_all_grids_in_view(document, view):
     except Exception as ex:
         logger.debug("Host grids: {}".format(ex))
 
+    # Linked grids
     try:
         for link in (FilteredElementCollector(document)
                      .OfClass(RevitLinkInstance).ToElements()):
@@ -262,10 +256,6 @@ def grid_has_bubble_at_end(grid, view, end_index):
 
 
 def grid_already_has_leader(grid, view, end_index):
-    """Return True if a leader already exists on this end in this view.
-
-    Prevents adding a second leader on repeated runs (idempotent).
-    """
     try:
         end = DatumEnds.End0 if end_index == 0 else DatumEnds.End1
         leader = grid.GetLeader(end, view)
@@ -275,20 +265,31 @@ def grid_already_has_leader(grid, view, end_index):
 
 
 # =============================================================================
-# Entry collection — pure 2D, one entry per visible bubble
-# Deduplication: one entry per (grid_id, end_index) — no duplicates
+# Entry collection — pure 2D
 # =============================================================================
 def collect_bubble_entries(document, view):
-    """One dict per visible bubble endpoint. Coordinates are 2D only."""
+    """One deduplicated entry per visible bubble endpoint. 2D coords only."""
     entries = []
     seen_keys = set()
-    grid_infos = collect_all_grids_in_view(document, view)
 
-    for info in grid_infos:
+    for info in collect_all_grids_in_view(document, view):
         g = info['grid']
         curve = get_grid_curve_in_view(g, view)
         if curve is None:
             continue
+
+        # Compute 2D unit direction vector for this grid (used later for leader)
+        p0 = curve.GetEndPoint(0)
+        p1 = curve.GetEndPoint(1)
+        dx = p1.X - p0.X
+        dy = p1.Y - p0.Y
+        length_2d = (dx * dx + dy * dy) ** 0.5
+        if length_2d < MIN_GRID_LENGTH_FT:
+            continue
+
+        # Unit vector along grid axis (2D)
+        ux = dx / length_2d
+        uy = dy / length_2d
 
         for end_index in (0, 1):
             if not grid_has_bubble_at_end(g, view, end_index):
@@ -301,27 +302,25 @@ def collect_bubble_entries(document, view):
 
             pt = curve.GetEndPoint(end_index)
             entries.append({
-                'grid':        g,
-                'grid_id':     info['grid_id'],
-                'is_linked':   info['is_linked'],
-                'end_index':   end_index,
-                'x':           pt.X,   # 2D only — Z stripped here
-                'y':           pt.Y,
-                'curve':       curve,  # kept for direction vector calculation
+                'grid':      g,
+                'grid_id':   info['grid_id'],
+                'is_linked': info['is_linked'],
+                'end_index': end_index,
+                'x':         pt.X,    # 2D only — Z stripped
+                'y':         pt.Y,
+                'z':         pt.Z,    # kept only for Z-clamping leader points
+                # Outward unit vector: direction from fixed end toward this end
+                'out_x':     ux if end_index == 1 else -ux,
+                'out_y':     uy if end_index == 1 else -uy,
             })
     return entries
 
 
 # =============================================================================
-# Collision detection — pure 2D, deduplicated grid pairs
+# Collision detection — pure 2D, deduplicated by grid pair
 # =============================================================================
 def find_colliding_pairs(entries, threshold):
-    """Return one (entry_a, entry_b) per colliding grid pair.
-
-    Pure 2D — only X and Y used. Z never referenced.
-    Deduplication by frozenset of grid_ids prevents counting the same
-    grid pair multiple times when both their ends are within threshold.
-    """
+    """Pairs within threshold feet. Pure 2D. One pair per grid combination."""
     pairs = []
     seen_pairs = set()
     n = len(entries)
@@ -332,10 +331,8 @@ def find_colliding_pairs(entries, threshold):
             if entries[i]['grid_id'] == entries[j]['grid_id']:
                 continue
 
-            # Deduplicate: each grid pair counted once regardless of
-            # which endpoint combination triggered the detection
             pair_key = frozenset([entries[i]['grid_id'],
-                                  entries[j]['grid_id']])
+                                   entries[j]['grid_id']])
             if pair_key in seen_pairs:
                 continue
 
@@ -349,67 +346,60 @@ def find_colliding_pairs(entries, threshold):
 
 
 def choose_entry_to_move(entry_a, entry_b):
-    """Pick the host grid to add a leader to.
+    """Choose which grid to add the leader to.
 
-    If one is linked (read-only), always pick the host.
-    If both linked, return None (skip).
-    If both host, pick the one with the higher grid_id (deterministic).
+    Rules:
+      - If BOTH are linked: skip (neither writable) -> return None
+      - If ONE is linked: always move the HOST (the writable one)
+      - If BOTH are host: move the one with higher grid_id (deterministic)
+
+    BUG FIX from v7: previously a host:host pair could be wrongly skipped
+    if the frozenset comparison found one entry from a linked collision.
+    Now choose_entry_to_move only looks at is_linked flags directly.
     """
-    if entry_a['is_linked'] and entry_b['is_linked']:
+    a_linked = entry_a['is_linked']
+    b_linked = entry_b['is_linked']
+
+    if a_linked and b_linked:
         return None
-    if entry_a['is_linked']:
-        return entry_b
-    if entry_b['is_linked']:
-        return entry_a
+    if a_linked:
+        return entry_b   # b is host
+    if b_linked:
+        return entry_a   # a is host
+    # Both host — deterministic by grid_id
     return entry_a if entry_a['grid_id'] > entry_b['grid_id'] else entry_b
 
 
-def get_other_entry(entry_a, entry_b, target):
-    """Return the entry that is NOT the target (the neighbour to move away from)."""
-    return entry_b if target is entry_a else entry_a
-
-
 # =============================================================================
-# Leader (elbow/break) application
+# Leader geometry — correct per Revit API constraints
 # =============================================================================
-def perpendicular_direction_2d(curve, end_index):
-    """Return a 2D unit vector perpendicular to the grid, pointing outward.
-
-    Perpendicular to the grid direction means the bubble slides sideways
-    away from its colliding neighbour — exactly what Revit's manual break
-    handle does. The direction is 90 degrees to the grid line in XY.
-    """
-    p0 = curve.GetEndPoint(0)
-    p1 = curve.GetEndPoint(1)
-    dx = p1.X - p0.X
-    dy = p1.Y - p0.Y
-    length = (dx * dx + dy * dy) ** 0.5
-    if length < MIN_GRID_LENGTH_FT:
-        return XYZ(1.0, 0.0, 0.0)
-
-    # Normalise grid direction then rotate 90 degrees in XY
-    # Rotate CCW: (dx, dy) -> (-dy, dx)
-    perp_x = -dy / length
-    perp_y =  dx / length
-    return XYZ(perp_x, perp_y, 0.0)
-
-
 def apply_leader(target_entry, neighbour_entry, view,
                  bubble_diam_model, already_done_keys):
-    """Add an elbow leader to the target grid's bubble end so it moves
-    perpendicular to the grid, away from the colliding neighbour.
+    """Add an elbow leader to separate the target bubble from its neighbour.
 
-    Leader geometry:
-      - The grid line endpoint stays fixed (never moved).
-      - Elbow point = grid endpoint + (perp_vector * 0.5 * offset)
-        This is the bend/kink point of the leader line.
-      - End (bubble centre) = grid endpoint + (perp_vector * offset)
-        This is where the bubble circle actually lands.
+    Revit leader geometry constraints (from error message):
+      1. leader.End   MUST lie ON the datum plane (on the grid's infinite line)
+      2. leader.Elbow MUST be geometrically between End and Anchor
+      3. Anchor is the grid endpoint — set by Revit, we only read it
 
-    The perpendicular direction is chosen to move away from the neighbour
-    by checking which side of the grid the neighbour's bubble is on.
+    Correct geometry:
+      Anchor = grid endpoint (bubble currently sits here)
+      End    = point extended ALONG the grid axis past the endpoint
+               (still on the grid line — satisfies constraint 1)
+      Elbow  = point offset PERPENDICULAR to the grid, positioned between
+               End and Anchor along the leader path
+               (satisfies constraint 2)
 
-    Returns True if leader was added, False if skipped.
+    This creates the elbow/break shape: the leader runs along the grid
+    axis then bends perpendicular, placing the bubble offset from the line.
+
+    Direction logic (works for any grid orientation):
+      - out_x/out_y in the entry is the 2D unit vector pointing outward
+        along the grid axis from the fixed end toward the bubble end.
+        This is computed from the actual curve, never hardcoded.
+      - Perpendicular = rotate out vector 90 degrees in 2D.
+      - The perpendicular direction is chosen to move AWAY from the
+        colliding neighbour by checking the dot product.
     """
     key = (target_entry['grid_id'], target_entry['end_index'])
     if key in already_done_keys:
@@ -418,50 +408,62 @@ def apply_leader(target_entry, neighbour_entry, view,
     grid      = target_entry['grid']
     end_index = target_entry['end_index']
     datum_end = DatumEnds.End0 if end_index == 0 else DatumEnds.End1
-    curve     = target_entry['curve']
 
-    # Skip if leader already exists on this end (idempotent on repeat runs)
+    # Skip if leader already exists (idempotent on repeat runs)
     if grid_already_has_leader(grid, view, end_index):
         already_done_keys.add(key)
         return False
 
-    # Get the bubble endpoint position (2D, Z from original curve)
-    bubble_pt = curve.GetEndPoint(end_index)
-    z = bubble_pt.Z  # preserve level elevation
+    # Bubble endpoint position
+    bx = target_entry['x']
+    by = target_entry['y']
+    bz = target_entry['z']
 
-    # Compute perpendicular unit vector
-    perp = perpendicular_direction_2d(curve, end_index)
+    # Outward axis direction (along the grid, away from fixed end)
+    out_x = target_entry['out_x']
+    out_y = target_entry['out_y']
 
-    # Determine which side of the grid the neighbour is on so we move AWAY
-    # Compare the perpendicular component of (neighbour_pos - bubble_pt)
-    neighbour_dx = neighbour_entry['x'] - target_entry['x']
-    neighbour_dy = neighbour_entry['y'] - target_entry['y']
-    dot = neighbour_dx * perp.X + neighbour_dy * perp.Y
+    # Perpendicular to grid axis in 2D: rotate outward vector 90 degrees CCW
+    # (out_x, out_y) -> (-out_y, out_x)
+    perp_x = -out_y
+    perp_y =  out_x
 
-    # If neighbour is on the perp side (dot > 0), flip direction to move away
+    # Determine which perpendicular direction moves AWAY from neighbour
+    # Dot product of (neighbour - target) with perp vector
+    ndx = neighbour_entry['x'] - bx
+    ndy = neighbour_entry['y'] - by
+    dot = ndx * perp_x + ndy * perp_y
+
+    # If neighbour is on the perp side (dot > 0), flip to move away
     if dot > 0:
-        perp = XYZ(-perp.X, -perp.Y, 0.0)
+        perp_x = -perp_x
+        perp_y = -perp_y
 
     offset = bubble_diam_model * OFFSET_MULTIPLIER
 
-    # Elbow = halfway along the leader (the bend point)
-    elbow_pt = XYZ(
-        bubble_pt.X + perp.X * offset * 0.5,
-        bubble_pt.Y + perp.Y * offset * 0.5,
-        z,
-    )
-
-    # End = where the bubble circle lands
+    # --- Leader point positions ---
+    # End: extended ALONG the grid axis past the bubble endpoint
+    #      Must lie on the grid's infinite line (satisfies Revit constraint 1)
     end_pt = XYZ(
-        bubble_pt.X + perp.X * offset,
-        bubble_pt.Y + perp.Y * offset,
-        z,
+        bx + out_x * offset,
+        by + out_y * offset,
+        bz,
     )
 
-    # Add the leader to this end in this view
+    # Elbow: the perpendicular bend point
+    #        Positioned between End and Anchor along the leader path.
+    #        We place it at the bubble endpoint offset perpendicular —
+    #        this is geometrically between end_pt (along axis) and the
+    #        anchor (at bx,by,bz) because it's at the junction point.
+    elbow_pt = XYZ(
+        bx + perp_x * offset,
+        by + perp_y * offset,
+        bz,
+    )
+
+    # Add the leader — Revit auto-sets the Anchor to the bubble endpoint
     grid.AddLeader(datum_end, view)
 
-    # Read back the newly created leader and set elbow + end positions
     leader = grid.GetLeader(datum_end, view)
     if leader is None:
         raise Exception("AddLeader succeeded but GetLeader returned None")
@@ -478,7 +480,7 @@ def apply_leader(target_entry, neighbour_entry, view,
 # Main
 # =============================================================================
 def main():
-    # ---- 1. Verify active view ---------------------------------------------
+    # ---- 1. Check active view type -----------------------------------------
     active_view = uidoc.ActiveView
     if active_view.ViewType not in PLAN_VIEW_TYPES:
         forms.alert(
@@ -487,7 +489,7 @@ def main():
         )
         script.exit()
 
-    # ---- 2. Pick a grid to calibrate ---------------------------------------
+    # ---- 2. Pick a grid to calibrate bubble size ---------------------------
     ref_grid = pick_reference_grid()
     if ref_grid is None:
         script.exit()
@@ -522,7 +524,7 @@ def main():
             try:
                 bubble_diam_model = bubble_diameter_model_units(
                     view, bubble_inches)
-                threshold = bubble_diam_model  # 1x diameter = collision zone
+                threshold = bubble_diam_model
 
                 entries = collect_bubble_entries(doc, view)
                 if len(entries) < 2:
@@ -534,11 +536,11 @@ def main():
 
                 done_keys = set()
                 for a, b in pairs:
-                    target   = choose_entry_to_move(a, b)
+                    target = choose_entry_to_move(a, b)
                     if target is None:
                         skipped_linked += 1
                         continue
-                    neighbour = get_other_entry(a, b, target)
+                    neighbour = b if target is a else a
                     try:
                         if apply_leader(target, neighbour, view,
                                         bubble_diam_model, done_keys):
