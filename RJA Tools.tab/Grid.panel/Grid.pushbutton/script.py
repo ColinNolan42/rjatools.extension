@@ -394,11 +394,34 @@ def bubbles_still_colliding(entry, all_entries, threshold):
 
 
 def choose_entry_to_move(entry_a, entry_b, view):
-    """Lowest alphanumeric name moves."""
-    if entry_is_lower_name(entry_a, entry_b):
-        return entry_a
-    elif entry_is_lower_name(entry_b, entry_a):
-        return entry_b
+    """Choose which bubble to move based purely on position.
+
+    Vertical grids (nudge direction = LEFT, -X):
+      Move the one with LOWER X — already further left.
+      Nudging it more left moves it AWAY from the right neighbour.
+      Example: grid 4 (X=-1837) and grid 5 (X=-1834).
+      Grid 4 has lower X -> grid 4 moves further left away from 5.
+
+    Horizontal grids (nudge direction = DOWN, -Y):
+      Move the one with LOWER Y — already further down.
+      Nudging it more down moves it AWAY from the upper neighbour.
+      Example: grid D (Y=-256, higher up) and grid E (Y=-261, lower).
+      Grid E has lower Y -> grid E moves further down away from D.
+
+    Fallback: lower grid_id moves if positions are tied.
+    """
+    is_vertical = entry_a['is_vertical']
+
+    if is_vertical:
+        # Lower X moves LEFT — away from higher X neighbour
+        if abs(entry_a['x'] - entry_b['x']) > 0.001:
+            return entry_a if entry_a['x'] < entry_b['x'] else entry_b
+    else:
+        # Lower Y moves DOWN — away from higher Y neighbour
+        if abs(entry_a['y'] - entry_b['y']) > 0.001:
+            return entry_a if entry_a['y'] < entry_b['y'] else entry_b
+
+    # Tied — lower grid_id moves
     return entry_a if entry_a['grid_id'] < entry_b['grid_id'] else entry_b
 
 
@@ -546,11 +569,10 @@ def main():
                     if not targets_this_pass:
                         break  # nothing new to do
 
-                    # Sort targets so the outermost bubble moves first.
-                    # Vertical: sort by X ascending  (leftmost moves first)
-                    # Horizontal: sort by Y ascending (lowest moves first)
-                    # This ensures the bubble with the most room to move
-                    # goes first, preventing it from landing on another.
+                    # Sort so the outermost bubble in the nudge direction
+                    # moves first — it has the most open space to move into.
+                    # Vertical (-X): lowest X first (furthest left goes first)
+                    # Horizontal (-Y): lowest Y first (furthest down goes first)
                     target_list = list(targets_this_pass.values())
                     if target_list and target_list[0]['is_vertical']:
                         target_list.sort(key=lambda e: e['x'])
