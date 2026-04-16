@@ -434,14 +434,27 @@ def get_offset_direction(entry, view):
 # Leader application
 # =============================================================================
 def apply_leader(target_entry, view, already_done_keys):
-    """Add or reposition a leader to offset the bubble in the correct direction.
+    """Add or reposition a leader to visually offset the bubble.
 
-    Proven geometry (from diagnostic):
-      - AddLeader gives valid default Anchor/Elbow/End on the grid axis
-      - Extend End by LEADER_OFFSET_FT in offset_dir
-      - Extend Elbow by LEADER_OFFSET_FT * 0.5 in same direction
-      - Both must move — moving End alone fails Revit validation
-      - SetLeader writes the result
+    Root cause of all SetLeader errors:
+      'End of leader should be in the datum plane curves'
+      End MUST lie on the grid's infinite axis line at all times.
+      Moving End in a fixed global direction (+X or -Y) takes it off
+      the axis for any grid that does not run in that exact direction.
+
+    Correct geometry:
+      - End   stays exactly where AddLeader placed it (on the axis).
+      - Elbow moves perpendicular to the offset direction to create
+        the visual bend that pushes the bubble circle to the side.
+      - Anchor is read-only — set by Revit at the grid endpoint.
+
+    The Elbow is the ONLY point we are allowed to move freely.
+    Moving it perpendicular to the grid axis pulls the bubble
+    annotation to the side without violating Revit's axis constraint.
+
+    offset_dir is perpendicular to the grid's own axis:
+      Vertical grid   -> offset_dir = +X (right) -> Elbow moves right
+      Horizontal grid -> offset_dir = -Y (down)  -> Elbow moves down
 
     Returns True if applied, False if skipped.
     """
@@ -464,21 +477,16 @@ def apply_leader(target_entry, view, already_done_keys):
     if leader is None:
         raise Exception("GetLeader returned None after AddLeader")
 
-    current_end   = leader.End
+    # End stays on the grid axis — DO NOT move it.
+    # Only move Elbow perpendicular to push the bubble visually.
     current_elbow = leader.Elbow
 
-    new_end = XYZ(
-        current_end.X   + offset_dir.X * LEADER_OFFSET_FT,
-        current_end.Y   + offset_dir.Y * LEADER_OFFSET_FT,
-        z,
-    )
     new_elbow = XYZ(
-        current_elbow.X + offset_dir.X * (LEADER_OFFSET_FT * 0.5),
-        current_elbow.Y + offset_dir.Y * (LEADER_OFFSET_FT * 0.5),
+        current_elbow.X + offset_dir.X * LEADER_OFFSET_FT,
+        current_elbow.Y + offset_dir.Y * LEADER_OFFSET_FT,
         z,
     )
 
-    leader.End   = new_end
     leader.Elbow = new_elbow
     grid.SetLeader(datum_end, view, leader)
 
