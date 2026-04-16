@@ -366,12 +366,17 @@ def collect_bubble_entries(document, view):
 
 
 # =============================================================================
-# Collision detection — pure 2D, deduplicated by grid pair
+# Collision detection — pure 2D
 # =============================================================================
 def find_colliding_pairs(entries, threshold):
-    """(entry_a, entry_b) within threshold feet. Pure 2D. One per grid pair."""
+    """Return all (entry_a, entry_b) pairs within threshold feet. Pure 2D.
+
+    No pair-level deduplication — every colliding pair is returned.
+    When 3 grids collide (A-B, B-C, A-C), all three pairs come through.
+    The already_done_keys set in apply_leader prevents any single grid
+    from getting AddLeader called twice on the same end in the same view.
+    """
     pairs = []
-    seen_pairs = set()
     n = len(entries)
     threshold_sq = threshold * threshold
 
@@ -379,16 +384,9 @@ def find_colliding_pairs(entries, threshold):
         for j in range(i + 1, n):
             if entries[i]['grid_id'] == entries[j]['grid_id']:
                 continue
-
-            pair_key = frozenset([entries[i]['grid_id'],
-                                   entries[j]['grid_id']])
-            if pair_key in seen_pairs:
-                continue
-
             dx = entries[i]['x'] - entries[j]['x']
             dy = entries[i]['y'] - entries[j]['y']
             if (dx * dx + dy * dy) <= threshold_sq:
-                seen_pairs.add(pair_key)
                 pairs.append((entries[i], entries[j]))
 
     return pairs
@@ -417,17 +415,25 @@ def choose_entry_to_move(entry_a, entry_b, view):
 # Offset direction per entry
 # =============================================================================
 def get_offset_direction(entry, view):
-    """Return XYZ direction the bubble should move.
+    """Return XYZ direction the bubble should move. Consistent rules:
 
-    Bottom/top of view (vertical grid): RIGHT -> XYZ(+1, 0, 0)
-    Side of view (horizontal grid):     DOWN  -> XYZ(0, -1, 0)
+    VERTICAL grids (bubble at bottom or top of view):
+      Lowest name shifts RIGHT (+X).
+      Grids are numbered left-to-right. Lowest moves further right,
+      away from higher-numbered grids to its right.
 
-    Determined purely from bubble Y position in view, no name used.
+    HORIZONTAL grids (bubble on left or right side of view):
+      Lowest name shifts UP (+Y).
+      Grids are lettered bottom-to-top. Lowest moves further up,
+      away from higher-lettered grids above it.
+
+    Both rules: lowest moves in the POSITIVE axis direction (+X or +Y).
+    This is consistent — lowest always moves away from the pack.
     """
     if bubble_is_at_bottom_or_top(entry, view):
-        return XYZ(1.0, 0.0, 0.0)    # shift RIGHT
+        return XYZ(1.0, 0.0, 0.0)    # vertical grid  — shift RIGHT (+X)
     else:
-        return XYZ(0.0, -1.0, 0.0)   # shift DOWN
+        return XYZ(0.0, 1.0, 0.0)    # horizontal grid — shift UP   (+Y)
 
 
 # =============================================================================
@@ -436,25 +442,21 @@ def get_offset_direction(entry, view):
 def apply_leader(target_entry, view, already_done_keys):
     """Add or reposition a leader to visually offset the bubble.
 
-    Root cause of all SetLeader errors:
-      'End of leader should be in the datum plane curves'
-      End MUST lie on the grid's infinite axis line at all times.
-      Moving End in a fixed global direction (+X or -Y) takes it off
-      the axis for any grid that does not run in that exact direction.
+    End MUST stay on the grid's infinite axis — only Elbow moves freely.
+    Moving Elbow perpendicular to the grid axis creates the visual bend
+    that pushes the bubble circle to the side without violating Revit's
+    'End must be in datum plane curves' constraint.
 
-    Correct geometry:
-      - End   stays exactly where AddLeader placed it (on the axis).
-      - Elbow moves perpendicular to the offset direction to create
-        the visual bend that pushes the bubble circle to the side.
-      - Anchor is read-only — set by Revit at the grid endpoint.
+    Direction:
+      Vertical grid   (bottom/top bubble) -> Elbow moves RIGHT (+X)
+      Horizontal grid (side bubble)       -> Elbow moves UP    (+Y)
+      Both: lowest-named grid is the target, moves in positive direction.
 
-    The Elbow is the ONLY point we are allowed to move freely.
-    Moving it perpendicular to the grid axis pulls the bubble
-    annotation to the side without violating Revit's axis constraint.
-
-    offset_dir is perpendicular to the grid's own axis:
-      Vertical grid   -> offset_dir = +X (right) -> Elbow moves right
-      Horizontal grid -> offset_dir = -Y (down)  -> Elbow moves down
+    3-way collision handling:
+      already_done_keys prevents AddLeader being called twice on the
+      same (grid_id, end_index) within a single transaction. If a grid
+      is the lowest in multiple pairs, it is moved once and subsequent
+      pairs involving it are skipped via the key check.
 
     Returns True if applied, False if skipped.
     """
@@ -469,9 +471,19 @@ def apply_leader(target_entry, view, already_done_keys):
 
     offset_dir = get_offset_direction(target_entry, view)
 
-    # Add leader if not already present, else reuse existing
-    if not grid_has_leader_at_end(grid, view, end_index):
-        grid.AddLeader(datum_end, view)
+    # Check both already_done_keys (same transaction) AND GetLeader
+    # (from a previous run) before calling AddLeader.
+    # already_done_keys is the primary guard within a single transaction
+    # because GetLeader may not reflect changes made earlier in the same
+    # transaction before it is committed.
+    has_leader_already = grid_has_leader_at_end(grid, view, end_index)
+    if not has_leader_already:
+        try:
+            grid.AddLeader(datum_end, view)
+        except Exception:
+            # AddLeader can still fail if Revit's internal state already
+            # has a leader — fall through to GetLeader and reposition.
+            pass
 
     leader = grid.GetLeader(datum_end, view)
     if leader is None:
