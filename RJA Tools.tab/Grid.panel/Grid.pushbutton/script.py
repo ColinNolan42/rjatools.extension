@@ -460,22 +460,19 @@ def process_view(view, bubble_diam_ft, threshold):
         if not pairs:
             break  # all clear
 
-        # Build targets dict.
-        # Direction rule — sequence order determines movement direction:
+        # RULE: Only ONE grid moves per collision pair — the HIGHER named one.
+        # Lower named grid stays completely still.
+        # Higher number/letter = further in counting sequence = moves away.
         #
-        #   Higher in sequence (further along counting/alphabet) moves +perp.
-        #   Lower in sequence moves -perp.
+        # Vertical grids:  higher number moves RIGHT (+X)
+        # Horizontal grids: higher letter moves DOWN  (-Y)
         #
-        #   Numbers: 6 > 5 > 4. In a collision, 6 moves +perp (right/down
-        #   away from 5 and 4). 4 moves -perp. 5 moves based on neighbours.
-        #
-        #   Letters: E > D > C. In a collision, E moves +perp away from D/C.
-        #   C moves -perp. D moves based on neighbours.
-        #
-        #   CRITICAL — apply order: process furthest-in-sequence FIRST.
-        #   In triple 4,5,6: move 6 first into open space, then 5 into
-        #   space 6 vacated, then 4 if needed. This prevents 5 landing
-        #   on top of 6 when 5 moves before 6 has cleared.
+        # Triple 4,5,6 example:
+        #   Pair(4,5) → 5 moves, 4 stays
+        #   Pair(5,6) → 6 moves, 5 stays
+        #   Pair(4,6) → 6 moves, 4 stays
+        #   Net: 6 gets nudged (from 2 pairs), 5 gets nudged (from 1 pair), 4 stays
+        #   Process order: 6 first, then 5 → 6 clears space, 5 moves into it
         targets = {}
         name_map = {g.Id.IntegerValue: g.Name for g in grids}
 
@@ -486,37 +483,31 @@ def process_view(view, bubble_diam_ft, threshold):
             name_a = name_map.get(g_a.Id.IntegerValue, "")
             name_b = name_map.get(g_b.Id.IntegerValue, "")
 
-            perp_a = get_nudge_direction(g_a, view)
-            perp_b = get_nudge_direction(g_b, view)
-
-            # Higher in sequence → +perp (moves further away)
-            # Lower in sequence → -perp (moves back / stays)
+            # Pick ONLY the higher-named grid to move
             if higher_name(name_a, name_b):
-                sign_a =  1.0   # a is further in sequence → +perp
-                sign_b = -1.0   # b is lower → -perp
+                move_g    = g_a
+                move_end  = end_a
+                move_idx  = idx_a
+                move_name = name_a
             else:
-                sign_a = -1.0   # a is lower → -perp
-                sign_b =  1.0   # b is further in sequence → +perp
+                move_g    = g_b
+                move_end  = end_b
+                move_idx  = idx_b
+                move_name = name_b
 
-            key_a = (g_a.Id.IntegerValue, idx_a)
-            if key_a not in targets:
-                targets[key_a] = [g_a, end_a, 0.0, 0.0, name_a]
-            targets[key_a][2] += perp_a.X * sign_a
-            targets[key_a][3] += perp_a.Y * sign_a
+            nudge_dir = get_nudge_direction(move_g, view)
 
-            key_b = (g_b.Id.IntegerValue, idx_b)
-            if key_b not in targets:
-                targets[key_b] = [g_b, end_b, 0.0, 0.0, name_b]
-            targets[key_b][2] += perp_b.X * sign_b
-            targets[key_b][3] += perp_b.Y * sign_b
+            key = (move_g.Id.IntegerValue, move_idx)
+            if key not in targets:
+                targets[key] = [move_g, move_end, 0.0, 0.0, move_name]
+            targets[key][2] += nudge_dir.X
+            targets[key][3] += nudge_dir.Y
 
-        # Sort targets furthest-in-sequence FIRST before applying nudges.
-        # This ensures 6 moves before 5 before 4 so each one moves into
-        # the space the previous one vacated — no cascading overlaps.
+        # Process highest-named first so it clears space before lower ones move
         sorted_targets = sorted(
             targets.items(),
             key=lambda item: name_sort_key(item[1][4]),
-            reverse=True   # highest sequence value first
+            reverse=True
         )
 
         for key, target_data in sorted_targets:
@@ -543,6 +534,11 @@ def process_view(view, bubble_diam_ft, threshold):
                 )
                 leader.Elbow = new_elbow
                 move_grid.SetLeader(move_end, view, leader)
+
+            except Exception as ex:
+                errors.append("Nudge grid {} iter {}: {}".format(
+                    move_grid.Id.IntegerValue, iteration, ex))
+                logger.debug(traceback.format_exc())
 
             except Exception as ex:
                 errors.append("Nudge grid {} iter {}: {}".format(
