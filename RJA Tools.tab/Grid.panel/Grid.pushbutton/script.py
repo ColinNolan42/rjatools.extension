@@ -87,7 +87,7 @@ PLAN_VIEW_TYPES = {
 DEFAULT_BUBBLE_DIAMETER_FT = 2.0
 
 MIN_GRID_LENGTH_FT = 0.01
-MAX_ITERATIONS     = 500   # safety cap on nudge loop per view
+MAX_ITERATIONS     = 50    # nudge step = threshold/8, so 50 steps = 6.25 bubble diameters max travel
 
 
 # =============================================================================
