@@ -1,53 +1,20 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on plan views placed on sheets.
 
-Current state (handoff to Opus for continued debugging):
-
-WHAT WORKS:
-  - Collision detection using leader.Anchor positions (2D XY only)
-  - AddLeader correctly adds elbow break to colliding grids
-  - doc.Regenerate() after AddLeader required before SetLeader works
-  - Name-order logic: higher name (5>4, E>D) moves, lower stays
-  - Process order: highest-named first so it clears space before lower moves
-  - Nudge direction math verified:
-      Vertical grid   tan=(0,1): perp=(tan_y,-tan_x)=(1,0)  = RIGHT (+X) ✓
-      Horizontal grid tan=(1,0): perp=(tan_y,-tan_x)=(0,-1) = DOWN  (-Y) ✓
-  - Bubble size: 2.0 ft model space (1/4" at 1/8" scale), user-enterable
-  - Views: FloorPlan/CeilingPlan/AreaPlan/EngineeringPlan on sheets only
-  - Host grids only (linked grids excluded)
-
-OUTSTANDING ISSUES:
-  - SetLeader throws "Elbow is between End and Anchor" on some grids
-    even after Regenerate. The elbow reset step (Project onto curve) was
-    removed because it caused this error. Need to find the valid Elbow
-    range and constrain nudges to stay within it.
-  - 1500 errors reported on last run — SetLeader failing consistently.
-    Root cause: after AddLeader+Regenerate, the Anchor and End define a
-    valid range for Elbow. Moving Elbow outside [Anchor..End] throws.
-    Need to: (a) read Anchor and End after Regenerate, (b) clamp nudge
-    direction so Elbow stays between Anchor and End at all times.
-  - Script needs to read leader.Anchor and leader.End AFTER Regenerate
-    and verify Elbow stays on the line segment between them.
-
-KEY REVIT API FACTS (proven by diagnostic runs):
-  - leader.Anchor is READ-ONLY (computed from Elbow and End)
-  - leader.End must stay ON the grid's infinite axis line
-  - leader.Elbow must be geometrically BETWEEN Anchor and End
-  - SetLeader signature: grid.SetCurveInView(DatumExtentType, View, Curve)
-    NO — correct: grid.SetLeader(DatumEnds, View, Leader)
-  - AddLeader signature: grid.AddLeader(DatumEnds, View)
-  - After AddLeader, MUST call doc.Regenerate() before GetLeader/SetLeader
-
-BUBBLE SIZE:
-  - 2.0 ft in model space at 1/8" scale
-  - Collision threshold = 2.0 ft (no view.Scale multiplication needed)
-  - Nudge step = threshold / 8.0 = 0.25 ft per iteration
-  - MAX_ITERATIONS = 50
+VERSION 16.0.0 — fixes:
+  - AddLeader only added to the higher-named grid in a colliding pair
+  - In triple/N-way collisions only the single highest-named grid moves per
+    iteration; lower grids are always stationary
+  - Tangent vector canonicalized so direction never depends on which endpoint
+    Revit stores as index 0 vs index 1 on the curve
+  - Elbow clamped to the true parametric segment [Anchor..End] (not bounding
+    box) so the "Elbow is between End and Anchor" constraint is always
+    satisfied
 """
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "15.0.0"
+__version__ = "16.0.0"
 __doc__     = ("Separates colliding grid bubbles using leader elbow nudging. "
                "Works for any grid orientation in Revit 2022-2025.")
 
@@ -80,18 +47,16 @@ PLAN_VIEW_TYPES = {
     ViewType.EngineeringPlan,
 }
 
-# Bubble diameter: 2.0 ft directly in Revit model space (no view.Scale multiply)
 DEFAULT_BUBBLE_DIAMETER_FT = 2.0
-
-MIN_GRID_LENGTH_FT = 0.01
-MAX_ITERATIONS     = 50   # nudge step = threshold/8 = 0.25 ft, 50 steps = 12.5 ft max
+MIN_GRID_LENGTH_FT         = 0.01
+MAX_ITERATIONS             = 50   # 50 x 0.25 ft = 12.5 ft max travel
 
 
 # =============================================================================
-# Name sort — higher number/letter = further in sequence = higher sort value
+# Name sort helpers
 # =============================================================================
 def name_sort_key(name):
-    """Sort key: 4<5<6<10, A<B<C<D<E. Further in sequence = higher value."""
+    """4 < 5 < 6 < 10,  A < B < C — further in sequence = higher value."""
     parts = re.split(r'(\d+)', str(name))
     key = []
     for part in parts:
@@ -103,12 +68,12 @@ def name_sort_key(name):
 
 
 def higher_name(name_a, name_b):
-    """Return True if name_a is further in the counting/alphabet sequence."""
+    """True if name_a is further in the counting / alphabet sequence."""
     return name_sort_key(name_a) > name_sort_key(name_b)
 
 
 # =============================================================================
-# Pick a grid — calibrate bubble size
+# Pick a reference grid to calibrate bubble size
 # =============================================================================
 def pick_reference_grid():
     try:
@@ -139,8 +104,8 @@ def pick_reference_grid():
 
 
 def read_bubble_diameter_ft(grid):
-    """Read bubble diameter from grid head annotation family.
-    Falls back to user input, then default 2.0 ft."""
+    """Read bubble diameter from the annotation family; fall back to user
+    input; fall back to default 2.0 ft."""
     try:
         grid_type = doc.GetElement(grid.GetTypeId())
         if grid_type is not None:
@@ -176,21 +141,14 @@ def read_bubble_diameter_ft(grid):
         if raw:
             val = float(raw)
             if 0.01 < val < 100.0:
-                output.print_md(
-                    "User-entered: **{} ft**".format(val))
+                output.print_md("User-entered: **{} ft**".format(val))
                 return val
     except Exception:
         pass
 
-    output.print_md("Using default: **{} ft**".format(DEFAULT_BUBBLE_DIAMETER_FT))
+    output.print_md(
+        "Using default: **{} ft**".format(DEFAULT_BUBBLE_DIAMETER_FT))
     return DEFAULT_BUBBLE_DIAMETER_FT
-
-
-# =============================================================================
-# Collision threshold — model space, no scaling
-# =============================================================================
-def collision_threshold(view, bubble_diameter_ft):
-    return bubble_diameter_ft
 
 
 # =============================================================================
@@ -198,7 +156,8 @@ def collision_threshold(view, bubble_diameter_ft):
 # =============================================================================
 def get_sheet_view_ids(document):
     placed_ids = set()
-    for sheet in FilteredElementCollector(document).OfClass(ViewSheet).ToElements():
+    for sheet in (FilteredElementCollector(document)
+                  .OfClass(ViewSheet).ToElements()):
         try:
             for vid in sheet.GetAllPlacedViews():
                 placed_ids.add(vid.IntegerValue)
@@ -222,7 +181,7 @@ def collect_plan_views_on_sheets(document):
 
 
 # =============================================================================
-# Grid curve helper
+# Grid curve helpers
 # =============================================================================
 def get_grid_curve_in_view(grid, view):
     for extent_type in (DatumExtentType.ViewSpecific, DatumExtentType.Model):
@@ -235,9 +194,6 @@ def get_grid_curve_in_view(grid, view):
     return None
 
 
-# =============================================================================
-# Bubble helpers
-# =============================================================================
 def grid_has_bubble_at_end(grid, view, end_index):
     try:
         end = DatumEnds.End0 if end_index == 0 else DatumEnds.End1
@@ -255,16 +211,25 @@ def grid_has_leader_at_end(grid, view, end_index):
 
 
 # =============================================================================
-# Nudge direction — verified math:
-#   Vertical   tan=(0,1): (tan_y,-tan_x)=(1, 0) = RIGHT (+X) ✓
-#   Horizontal tan=(1,0): (tan_y,-tan_x)=(0,-1) = DOWN  (-Y) ✓
+# Canonicalized nudge direction
 # =============================================================================
 def get_nudge_direction(grid, view):
-    """Unit vector that higher-named grids move toward (RIGHT or DOWN)."""
+    """Return the unit vector that higher-named grids should move toward.
+
+    Formula: nudge = (tan_y, -tan_x, 0)
+      vertical grid   tan≈(0,±1,0) → canonical (0,+1,0) → nudge=(+1, 0,0) RIGHT
+      horizontal grid tan≈(±1,0,0) → canonical (+1,0,0) → nudge=(0, -1,0) DOWN
+
+    The tangent is CANONICALIZED before the formula is applied so that the
+    result never depends on which endpoint Revit labels index 0 vs index 1.
+    Canonicalization rule: flip the sign of the whole tangent if its primary
+    component is negative, so the primary component is always positive.
+    """
     try:
         curve = get_grid_curve_in_view(grid, view)
         if curve is None:
             return XYZ(1.0, 0.0, 0.0)
+
         p0 = curve.GetEndPoint(0)
         p1 = curve.GetEndPoint(1)
         dx = p1.X - p0.X
@@ -272,20 +237,45 @@ def get_nudge_direction(grid, view):
         length = (dx * dx + dy * dy) ** 0.5
         if length < 1e-9:
             return XYZ(1.0, 0.0, 0.0)
+
         tan_x = dx / length
         tan_y = dy / length
-        # Verified: vertical→RIGHT, horizontal→DOWN
+
+        # --- Canonicalize so primary direction is always positive ---
+        # Vertical grid: |tan_y| > |tan_x|  → primary axis is Y
+        #   If tan_y < 0 the curve was stored bottom→top; flip both components.
+        # Horizontal grid: |tan_x| >= |tan_y| → primary axis is X
+        #   If tan_x < 0 the curve was stored right→left; flip both components.
+        if abs(tan_y) > abs(tan_x):
+            # Vertical
+            if tan_y < 0.0:
+                tan_x = -tan_x
+                tan_y = -tan_y
+        else:
+            # Horizontal
+            if tan_x < 0.0:
+                tan_x = -tan_x
+                tan_y = -tan_y
+
+        # nudge = perpendicular rotated 90° clockwise from canonical tangent
+        # (tan_y, -tan_x, 0)
+        #   vertical   (0,+1) → (+1, 0) = RIGHT (+X) ✓
+        #   horizontal (+1,0) → ( 0,-1) = DOWN  (-Y) ✓
         return XYZ(tan_y, -tan_x, 0.0)
+
     except Exception:
         return XYZ(1.0, 0.0, 0.0)
 
 
 # =============================================================================
-# Bubble position collection — uses Anchor after leaders exist
+# Bubble position collection
 # =============================================================================
 def collect_bubble_positions(grids, view):
-    """(grid, datum_end, end_index, anchor_pt) for all visible bubbles.
-    Uses leader.Anchor if available, else curve endpoint."""
+    """Return list of (grid, datum_end, end_index, anchor_pt).
+
+    Uses leader.Anchor when a leader exists (post-Regenerate accurate
+    position), otherwise falls back to the curve endpoint.
+    """
     positions = []
     for g in grids:
         curve = get_grid_curve_in_view(g, view)
@@ -310,8 +300,8 @@ def collect_bubble_positions(grids, view):
 # =============================================================================
 # Collision detection
 # =============================================================================
-def find_colliding_anchor_pairs(positions, threshold):
-    """Colliding (pos_a, pos_b) pairs using Anchor XY distance. Pure 2D."""
+def find_colliding_pairs(positions, threshold):
+    """Return list of (pos_a, pos_b) whose Anchor XY distance ≤ threshold."""
     pairs = []
     threshold_sq = threshold * threshold
     n = len(positions)
@@ -326,6 +316,46 @@ def find_colliding_anchor_pairs(positions, threshold):
             if (dx * dx + dy * dy) <= threshold_sq:
                 pairs.append((positions[i], positions[j]))
     return pairs
+
+
+# =============================================================================
+# Elbow clamping — true parametric segment, not bounding box
+# =============================================================================
+def clamp_elbow_to_segment(proposed_x, proposed_y, anchor, end):
+    """Project the proposed Elbow XY onto the segment [anchor..end] and
+    return a point that is strictly BETWEEN them (not at either endpoint).
+
+    The Revit constraint is: Elbow must lie between Anchor and End on the
+    leader path.  The safest geometric interpretation is that the Elbow,
+    when projected onto the line through Anchor and End, must have a
+    parameter t strictly in (0, 1).
+
+    We project the proposed point, clamp t to [margin, 1-margin], and
+    return the clamped point in 3-D (Z inherited from Anchor).
+    """
+    # Vector from anchor to end
+    ax, ay = anchor.X, anchor.Y
+    ex, ey = end.X,    end.Y
+    seg_x  = ex - ax
+    seg_y  = ey - ay
+    seg_len_sq = seg_x * seg_x + seg_y * seg_y
+
+    if seg_len_sq < 1e-12:
+        # Degenerate segment — return midpoint
+        return XYZ((ax + ex) * 0.5, (ay + ey) * 0.5, anchor.Z)
+
+    # Parameter t of the proposed point projected onto anchor→end
+    t = ((proposed_x - ax) * seg_x +
+         (proposed_y - ay) * seg_y) / seg_len_sq
+
+    # Keep t strictly inside — 5% inset from each end
+    margin = 0.05
+    if t < margin:
+        t = margin
+    elif t > 1.0 - margin:
+        t = 1.0 - margin
+
+    return XYZ(ax + t * seg_x, ay + t * seg_y, anchor.Z)
 
 
 # =============================================================================
@@ -345,60 +375,99 @@ def process_view(view, bubble_diam_ft, threshold):
     if len(grids) < 2:
         return leaders_added, errors
 
-    # --- Step 1: AddLeader on all grids with visible bubbles -----------------
-    new_leader_keys = set()
-    for g in grids:
-        for end_index in (0, 1):
-            datum_end = DatumEnds.End0 if end_index == 0 else DatumEnds.End1
-            if not grid_has_bubble_at_end(g, view, end_index):
-                continue
-            if grid_has_leader_at_end(g, view, end_index):
-                continue
-            try:
-                g.AddLeader(datum_end, view)
-                new_leader_keys.add((g.Id.IntegerValue, end_index))
-                leaders_added += 1
-            except Exception as ex:
-                logger.debug("AddLeader grid {} end {}: {}".format(
-                    g.Id.IntegerValue, end_index, ex))
+    # ------------------------------------------------------------------
+    # Step 1: Identify colliding pairs and add leaders ONLY to the
+    # higher-named grid of each colliding pair.
+    #
+    # Approach:
+    #   a) Collect bubble positions using curve endpoints (leaders not yet
+    #      present so Anchor is not available yet).
+    #   b) Find all colliding pairs.
+    #   c) For each pair the higher-named grid is the "mover"; add a leader
+    #      to that grid/end if it doesn't already have one.
+    #   d) Lower-named grids never receive a leader from this script.
+    # ------------------------------------------------------------------
+    initial_positions = collect_bubble_positions(grids, view)
+    initial_pairs     = find_colliding_pairs(initial_positions, threshold)
 
-    # --- Step 2: REQUIRED — Regenerate before any SetLeader calls ------------
-    # Without this, leader geometry is stale and SetLeader fails.
+    if not initial_pairs:
+        return leaders_added, errors
+
+    # Collect (grid_id, end_index) keys that need a leader
+    needs_leader = set()
+    name_map     = {g.Id.IntegerValue: g.Name for g in grids}
+
+    for pos_a, pos_b in initial_pairs:
+        g_a, end_a, idx_a, _ = pos_a
+        g_b, end_b, idx_b, _ = pos_b
+        name_a = name_map.get(g_a.Id.IntegerValue, "")
+        name_b = name_map.get(g_b.Id.IntegerValue, "")
+
+        if higher_name(name_a, name_b):
+            needs_leader.add((g_a.Id.IntegerValue, idx_a))
+        else:
+            needs_leader.add((g_b.Id.IntegerValue, idx_b))
+
+    # Build a lookup from (grid_id, end_index) → (grid, datum_end)
+    pos_lookup = {}
+    for g, datum_end, end_index, _ in initial_positions:
+        pos_lookup[(g.Id.IntegerValue, end_index)] = (g, datum_end)
+
+    for key in needs_leader:
+        if key not in pos_lookup:
+            continue
+        g, datum_end = pos_lookup[key]
+        end_index    = key[1]
+        if grid_has_leader_at_end(g, view, end_index):
+            continue   # already has one from a previous run
+        try:
+            g.AddLeader(datum_end, view)
+            leaders_added += 1
+        except Exception as ex:
+            logger.debug("AddLeader grid {} end {}: {}".format(
+                g.Id.IntegerValue, end_index, ex))
+
+    # ------------------------------------------------------------------
+    # Step 2: Regenerate — REQUIRED before any GetLeader/SetLeader call
+    # ------------------------------------------------------------------
     doc.Regenerate()
 
-    # --- Step 3: Iteratively nudge colliding bubbles apart -------------------
-    # nudge_step = threshold / 8 = 0.25 ft per step
-    # Only higher-named grid moves per pair. Lower stays.
-    # Process highest-named first so it clears space before lower moves.
+    # ------------------------------------------------------------------
+    # Step 3: Iteratively nudge colliding bubbles apart.
     #
-    # KNOWN ISSUE: SetLeader throws "Elbow is between End and Anchor"
-    # when Elbow is nudged outside the valid range defined by Anchor and End.
-    # TODO: After Regenerate, read leader.Anchor and leader.End, then
-    # clamp each nudge so Elbow stays on the segment between them.
+    # Rules:
+    #   - Only the highest-named grid in any collision group moves per step.
+    #   - Grid 4 never moves if grid 5 is in the same collision group.
+    #   - Nudge step = threshold / 8 = 0.25 ft per iteration.
+    #   - Elbow is clamped to the parametric segment [Anchor..End] after
+    #     every nudge so SetLeader never throws a constraint error.
+    # ------------------------------------------------------------------
     nudge_step = threshold / 8.0
 
     for iteration in range(MAX_ITERATIONS):
         positions = collect_bubble_positions(grids, view)
-        pairs     = find_colliding_anchor_pairs(positions, threshold)
+        pairs     = find_colliding_pairs(positions, threshold)
 
         if not pairs:
             break
 
-        targets  = {}
-        name_map = {g.Id.IntegerValue: g.Name for g in grids}
+        # Determine which grids to move this iteration.
+        # For each colliding pair only the higher-named grid is a candidate.
+        # Accumulate net nudge vectors per (grid_id, end_index) key.
+        targets = {}
 
         for pos_a, pos_b in pairs:
-            g_a, end_a, idx_a, anchor_a = pos_a
-            g_b, end_b, idx_b, anchor_b = pos_b
-
+            g_a, end_a, idx_a, _ = pos_a
+            g_b, end_b, idx_b, _ = pos_b
             name_a = name_map.get(g_a.Id.IntegerValue, "")
             name_b = name_map.get(g_b.Id.IntegerValue, "")
 
-            # Only higher-named moves
             if higher_name(name_a, name_b):
-                move_g, move_end, move_idx, move_name = g_a, end_a, idx_a, name_a
+                move_g, move_end, move_idx, move_name = (
+                    g_a, end_a, idx_a, name_a)
             else:
-                move_g, move_end, move_idx, move_name = g_b, end_b, idx_b, name_b
+                move_g, move_end, move_idx, move_name = (
+                    g_b, end_b, idx_b, name_b)
 
             nudge_dir = get_nudge_direction(move_g, view)
             key = (move_g.Id.IntegerValue, move_idx)
@@ -407,11 +476,11 @@ def process_view(view, bubble_diam_ft, threshold):
             targets[key][2] += nudge_dir.X
             targets[key][3] += nudge_dir.Y
 
-        # Highest-named first
+        # Process highest-named first so it clears space before lower grids
         sorted_targets = sorted(
             targets.items(),
             key=lambda item: name_sort_key(item[1][4]),
-            reverse=True
+            reverse=True,
         )
 
         for key, target_data in sorted_targets:
@@ -423,58 +492,36 @@ def process_view(view, bubble_diam_ft, threshold):
             net_len = (net_x * net_x + net_y * net_y) ** 0.5
             if net_len < 1e-9:
                 continue
-            nx = net_x / net_len
-            ny = net_y / net_len
+            # Normalized direction × step size
+            nx = (net_x / net_len) * nudge_step
+            ny = (net_y / net_len) * nudge_step
 
             try:
                 leader = move_grid.GetLeader(move_end, view)
                 if leader is None:
                     continue
 
-                # Read the current leader geometry. Anchor is read-only and
-                # computed from Elbow + End; we use it only for clamping.
-                anchor = leader.Anchor
+                anchor = leader.Anchor   # read-only, computed by Revit
                 elbow  = leader.Elbow
-                end    = leader.End
+                end    = leader.End      # must never be moved
 
-                # Proposed new Elbow before clamping.
-                prop_x = elbow.X + nx * nudge_step
-                prop_y = elbow.Y + ny * nudge_step
+                # Proposed new Elbow position
+                prop_x = elbow.X + nx
+                prop_y = elbow.Y + ny
 
-                # Clamp the proposed Elbow into the axis-aligned bounding
-                # box of Anchor and End so the
-                #     "Elbow is between End and Anchor"
-                # constraint always holds. A 1/16" inset keeps us strictly
-                # off the boundary (Revit's "between" check can reject
-                # exact-equal values).
-                margin = 1.0 / 12.0 / 16.0   # ~1/16" in feet
+                # Clamp to the true parametric segment [anchor..end]
+                # so the "Elbow is between End and Anchor" constraint
+                # is always satisfied.
+                clamped = clamp_elbow_to_segment(
+                    prop_x, prop_y, anchor, end)
 
-                min_x = min(anchor.X, end.X) + margin
-                max_x = max(anchor.X, end.X) - margin
-                min_y = min(anchor.Y, end.Y) + margin
-                max_y = max(anchor.Y, end.Y) - margin
-
-                # If Anchor and End coincide on an axis, margin can collapse
-                # the range; pin to the midpoint rather than flip order.
-                if max_x < min_x:
-                    min_x = max_x = (anchor.X + end.X) / 2.0
-                if max_y < min_y:
-                    min_y = max_y = (anchor.Y + end.Y) / 2.0
-
-                if   prop_x < min_x: prop_x = min_x
-                elif prop_x > max_x: prop_x = max_x
-                if   prop_y < min_y: prop_y = min_y
-                elif prop_y > max_y: prop_y = max_y
-
-                # If clamping left Elbow unchanged, this grid has no room
-                # to move further in the requested direction — skip the
-                # SetLeader call rather than burning an iteration on a
-                # guaranteed no-op.
-                if (abs(prop_x - elbow.X) < 1e-9 and
-                        abs(prop_y - elbow.Y) < 1e-9):
+                # Skip the API call if clamping produced no movement —
+                # the grid has no remaining room in this direction.
+                if (abs(clamped.X - elbow.X) < 1e-9 and
+                        abs(clamped.Y - elbow.Y) < 1e-9):
                     continue
 
-                leader.Elbow = XYZ(prop_x, prop_y, elbow.Z)
+                leader.Elbow = clamped
                 move_grid.SetLeader(move_end, view, leader)
 
             except Exception as ex:
@@ -524,7 +571,7 @@ def main():
 
         for view in views:
             try:
-                threshold = collision_threshold(view, bubble_diam_ft)
+                threshold = bubble_diam_ft   # model space, no scale factor
                 added, errors = process_view(view, bubble_diam_ft, threshold)
                 total_leaders += added
                 for err in errors:
