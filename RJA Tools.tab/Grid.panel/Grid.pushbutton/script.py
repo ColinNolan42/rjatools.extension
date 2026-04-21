@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on plan views placed on sheets.
 
-VERSION 18.0.0 — fixes:
-  - name_sort_key() now correctly handles sub-grid names like 3.1, 3.3,
-    H.1, H.2 so that 3 < 3.1 < 3.3 < 4 and H < H.1 < H.2 < I.
-    Sub-grids are treated as decimal subdivisions of their parent grid,
-    not as separate tokens — fully universal, nothing hardcoded.
+VERSION 18.1.0 — diagnostic logging embedded to trace sub-grid collision
+behaviour at runtime. All logic identical to v18; output panel will print
+bubble positions, collision pairs, leader additions and nudge results for
+every view so the root cause of the 3.1 mis-movement can be identified.
 """
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "18.0.0"
+__version__ = "18.1.0"
 __doc__     = ("Separates colliding grid bubbles using leader elbow nudging. "
                "Works for any grid orientation in Revit 2022-2025.")
 
@@ -53,39 +52,13 @@ MAX_PASSES                 = 20
 # Name sort helpers
 # =============================================================================
 def name_sort_key(name):
-    """Universal sort key that correctly orders grid names including
-    sub-grids with dot notation.
-
-    Strategy: split the name on dots first, then parse each segment as
-    a (letters, number) pair. This produces a tuple of tuples that sorts
-    correctly for all cases:
-
-        1 < 2 < 3 < 3.1 < 3.3 < 3.5 < 4 < 10
-        A < B < H < H.1 < H.2 < H.3 < I
-        A1 < A2 < A10 < B1
-
-    Each dot-segment is parsed into (alpha_prefix, numeric_suffix) where
-    the alpha part is compared as an uppercase string and the numeric part
-    as an integer. Missing parts default to ("", 0) so that the parent
-    "3" sorts below any sub-grid "3.x".
-
-    Examples:
-        "3"   → [("", 3)]
-        "3.1" → [("", 3), ("", 1)]   → 3 < 3.1 ✓
-        "3.3" → [("", 3), ("", 3)]   → 3.1 < 3.3 ✓
-        "4"   → [("", 4)]            → 3.3 < 4 ✓
-        "H"   → [("H", 0)]
-        "H.1" → [("H", 0), ("", 1)]  → H < H.1 ✓
-        "H.2" → [("H", 0), ("", 2)]  → H.1 < H.2 ✓
-        "I"   → [("I", 0)]           → H.2 < I ✓
+    """Universal sort key handling sub-grid dot notation.
+    3 < 3.1 < 3.3 < 4,  H < H.1 < H.2 < I
+    Each dot-segment parsed as (alpha_prefix, numeric_suffix).
     """
     key = []
     segments = str(name).split(".")
     for seg in segments:
-        # Split each segment into leading alpha and trailing numeric parts.
-        # e.g. "H"  → ("H", 0)
-        #      "3"  → ("",  3)
-        #      "A1" → ("A", 1)
         m = re.match(r'^([A-Za-z]*)(\d*)$', seg.strip())
         if m:
             alpha  = m.group(1).upper()
@@ -98,7 +71,6 @@ def name_sort_key(name):
 
 
 def higher_name(name_a, name_b):
-    """True if name_a is further in the counting / alphabet sequence."""
     return name_sort_key(name_a) > name_sort_key(name_b)
 
 
@@ -134,8 +106,6 @@ def pick_reference_grid():
 
 
 def read_bubble_diameter_ft(grid):
-    """Read bubble diameter from the annotation family; fall back to user
-    input; fall back to default 2.0 ft."""
     try:
         grid_type = doc.GetElement(grid.GetTypeId())
         if grid_type is not None:
@@ -244,17 +214,6 @@ def grid_has_leader_at_end(grid, view, end_index):
 # Canonicalized nudge direction
 # =============================================================================
 def get_nudge_direction(grid, view):
-    """Return the unit vector that higher-named grids should move toward.
-
-    Formula: nudge = (tan_y, -tan_x, 0)
-      vertical grid   canonical tan=(0,+1,0) → nudge=(+1,  0, 0) = RIGHT ✓
-      horizontal grid canonical tan=(+1,0,0) → nudge=( 0, -1, 0) = DOWN  ✓
-
-    Tangent is canonicalized before the formula so the result never depends
-    on which endpoint Revit labels index 0 vs 1 on the stored curve.
-    Rule: if the primary component (largest abs value) is negative, flip
-    both components so primary is always positive.
-    """
     try:
         curve = get_grid_curve_in_view(grid, view)
         if curve is None:
@@ -271,14 +230,11 @@ def get_nudge_direction(grid, view):
         tan_x = dx / length
         tan_y = dy / length
 
-        # Canonicalize: primary axis must be positive
         if abs(tan_y) > abs(tan_x):
-            # Vertical grid — primary axis is Y
             if tan_y < 0.0:
                 tan_x = -tan_x
                 tan_y = -tan_y
         else:
-            # Horizontal grid — primary axis is X
             if tan_x < 0.0:
                 tan_x = -tan_x
                 tan_y = -tan_y
@@ -293,11 +249,6 @@ def get_nudge_direction(grid, view):
 # Bubble position collection
 # =============================================================================
 def collect_bubble_positions(grids, view):
-    """Return list of (grid, datum_end, end_index, position_pt).
-
-    Uses leader.Anchor when a leader exists (accurate post-Regenerate
-    position), otherwise uses the raw curve endpoint.
-    """
     positions = []
     for g in grids:
         curve = get_grid_curve_in_view(g, view)
@@ -323,7 +274,6 @@ def collect_bubble_positions(grids, view):
 # Collision detection
 # =============================================================================
 def find_colliding_pairs(positions, threshold):
-    """Return list of (pos_a, pos_b) whose position XY distance <= threshold."""
     pairs = []
     threshold_sq = threshold * threshold
     n = len(positions)
@@ -341,15 +291,9 @@ def find_colliding_pairs(positions, threshold):
 
 
 # =============================================================================
-# Elbow clamping — true parametric segment projection
+# Elbow clamping
 # =============================================================================
 def clamp_elbow_to_segment(proposed_x, proposed_y, anchor, end):
-    """Project proposed Elbow XY onto segment [anchor..end] and return a
-    point strictly between them (t clamped to [0.05, 0.95]).
-
-    This satisfies Revit's constraint that Elbow must lie between
-    Anchor and End at all times.
-    """
     ax, ay = anchor.X, anchor.Y
     ex, ey = end.X,    end.Y
     seg_x  = ex - ax
@@ -372,31 +316,96 @@ def clamp_elbow_to_segment(proposed_x, proposed_y, anchor, end):
 
 
 # =============================================================================
+# Diagnostic printer — called once per view before any changes
+# =============================================================================
+def print_view_diagnostic(grids, view, threshold):
+    """Print full bubble state for every grid in this view so we can trace
+    exactly what positions, ends and collisions the script sees."""
+    output.print_md("#### DIAGNOSTIC — View: `{}`  threshold={:.3f} ft".format(
+        view.Name, threshold))
+
+    grids_sorted = sorted(grids, key=lambda g: g.Name)
+    for g in grids_sorted:
+        curve = get_grid_curve_in_view(g, view)
+        if curve is None:
+            output.print_md("  `{}` — no curve in view".format(g.Name))
+            continue
+
+        p0 = curve.GetEndPoint(0)
+        p1 = curve.GetEndPoint(1)
+        nudge = get_nudge_direction(g, view)
+
+        output.print_md(
+            "  `{}` | End0({:.2f},{:.2f}) End1({:.2f},{:.2f}) "
+            "nudge({:.0f},{:.0f})".format(
+                g.Name,
+                p0.X, p0.Y, p1.X, p1.Y,
+                nudge.X, nudge.Y))
+
+        for end_index, datum_end in [(0, DatumEnds.End0), (1, DatumEnds.End1)]:
+            try:
+                visible = g.IsBubbleVisibleInView(datum_end, view)
+            except Exception:
+                visible = False
+            if not visible:
+                continue
+
+            try:
+                leader = g.GetLeader(datum_end, view)
+                if leader and leader.Anchor:
+                    pt = leader.Anchor
+                    src = "Anchor"
+                else:
+                    pt = curve.GetEndPoint(end_index)
+                    src = "CurveEP"
+                output.print_md(
+                    "    End{} VISIBLE | {} pos({:.2f},{:.2f})".format(
+                        end_index, src, pt.X, pt.Y))
+            except Exception as ex:
+                output.print_md(
+                    "    End{} VISIBLE | pos ERROR: {}".format(end_index, ex))
+
+    # Print collision pairs
+    positions = collect_bubble_positions(grids, view)
+    pairs     = find_colliding_pairs(positions, threshold)
+    if pairs:
+        output.print_md("  **Collisions detected: {}**".format(len(pairs)))
+        for pos_a, pos_b in pairs:
+            g_a, _, idx_a, pt_a = pos_a
+            g_b, _, idx_b, pt_b = pos_b
+            name_a = g_a.Name
+            name_b = g_b.Name
+            dist = ((pt_a.X - pt_b.X)**2 + (pt_a.Y - pt_b.Y)**2) ** 0.5
+            winner = name_a if higher_name(name_a, name_b) else name_b
+            output.print_md(
+                "    `{}` End{} vs `{}` End{} | "
+                "dist={:.3f} | mover=`{}`".format(
+                    name_a, idx_a, name_b, idx_b, dist, winner))
+    else:
+        output.print_md("  No collisions detected.")
+
+    output.print_md("")
+
+
+# =============================================================================
 # Single pass: detect new collisions, add leaders, nudge to resolve
 # =============================================================================
-def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
-    """One full detection + nudge pass.
-
-    Returns:
-        new_leader_keys  — set of (grid_id_int, end_index) added this pass
-        errors           — list of error strings
-        any_collisions   — True if collisions were found at pass entry
-
-    Outer loop in process_view() repeats passes until new_leader_keys
-    is empty (no new collisions introduced by the previous pass).
-    """
+def run_pass(grids, view, threshold, nudge_step, existing_leader_keys,
+             pass_num, diag):
     new_leader_keys = set()
     errors          = []
     name_map        = {g.Id.IntegerValue: g.Name for g in grids}
 
-    # ------------------------------------------------------------------
     # Phase A: detect collisions, add leaders only to higher-named grid
-    # ------------------------------------------------------------------
     positions = collect_bubble_positions(grids, view)
     pairs     = find_colliding_pairs(positions, threshold)
 
     if not pairs:
         return new_leader_keys, errors, False
+
+    if diag:
+        output.print_md("  **Pass {} — Phase A: {} collision(s)**".format(
+            pass_num + 1, len(pairs)))
 
     pos_lookup = {}
     for g, datum_end, end_index, _ in positions:
@@ -404,43 +413,64 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
 
     needs_leader = set()
     for pos_a, pos_b in pairs:
-        g_a, end_a, idx_a, _ = pos_a
-        g_b, end_b, idx_b, _ = pos_b
+        g_a, end_a, idx_a, pt_a = pos_a
+        g_b, end_b, idx_b, pt_b = pos_b
         name_a = name_map.get(g_a.Id.IntegerValue, "")
         name_b = name_map.get(g_b.Id.IntegerValue, "")
 
         if higher_name(name_a, name_b):
-            needs_leader.add((g_a.Id.IntegerValue, idx_a))
+            mover_key  = (g_a.Id.IntegerValue, idx_a)
+            mover_name = name_a
         else:
-            needs_leader.add((g_b.Id.IntegerValue, idx_b))
+            mover_key  = (g_b.Id.IntegerValue, idx_b)
+            mover_name = name_b
+
+        needs_leader.add(mover_key)
+
+        if diag:
+            output.print_md(
+                "    collision `{}` vs `{}` → mover=`{}`".format(
+                    name_a, name_b, mover_name))
 
     for key in needs_leader:
         if key in existing_leader_keys:
+            if diag:
+                output.print_md(
+                    "    grid_id={} end={} already has leader — skip AddLeader".format(
+                        key[0], key[1]))
             continue
         if key not in pos_lookup:
             continue
         g, datum_end = pos_lookup[key]
         end_index    = key[1]
         if grid_has_leader_at_end(g, view, end_index):
+            if diag:
+                output.print_md(
+                    "    `{}` End{} leader exists in model — skip AddLeader".format(
+                        g.Name, end_index))
             continue
         try:
             g.AddLeader(datum_end, view)
             new_leader_keys.add(key)
+            if diag:
+                output.print_md(
+                    "    AddLeader → `{}` End{}".format(g.Name, end_index))
         except Exception as ex:
             logger.debug("AddLeader grid {} end {}: {}".format(
                 g.Id.IntegerValue, end_index, ex))
 
     doc.Regenerate()
 
-    # ------------------------------------------------------------------
-    # Phase B: iteratively nudge until collisions resolved or cap hit.
-    # Inner loop handles triple+ collisions within a single pass.
-    # ------------------------------------------------------------------
+    # Phase B: iteratively nudge
     for iteration in range(MAX_ITERATIONS):
         positions = collect_bubble_positions(grids, view)
         pairs     = find_colliding_pairs(positions, threshold)
 
         if not pairs:
+            if diag:
+                output.print_md(
+                    "  Pass {} resolved after {} nudge iteration(s)".format(
+                        pass_num + 1, iteration))
             break
 
         targets = {}
@@ -464,7 +494,6 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
             targets[key][2] += nudge_dir.X
             targets[key][3] += nudge_dir.Y
 
-        # Process highest-named first so it clears space before lower grids
         sorted_targets = sorted(
             targets.items(),
             key=lambda item: name_sort_key(item[1][4]),
@@ -476,6 +505,7 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
             move_end  = target_data[1]
             net_x     = target_data[2]
             net_y     = target_data[3]
+            move_name = target_data[4]
 
             net_len = (net_x * net_x + net_y * net_y) ** 0.5
             if net_len < 1e-9:
@@ -486,6 +516,10 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
             try:
                 leader = move_grid.GetLeader(move_end, view)
                 if leader is None:
+                    if diag:
+                        output.print_md(
+                            "    iter {} `{}` End{} — GetLeader returned None".format(
+                                iteration, move_name, move_end))
                     continue
 
                 anchor = leader.Anchor
@@ -500,7 +534,25 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
 
                 if (abs(clamped.X - elbow.X) < 1e-9 and
                         abs(clamped.Y - elbow.Y) < 1e-9):
+                    if diag:
+                        output.print_md(
+                            "    iter {} `{}` End{} — clamped, no room to move".format(
+                                iteration, move_name, move_end))
                     continue
+
+                if diag and iteration == 0:
+                    output.print_md(
+                        "    iter {} nudge `{}` End{} | "
+                        "Anchor({:.2f},{:.2f}) "
+                        "Elbow({:.2f},{:.2f})→({:.2f},{:.2f}) "
+                        "End({:.2f},{:.2f}) "
+                        "step({:.3f},{:.3f})".format(
+                            iteration, move_name, move_end,
+                            anchor.X, anchor.Y,
+                            elbow.X, elbow.Y,
+                            clamped.X, clamped.Y,
+                            end.X, end.Y,
+                            nx, ny))
 
                 leader.Elbow = clamped
                 move_grid.SetLeader(move_end, view, leader)
@@ -517,12 +569,6 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
 # Per-view processing — outer pass loop
 # =============================================================================
 def process_view(view, bubble_diam_ft, threshold):
-    """Run repeated passes until no new collisions are detected.
-
-    Pass 1: detects original collisions, adds leaders, nudges.
-    Pass 2: detects any new collisions created by pass 1, resolves.
-    Pass N: no new collisions → stops.
-    """
     total_leaders_added  = 0
     all_errors           = []
 
@@ -539,9 +585,13 @@ def process_view(view, bubble_diam_ft, threshold):
     nudge_step           = threshold / 8.0
     all_leader_keys_seen = set()
 
+    # Print full diagnostic snapshot before any changes
+    print_view_diagnostic(grids, view, threshold)
+
     for pass_num in range(MAX_PASSES):
         new_keys, errors, had_collisions = run_pass(
-            grids, view, threshold, nudge_step, all_leader_keys_seen)
+            grids, view, threshold, nudge_step, all_leader_keys_seen,
+            pass_num, diag=True)
 
         all_errors.extend(errors)
         total_leaders_added += len(new_keys)
@@ -549,13 +599,13 @@ def process_view(view, bubble_diam_ft, threshold):
 
         if not had_collisions:
             output.print_md(
-                "View **{}**: resolved in {} pass(es)".format(
+                "View **{}**: clean after {} pass(es)".format(
                     view.Name, pass_num + 1))
             break
 
         if not new_keys:
             output.print_md(
-                "View **{}**: resolved in {} pass(es)".format(
+                "View **{}**: resolved after {} pass(es)".format(
                     view.Name, pass_num + 1))
             break
     else:
@@ -582,7 +632,7 @@ def main():
     if ref_grid is None:
         script.exit()
 
-    output.print_md("## Grid Bubble Separation")
+    output.print_md("## Grid Bubble Separation — v18.1 Diagnostic Run")
     output.print_md("Reference grid: **{}** (ID {})".format(
         ref_grid.Name, ref_grid.Id.IntegerValue))
 
