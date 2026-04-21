@@ -1,22 +1,16 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on plan views placed on sheets.
 
-VERSION 17.0.0 — fixes:
-  - Multi-pass architecture: each pass can detect new collisions introduced
-    by the previous pass's leader additions (e.g. grid 9 moves right into
-    grid 10). Passes repeat until no new leaders are needed.
-  - Inner iteration loop (MAX_ITERATIONS) handles triple+ collisions within
-    a single pass where multiple nudge steps are required.
-  - AddLeader only added to the higher-named grid in a colliding pair.
-  - Tangent canonicalized — primary axis always positive — so nudge direction
-    never depends on which endpoint Revit stores as index 0 vs index 1.
-  - Elbow clamped to true parametric segment [Anchor..End], not bounding box.
-  - Lower-named grids (e.g. grid 4 in a 4-5-6 collision) never move.
+VERSION 18.0.0 — fixes:
+  - name_sort_key() now correctly handles sub-grid names like 3.1, 3.3,
+    H.1, H.2 so that 3 < 3.1 < 3.3 < 4 and H < H.1 < H.2 < I.
+    Sub-grids are treated as decimal subdivisions of their parent grid,
+    not as separate tokens — fully universal, nothing hardcoded.
 """
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "17.0.0"
+__version__ = "18.0.0"
 __doc__     = ("Separates colliding grid bubbles using leader elbow nudging. "
                "Works for any grid orientation in Revit 2022-2025.")
 
@@ -51,22 +45,55 @@ PLAN_VIEW_TYPES = {
 
 DEFAULT_BUBBLE_DIAMETER_FT = 2.0
 MIN_GRID_LENGTH_FT         = 0.01
-MAX_ITERATIONS             = 50    # nudge steps per pass (triple+ collisions)
-MAX_PASSES                 = 20    # safety cap on outer pass loop
+MAX_ITERATIONS             = 50
+MAX_PASSES                 = 20
 
 
 # =============================================================================
 # Name sort helpers
 # =============================================================================
 def name_sort_key(name):
-    """4 < 5 < 6 < 10,  A < B < C — further in sequence = higher value."""
-    parts = re.split(r'(\d+)', str(name))
+    """Universal sort key that correctly orders grid names including
+    sub-grids with dot notation.
+
+    Strategy: split the name on dots first, then parse each segment as
+    a (letters, number) pair. This produces a tuple of tuples that sorts
+    correctly for all cases:
+
+        1 < 2 < 3 < 3.1 < 3.3 < 3.5 < 4 < 10
+        A < B < H < H.1 < H.2 < H.3 < I
+        A1 < A2 < A10 < B1
+
+    Each dot-segment is parsed into (alpha_prefix, numeric_suffix) where
+    the alpha part is compared as an uppercase string and the numeric part
+    as an integer. Missing parts default to ("", 0) so that the parent
+    "3" sorts below any sub-grid "3.x".
+
+    Examples:
+        "3"   → [("", 3)]
+        "3.1" → [("", 3), ("", 1)]   → 3 < 3.1 ✓
+        "3.3" → [("", 3), ("", 3)]   → 3.1 < 3.3 ✓
+        "4"   → [("", 4)]            → 3.3 < 4 ✓
+        "H"   → [("H", 0)]
+        "H.1" → [("H", 0), ("", 1)]  → H < H.1 ✓
+        "H.2" → [("H", 0), ("", 2)]  → H.1 < H.2 ✓
+        "I"   → [("I", 0)]           → H.2 < I ✓
+    """
     key = []
-    for part in parts:
-        if part.isdigit():
-            key.append((0, int(part)))
+    segments = str(name).split(".")
+    for seg in segments:
+        # Split each segment into leading alpha and trailing numeric parts.
+        # e.g. "H"  → ("H", 0)
+        #      "3"  → ("",  3)
+        #      "A1" → ("A", 1)
+        m = re.match(r'^([A-Za-z]*)(\d*)$', seg.strip())
+        if m:
+            alpha  = m.group(1).upper()
+            digits = int(m.group(2)) if m.group(2) else 0
         else:
-            key.append((1, part.upper()))
+            alpha  = seg.upper()
+            digits = 0
+        key.append((alpha, digits))
     return key
 
 
@@ -256,7 +283,6 @@ def get_nudge_direction(grid, view):
                 tan_x = -tan_x
                 tan_y = -tan_y
 
-        # nudge = 90° clockwise rotation of canonical tangent
         return XYZ(tan_y, -tan_x, 0.0)
 
     except Exception:
@@ -364,8 +390,7 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
     name_map        = {g.Id.IntegerValue: g.Name for g in grids}
 
     # ------------------------------------------------------------------
-    # Phase A: detect collisions using current bubble positions, add
-    # leaders only to the higher-named grid of each new colliding pair.
+    # Phase A: detect collisions, add leaders only to higher-named grid
     # ------------------------------------------------------------------
     positions = collect_bubble_positions(grids, view)
     pairs     = find_colliding_pairs(positions, threshold)
@@ -390,7 +415,6 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
             needs_leader.add((g_b.Id.IntegerValue, idx_b))
 
     for key in needs_leader:
-        # Skip if this grid/end already had a leader before this pass
         if key in existing_leader_keys:
             continue
         if key not in pos_lookup:
@@ -406,15 +430,11 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
             logger.debug("AddLeader grid {} end {}: {}".format(
                 g.Id.IntegerValue, end_index, ex))
 
-    # Regenerate after any AddLeader calls so Anchor positions are accurate
-    # before the nudge phase. Safe to call even if no leaders were added.
     doc.Regenerate()
 
     # ------------------------------------------------------------------
-    # Phase B: iteratively nudge until all collisions in this pass are
-    # resolved or MAX_ITERATIONS is reached.
-    # Inner loop exists for triple+ collisions where a single nudge step
-    # is not enough — e.g. grids 4,5,6 all colliding simultaneously.
+    # Phase B: iteratively nudge until collisions resolved or cap hit.
+    # Inner loop handles triple+ collisions within a single pass.
     # ------------------------------------------------------------------
     for iteration in range(MAX_ITERATIONS):
         positions = collect_bubble_positions(grids, view)
@@ -470,7 +490,7 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
 
                 anchor = leader.Anchor
                 elbow  = leader.Elbow
-                end    = leader.End      # never moved
+                end    = leader.End
 
                 prop_x = elbow.X + nx
                 prop_y = elbow.Y + ny
@@ -499,14 +519,12 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys):
 def process_view(view, bubble_diam_ft, threshold):
     """Run repeated passes until no new collisions are detected.
 
-    Pass 1: detects original collisions (e.g. 8-9), adds leader to 9,
-            nudges 9 right.
-    Pass 2: detects new collision created by pass 1 (e.g. 9-10), adds
-            leader to 10, nudges 10 right.
-    Pass 3: no new collisions → stops.
+    Pass 1: detects original collisions, adds leaders, nudges.
+    Pass 2: detects any new collisions created by pass 1, resolves.
+    Pass N: no new collisions → stops.
     """
-    total_leaders_added = 0
-    all_errors          = []
+    total_leaders_added  = 0
+    all_errors           = []
 
     try:
         grids = list(FilteredElementCollector(doc, view.Id)
@@ -529,20 +547,12 @@ def process_view(view, bubble_diam_ft, threshold):
         total_leaders_added += len(new_keys)
         all_leader_keys_seen.update(new_keys)
 
-        if errors:
-            for err in errors:
-                logger.debug("Pass {} view {}: {}".format(
-                    pass_num + 1, view.Name, err))
-
-        # Stop when a pass finds no collisions at all — fully resolved
         if not had_collisions:
             output.print_md(
                 "View **{}**: resolved in {} pass(es)".format(
                     view.Name, pass_num + 1))
             break
 
-        # Stop when a pass found collisions but added no new leaders —
-        # means existing leaders are handling everything via nudging only
         if not new_keys:
             output.print_md(
                 "View **{}**: resolved in {} pass(es)".format(
@@ -595,7 +605,7 @@ def main():
 
         for view in views:
             try:
-                threshold = bubble_diam_ft   # model space, no scale factor
+                threshold = bubble_diam_ft
                 added, errors = process_view(view, bubble_diam_ft, threshold)
                 total_leaders += added
                 for err in errors:
