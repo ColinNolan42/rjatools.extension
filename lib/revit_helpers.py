@@ -244,6 +244,45 @@ def get_pipe_diameter_inches(pipe):
 # CONNECTOR INSPECTION
 # =============================================================================
 
+def _get_connector_manager(element):
+    """Return the ConnectorManager for any MEP element.
+
+    Tries two access paths:
+      1. element.ConnectorManager         - pipes, fittings, most elements
+      2. element.MEPModel.ConnectorManager - mechanical/plumbing equipment families
+
+    Returns ConnectorManager or None.
+    """
+    if element is None:
+        return None
+
+    eid = element.Id.IntegerValue
+
+    # Path 1 - direct access (pipes, fittings, most elements)
+    try:
+        cm = element.ConnectorManager
+        if cm is not None:
+            _log_entry("INFO", "_get_connector_manager", eid,
+                       "ConnectorManager found via element.ConnectorManager.")
+            return cm
+    except Exception:
+        pass
+
+    # Path 2 - via MEPModel (mechanical equipment, plumbing fixture families)
+    try:
+        cm = element.MEPModel.ConnectorManager
+        if cm is not None:
+            _log_entry("INFO", "_get_connector_manager", eid,
+                       "ConnectorManager found via element.MEPModel.ConnectorManager.")
+            return cm
+    except Exception:
+        pass
+
+    _log_entry("WARNING", "_get_connector_manager", eid,
+               "No ConnectorManager found via any access path.")
+    return None
+
+
 def get_connectors(element):
     """Return all connectors on an element as a list of dicts.
     
@@ -269,15 +308,11 @@ def get_connectors(element):
 
     eid = element.Id.IntegerValue
 
-    try:
-        connector_manager = element.ConnectorManager
-    except Exception as e:
-        _log_entry("WARNING", fn, eid,
-                   "Element has no ConnectorManager: {}".format(str(e)))
-        return []
+    connector_manager = _get_connector_manager(element)
 
     if connector_manager is None:
-        _log_entry("WARNING", fn, eid, "ConnectorManager is None.")
+        _log_entry("WARNING", fn, eid,
+                   "No ConnectorManager found on element via any access path.")
         return []
 
     results = []
@@ -452,19 +487,12 @@ def validate_selected_element(element):
 
     eid = element.Id.IntegerValue
 
-    # Check ConnectorManager exists
-    try:
-        cm = element.ConnectorManager
-        if cm is None:
-            _log_entry("ERROR", fn, eid, "ConnectorManager is None.")
-            return {
-                "is_valid": False,
-                "reason": "Selected element has no MEP connectors. Please select the gas meter.",
-                "connector_summary": []
-            }
-    except Exception as e:
+    # Check ConnectorManager exists - tries element.ConnectorManager
+    # and element.MEPModel.ConnectorManager for equipment families
+    cm = _get_connector_manager(element)
+    if cm is None:
         _log_entry("ERROR", fn, eid,
-                   "No ConnectorManager on selected element: {}".format(str(e)))
+                   "No ConnectorManager found via any access path.")
         return {
             "is_valid": False,
             "reason": "Selected element has no MEP connectors. Please select the gas meter.",
