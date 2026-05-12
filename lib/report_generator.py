@@ -1,7 +1,7 @@
 # report_generator.py
 # Takes the NetworkGraph from pipe_graph.py and produces:
-#   1. Diagnostic report JSON  -  debugging snapshot of what the traversal found
-#   2. One-line diagram data  -  formatted segments and fixture labels
+#   1. format_diagnostic_output()  -  formatted string printed to PyRevit output window
+#   2. generate_one_line_data()    -  structured segment and fixture label data
 #
 # IronPython 2.7
 
@@ -10,234 +10,192 @@ import shared_params
 import revit_helpers
 
 
-def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_version):
-    """Build the full diagnostic report dict from the network graph.
+# =============================================================================
+# DIAGNOSTIC OUTPUT  -  printed to PyRevit output window, copy/paste to debug
+# =============================================================================
+
+def format_diagnostic_output(graph, origin_element):
+    """Return a formatted diagnostic string for printing to the PyRevit output window.
 
     Args:
         graph: NetworkGraph from pipe_graph.build_network()
         origin_element: The user-selected meter Revit element
-        revit_version: str  -  e.g. "Revit 2024"
-        pyrevit_version: str  -  e.g. "4.8.x"
 
     Returns:
-        dict  -  the complete diagnostic report, ready for json.dumps()
+        str
     """
+    lines = []
 
-    report = {}
-
-    # -------------------------------------------------------------------------
-    # METADATA
-    # -------------------------------------------------------------------------
-    report["report_metadata"] = {
-        "schema_version":       shared_params.REPORT_SCHEMA_VERSION,
-        "tool_name":            shared_params.TOOL_NAME,
-        "phase":                shared_params.PHASE,
-        "timestamp":            datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-        "revit_version":        revit_version,
-        "pyrevit_version":      pyrevit_version,
-    }
+    def section(title):
+        lines.append("")
+        lines.append("=== {} ===".format(title))
 
     # -------------------------------------------------------------------------
-    # SYSTEM ORIGIN  -  meter element
+    # HEADER
     # -------------------------------------------------------------------------
+    lines.append("=== DIAGNOSTIC REPORT ===")
+    lines.append("Timestamp: {}".format(
+        datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")))
+
+    # -------------------------------------------------------------------------
+    # SYSTEM ORIGIN
+    # -------------------------------------------------------------------------
+    section("SYSTEM ORIGIN")
     origin_id = origin_element.Id.IntegerValue
-    origin_node = graph.nodes.get(origin_id)
     origin_connectors = revit_helpers.get_connectors(origin_element)
+    location = revit_helpers.get_element_location(origin_element)
 
-    # Validation checks on the meter
     has_out = any(c["direction"] == "Out" for c in origin_connectors)
     out_connected = any(
         c["direction"] == "Out" and c["is_connected"] for c in origin_connectors)
-    has_in = any(c["direction"] == "In" for c in origin_connectors)
+    meter_valid = "PASS" if (has_out and out_connected) else "FAIL"
 
-    report["system_origin"] = {
-        "element_id":       origin_id,
-        "family_name":      _safe_family_name(origin_element),
-        "location_xyz":     revit_helpers.get_element_location(origin_element),
-        "connector_count":  len(origin_connectors),
-        "connectors":       origin_connectors,
-        "validation": {
-            "has_out_connector":        has_out,
-            "out_connector_connected":  out_connected,
-            "has_in_connector":         has_in,
-            "result":   "PASS" if (has_out and out_connected) else "FAIL"
-        }
-    }
+    lines.append("Element ID:  {}".format(origin_id))
+    lines.append("Family:      {}".format(_safe_family_name(origin_element)))
+    lines.append("Location:    {}".format(location))
+    lines.append("Connectors:  {}".format(len(origin_connectors)))
+    for c in origin_connectors:
+        lines.append("  connector  direction={}  connected={}".format(
+            c["direction"], c["is_connected"]))
+    lines.append("Meter validation: {}".format(meter_valid))
 
     # -------------------------------------------------------------------------
     # FIXTURES
     # -------------------------------------------------------------------------
-    fixtures = []
-    for node in graph.nodes.values():
-        if node.is_gas_fixture:
-            fixtures.append({
-                "element_id":       node.element_id,
-                "fixture_name":     node.fixture_name,
-                "family_name":      node.family_name,
-                "location_xyz":     node.location_xyz,
-                "gas_load_mbh":     node.gas_load_mbh,
-                "gas_load_cfh":     node.gas_load_mbh,  # 1 MBH = 1 CFH at 1000 BTU/cf
-                "connector_count":  node.connector_count,
-                "validation": {
-                    "has_gas_load":     node.gas_load_mbh > 0,
-                    "has_fixture_name": node.fixture_name not in ("", "UNNAMED"),
-                    "result": "PASS" if (node.gas_load_mbh > 0) else "WARN  -  load is 0"
-                }
-            })
-
-    report["fixtures_found"] = fixtures
+    fixtures = [n for n in graph.nodes.values() if n.is_gas_fixture]
+    section("FIXTURES ({} found)".format(len(fixtures)))
+    if not fixtures:
+        lines.append("  NONE")
+    for n in fixtures:
+        result = "PASS" if n.gas_load_mbh > 0 else "WARN-load=0"
+        lines.append("  [{}]  {}  {:.1f} MBH  loc={}  {}".format(
+            n.element_id, n.fixture_name, n.gas_load_mbh, n.location_xyz, result))
 
     # -------------------------------------------------------------------------
     # PIPES
     # -------------------------------------------------------------------------
-    pipes = []
-    for edge in graph.edges.values():
-        pipes.append({
-            "element_id":           edge.element_id,
-            "diameter_inches":      round(edge.diameter_inches, 4),
-            "length_feet":          round(edge.length_feet, 2),
-            "from_node_id":         edge.from_node_id,
-            "to_node_id":           edge.to_node_id,
-            "start_xyz":            edge.start_xyz,
-            "end_xyz":              edge.end_xyz,
-            "cumulative_load_mbh":  round(edge.cumulative_load_mbh, 2)
-        })
-
-    report["pipes_found"] = pipes
+    section("PIPES ({} found)".format(len(graph.edges)))
+    if not graph.edges:
+        lines.append("  NONE")
+    for e in graph.edges.values():
+        lines.append("  [{}]  {}\"  {:.1f}'  from={} to={}  cumulative={:.1f} MBH".format(
+            e.element_id,
+            round(e.diameter_inches, 4),
+            e.length_feet,
+            e.from_node_id,
+            e.to_node_id,
+            e.cumulative_load_mbh))
 
     # -------------------------------------------------------------------------
-    # FITTINGS / TEES
+    # FITTINGS
     # -------------------------------------------------------------------------
-    fittings = []
+    fittings = [n for n in graph.nodes.values()
+                if n.node_type in ("tee", "fitting", "elbow")]
+    section("FITTINGS ({} found)".format(len(fittings)))
+    if not fittings:
+        lines.append("  NONE")
+    for n in fittings:
+        lines.append("  [{}]  {}  connectors={}  branch_point={}".format(
+            n.element_id, n.node_type, n.connector_count,
+            n.node_type == "tee"))
+
+    # -------------------------------------------------------------------------
+    # NETWORK GRAPH
+    # -------------------------------------------------------------------------
+    section("NETWORK GRAPH  nodes={}  edges={}".format(
+        len(graph.nodes), len(graph.edges)))
     for node in graph.nodes.values():
-        if node.node_type in ("tee", "fitting", "elbow"):
-            fittings.append({
-                "element_id":       node.element_id,
-                "family_name":      node.family_name,
-                "node_type":        node.node_type,
-                "is_elbow":         node.is_elbow,
-                "connector_count":  node.connector_count,
-                "location_xyz":     node.location_xyz,
-                "is_branch_point":  node.node_type == "tee"
-            })
-
-    report["fittings_found"] = fittings
-
-    # -------------------------------------------------------------------------
-    # NETWORK GRAPH  -  adjacency summary
-    # -------------------------------------------------------------------------
-    nodes_out = []
-    for node in graph.nodes.values():
-        nodes_out.append({
-            "node_id":              node.element_id,
-            "node_type":            node.node_type,
-            "family_name":          node.family_name,
-            "cumulative_load_mbh":  round(node.cumulative_load_mbh, 2)
-        })
-
-    edges_out = []
+        lines.append("  node [{}]  {}  {:.1f} MBH".format(
+            node.element_id, node.node_type, node.cumulative_load_mbh))
     for edge in graph.edges.values():
-        edges_out.append({
-            "edge_id":              edge.element_id,
-            "from_node":            edge.from_node_id,
-            "to_node":              edge.to_node_id,
-            "length_feet":          round(edge.length_feet, 2),
-            "diameter_inches":      round(edge.diameter_inches, 4),
-            "cumulative_load_mbh":  round(edge.cumulative_load_mbh, 2)
-        })
-
-    report["network_graph"] = {
-        "node_count":   len(graph.nodes),
-        "edge_count":   len(graph.edges),
-        "nodes":        nodes_out,
-        "edges":        edges_out
-    }
+        lines.append("  edge [{}]  {} -> {}  {:.1f}'  {:.1f} MBH".format(
+            edge.element_id, edge.from_node_id, edge.to_node_id,
+            edge.length_feet, edge.cumulative_load_mbh))
 
     # -------------------------------------------------------------------------
     # LONGEST RUN
     # -------------------------------------------------------------------------
+    section("LONGEST RUN")
     if graph.longest_run:
         lr = graph.longest_run
-        report["longest_run"] = {
-            "total_length_feet":        round(lr["total_length_feet"], 2),
-            "pipe_length_feet":         round(lr["pipe_length_feet"], 2),
-            "elbow_count":              lr["elbow_count"],
-            "elbow_equiv_length_feet":  round(lr["elbow_equiv_length_feet"], 2),
-            "path_element_ids":         lr["path_element_ids"],
-            "farthest_fixture_id":      lr["farthest_fixture_id"],
-            "farthest_fixture_name":    lr["farthest_fixture_name"]
-        }
+        lines.append("  Total:          {:.1f}'".format(lr["total_length_feet"]))
+        lines.append("  Pipe length:    {:.1f}'".format(lr["pipe_length_feet"]))
+        lines.append("  Elbows:         {}  ({:.1f}' equiv)".format(
+            lr["elbow_count"], lr["elbow_equiv_length_feet"]))
+        lines.append("  Farthest:       {} (ID {})".format(
+            lr["farthest_fixture_name"], lr["farthest_fixture_id"]))
+        lines.append("  Path IDs:       {}".format(lr["path_element_ids"]))
     else:
-        report["longest_run"] = None
+        lines.append("  NOT FOUND")
 
     # -------------------------------------------------------------------------
     # SYSTEM SUMMARY
     # -------------------------------------------------------------------------
-    total_load = sum(
-        n.gas_load_mbh for n in graph.nodes.values() if n.is_gas_fixture)
-    total_pipes = len(graph.edges)
+    total_load = sum(n.gas_load_mbh for n in graph.nodes.values() if n.is_gas_fixture)
     longest_ft = graph.longest_run["total_length_feet"] if graph.longest_run else 0.0
 
-    report["system_summary"] = {
-        "total_fixtures":       len(fixtures),
-        "total_load_mbh":       round(total_load, 2),
-        "total_load_cfh":       round(total_load, 2),
-        "total_pipe_segments":  total_pipes,
-        "longest_run_feet":     round(longest_ft, 2),
-        "specific_gravity":     shared_params.SPECIFIC_GRAVITY
-    }
-
-    # -------------------------------------------------------------------------
-    # ONE-LINE DIAGRAM DATA
-    # -------------------------------------------------------------------------
-    report["one_line_data"] = _build_one_line_data(graph, total_load, longest_ft)
+    section("SYSTEM SUMMARY")
+    lines.append("  Fixtures:       {}".format(len(fixtures)))
+    lines.append("  Total load:     {:.1f} MBH".format(total_load))
+    lines.append("  Pipe segments:  {}".format(len(graph.edges)))
+    lines.append("  Longest run:    {:.1f}'".format(longest_ft))
+    lines.append("  Spec gravity:   {}".format(shared_params.SPECIFIC_GRAVITY))
 
     # -------------------------------------------------------------------------
     # DISCONNECTED ELEMENTS
     # -------------------------------------------------------------------------
-    report["disconnected_elements"] = {
-        "count":    len(graph.disconnected),
-        "elements": graph.disconnected
-    }
-
-    # -------------------------------------------------------------------------
-    # TRAVERSAL LOG
-    # -------------------------------------------------------------------------
-    report["traversal_log"] = graph.traversal_log
+    section("DISCONNECTED ELEMENTS ({})".format(len(graph.disconnected)))
+    if not graph.disconnected:
+        lines.append("  None")
+    for d in graph.disconnected:
+        lines.append("  {}".format(d))
 
     # -------------------------------------------------------------------------
     # VALIDATION SUMMARY
     # -------------------------------------------------------------------------
-    report["validation_summary"] = _build_validation_summary(
+    validation = _build_validation_summary(
         graph, fixtures, origin_connectors, total_load)
 
-    return report
+    section("VALIDATION SUMMARY")
+    for check in validation["checks"]:
+        lines.append("  {}  {}".format(check["result"], check["check"]))
+    lines.append("")
+    lines.append("  ready_for_sizing: {}".format(validation["ready_for_sizing"]))
+    if validation["errors_list"]:
+        lines.append("  ERRORS:   {}".format(", ".join(validation["errors_list"])))
+    if validation["warnings_list"]:
+        lines.append("  WARNINGS: {}".format(", ".join(validation["warnings_list"])))
+
+    return "\n".join(lines)
 
 
 # =============================================================================
 # ONE-LINE DIAGRAM DATA
 # =============================================================================
 
-def _build_one_line_data(graph, total_load_mbh, longest_run_ft):
-    """Build formatted one-line diagram data from the graph."""
+def generate_one_line_data(graph):
+    """Build structured one-line diagram data from the graph.
+
+    Returns:
+        dict with keys: segments, fixtures, notes_block
+    """
+    total_load = sum(n.gas_load_mbh for n in graph.nodes.values() if n.is_gas_fixture)
+    longest_ft = graph.longest_run["total_length_feet"] if graph.longest_run else 0.0
 
     segments = []
     for edge in graph.edges.values():
-        d = edge.diameter_inches
-        size_str = _format_pipe_size(d)
-        length_str = "{}\'".format(int(round(edge.length_feet)))
-        label_line1 = "{}G, {}".format(size_str, length_str)
+        size_str = _format_pipe_size(edge.diameter_inches)
+        label_line1 = "{}G, {}'".format(size_str, int(round(edge.length_feet)))
         label_line2 = "{} MBH".format(round(edge.cumulative_load_mbh, 1))
-
         segments.append({
-            "edge_id":          edge.element_id,
-            "from_node":        edge.from_node_id,
-            "to_node":          edge.to_node_id,
-            "pipe_label_line1": label_line1,
-            "pipe_label_line2": label_line2,
-            "diameter_inches":  round(edge.diameter_inches, 4),
-            "length_feet":      round(edge.length_feet, 2),
-            "cumulative_load_mbh": round(edge.cumulative_load_mbh, 2)
+            "edge_id":              edge.element_id,
+            "from_node":            edge.from_node_id,
+            "to_node":              edge.to_node_id,
+            "pipe_label_line1":     label_line1,
+            "pipe_label_line2":     label_line2,
+            "diameter_inches":      round(edge.diameter_inches, 4),
+            "length_feet":          round(edge.length_feet, 2),
+            "cumulative_load_mbh":  round(edge.cumulative_load_mbh, 2)
         })
 
     fixture_labels = []
@@ -253,8 +211,8 @@ def _build_one_line_data(graph, total_load_mbh, longest_run_ft):
         "line1": "CONTRACTOR SHALL SUBMIT APPLICATIONS TO UTILITY AND COORDINATE NEW METER SERVICE",
         "line2": "GAS PIPING SIZED FOR [X] PSI",
         "line3": "MAX PRESSURE LOSS OF [X] PSI PER IFGC TABLE 402.4([X])",
-        "line4": "TOTAL CONNECTED LOAD: {} MBH".format(round(total_load_mbh, 1)),
-        "line5": "TOTAL DEVELOPED LENGTH: {}'".format(int(round(longest_run_ft)))
+        "line4": "TOTAL CONNECTED LOAD: {} MBH".format(round(total_load, 1)),
+        "line5": "TOTAL DEVELOPED LENGTH: {}'".format(int(round(longest_ft)))
     }
 
     return {
@@ -269,8 +227,6 @@ def _build_one_line_data(graph, total_load_mbh, longest_run_ft):
 # =============================================================================
 
 def _build_validation_summary(graph, fixtures, origin_connectors, total_load):
-    """Run all validation checks and return a summary dict."""
-
     checks = []
     warnings = []
     errors = []
@@ -284,47 +240,33 @@ def _build_validation_summary(graph, fixtures, origin_connectors, total_load):
             else:
                 errors.append(name)
 
-    # Meter checks
     has_out = any(c["direction"] == "Out" for c in origin_connectors)
     out_connected = any(
         c["direction"] == "Out" and c["is_connected"] for c in origin_connectors)
     _check("Meter has Out connector", has_out)
     _check("Meter Out connector is connected to piping", out_connected)
-
-    # Fixture checks
     _check("At least one fixture found", len(fixtures) > 0)
     _check("Total load > 0 MBH", total_load > 0)
 
-    fixtures_missing_load = [
-        f for f in fixtures if f["gas_load_mbh"] <= 0]
-    _check(
-        "All fixtures have GAS_LOAD_MBH > 0",
-        len(fixtures_missing_load) == 0,
-        warn_not_error=True
-    )
+    fixtures_missing_load = [n for n in fixtures if n.gas_load_mbh <= 0]
+    _check("All fixtures have gas load > 0",
+           len(fixtures_missing_load) == 0, warn_not_error=True)
 
     fixtures_missing_name = [
-        f for f in fixtures
-        if f["fixture_name"] in ("", "UNNAMED", None)]
-    _check(
-        "All fixtures have FIXTURE_NAME",
-        len(fixtures_missing_name) == 0,
-        warn_not_error=True
-    )
+        n for n in fixtures if n.fixture_name in ("", "UNNAMED", None)]
+    _check("All fixtures have Fixture_Name",
+           len(fixtures_missing_name) == 0, warn_not_error=True)
 
-    # Graph checks
-    _check("No disconnected elements", len(graph.disconnected) == 0,
-           warn_not_error=True)
+    _check("No disconnected elements",
+           len(graph.disconnected) == 0, warn_not_error=True)
     _check("Longest run identified", graph.longest_run is not None)
-
-    ready = len(errors) == 0
 
     return {
         "total_checks":     len(checks),
         "passed":           sum(1 for c in checks if c["result"] == "PASS"),
         "warnings":         len(warnings),
         "errors":           len(errors),
-        "ready_for_sizing": ready,
+        "ready_for_sizing": len(errors) == 0,
         "checks":           checks,
         "warnings_list":    warnings,
         "errors_list":      errors
@@ -336,39 +278,28 @@ def _build_validation_summary(graph, fixtures, origin_connectors, total_load):
 # =============================================================================
 
 def _format_pipe_size(diameter_inches):
-    """Convert a decimal diameter in inches to a fractional string.
-
-    Examples:
-        0.5  -> "1/2\""
-        0.75 -> "3/4\""
-        1.0  -> "1\""
-        1.25 -> "1-1/4\""
-        2.5  -> "2-1/2\""
-    """
+    """Convert decimal diameter in inches to fractional string (e.g. 2.5 -> '2-1/2"')."""
     size_map = {
-        0.5:    '1/2"',
-        0.75:   '3/4"',
-        1.0:    '1"',
-        1.25:   '1-1/4"',
-        1.5:    '1-1/2"',
-        2.0:    '2"',
-        2.5:    '2-1/2"',
-        3.0:    '3"',
-        4.0:    '4"',
-        5.0:    '5"',
-        6.0:    '6"',
-        8.0:    '8"',
-        10.0:   '10"',
-        12.0:   '12"',
+        0.5:   '1/2"',
+        0.75:  '3/4"',
+        1.0:   '1"',
+        1.25:  '1-1/4"',
+        1.5:   '1-1/2"',
+        2.0:   '2"',
+        2.5:   '2-1/2"',
+        3.0:   '3"',
+        4.0:   '4"',
+        5.0:   '5"',
+        6.0:   '6"',
+        8.0:   '8"',
+        10.0:  '10"',
+        12.0:  '12"',
     }
-
-    # Find the closest nominal size
     closest = min(size_map.keys(), key=lambda k: abs(k - diameter_inches))
     return size_map[closest]
 
 
 def _safe_family_name(element):
-    """Return family name or fallback string."""
     try:
         return element.Symbol.Family.Name
     except Exception:
