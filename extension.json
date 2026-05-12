@@ -1,0 +1,7 @@
+{
+    "type": "extension",
+    "name": "rjatools",
+    "description": "RJA Tools — Automated gas and water pipe sizing per IFGC/IPC",
+    "author": "RJA",
+    "version": "0.1.0"
+}

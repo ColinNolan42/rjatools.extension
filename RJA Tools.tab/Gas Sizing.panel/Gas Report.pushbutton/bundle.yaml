@@ -1,0 +1,4 @@
+title: Gas Report
+tooltip: >
+  Generate a formatted gas sizing report from the last sizing run.
+  Phase 2 tool.

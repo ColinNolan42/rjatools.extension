@@ -1,0 +1,5 @@
+title: One-Line
+tooltip: >
+  Generate the gas piping one-line diagram per firm standard.
+  Optionally places the diagram on a Revit drafting view.
+  Phase 2 tool.

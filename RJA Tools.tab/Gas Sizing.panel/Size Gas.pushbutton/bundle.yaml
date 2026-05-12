@@ -1,0 +1,5 @@
+title: Size Gas
+tooltip: >
+  Select the gas meter element, then click to size all gas piping per
+  IFGC Appendix A Longest Run Method.
+  Phase 2 tool — requires pipe material, inlet pressure, and pressure drop.

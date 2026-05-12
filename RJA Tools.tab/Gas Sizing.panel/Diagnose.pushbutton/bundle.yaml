@@ -1,0 +1,5 @@
+title: Diagnose
+tooltip: >
+  Select the gas meter element, then click to traverse the piping network
+  and generate a diagnostic report + one-line diagram data.
+  Phase 1 tool — no dialogs, no prompts.
