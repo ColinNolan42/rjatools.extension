@@ -40,6 +40,10 @@ class NetworkNode(object):
         self.fixture_name       = ""
         self.is_gas_fixture     = False
 
+        # Elbow detection  -  True if family name contains "Elbow"
+        # Used by _find_longest_run to add 5ft equivalent length per elbow
+        self.is_elbow           = "Elbow" in self.family_name
+
         # Cumulative load at this node  -  sum of all downstream fixture loads
         self.cumulative_load_mbh = 0.0
 
@@ -61,6 +65,11 @@ class NetworkEdge(object):
         self.to_node_id         = to_node_id
         self.length_feet        = revit_helpers.get_pipe_length_feet(pipe) or 0.0
         self.diameter_inches    = revit_helpers.get_pipe_diameter_inches(pipe) or 0.0
+
+        # Start and end XYZ captured for one-line diagram layout (Phase 2)
+        connectors = revit_helpers.get_connectors(pipe)
+        self.start_xyz = connectors[0]["origin_xyz"] if len(connectors) > 0 else None
+        self.end_xyz   = connectors[1]["origin_xyz"] if len(connectors) > 1 else None
 
         # Cumulative load carried by this segment  -  set after traversal
         self.cumulative_load_mbh = 0.0
@@ -337,42 +346,63 @@ def _calculate_cumulative_loads(graph):
 def _find_longest_run(graph):
     """Find the longest developed length from meter to any fixture.
 
-    Per IFGC A103.1  -  this single length is used to size ALL segments
-    in Phase 2. It is the path with the greatest total pipe length,
-    not necessarily the path with the greatest load.
+    Per IFGC A103.1 - this single length is used to size ALL segments
+    in Phase 2. It is the path with the greatest total developed length.
+
+    Equivalent length additions per IFGC Table A102.2:
+      - Each elbow fitting (family name contains "Elbow"): +5 ft
     """
     if graph.origin_id is None:
         return
 
+    ELBOW_EQUIV_FT = 5.0
+
     longest = {
-        "total_length_feet": 0.0,
-        "path_element_ids": [],
-        "farthest_fixture_id": None,
-        "farthest_fixture_name": ""
+        "total_length_feet":        0.0,
+        "pipe_length_feet":         0.0,
+        "elbow_count":              0,
+        "elbow_equiv_length_feet":  0.0,
+        "path_element_ids":         [],
+        "farthest_fixture_id":      None,
+        "farthest_fixture_name":    ""
     }
 
-    def _dfs(node_id, current_length, current_path):
+    def _dfs(node_id, pipe_length, elbow_count, current_path):
         node = graph.nodes.get(node_id)
         if node is None:
             return
 
+        # Add elbow equivalent length if this node is an elbow
+        local_elbow_count = elbow_count
+        if node.is_elbow:
+            local_elbow_count += 1
+            graph.log(
+                "ELBOW at node {}: +5ft equiv length (running total: {} elbows)".format(
+                    node_id, local_elbow_count))
+
+        total_length = pipe_length + (local_elbow_count * ELBOW_EQUIV_FT)
+
         if node.is_gas_fixture:
-            if current_length > longest["total_length_feet"]:
-                longest["total_length_feet"] = current_length
-                longest["path_element_ids"] = list(current_path)
-                longest["farthest_fixture_id"] = node_id
-                longest["farthest_fixture_name"] = node.fixture_name
+            if total_length > longest["total_length_feet"]:
+                longest["total_length_feet"]        = total_length
+                longest["pipe_length_feet"]         = pipe_length
+                longest["elbow_count"]              = local_elbow_count
+                longest["elbow_equiv_length_feet"]  = local_elbow_count * ELBOW_EQUIV_FT
+                longest["path_element_ids"]         = list(current_path)
+                longest["farthest_fixture_id"]      = node_id
+                longest["farthest_fixture_name"]    = node.fixture_name
             return
 
         for edge in graph.edges.values():
             if edge.from_node_id == node_id:
                 _dfs(
                     edge.to_node_id,
-                    current_length + edge.length_feet,
+                    pipe_length + edge.length_feet,
+                    local_elbow_count,
                     current_path + [edge.element_id, edge.to_node_id]
                 )
 
-    _dfs(graph.origin_id, 0.0, [graph.origin_id])
+    _dfs(graph.origin_id, 0.0, 0, [graph.origin_id])
     graph.longest_run = longest
 
 

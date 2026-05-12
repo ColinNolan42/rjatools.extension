@@ -93,12 +93,14 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
     pipes = []
     for edge in graph.edges.values():
         pipes.append({
-            "element_id":       edge.element_id,
-            "diameter_inches":  round(edge.diameter_inches, 4),
-            "length_feet":      round(edge.length_feet, 2),
-            "from_node_id":     edge.from_node_id,
-            "to_node_id":       edge.to_node_id,
-            "cumulative_load_mbh": round(edge.cumulative_load_mbh, 2)
+            "element_id":           edge.element_id,
+            "diameter_inches":      round(edge.diameter_inches, 4),
+            "length_feet":          round(edge.length_feet, 2),
+            "from_node_id":         edge.from_node_id,
+            "to_node_id":           edge.to_node_id,
+            "start_xyz":            edge.start_xyz,
+            "end_xyz":              edge.end_xyz,
+            "cumulative_load_mbh":  round(edge.cumulative_load_mbh, 2)
         })
 
     report["pipes_found"] = pipes
@@ -108,11 +110,12 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
     # -------------------------------------------------------------------------
     fittings = []
     for node in graph.nodes.values():
-        if node.node_type in ("tee", "fitting"):
+        if node.node_type in ("tee", "fitting", "elbow"):
             fittings.append({
                 "element_id":       node.element_id,
                 "family_name":      node.family_name,
                 "node_type":        node.node_type,
+                "is_elbow":         node.is_elbow,
                 "connector_count":  node.connector_count,
                 "location_xyz":     node.location_xyz,
                 "is_branch_point":  node.node_type == "tee"
@@ -156,10 +159,13 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
     if graph.longest_run:
         lr = graph.longest_run
         report["longest_run"] = {
-            "total_length_feet":    round(lr["total_length_feet"], 2),
-            "path_element_ids":     lr["path_element_ids"],
-            "farthest_fixture_id":  lr["farthest_fixture_id"],
-            "farthest_fixture_name": lr["farthest_fixture_name"]
+            "total_length_feet":        round(lr["total_length_feet"], 2),
+            "pipe_length_feet":         round(lr["pipe_length_feet"], 2),
+            "elbow_count":              lr["elbow_count"],
+            "elbow_equiv_length_feet":  round(lr["elbow_equiv_length_feet"], 2),
+            "path_element_ids":         lr["path_element_ids"],
+            "farthest_fixture_id":      lr["farthest_fixture_id"],
+            "farthest_fixture_name":    lr["farthest_fixture_name"]
         }
     else:
         report["longest_run"] = None

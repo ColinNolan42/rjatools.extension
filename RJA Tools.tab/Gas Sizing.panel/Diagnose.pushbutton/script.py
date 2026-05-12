@@ -184,8 +184,13 @@ def main():
         summary.get("total_load_mbh", 0)))
     output.print_md("| Total pipe segments | {} |".format(
         summary.get("total_pipe_segments", 0)))
-    output.print_md("| Longest run | {} ft |".format(
+    output.print_md("| Longest run (total) | {} ft |".format(
         summary.get("longest_run_feet", 0)))
+    output.print_md("| Longest run (pipe only) | {} ft |".format(
+        longest_run.get("pipe_length_feet", 0)))
+    output.print_md("| Elbows on longest run | {} x 5ft = {} ft |".format(
+        longest_run.get("elbow_count", 0),
+        longest_run.get("elbow_equiv_length_feet", 0)))
     output.print_md("| Farthest fixture | {} |".format(
         longest_run.get("farthest_fixture_name", " - ")))
     output.print_md("| Revit version | {} |".format(revit_version))
