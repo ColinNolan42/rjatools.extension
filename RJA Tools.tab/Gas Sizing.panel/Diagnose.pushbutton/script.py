@@ -1,6 +1,6 @@
 # Diagnose.pushbutton/script.py
 # Entry point for the Diagnose button in Revit.
-# User selects the gas meter → clicks Diagnose → report is saved and summary shown.
+# User selects the gas meter -> clicks Diagnose -> report is saved and summary shown.
 # No dialogs. No prompts. The selected element is the only input.
 #
 # IronPython 2.7 / PyRevit
@@ -46,7 +46,7 @@ def main():
     output.print_md("---")
 
     # -------------------------------------------------------------------------
-    # STEP 1 — Get selected element
+    # STEP 1  -  Get selected element
     # -------------------------------------------------------------------------
     revit_helpers.clear_log()
 
@@ -55,14 +55,14 @@ def main():
     if not selection or len(selection) == 0:
         forms.alert(
             "No element selected.\n\nPlease select the gas meter element, then click Diagnose.",
-            title="Diagnose — No Selection"
+            title="Diagnose  -  No Selection"
         )
         return
 
     if len(selection) > 1:
         forms.alert(
             "Multiple elements selected.\n\nPlease select only the gas meter element.",
-            title="Diagnose — Multiple Elements Selected"
+            title="Diagnose  -  Multiple Elements Selected"
         )
         return
 
@@ -72,7 +72,7 @@ def main():
     output.print_md("**Selected element:** ID {}".format(element_id.IntegerValue))
 
     # -------------------------------------------------------------------------
-    # STEP 2 — Validate the selected element
+    # STEP 2  -  Validate the selected element
     # -------------------------------------------------------------------------
     output.print_md("**Validating selection...**")
 
@@ -82,7 +82,7 @@ def main():
         forms.alert(
             "Invalid selection: {}\n\nPlease select the gas meter element.".format(
                 validation["reason"]),
-            title="Diagnose — Invalid Selection"
+            title="Diagnose  -  Invalid Selection"
         )
         output.print_md(
             ":cross_mark: Validation FAILED: {}".format(validation["reason"]))
@@ -93,7 +93,7 @@ def main():
         "Connector directions found: {}".format(validation["connector_summary"]))
 
     # -------------------------------------------------------------------------
-    # STEP 3 — Traverse the piping network
+    # STEP 3  -  Traverse the piping network
     # -------------------------------------------------------------------------
     output.print_md("**Traversing gas piping network...**")
 
@@ -102,7 +102,7 @@ def main():
     except Exception as e:
         forms.alert(
             "Traversal failed with error:\n\n{}".format(str(e)),
-            title="Diagnose — Traversal Error"
+            title="Diagnose  -  Traversal Error"
         )
         output.print_md(":cross_mark: Traversal ERROR: {}".format(str(e)))
         return
@@ -113,7 +113,7 @@ def main():
             len(graph.nodes), len(graph.edges)))
 
     # -------------------------------------------------------------------------
-    # STEP 4 — Get environment info
+    # STEP 4  -  Get environment info
     # -------------------------------------------------------------------------
     try:
         revit_version = "Revit {}".format(
@@ -128,7 +128,7 @@ def main():
         pyrevit_version = "Unknown"
 
     # -------------------------------------------------------------------------
-    # STEP 5 — Generate diagnostic report
+    # STEP 5  -  Generate diagnostic report
     # -------------------------------------------------------------------------
     output.print_md("**Generating diagnostic report...**")
 
@@ -142,13 +142,13 @@ def main():
     except Exception as e:
         forms.alert(
             "Report generation failed:\n\n{}".format(str(e)),
-            title="Diagnose — Report Error"
+            title="Diagnose  -  Report Error"
         )
         output.print_md(":cross_mark: Report generation ERROR: {}".format(str(e)))
         return
 
     # -------------------------------------------------------------------------
-    # STEP 6 — Save report to desktop
+    # STEP 6  -  Save report to desktop
     # -------------------------------------------------------------------------
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -168,7 +168,7 @@ def main():
         report_path = "Not saved"
 
     # -------------------------------------------------------------------------
-    # STEP 7 — Print summary to output window
+    # STEP 7  -  Print summary to output window
     # -------------------------------------------------------------------------
     summary = report.get("system_summary", {})
     validation_summary = report.get("validation_summary", {})
@@ -187,7 +187,7 @@ def main():
     output.print_md("| Longest run | {} ft |".format(
         summary.get("longest_run_feet", 0)))
     output.print_md("| Farthest fixture | {} |".format(
-        longest_run.get("farthest_fixture_name", "—")))
+        longest_run.get("farthest_fixture_name", " - ")))
     output.print_md("| Revit version | {} |".format(revit_version))
 
     # Fixtures list
@@ -199,9 +199,9 @@ def main():
         output.print_md("| --- | --- | --- |")
         for f in fixtures:
             output.print_md("| {} | {} | {} |".format(
-                f.get("fixture_name", "—"),
+                f.get("fixture_name", " - "),
                 f.get("gas_load_mbh", 0),
-                f.get("element_id", "—")
+                f.get("element_id", " - ")
             ))
 
     # Validation results
@@ -219,7 +219,7 @@ def main():
 
     if errors:
         output.print_md("---")
-        output.print_md("## :cross_mark: Errors — Fix Before Sizing")
+        output.print_md("## :cross_mark: Errors  -  Fix Before Sizing")
         for e in errors:
             output.print_md("- {}".format(e))
 

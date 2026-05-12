@@ -3,9 +3,9 @@
 # through every pipe, fitting, and fixture to build a network graph.
 #
 # Implements:
-#   - build_network(origin_element, doc) → NetworkGraph
+#   - build_network(origin_element, doc) -> NetworkGraph
 #
-# IronPython 2.7 — Revit API via Autodesk.Revit.DB
+# IronPython 2.7  -  Revit API via Autodesk.Revit.DB
 
 from Autodesk.Revit.DB import ElementId
 
@@ -18,14 +18,14 @@ import revit_helpers
 # =============================================================================
 
 class NetworkNode(object):
-    """A node in the piping network — meter, fitting, or fixture."""
+    """A node in the piping network  -  meter, fitting, or fixture."""
 
     def __init__(self, element_id, element, node_type):
         """
         Args:
-            element_id: int — Revit element ID
+            element_id: int  -  Revit element ID
             element: Revit Element object
-            node_type: str — "meter", "tee", "fitting", "fixture", "unknown"
+            node_type: str  -  "meter", "tee", "fitting", "fixture", "unknown"
         """
         self.element_id         = element_id
         self.element            = element
@@ -35,25 +35,25 @@ class NetworkNode(object):
         self.connector_count    = 0
         self.connectors         = []
 
-        # Fixture-specific — populated during traversal if IS_GAS_FIXTURE = True
+        # Fixture-specific  -  populated during traversal if IS_GAS_FIXTURE = True
         self.gas_load_mbh       = 0.0
         self.fixture_name       = ""
         self.is_gas_fixture     = False
 
-        # Cumulative load at this node — sum of all downstream fixture loads
+        # Cumulative load at this node  -  sum of all downstream fixture loads
         self.cumulative_load_mbh = 0.0
 
 
 class NetworkEdge(object):
-    """An edge in the piping network — a single pipe segment."""
+    """An edge in the piping network  -  a single pipe segment."""
 
     def __init__(self, element_id, pipe, from_node_id, to_node_id):
         """
         Args:
-            element_id: int — Revit element ID of the pipe
+            element_id: int  -  Revit element ID of the pipe
             pipe: Revit Pipe element
-            from_node_id: int — upstream node element ID
-            to_node_id: int — downstream node element ID
+            from_node_id: int  -  upstream node element ID
+            to_node_id: int  -  downstream node element ID
         """
         self.element_id         = element_id
         self.pipe               = pipe
@@ -62,7 +62,7 @@ class NetworkEdge(object):
         self.length_feet        = revit_helpers.get_pipe_length_feet(pipe) or 0.0
         self.diameter_inches    = revit_helpers.get_pipe_diameter_inches(pipe) or 0.0
 
-        # Cumulative load carried by this segment — set after traversal
+        # Cumulative load carried by this segment  -  set after traversal
         self.cumulative_load_mbh = 0.0
 
 
@@ -70,8 +70,8 @@ class NetworkGraph(object):
     """The complete piping network graph."""
 
     def __init__(self):
-        self.nodes              = {}    # element_id (int) → NetworkNode
-        self.edges              = {}    # element_id (int) → NetworkEdge
+        self.nodes              = {}    # element_id (int) -> NetworkNode
+        self.edges              = {}    # element_id (int) -> NetworkEdge
         self.origin_id          = None  # meter element ID
         self.traversal_log      = []    # step-by-step traversal decisions
         self.disconnected       = []    # element IDs the traversal could not reach
@@ -104,7 +104,7 @@ def build_network(origin_element, doc):
         doc: The active Revit Document (needed for GetElement calls).
 
     Returns:
-        NetworkGraph — fully populated graph ready for report generation.
+        NetworkGraph  -  fully populated graph ready for report generation.
     """
     graph = NetworkGraph()
 
@@ -135,11 +135,11 @@ def build_network(origin_element, doc):
                 if connected_element is not None:
                     queue.append((connected_element, origin_id))
                     graph.log(
-                        "METER Out connector → queuing element {} to traverse".format(
+                        "METER Out connector -> queuing element {} to traverse".format(
                             connected_id))
         elif connector["direction"] == "In":
             graph.log(
-                "METER In connector (street side) — skipping direction.")
+                "METER In connector (street side)  -  skipping direction.")
 
     # Breadth-first traversal
     while queue:
@@ -167,7 +167,7 @@ def build_network(origin_element, doc):
 
         else:
             graph.log(
-                "UNKNOWN element type {} on element {} — skipping.".format(
+                "UNKNOWN element type {} on element {}  -  skipping.".format(
                     element_type, current_id))
 
     # --- Post-traversal calculations ---
@@ -185,7 +185,7 @@ def build_network(origin_element, doc):
 # =============================================================================
 
 def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
-    """Process a pipe element — create an edge and queue the far end."""
+    """Process a pipe element  -  create an edge and queue the far end."""
     pipe_id = pipe.Id.IntegerValue
 
     # Find the two connectors on the pipe
@@ -206,7 +206,7 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
             far_connected_id
         ))
 
-    # Determine the to_node_id — will be set properly when far end is processed
+    # Determine the to_node_id  -  will be set properly when far end is processed
     # For now use far_connected_id as placeholder
     to_node_id = far_connected_id if far_connected_id is not None else pipe_id
 
@@ -226,7 +226,7 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
 
 
 def _process_family_instance(graph, doc, element, parent_node_id, visited, queue):
-    """Process a family instance — fitting, fixture, or equipment."""
+    """Process a family instance  -  fitting, fixture, or equipment."""
     eid = element.Id.IntegerValue
     family_name = _get_family_name(element)
     connectors = revit_helpers.get_connectors(element)
@@ -337,7 +337,7 @@ def _calculate_cumulative_loads(graph):
 def _find_longest_run(graph):
     """Find the longest developed length from meter to any fixture.
 
-    Per IFGC A103.1 — this single length is used to size ALL segments
+    Per IFGC A103.1  -  this single length is used to size ALL segments
     in Phase 2. It is the path with the greatest total pipe length,
     not necessarily the path with the greatest load.
     """

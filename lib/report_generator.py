@@ -1,7 +1,7 @@
 # report_generator.py
 # Takes the NetworkGraph from pipe_graph.py and produces:
-#   1. Diagnostic report JSON — debugging snapshot of what the traversal found
-#   2. One-line diagram data — formatted segments and fixture labels
+#   1. Diagnostic report JSON  -  debugging snapshot of what the traversal found
+#   2. One-line diagram data  -  formatted segments and fixture labels
 #
 # IronPython 2.7
 
@@ -16,11 +16,11 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
     Args:
         graph: NetworkGraph from pipe_graph.build_network()
         origin_element: The user-selected meter Revit element
-        revit_version: str — e.g. "Revit 2024"
-        pyrevit_version: str — e.g. "4.8.x"
+        revit_version: str  -  e.g. "Revit 2024"
+        pyrevit_version: str  -  e.g. "4.8.x"
 
     Returns:
-        dict — the complete diagnostic report, ready for json.dumps()
+        dict  -  the complete diagnostic report, ready for json.dumps()
     """
 
     report = {}
@@ -38,7 +38,7 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
     }
 
     # -------------------------------------------------------------------------
-    # SYSTEM ORIGIN — meter element
+    # SYSTEM ORIGIN  -  meter element
     # -------------------------------------------------------------------------
     origin_id = origin_element.Id.IntegerValue
     origin_node = graph.nodes.get(origin_id)
@@ -81,7 +81,7 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
                 "validation": {
                     "has_gas_load":     node.gas_load_mbh > 0,
                     "has_fixture_name": node.fixture_name not in ("", "UNNAMED"),
-                    "result": "PASS" if (node.gas_load_mbh > 0) else "WARN — load is 0"
+                    "result": "PASS" if (node.gas_load_mbh > 0) else "WARN  -  load is 0"
                 }
             })
 
@@ -121,7 +121,7 @@ def generate_diagnostic_report(graph, origin_element, revit_version, pyrevit_ver
     report["fittings_found"] = fittings
 
     # -------------------------------------------------------------------------
-    # NETWORK GRAPH — adjacency summary
+    # NETWORK GRAPH  -  adjacency summary
     # -------------------------------------------------------------------------
     nodes_out = []
     for node in graph.nodes.values():
@@ -333,11 +333,11 @@ def _format_pipe_size(diameter_inches):
     """Convert a decimal diameter in inches to a fractional string.
 
     Examples:
-        0.5  → "1/2\""
-        0.75 → "3/4\""
-        1.0  → "1\""
-        1.25 → "1-1/4\""
-        2.5  → "2-1/2\""
+        0.5  -> "1/2\""
+        0.75 -> "3/4\""
+        1.0  -> "1\""
+        1.25 -> "1-1/4\""
+        2.5  -> "2-1/2\""
     """
     size_map = {
         0.5:    '1/2"',

@@ -20,11 +20,11 @@ PARAM_FIXTURE_NAME      = "FIXTURE_NAME"        # Text. Equipment tag for one-li
 # Import BuiltInParameter from Autodesk.Revit.DB before using these.
 # =============================================================================
 
-# Pipe nominal diameter — returns value in Revit internal units (decimal feet).
+# Pipe nominal diameter  -  returns value in Revit internal units (decimal feet).
 # Must be converted to inches: value * 12
 BUILTIN_PIPE_DIAMETER   = "RBS_PIPE_DIAMETER_PARAM"
 
-# Pipe length — accessed via pipe.Location.Curve.Length
+# Pipe length  -  accessed via pipe.Location.Curve.Length
 # Returns value in Revit internal units (decimal feet).
 BUILTIN_PIPE_LENGTH     = "CURVE_ELEM_LENGTH"
 
@@ -33,7 +33,7 @@ BUILTIN_PIPE_LENGTH     = "CURVE_ELEM_LENGTH"
 # =============================================================================
 
 SPECIFIC_GRAVITY        = 0.60      # Natural gas specific gravity. Matches all IFGC tables.
-                                    # Do not expose as user input — hardcoded per project spec.
+                                    # Do not expose as user input  -  hardcoded per project spec.
 
 BTU_PER_CFH             = 1000      # Natural gas: 1 cubic foot = 1000 BTU (approx).
                                     # CFH = BTU_hr / BTU_PER_CFH
@@ -48,15 +48,15 @@ INCHES_PER_FOOT         = 12.0      # Used when converting pipe diameter from fe
 # The meter family sets street-side connector to Flow = In, building-side to Flow = Out.
 # =============================================================================
 
-CONNECTOR_FLOW_OUT      = "Out"         # Building side — traversal walks this direction.
-CONNECTOR_FLOW_IN       = "In"          # Street side — traversal skips this direction.
+CONNECTOR_FLOW_OUT      = "Out"         # Building side  -  traversal walks this direction.
+CONNECTOR_FLOW_IN       = "In"          # Street side  -  traversal skips this direction.
 CONNECTOR_FLOW_BIDI     = "Bidirectional"   # All non-meter elements expected to be bidirectional.
 
 # =============================================================================
 # MEP SYSTEM TYPE NAME
 # Must match the system type name exactly as defined in the Revit model.
 # If the project uses a different name (e.g. "GAS" or "Natural Gas"),
-# update this constant — do not hardcode the string elsewhere.
+# update this constant  -  do not hardcode the string elsewhere.
 # =============================================================================
 
 SYSTEM_TYPE_GAS         = "Natural Gas"
