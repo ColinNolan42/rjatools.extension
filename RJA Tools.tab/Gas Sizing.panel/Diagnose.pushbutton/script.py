@@ -1,7 +1,6 @@
 # Diagnose.pushbutton/script.py
 # Entry point for the Diagnose button in Revit.
-# User selects the gas meter -> clicks Diagnose -> report is saved and summary shown.
-# No dialogs. No prompts. The selected element is the only input.
+# User clicks Diagnose -> prompted to pick the gas meter -> report saved and summary shown.
 #
 # IronPython 2.7 / PyRevit
 
@@ -16,6 +15,7 @@ from pyrevit import forms
 
 # --- Revit API ---
 from Autodesk.Revit.DB import Document
+from Autodesk.Revit.UI.Selection import ObjectType
 
 # --- PyRevit document/UI handles ---
 doc   = __revit__.ActiveUIDocument.Document
@@ -25,8 +25,6 @@ uidoc = __revit__.ActiveUIDocument
 output = script.get_output()
 
 # --- Add lib/ folder to path so shared modules are importable ---
-# PyRevit should handle this automatically if lib/ is in the extension root.
-# This block is a fallback in case the path is not added automatically.
 _script_dir = os.path.dirname(__file__)
 _lib_dir = os.path.normpath(os.path.join(_script_dir, '..', '..', '..', 'lib'))
 if _lib_dir not in sys.path:
@@ -46,30 +44,30 @@ def main():
     output.print_md("---")
 
     # -------------------------------------------------------------------------
-    # STEP 1  -  Get selected element
+    # STEP 1 - Prompt user to pick the gas meter in the model
     # -------------------------------------------------------------------------
     revit_helpers.clear_log()
 
-    selection = uidoc.Selection.GetElementIds()
+    try:
+        reference = uidoc.Selection.PickObject(
+            ObjectType.Element,
+            "Pick the gas meter element"
+        )
+        selected_element = doc.GetElement(reference.ElementId)
+    except Exception:
+        # User pressed Escape or cancelled the pick
+        output.print_md("Selection cancelled.")
+        return
 
-    if not selection or len(selection) == 0:
+    if selected_element is None:
         forms.alert(
-            "No element selected.\n\nPlease select the gas meter element, then click Diagnose.",
-            title="Diagnose  -  No Selection"
+            "Could not retrieve the selected element. Please try again.",
+            title="Diagnose - Selection Error"
         )
         return
 
-    if len(selection) > 1:
-        forms.alert(
-            "Multiple elements selected.\n\nPlease select only the gas meter element.",
-            title="Diagnose  -  Multiple Elements Selected"
-        )
-        return
-
-    element_id = list(selection)[0]
-    selected_element = doc.GetElement(element_id)
-
-    output.print_md("**Selected element:** ID {}".format(element_id.IntegerValue))
+    output.print_md("**Selected element:** ID {}".format(
+        selected_element.Id.IntegerValue))
 
     # -------------------------------------------------------------------------
     # STEP 2  -  Validate the selected element

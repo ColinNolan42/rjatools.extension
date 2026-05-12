@@ -347,10 +347,15 @@ def _find_longest_run(graph):
     """Find the longest developed length from meter to any fixture.
 
     Per IFGC A103.1 - this single length is used to size ALL segments
-    in Phase 2. It is the path with the greatest total developed length.
+    in Phase 2.
 
-    Equivalent length additions per IFGC Table A102.2:
-      - Each elbow fitting (family name contains "Elbow"): +5 ft
+    Developed length for each path =
+        sum of pipe lengths along that path
+        + (number of elbows along that path x 5ft equivalent length)
+
+    The path with the greatest developed length is the longest run.
+    Elbows are counted per path - an elbow only contributes to paths
+    that physically pass through it.
     """
     if graph.origin_id is None:
         return
@@ -368,21 +373,28 @@ def _find_longest_run(graph):
     }
 
     def _dfs(node_id, pipe_length, elbow_count, current_path):
+        """Walk one path. pipe_length and elbow_count are local to this path."""
         node = graph.nodes.get(node_id)
         if node is None:
             return
 
-        # Add elbow equivalent length if this node is an elbow
+        # If this node is an elbow, add its equivalent length to THIS path only
         local_elbow_count = elbow_count
         if node.is_elbow:
             local_elbow_count += 1
-            graph.log(
-                "ELBOW at node {}: +5ft equiv length (running total: {} elbows)".format(
-                    node_id, local_elbow_count))
 
         total_length = pipe_length + (local_elbow_count * ELBOW_EQUIV_FT)
 
         if node.is_gas_fixture:
+            graph.log(
+                "PATH to fixture '{}': pipe={:.2f}ft, elbows={}, "
+                "equiv={:.0f}ft, total={:.2f}ft".format(
+                    node.fixture_name,
+                    pipe_length,
+                    local_elbow_count,
+                    local_elbow_count * ELBOW_EQUIV_FT,
+                    total_length
+                ))
             if total_length > longest["total_length_feet"]:
                 longest["total_length_feet"]        = total_length
                 longest["pipe_length_feet"]         = pipe_length
