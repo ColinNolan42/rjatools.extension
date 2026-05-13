@@ -400,29 +400,7 @@ def main():
             return
 
     # ------------------------------------------------------------------
-    # STEP 7 - Backup fixture families before pipe resize
-    # Revit replaces Pipe Fitting category families when the connected
-    # pipe diameter changes. Save type + parameters so we can restore.
-    # ------------------------------------------------------------------
-    fixture_backups = {}
-    for pipe_id, nominal_size in result["sizes"].items():
-        edge = graph.edges.get(pipe_id)
-        if edge is None or edge.pipe is None:
-            continue
-        to_node = graph.nodes.get(edge.to_node_id)
-        if to_node is not None and to_node.is_gas_fixture and to_node.element is not None:
-            try:
-                fixture_backups[pipe_id] = {
-                    "type_id":       to_node.element.GetTypeId(),
-                    "from_node_id":  edge.from_node_id,
-                    "gas_load_mbh":  to_node.gas_load_mbh,
-                    "fixture_name":  to_node.fixture_name or "",
-                }
-            except Exception:
-                pass
-
-    # ------------------------------------------------------------------
-    # STEP 8 - Write sizes to Revit via Transaction
+    # STEP 7 - Write sizes to Revit via Transaction
     # ------------------------------------------------------------------
     output.print_md("---")
     output.print_md("**Writing sizes to Revit model...**")
@@ -434,6 +412,8 @@ def main():
     success_count = 0
     fail_count    = 0
     fail_list     = []
+    skip_count    = 0
+    skipped_stubs = []
 
     t = Transaction(doc, "RJA Tools - Size Gas Pipes")
     t.Start()
@@ -446,6 +426,21 @@ def main():
                     "Pipe {}: edge or pipe element not found in graph.".format(
                         pipe_id))
                 fail_count += 1
+                continue
+
+            # Skip stub pipes directly connected to equipment caps.
+            # Revit auto-replaces Pipe Fittings category elements when the
+            # connected pipe diameter changes. Skipping preserves the cap.
+            # Set these stubs manually using the stub report below.
+            to_node = graph.nodes.get(edge.to_node_id)
+            if to_node is not None and to_node.is_gas_fixture:
+                skip_count += 1
+                skipped_stubs.append({
+                    "pipe_id":          pipe_id,
+                    "fixture_name":     to_node.fixture_name or "UNNAMED",
+                    "demand_mbh":       edge.cumulative_load_mbh,
+                    "recommended_size": nominal_size,
+                })
                 continue
 
             nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
@@ -482,82 +477,7 @@ def main():
         return
 
     # ------------------------------------------------------------------
-    # STEP 9 - Restore fixture families replaced during pipe resize
-    # ------------------------------------------------------------------
-    if fixture_backups:
-        t_restore = Transaction(doc, "RJA Tools - Restore Fixture Families")
-        t_restore.Start()
-        restored_count = 0
-        try:
-            for pipe_id, backup in fixture_backups.items():
-                try:
-                    pipe_elem = doc.GetElement(ElementId(pipe_id))
-                    if pipe_elem is None:
-                        continue
-
-                    # Find the element now connected to the fixture end of the stub
-                    new_fixture = None
-                    from_id = backup["from_node_id"]
-                    for connector in pipe_elem.ConnectorManager.Connectors:
-                        if not connector.IsConnected:
-                            continue
-                        try:
-                            for ref in connector.AllRefs:
-                                if ref.Owner.Id.IntegerValue != from_id:
-                                    new_fixture = ref.Owner
-                                    break
-                        except Exception:
-                            pass
-                        if new_fixture is not None:
-                            break
-
-                    if new_fixture is None:
-                        continue
-
-                    # Restore original family type if it was swapped out
-                    if new_fixture.GetTypeId() != backup["type_id"]:
-                        new_fixture.ChangeTypeId(backup["type_id"])
-
-                    # Re-apply custom parameters
-                    p = new_fixture.LookupParameter(
-                        shared_params.PARAM_IS_GAS_FIXTURE)
-                    if p is not None and not p.IsReadOnly:
-                        p.Set(1)
-
-                    p2 = new_fixture.LookupParameter(
-                        shared_params.PARAM_GAS_LOAD_MBH)
-                    if p2 is not None and not p2.IsReadOnly:
-                        p2.Set(backup["gas_load_mbh"])
-
-                    p3 = new_fixture.LookupParameter(
-                        shared_params.PARAM_FIXTURE_NAME)
-                    if p3 is not None and not p3.IsReadOnly:
-                        p3.Set(backup["fixture_name"])
-
-                    restored_count += 1
-
-                except Exception as e:
-                    output.print_md(
-                        ":warning: Could not restore fixture at pipe {}: {}".format(
-                            pipe_id, str(e)))
-
-            t_restore.Commit()
-            output.print_md(
-                ":white_check_mark: Restored {} fixture famil(ies) after pipe "
-                "resize.".format(restored_count))
-
-        except Exception as e:
-            t_restore.RollBack()
-            output.print_md(
-                ":warning: Fixture restore transaction failed: {}".format(str(e)))
-            output.print_md(
-                "_Note: Long-term fix - change fixture cap families from "
-                "Pipe Fittings category to Mechanical Equipment. Revit only "
-                "auto-replaces Pipe Fittings category elements when pipe "
-                "sizes change._")
-
-    # ------------------------------------------------------------------
-    # STEP 10 - Resize fittings (separate transaction)
+    # STEP 8 - Resize fittings (separate transaction)
     # ------------------------------------------------------------------
     output.print_md("**Resizing fittings (Nominal Radius parameter)...**")
     fit_resized  = 0
@@ -583,13 +503,27 @@ def main():
             ":warning: Fitting resize transaction failed: {}".format(str(e)))
 
     # ------------------------------------------------------------------
-    # STEP 8 - Summary
+    # STEP 9 - Summary and stub report
     # ------------------------------------------------------------------
+    if skipped_stubs:
+        output.print_md("---")
+        output.print_md("## Fixture Stub Pipes - Set These Manually")
+        output.print_md(
+            "{} stub pipe(s) were not auto-sized to preserve equipment "
+            "cap families. Select each pipe by ID and set its diameter:".format(
+                len(skipped_stubs)))
+        output.print_md("| Fixture | Set stub to | Pipe ID |")
+        output.print_md("| --- | --- | --- |")
+        for s in skipped_stubs:
+            output.print_md("| {} | {}\" | {} |".format(
+                s["fixture_name"], s["recommended_size"], s["pipe_id"]))
+
     output.print_md("---")
     output.print_md("## Summary")
     output.print_md("| Item | Value |")
     output.print_md("| --- | --- |")
     output.print_md("| Pipes sized and written | {} |".format(success_count))
+    output.print_md("| Stub pipes skipped | {} |".format(skip_count))
     output.print_md("| Fittings resized | {} |".format(fit_resized))
     output.print_md("| Fitting failures | {} |".format(fit_skipped))
     output.print_md("| Pipe failures | {} |".format(fail_count))
@@ -610,8 +544,9 @@ def main():
     if fail_count == 0:
         output.print_md("---")
         output.print_md(
-            ":white_check_mark: **All {} pipes sized and written.**".format(
-                success_count))
+            ":white_check_mark: **{} distribution pipes sized. "
+            "{} stub pipes need manual sizing (see table above).**".format(
+                success_count, skip_count))
     else:
         output.print_md("---")
         output.print_md(
