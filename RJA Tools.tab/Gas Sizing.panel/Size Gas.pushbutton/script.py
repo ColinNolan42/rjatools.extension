@@ -252,7 +252,52 @@ def main():
             diag.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
 
     # ------------------------------------------------------------------
-    # STEP 6 - Write sizes to Revit via Transaction
+    # STEP 6 - Pre-sizing validation warning
+    # ------------------------------------------------------------------
+    fixture_nodes  = [n for n in graph.nodes.values() if n.is_gas_fixture]
+    no_load        = [n for n in fixture_nodes if n.gas_load_mbh <= 0]
+    unnamed        = [n for n in fixture_nodes
+                      if n.fixture_name in ("", "UNNAMED", None)]
+
+    if no_load or unnamed or graph.disconnected:
+        output.print_md("---")
+        output.print_md("## :warning: Pre-Sizing Warnings")
+
+        if no_load:
+            output.print_md(
+                "**{}/{} fixture(s) have 0 MBH load** - "
+                "connected pipes will be sized at minimum (1/2\"):".format(
+                    len(no_load), len(fixture_nodes)))
+            for n in no_load:
+                output.print_md("  - {} (ID {})".format(
+                    n.fixture_name or "UNNAMED", n.element_id))
+
+        if unnamed:
+            output.print_md(
+                "**{}/{} fixture(s) have no name** "
+                "(will appear as UNNAMED on one-line diagram):".format(
+                    len(unnamed), len(fixture_nodes)))
+            for n in unnamed:
+                output.print_md("  - ID {}  {:.1f} MBH".format(
+                    n.element_id, n.gas_load_mbh))
+
+        if graph.disconnected:
+            output.print_md(
+                "**{} disconnected element(s)** - "
+                "not included in sizing:".format(len(graph.disconnected)))
+            for d in graph.disconnected:
+                output.print_md("  - Element ID {}".format(d))
+
+        proceed = forms.CommandSwitchWindow.show(
+            ["Proceed with sizing", "Cancel"],
+            message="Warnings found (see output window). Proceed anyway?"
+        )
+        if proceed != "Proceed with sizing":
+            output.print_md("Sizing cancelled.")
+            return
+
+    # ------------------------------------------------------------------
+    # STEP 7 - Write sizes to Revit via Transaction
     # ------------------------------------------------------------------
     output.print_md("---")
     output.print_md("**Writing sizes to Revit model...**")
@@ -261,8 +306,12 @@ def main():
         "RBS_PIPE_NOMINAL_DIAMETER -> "
         "RBS_PIPE_DIAMETER_PARAM -> "
         "LookupParameter(Diameter)")
+    output.print_md(
+        "Note: pipes directly connected to fixture families are skipped "
+        "to preserve custom fixture parameters.")
 
     success_count = 0
+    skip_count    = 0
     fail_count    = 0
     fail_list     = []
 
@@ -277,6 +326,14 @@ def main():
                     "Pipe {}: edge or pipe element not found in graph.".format(
                         pipe_id))
                 fail_count += 1
+                continue
+
+            # Skip pipes directly connected to gas fixtures - resizing these
+            # causes Revit to replace the fixture cap family, losing custom
+            # parameters (GAS_LOAD_MBH, FIXTURE_NAME, IS_GAS_FIXTURE).
+            to_node = graph.nodes.get(edge.to_node_id)
+            if to_node is not None and to_node.is_gas_fixture:
+                skip_count += 1
                 continue
 
             nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
@@ -309,6 +366,10 @@ def main():
         output.print_md(":cross_mark: Transaction ERROR: {}".format(str(e)))
         return
 
+    # Force fittings to update after pipe sizes change
+    doc.Regenerate()
+        return
+
     # ------------------------------------------------------------------
     # STEP 7 - Summary
     # ------------------------------------------------------------------
@@ -316,7 +377,8 @@ def main():
     output.print_md("## Summary")
     output.print_md("| Item | Value |")
     output.print_md("| --- | --- |")
-    output.print_md("| Pipes sized successfully | {} |".format(success_count))
+    output.print_md("| Pipes sized and written | {} |".format(success_count))
+    output.print_md("| Fixture stub pipes skipped | {} |".format(skip_count))
     output.print_md("| Failures | {} |".format(fail_count))
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
@@ -325,6 +387,11 @@ def main():
         result["longest_run_ft"]))
     output.print_md("| Table row used | {} ft |".format(
         result["table_length_used_ft"]))
+
+    if skip_count:
+        output.print_md(
+            "_Note: {} fixture stub pipe(s) were not resized to preserve "
+            "custom fixture family parameters._".format(skip_count))
 
     if fail_list:
         output.print_md("---")
@@ -335,8 +402,8 @@ def main():
     if fail_count == 0:
         output.print_md("---")
         output.print_md(
-            ":white_check_mark: **All {} pipes sized and written to model.**".format(
-                success_count))
+            ":white_check_mark: **{} pipes sized and written. "
+            "{} fixture stubs preserved.**".format(success_count, skip_count))
     else:
         output.print_md("---")
         output.print_md(
