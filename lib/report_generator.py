@@ -78,12 +78,13 @@ def format_diagnostic_output(graph, origin_element):
     if not graph.edges:
         lines.append("  NONE")
     for e in graph.edges.values():
+        to_display = "OPEN-END" if e.to_node_id is None else str(e.to_node_id)
         lines.append("  [{}]  {}\"  {:.1f}'  from={} to={}  cumulative={:.1f} MBH".format(
             e.element_id,
             round(e.diameter_inches, 4),
             e.length_feet,
             e.from_node_id,
-            e.to_node_id,
+            to_display,
             e.cumulative_load_mbh))
 
     # -------------------------------------------------------------------------

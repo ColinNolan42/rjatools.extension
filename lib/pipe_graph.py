@@ -215,15 +215,20 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
             far_connected_id
         ))
 
-    # Determine the to_node_id  -  will be set properly when far end is processed
-    # For now use far_connected_id as placeholder
-    to_node_id = far_connected_id if far_connected_id is not None else pipe_id
+    # Open-ended pipe  -  far end has no connected element
+    if far_connected_id is None:
+        graph.log(
+            "WARNING: Pipe {} has an unconnected (open) far end.".format(pipe_id))
+        graph.disconnected.append(pipe_id)
+        edge = NetworkEdge(pipe_id, pipe, parent_node_id, None)
+        graph.add_edge(edge)
+        return
 
-    edge = NetworkEdge(pipe_id, pipe, parent_node_id, to_node_id)
+    edge = NetworkEdge(pipe_id, pipe, parent_node_id, far_connected_id)
     graph.add_edge(edge)
 
     # Queue the far end element
-    if far_connected_id is not None and far_connected_id not in visited:
+    if far_connected_id not in visited:
         far_element = _get_element(doc, far_connected_id)
         if far_element is not None:
             queue.append((far_element, pipe_id))
@@ -325,7 +330,7 @@ def _calculate_cumulative_loads(graph):
         # Otherwise sum loads from all downstream edges
         total = 0.0
         for edge in graph.edges.values():
-            if edge.from_node_id == node_id:
+            if edge.from_node_id == node_id and edge.to_node_id is not None:
                 downstream_load = _sum_load(edge.to_node_id)
                 edge.cumulative_load_mbh = downstream_load
                 total += downstream_load
@@ -406,7 +411,7 @@ def _find_longest_run(graph):
             return
 
         for edge in graph.edges.values():
-            if edge.from_node_id == node_id:
+            if edge.from_node_id == node_id and edge.to_node_id is not None:
                 _dfs(
                     edge.to_node_id,
                     pipe_length + edge.length_feet,
