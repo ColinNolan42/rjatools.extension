@@ -115,6 +115,80 @@ def _apply_approach(approach_name, pipe, nominal_feet):
 
 
 # ---------------------------------------------------------------------------
+# Fitting resize - set each connector radius to match its connected pipe
+# ---------------------------------------------------------------------------
+
+def _resize_fittings(graph, result_sizes, doc):
+    """Resize parametric fitting families by setting each connector's Radius
+    to match the pipe it is connected to.
+
+    Works on fully parametric families (no separate type per size).
+    Each connector is sized independently so reducing tees are handled correctly.
+
+    Returns:
+        (resized_count, skipped_count, fail_list)
+    """
+    resized  = 0
+    skipped  = 0
+    failures = []
+
+    for node in graph.nodes.values():
+        if node.node_type not in ("tee", "fitting", "elbow"):
+            continue
+        if node.is_gas_fixture:
+            continue
+        if node.element is None:
+            skipped += 1
+            continue
+
+        try:
+            cm = node.element.ConnectorManager
+        except Exception:
+            skipped += 1
+            continue
+
+        if cm is None:
+            skipped += 1
+            continue
+
+        node_changed = False
+        for connector in cm.Connectors:
+            try:
+                if not connector.IsConnected:
+                    continue
+
+                # Find which pipe this connector links to
+                pipe_id = None
+                for ref in connector.AllRefs:
+                    owner_id = ref.Owner.Id.IntegerValue
+                    if owner_id in result_sizes:
+                        pipe_id = owner_id
+                        break
+
+                if pipe_id is None:
+                    continue
+
+                nominal_size   = result_sizes[pipe_id]
+                nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
+                if nominal_inches is None:
+                    continue
+
+                target_radius_feet = (nominal_inches / 2.0) / 12.0
+                connector.Radius = target_radius_feet
+                node_changed = True
+
+            except Exception:
+                continue
+
+        if node_changed:
+            resized += 1
+        else:
+            skipped += 1
+
+    return resized, skipped, failures
+
+
+# ---------------------------------------------------------------------------
 # Startup dialog helpers
 # ---------------------------------------------------------------------------
 
@@ -385,7 +459,29 @@ def main():
         return
 
     # ------------------------------------------------------------------
-    # STEP 7 - Summary
+    # STEP 7 - Resize fittings (separate transaction)
+    # ------------------------------------------------------------------
+    output.print_md("**Resizing fittings (connector.Radius approach)...**")
+    fit_resized = 0
+    fit_skipped = 0
+
+    t2 = Transaction(doc, "RJA Tools - Resize Pipe Fittings")
+    t2.Start()
+    try:
+        fit_resized, fit_skipped, _ = _resize_fittings(
+            graph, result["sizes"], doc)
+        doc.Regenerate()
+        t2.Commit()
+        output.print_md(
+            ":white_check_mark: Fittings: {} resized, {} skipped.".format(
+                fit_resized, fit_skipped))
+    except Exception as e:
+        t2.RollBack()
+        output.print_md(
+            ":warning: Fitting resize transaction failed: {}".format(str(e)))
+
+    # ------------------------------------------------------------------
+    # STEP 8 - Summary
     # ------------------------------------------------------------------
     output.print_md("---")
     output.print_md("## Summary")
@@ -393,7 +489,8 @@ def main():
     output.print_md("| --- | --- |")
     output.print_md("| Pipes sized and written | {} |".format(success_count))
     output.print_md("| Fixture stub pipes skipped | {} |".format(skip_count))
-    output.print_md("| Failures | {} |".format(fail_count))
+    output.print_md("| Fittings resized | {} |".format(fit_resized))
+    output.print_md("| Pipe failures | {} |".format(fail_count))
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
     output.print_md("| IFGC table | {} |".format(result["table_id"]))
