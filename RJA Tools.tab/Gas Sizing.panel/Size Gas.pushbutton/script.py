@@ -501,29 +501,52 @@ def main():
             ":warning: Fitting resize transaction failed: {}".format(str(e)))
 
     # ------------------------------------------------------------------
-    # STEP 9 - Summary and stub report
+    # STEP 9 - Resize fixture stub pipes (after cap Nominal Radius is set)
+    # Cap Nominal Radius was updated in the fitting transaction above.
+    # Revit may now see no size conflict and skip the family replacement.
     # ------------------------------------------------------------------
+    stub_success = 0
+    stub_fail    = 0
+
     if skipped_stubs:
-        output.print_md("---")
-        output.print_md("## Fixture Stub Pipes - Optional Manual Sizing")
-        output.print_md(
-            "{} short stub pipe(s) at fixture connections were not resized "
-            "(cap Nominal Radius was set instead). "
-            "Optionally set the stub pipe diameter to match:".format(
-                len(skipped_stubs)))
-        output.print_md("| Fixture | Stub pipe ID | Set to |")
-        output.print_md("| --- | --- | --- |")
-        for s in skipped_stubs:
-            output.print_md("| {} | {} | {}\" |".format(
-                s["fixture_name"], s["pipe_id"], s["recommended_size"]))
+        output.print_md("**Sizing fixture stub pipes (cap already resized)...**")
+        t3 = Transaction(doc, "RJA Tools - Size Fixture Stub Pipes")
+        t3.Start()
+        try:
+            for s in skipped_stubs:
+                edge = graph.edges.get(s["pipe_id"])
+                if edge is None or edge.pipe is None:
+                    stub_fail += 1
+                    continue
+                nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(
+                    s["recommended_size"])
+                if nominal_inches is None:
+                    stub_fail += 1
+                    continue
+                ok, _approach = _set_pipe_diameter(edge.pipe, nominal_inches)
+                if ok:
+                    stub_success += 1
+                else:
+                    stub_fail += 1
+            doc.Regenerate()
+            t3.Commit()
+            output.print_md(
+                ":white_check_mark: Stub pipes: {} sized.".format(stub_success))
+            if stub_fail:
+                output.print_md(
+                    ":warning: {} stub pipe(s) failed.".format(stub_fail))
+        except Exception as e:
+            t3.RollBack()
+            output.print_md(
+                ":warning: Stub pipe transaction failed: {}".format(str(e)))
 
     output.print_md("---")
     output.print_md("## Summary")
     output.print_md("| Item | Value |")
     output.print_md("| --- | --- |")
-    output.print_md("| Pipes sized and written | {} |".format(success_count))
-    output.print_md("| Stub pipes skipped | {} |".format(skip_count))
-    output.print_md("| Fittings resized | {} |".format(fit_resized))
+    output.print_md("| Distribution pipes sized | {} |".format(success_count))
+    output.print_md("| Fixture stub pipes sized | {} |".format(stub_success))
+    output.print_md("| Fittings + caps resized | {} |".format(fit_resized))
     output.print_md("| Fitting failures | {} |".format(fit_skipped))
     output.print_md("| Pipe failures | {} |".format(fail_count))
     output.print_md("| API approach used | {} |".format(
@@ -543,9 +566,9 @@ def main():
     if fail_count == 0:
         output.print_md("---")
         output.print_md(
-            ":white_check_mark: **{} distribution pipes sized. "
-            "{} stub pipes need manual sizing (see table above).**".format(
-                success_count, skip_count))
+            ":white_check_mark: **{} distribution pipes + {} stub pipes + "
+            "{} fittings/caps sized.**".format(
+                success_count, stub_success, fit_resized))
     else:
         output.print_md("---")
         output.print_md(
