@@ -133,9 +133,7 @@ def _resize_fittings(graph, result_sizes, doc):
     failures = []
 
     for node in graph.nodes.values():
-        if node.node_type not in ("tee", "fitting", "elbow"):
-            continue
-        if node.is_gas_fixture:
+        if node.node_type not in ("tee", "fitting", "elbow", "fixture"):
             continue
         if node.element is None:
             skipped += 1
@@ -349,28 +347,6 @@ def main():
         "<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
             diag.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
 
-    # Print stub report (calculated sizes for fixture-connected pipes that
-    # will be skipped during write-back to protect custom fixture families)
-    # Build stub list now from the sizing result before write-back
-    stub_preview = []
-    for pipe_id, nominal_size in result["sizes"].items():
-        edge = graph.edges.get(pipe_id)
-        if edge is None:
-            continue
-        to_node = graph.nodes.get(edge.to_node_id)
-        if to_node is not None and to_node.is_gas_fixture:
-            stub_preview.append({
-                "pipe_id":          pipe_id,
-                "fixture_name":     to_node.fixture_name or "UNNAMED",
-                "demand_mbh":       edge.cumulative_load_mbh,
-                "recommended_size": nominal_size,
-            })
-
-    if stub_preview:
-        stub_text = sizing_engine.format_stub_report(stub_preview)
-        output.print_html(
-            "<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
-                stub_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
 
     # ------------------------------------------------------------------
     # STEP 6 - Pre-sizing validation warning
@@ -431,15 +407,9 @@ def main():
         "RBS_PIPE_NOMINAL_DIAMETER -> "
         "RBS_PIPE_DIAMETER_PARAM -> "
         "LookupParameter(Diameter)")
-    output.print_md(
-        "Note: pipes directly connected to fixture families are skipped "
-        "to preserve custom fixture parameters.")
-
     success_count = 0
-    skip_count    = 0
     fail_count    = 0
     fail_list     = []
-    skipped_stubs = []   # fixture stub pipes - not written, reported separately
 
     t = Transaction(doc, "RJA Tools - Size Gas Pipes")
     t.Start()
@@ -452,20 +422,6 @@ def main():
                     "Pipe {}: edge or pipe element not found in graph.".format(
                         pipe_id))
                 fail_count += 1
-                continue
-
-            # Skip pipes directly connected to gas fixtures - resizing these
-            # causes Revit to replace the fixture cap family, losing custom
-            # parameters (GAS_LOAD_MBH, FIXTURE_NAME, IS_GAS_FIXTURE).
-            to_node = graph.nodes.get(edge.to_node_id)
-            if to_node is not None and to_node.is_gas_fixture:
-                skip_count += 1
-                skipped_stubs.append({
-                    "pipe_id":          pipe_id,
-                    "fixture_name":     to_node.fixture_name or "UNNAMED",
-                    "demand_mbh":       edge.cumulative_load_mbh,
-                    "recommended_size": nominal_size,
-                })
                 continue
 
             nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
@@ -535,8 +491,8 @@ def main():
     output.print_md("| Item | Value |")
     output.print_md("| --- | --- |")
     output.print_md("| Pipes sized and written | {} |".format(success_count))
-    output.print_md("| Fixture stub pipes skipped | {} |".format(skip_count))
     output.print_md("| Fittings resized | {} |".format(fit_resized))
+    output.print_md("| Fitting failures | {} |".format(fit_skipped))
     output.print_md("| Pipe failures | {} |".format(fail_count))
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
@@ -546,22 +502,17 @@ def main():
     output.print_md("| Table row used | {} ft |".format(
         result["table_length_used_ft"]))
 
-    if skip_count:
-        output.print_md(
-            "_Note: {} fixture stub pipe(s) were not resized to preserve "
-            "custom fixture family parameters._".format(skip_count))
-
     if fail_list:
         output.print_md("---")
-        output.print_md("## :cross_mark: Failures")
+        output.print_md("## :cross_mark: Pipe Failures")
         for f in fail_list:
             output.print_md("- {}".format(f))
 
     if fail_count == 0:
         output.print_md("---")
         output.print_md(
-            ":white_check_mark: **{} pipes sized and written. "
-            "{} fixture stubs preserved.**".format(success_count, skip_count))
+            ":white_check_mark: **All {} pipes sized and written.**".format(
+                success_count))
     else:
         output.print_md("---")
         output.print_md(
