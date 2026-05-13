@@ -185,11 +185,11 @@ def format_sizing_output(sizing_result, graph):
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
         lines.append(
             "  [{}]  {:.1f} CFH  ->  {}\"  "
-            "(cap {:.0f} CFH)  {}{}".format(
+            "(cap {} CFH)  {}{}".format(
                 detail["pipe_id"],
                 detail["demand_cfh"],
                 detail["selected_size"],
-                detail["capacity_cfh"],
+                int(detail["capacity_cfh"]),
                 length_str,
                 note))
 
