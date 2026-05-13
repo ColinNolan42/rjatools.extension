@@ -119,11 +119,11 @@ def _apply_approach(approach_name, pipe, nominal_feet):
 # ---------------------------------------------------------------------------
 
 def _resize_fittings(graph, result_sizes, doc):
-    """Resize parametric fitting families by setting each connector's Radius
-    to match the pipe it is connected to.
+    """Resize parametric fittings by setting the 'Nominal Radius' instance
+    parameter. Nominal Radius = nominal pipe diameter / 2 (in feet).
 
-    Works on fully parametric families (no separate type per size).
-    Each connector is sized independently so reducing tees are handled correctly.
+    For each fitting the target size is the highest-load connected pipe,
+    which corresponds to the main run size at that fitting location.
 
     Returns:
         (resized_count, skipped_count, fail_list)
@@ -141,48 +141,61 @@ def _resize_fittings(graph, result_sizes, doc):
             skipped += 1
             continue
 
+        # Find the highest-load connected pipe to determine target size
+        target_size = None
+        max_load    = -1
+        for edge in graph.edges.values():
+            if (edge.from_node_id == node.element_id or
+                    edge.to_node_id == node.element_id):
+                if (edge.element_id in result_sizes and
+                        edge.cumulative_load_mbh > max_load):
+                    max_load    = edge.cumulative_load_mbh
+                    target_size = result_sizes[edge.element_id]
+
+        if target_size is None:
+            skipped += 1
+            continue
+
+        nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(target_size)
+        if nominal_inches is None:
+            skipped += 1
+            continue
+
+        # Nominal Radius = nominal diameter / 2, converted to feet
+        target_radius_feet = (nominal_inches / 2.0) / 12.0
+
+        ok = False
+
+        # Approach 1: LookupParameter("Nominal Radius") - instance param on
+        # Generic Standard elbows and tees
         try:
-            cm = node.element.ConnectorManager
+            param = node.element.LookupParameter("Nominal Radius")
+            if param is not None and not param.IsReadOnly:
+                param.Set(target_radius_feet)
+                ok = True
         except Exception:
-            skipped += 1
-            continue
+            pass
 
-        if cm is None:
-            skipped += 1
-            continue
-
-        node_changed = False
-        for connector in cm.Connectors:
+        # Approach 2: connector.Radius fallback
+        if not ok:
             try:
-                if not connector.IsConnected:
-                    continue
-
-                # Find which pipe this connector links to
-                pipe_id = None
-                for ref in connector.AllRefs:
-                    owner_id = ref.Owner.Id.IntegerValue
-                    if owner_id in result_sizes:
-                        pipe_id = owner_id
-                        break
-
-                if pipe_id is None:
-                    continue
-
-                nominal_size   = result_sizes[pipe_id]
-                nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
-                if nominal_inches is None:
-                    continue
-
-                target_radius_feet = (nominal_inches / 2.0) / 12.0
-                connector.Radius = target_radius_feet
-                node_changed = True
-
+                cm = node.element.ConnectorManager
+                if cm is not None:
+                    for connector in cm.Connectors:
+                        try:
+                            connector.Radius = target_radius_feet
+                            ok = True
+                        except Exception:
+                            pass
             except Exception:
-                continue
+                pass
 
-        if node_changed:
+        if ok:
             resized += 1
         else:
+            failures.append(
+                "Fitting {} ({}): could not set size to {}".format(
+                    node.element_id, node.family_name, target_size))
             skipped += 1
 
     return resized, skipped, failures
@@ -461,20 +474,24 @@ def main():
     # ------------------------------------------------------------------
     # STEP 7 - Resize fittings (separate transaction)
     # ------------------------------------------------------------------
-    output.print_md("**Resizing fittings (connector.Radius approach)...**")
-    fit_resized = 0
-    fit_skipped = 0
+    output.print_md("**Resizing fittings (Nominal Radius parameter)...**")
+    fit_resized  = 0
+    fit_skipped  = 0
+    fit_failures = []
 
     t2 = Transaction(doc, "RJA Tools - Resize Pipe Fittings")
     t2.Start()
     try:
-        fit_resized, fit_skipped, _ = _resize_fittings(
+        fit_resized, fit_skipped, fit_failures = _resize_fittings(
             graph, result["sizes"], doc)
         doc.Regenerate()
         t2.Commit()
         output.print_md(
             ":white_check_mark: Fittings: {} resized, {} skipped.".format(
                 fit_resized, fit_skipped))
+        if fit_failures:
+            for f in fit_failures:
+                output.print_md(":warning: {}".format(f))
     except Exception as e:
         t2.RollBack()
         output.print_md(
