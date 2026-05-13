@@ -109,8 +109,9 @@ def format_diagnostic_output(graph, origin_element):
         lines.append("  node [{}]  {}  {:.1f} MBH".format(
             node.element_id, node.node_type, node.cumulative_load_mbh))
     for edge in graph.edges.values():
+        to_display = "OPEN-END" if edge.to_node_id is None else str(edge.to_node_id)
         lines.append("  edge [{}]  {} -> {}  {:.1f}'  {:.1f} MBH".format(
-            edge.element_id, edge.from_node_id, edge.to_node_id,
+            edge.element_id, edge.from_node_id, to_display,
             edge.length_feet, edge.cumulative_load_mbh))
 
     # -------------------------------------------------------------------------
