@@ -368,7 +368,6 @@ def main():
 
     # Force fittings to update after pipe sizes change
     doc.Regenerate()
-        return
 
     # ------------------------------------------------------------------
     # STEP 7 - Summary
