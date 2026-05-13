@@ -369,6 +369,9 @@ def main():
                     "Pipe {}: all API approaches failed "
                     "({}\").".format(pipe_id, nominal_size))
 
+        # Regenerate inside the transaction so Revit propagates pipe size
+        # changes to connected fittings (elbows, tees) before committing.
+        doc.Regenerate()
         t.Commit()
 
     except Exception as e:
