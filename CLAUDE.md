@@ -31,7 +31,7 @@ Claude may answer questions about future phases but shall not write code for the
 
 ## Runtime UX
 
-- **Phase 1:** User selects gas meter → clicks Diagnose. Script traverses from selected element. Zero dialogs. Zero prompts. One selection is the only input.
+- **Phase 1:** User clicks Diagnose → Revit prompts to pick gas meter → user picks element → traversal runs → output printed to PyRevit window. One pick is the only input.
 - **Phase 2:** User selects gas meter → clicks Size Gas → one startup dialog (pipe material, inlet pressure, pressure drop) → fully automatic. Specific gravity hardcoded 0.60.
 - **Phase 3:** User selects water meter → clicks Size Water → one startup dialog (pipe material, street supply pressure, system type) → fully automatic. Sizing per IPC: WSFUs → GPM → velocity/pressure. Three system types: DCW, DHW, HWR.
 
@@ -123,15 +123,15 @@ Acceptance: Printed output contains all key sections (meter, fixtures, pipes, fi
 Single-click entry point.
 
 Flow:
-1. Get currently selected element
-2. `validate_selected_element()` — if invalid, show error: "Please select the gas meter element"
+1. `PickObject()` — Revit prompts "Select the gas meter element". Escape cancels cleanly.
+2. `validate_selected_element()` — if invalid, show error and exit
 3. `build_network(selected_element)`
 4. `format_diagnostic_output(graph)` — print to PyRevit output window
 5. `generate_one_line_data(graph)`
 6. Print summary: fixture count, total MBH, longest run, warnings/errors
 7. If errors, list them clearly
 
-Select meter → click button → results. No dialogs.
+Click button → pick meter → results. One pick, no other dialogs.
 
 Acceptance: Runs to completion on test model. Report JSON saved. Summary correct. Non-meter selection shows clear error. Disconnected pipes flagged without crash.
 

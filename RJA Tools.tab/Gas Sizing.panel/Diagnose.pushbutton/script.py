@@ -10,6 +10,7 @@ import os
 import sys
 
 from pyrevit import script, forms
+from Autodesk.Revit.UI.Selection import ObjectType
 
 doc   = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
@@ -34,30 +35,22 @@ def main():
     revit_helpers.clear_log()
 
     # ------------------------------------------------------------------
-    # STEP 1 -Get pre-selected element
+    # STEP 1 - Prompt user to pick the gas meter
     # ------------------------------------------------------------------
-    selected_ids = list(uidoc.Selection.GetElementIds())
-
-    if len(selected_ids) == 0:
-        forms.alert(
-            "Nothing is selected.\n\nSelect the gas meter in the model, then click Diagnose.",
-            title="Diagnose -No Selection"
+    try:
+        ref = uidoc.Selection.PickObject(
+            ObjectType.Element,
+            "Select the gas meter element"
         )
+        selected_element = doc.GetElement(ref.ElementId)
+    except Exception:
+        output.print_md("Selection cancelled.")
         return
 
-    if len(selected_ids) > 1:
-        forms.alert(
-            "{} elements are selected.\n\nSelect only the gas meter, then click Diagnose.".format(
-                len(selected_ids)),
-            title="Diagnose -Too Many Selected"
-        )
-        return
-
-    selected_element = doc.GetElement(selected_ids[0])
     if selected_element is None:
         forms.alert(
             "Could not retrieve the selected element. Please try again.",
-            title="Diagnose -Selection Error"
+            title="Diagnose - Selection Error"
         )
         return
 
