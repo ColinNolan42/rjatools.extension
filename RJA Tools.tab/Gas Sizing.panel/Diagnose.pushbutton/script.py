@@ -1,3 +1,4 @@
+# -*- coding: ascii -*-
 # Diagnose.pushbutton/script.py
 # Entry point for the Diagnose button.
 # User pre-selects the gas meter in Revit, then clicks this button.
@@ -33,14 +34,14 @@ def main():
     revit_helpers.clear_log()
 
     # ------------------------------------------------------------------
-    # STEP 1 — Get pre-selected element
+    # STEP 1 -Get pre-selected element
     # ------------------------------------------------------------------
     selected_ids = list(uidoc.Selection.GetElementIds())
 
     if len(selected_ids) == 0:
         forms.alert(
             "Nothing is selected.\n\nSelect the gas meter in the model, then click Diagnose.",
-            title="Diagnose — No Selection"
+            title="Diagnose -No Selection"
         )
         return
 
@@ -48,7 +49,7 @@ def main():
         forms.alert(
             "{} elements are selected.\n\nSelect only the gas meter, then click Diagnose.".format(
                 len(selected_ids)),
-            title="Diagnose — Too Many Selected"
+            title="Diagnose -Too Many Selected"
         )
         return
 
@@ -56,7 +57,7 @@ def main():
     if selected_element is None:
         forms.alert(
             "Could not retrieve the selected element. Please try again.",
-            title="Diagnose — Selection Error"
+            title="Diagnose -Selection Error"
         )
         return
 
@@ -64,7 +65,7 @@ def main():
         selected_element.Id.IntegerValue))
 
     # ------------------------------------------------------------------
-    # STEP 2 — Validate selection
+    # STEP 2 -Validate selection
     # ------------------------------------------------------------------
     validation = revit_helpers.validate_selected_element(selected_element)
 
@@ -72,44 +73,44 @@ def main():
         forms.alert(
             "Please select the gas meter element.\n\n{}".format(
                 validation["reason"]),
-            title="Diagnose — Invalid Selection"
+            title="Diagnose -Invalid Selection"
         )
         return
 
     output.print_md(":white_check_mark: Meter validation passed.")
 
     # ------------------------------------------------------------------
-    # STEP 3 — Traverse piping network
+    # STEP 3 -Traverse piping network
     # ------------------------------------------------------------------
     try:
         graph = pipe_graph.build_network(selected_element, doc)
     except Exception as e:
         forms.alert(
             "Traversal failed:\n\n{}".format(str(e)),
-            title="Diagnose — Traversal Error"
+            title="Diagnose -Traversal Error"
         )
         output.print_md(":cross_mark: Traversal ERROR: {}".format(str(e)))
         return
 
-    output.print_md(":white_check_mark: Traversal complete — {} nodes, {} pipe segments.".format(
+    output.print_md(":white_check_mark: Traversal complete -{} nodes, {} pipe segments.".format(
         len(graph.nodes), len(graph.edges)))
 
     # ------------------------------------------------------------------
-    # STEP 4 — Print diagnostic output (copy/paste into conversation)
+    # STEP 4 -Print diagnostic output (copy/paste into conversation)
     # ------------------------------------------------------------------
     output.print_md("---")
-    output.print_md("## Diagnostic Output — Copy and paste below this line")
+    output.print_md("## Diagnostic Output -Copy and paste below this line")
     diagnostic_text = report_generator.format_diagnostic_output(graph, selected_element)
     output.print_html("<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
         diagnostic_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
 
     # ------------------------------------------------------------------
-    # STEP 5 — Generate one-line diagram data (used by One-Line button)
+    # STEP 5 -Generate one-line diagram data (used by One-Line button)
     # ------------------------------------------------------------------
     one_line = report_generator.generate_one_line_data(graph)
 
     # ------------------------------------------------------------------
-    # STEP 6 — Print summary
+    # STEP 6 -Print summary
     # ------------------------------------------------------------------
     fixtures = [n for n in graph.nodes.values() if n.is_gas_fixture]
     total_load = sum(n.gas_load_mbh for n in fixtures)
@@ -125,7 +126,7 @@ def main():
     output.print_md("| Total load | {:.1f} MBH |".format(total_load))
     output.print_md("| Pipe segments | {} |".format(len(graph.edges)))
     output.print_md("| Longest run | {:.1f} ft |".format(longest_ft))
-    output.print_md("| Elbows on longest run | {} × 5 ft = {:.0f} ft |".format(
+    output.print_md("| Elbows on longest run | {} x 5 ft = {:.0f} ft |".format(
         lr.get("elbow_count", 0), lr.get("elbow_equiv_length_feet", 0.0)))
     output.print_md("| Farthest fixture | {} |".format(farthest))
 
@@ -139,7 +140,7 @@ def main():
                 n.fixture_name, n.gas_load_mbh, n.element_id))
 
     # ------------------------------------------------------------------
-    # STEP 7 — Errors and warnings
+    # STEP 7 -Errors and warnings
     # ------------------------------------------------------------------
     errors   = []
     warnings = []
@@ -156,7 +157,7 @@ def main():
 
     if errors:
         output.print_md("---")
-        output.print_md("## :cross_mark: Errors — Fix Before Sizing")
+        output.print_md("## :cross_mark: Errors -Fix Before Sizing")
         for e in errors:
             output.print_md("- {}".format(e))
 
