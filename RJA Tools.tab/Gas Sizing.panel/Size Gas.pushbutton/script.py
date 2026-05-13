@@ -133,9 +133,7 @@ def _resize_fittings(graph, result_sizes, doc):
     failures = []
 
     for node in graph.nodes.values():
-        if node.node_type not in ("tee", "fitting", "elbow"):
-            continue
-        if node.is_gas_fixture:
+        if node.node_type not in ("tee", "fitting", "elbow", "fixture"):
             continue
         if node.element is None:
             skipped += 1
@@ -507,16 +505,17 @@ def main():
     # ------------------------------------------------------------------
     if skipped_stubs:
         output.print_md("---")
-        output.print_md("## Fixture Stub Pipes - Set These Manually")
+        output.print_md("## Fixture Stub Pipes - Optional Manual Sizing")
         output.print_md(
-            "{} stub pipe(s) were not auto-sized to preserve equipment "
-            "cap families. Select each pipe by ID and set its diameter:".format(
+            "{} short stub pipe(s) at fixture connections were not resized "
+            "(cap Nominal Radius was set instead). "
+            "Optionally set the stub pipe diameter to match:".format(
                 len(skipped_stubs)))
-        output.print_md("| Fixture | Set stub to | Pipe ID |")
+        output.print_md("| Fixture | Stub pipe ID | Set to |")
         output.print_md("| --- | --- | --- |")
         for s in skipped_stubs:
-            output.print_md("| {} | {}\" | {} |".format(
-                s["fixture_name"], s["recommended_size"], s["pipe_id"]))
+            output.print_md("| {} | {} | {}\" |".format(
+                s["fixture_name"], s["pipe_id"], s["recommended_size"]))
 
     output.print_md("---")
     output.print_md("## Summary")
