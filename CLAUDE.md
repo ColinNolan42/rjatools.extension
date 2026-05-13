@@ -1,8 +1,8 @@
 # RevitPipeSizing — Claude Code Project Context
 
 ## Active Status
-**Active Phase: 1**
-**Current Sub-Task: 1.5 — Diagnose.pushbutton/script.py**
+**Active Phase: 2**
+**Current Sub-Task: 2.1 — Fix cumulative load calculation**
 
 Update this block manually as phases and sub-tasks complete.
 

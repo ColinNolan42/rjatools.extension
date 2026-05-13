@@ -85,6 +85,9 @@ class NetworkGraph(object):
         self.traversal_log      = []    # step-by-step traversal decisions
         self.disconnected       = []    # element IDs the traversal could not reach
         self.longest_run        = None  # populated by _find_longest_run()
+        self.node_children      = {}    # node_id -> [child_node_id, ...]
+                                        # Records direct fitting-to-fitting connections
+                                        # where no pipe exists between them in the model
 
     def add_node(self, node):
         self.nodes[node.element_id] = node
@@ -282,6 +285,18 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
 
     graph.add_node(node)
 
+    # --- Record direct node-to-node connection if parent is also a node ---
+    # This happens when a tee connects straight to a fitting with no pipe
+    # between them. Without recording this, the load algorithm can't cross
+    # the gap because it only walks edges (pipes).
+    if parent_node_id in graph.nodes:
+        if parent_node_id not in graph.node_children:
+            graph.node_children[parent_node_id] = []
+        graph.node_children[parent_node_id].append(eid)
+        graph.log(
+            "DIRECT CONNECTION: node {} -> node {} (no pipe between them)".format(
+                parent_node_id, eid))
+
     # --- Queue all connected elements we haven't visited ---
     for c in connectors:
         if c["is_connected"] and c["connected_element_id"] is not None:
@@ -327,13 +342,17 @@ def _calculate_cumulative_loads(graph):
         if node.is_gas_fixture:
             return node.gas_load_mbh
 
-        # Otherwise sum loads from all downstream edges
+        # Sum loads from downstream pipe edges
         total = 0.0
         for edge in graph.edges.values():
             if edge.from_node_id == node_id and edge.to_node_id is not None:
                 downstream_load = _sum_load(edge.to_node_id)
                 edge.cumulative_load_mbh = downstream_load
                 total += downstream_load
+
+        # Sum loads from direct node-to-node connections (no pipe between them)
+        for child_id in graph.node_children.get(node_id, []):
+            total += _sum_load(child_id)
 
         node.cumulative_load_mbh = total
         return total
@@ -418,6 +437,11 @@ def _find_longest_run(graph):
                     local_elbow_count,
                     current_path + [edge.element_id, edge.to_node_id]
                 )
+
+        # Traverse direct node-to-node connections (zero pipe length added)
+        for child_id in graph.node_children.get(node_id, []):
+            _dfs(child_id, pipe_length, local_elbow_count,
+                 current_path + [child_id])
 
     _dfs(graph.origin_id, 0.0, 0, [graph.origin_id])
     graph.longest_run = longest
