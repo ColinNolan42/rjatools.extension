@@ -154,7 +154,7 @@ def main():
         )
         selected_element = doc.GetElement(ref.ElementId)
     except Exception:
-        output.print_md("Selection cancelled.")
+        output.print_md("Selection cancelled. No element was picked.")
         return
 
     if selected_element is None:
@@ -184,20 +184,32 @@ def main():
     # ------------------------------------------------------------------
     # STEP 3 - Startup dialog: pipe material then inlet pressure
     # ------------------------------------------------------------------
-    pipe_material = forms.CommandSwitchWindow.show(
-        sorted(gas_tables.SUPPORTED_MATERIALS),
-        message="Select pipe material:"
-    )
-    if not pipe_material:
-        output.print_md("Cancelled.")
-        return
+    # If only one material is supported, skip the dialog and use it directly.
+    # Show a dialog only when multiple materials are available.
+    materials = sorted(gas_tables.SUPPORTED_MATERIALS)
+    if len(materials) == 1:
+        pipe_material = materials[0]
+        output.print_md("**Material:** {} (only supported material)".format(
+            pipe_material))
+    else:
+        pipe_material = forms.CommandSwitchWindow.show(
+            materials,
+            message="Select pipe material:"
+        )
+        if not pipe_material:
+            output.print_md(
+                "Cancelled at pipe material dialog. "
+                "No changes were made to the model.")
+            return
 
     pressure_choice = forms.CommandSwitchWindow.show(
         _PRESSURE_OPTIONS,
         message="Select inlet pressure at meter:"
     )
     if not pressure_choice:
-        output.print_md("Cancelled.")
+        output.print_md(
+            "Cancelled at inlet pressure dialog. "
+            "No changes were made to the model.")
         return
 
     inlet_pressure_psi = _PRESSURE_PSI[pressure_choice]
@@ -293,7 +305,9 @@ def main():
             message="Warnings found (see output window). Proceed anyway?"
         )
         if proceed != "Proceed with sizing":
-            output.print_md("Sizing cancelled.")
+            output.print_md(
+                "Sizing cancelled at pre-sizing warnings dialog. "
+                "No changes were made to the model.")
             return
 
     # ------------------------------------------------------------------
