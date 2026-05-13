@@ -349,6 +349,29 @@ def main():
         "<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
             diag.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
 
+    # Print stub report (calculated sizes for fixture-connected pipes that
+    # will be skipped during write-back to protect custom fixture families)
+    # Build stub list now from the sizing result before write-back
+    stub_preview = []
+    for pipe_id, nominal_size in result["sizes"].items():
+        edge = graph.edges.get(pipe_id)
+        if edge is None:
+            continue
+        to_node = graph.nodes.get(edge.to_node_id)
+        if to_node is not None and to_node.is_gas_fixture:
+            stub_preview.append({
+                "pipe_id":          pipe_id,
+                "fixture_name":     to_node.fixture_name or "UNNAMED",
+                "demand_mbh":       edge.cumulative_load_mbh,
+                "recommended_size": nominal_size,
+            })
+
+    if stub_preview:
+        stub_text = sizing_engine.format_stub_report(stub_preview)
+        output.print_html(
+            "<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
+                stub_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
+
     # ------------------------------------------------------------------
     # STEP 6 - Pre-sizing validation warning
     # ------------------------------------------------------------------
@@ -416,6 +439,7 @@ def main():
     skip_count    = 0
     fail_count    = 0
     fail_list     = []
+    skipped_stubs = []   # fixture stub pipes - not written, reported separately
 
     t = Transaction(doc, "RJA Tools - Size Gas Pipes")
     t.Start()
@@ -436,6 +460,12 @@ def main():
             to_node = graph.nodes.get(edge.to_node_id)
             if to_node is not None and to_node.is_gas_fixture:
                 skip_count += 1
+                skipped_stubs.append({
+                    "pipe_id":          pipe_id,
+                    "fixture_name":     to_node.fixture_name or "UNNAMED",
+                    "demand_mbh":       edge.cumulative_load_mbh,
+                    "recommended_size": nominal_size,
+                })
                 continue
 
             nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)

@@ -87,18 +87,18 @@ def size_system(graph, pipe_material, inlet_pressure_psi):
         if edge.to_node_id is None:
             continue
 
-        demand_cfh = edge.cumulative_load_mbh  # 1 MBH = 1 CFH
+        demand_mbh = edge.cumulative_load_mbh  # 1 MBH = 1 CFH
 
         # Zero demand: assign minimum available pipe size
-        if demand_cfh <= 0:
+        if demand_mbh <= 0:
             selected = pipe_sizes[0]
             capacity_at_size = gas_tables.get_capacity(
                 table_id, longest_run_ft, selected)
             segment_detail.append({
                 "pipe_id":       edge.element_id,
-                "demand_cfh":    0.0,
+                "demand_mbh":    0.0,
                 "selected_size": selected,
-                "capacity_cfh":  capacity_at_size,
+                "capacity_mbh":  capacity_at_size,
                 "note":          "zero demand - minimum size assigned"
             })
             sizes[edge.element_id] = selected
@@ -111,7 +111,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi):
             try:
                 capacity = gas_tables.get_capacity(
                     table_id, longest_run_ft, size)
-                if capacity >= demand_cfh:
+                if capacity >= demand_mbh:
                     selected = size
                     selected_capacity = capacity
                     break
@@ -121,17 +121,17 @@ def size_system(graph, pipe_material, inlet_pressure_psi):
 
         if selected is None:
             sizing_errors.append(
-                "Pipe {}: demand {:.1f} CFH exceeds max table capacity "
+                "Pipe {}: demand {:.1f} MBH exceeds max table capacity "
                 "at {:.0f} ft in Table {}.".format(
-                    edge.element_id, demand_cfh, table_length_used, table_id))
+                    edge.element_id, demand_mbh, table_length_used, table_id))
             continue
 
         sizes[edge.element_id] = selected
         segment_detail.append({
             "pipe_id":       edge.element_id,
-            "demand_cfh":    round(demand_cfh, 1),
+            "demand_mbh":    round(demand_mbh, 1),
             "selected_size": selected,
-            "capacity_cfh":  selected_capacity,
+            "capacity_mbh":  selected_capacity,
             "note":          ""
         })
 
@@ -152,6 +152,40 @@ def size_system(graph, pipe_material, inlet_pressure_psi):
 
 
 # ---------------------------------------------------------------------------
+# Downstream fixture helper
+# ---------------------------------------------------------------------------
+
+def _downstream_fixtures(start_node_id, graph):
+    """Return list of fixture names reachable downstream from start_node_id."""
+    names = []
+    visited = set()
+    stack = [start_node_id]
+
+    while stack:
+        nid = stack.pop()
+        if nid is None or nid in visited:
+            continue
+        visited.add(nid)
+
+        node = graph.nodes.get(nid)
+        if node is None:
+            continue
+
+        if node.is_gas_fixture:
+            names.append(node.fixture_name or "UNNAMED")
+            continue
+
+        for edge in graph.edges.values():
+            if edge.from_node_id == nid and edge.to_node_id is not None:
+                stack.append(edge.to_node_id)
+
+        for child_id in graph.node_children.get(nid, []):
+            stack.append(child_id)
+
+    return names
+
+
+# ---------------------------------------------------------------------------
 # Diagnostic formatter
 # ---------------------------------------------------------------------------
 
@@ -167,6 +201,10 @@ def format_sizing_output(sizing_result, graph):
     """
     lines = []
 
+    # Total load and fixture count
+    fixture_nodes = [n for n in graph.nodes.values() if n.is_gas_fixture]
+    total_mbh = sum(n.gas_load_mbh for n in fixture_nodes)
+
     lines.append("=== SIZING RESULTS ===")
     lines.append("Table:         {}".format(sizing_result["table_id"]))
     lines.append("Table row:     {} ft  (longest run {:.1f} ft rounded up)".format(
@@ -174,6 +212,8 @@ def format_sizing_output(sizing_result, graph):
         sizing_result["longest_run_ft"]))
     lines.append("Pipe material: {}".format(sizing_result["pipe_material"]))
     lines.append("Inlet PSI:     {}".format(sizing_result["inlet_pressure_psi"]))
+    lines.append("Total load:    {:.1f} MBH  |  {} fixtures".format(
+        total_mbh, len(fixture_nodes)))
     lines.append("")
 
     sizes = sizing_result["sizes"]
@@ -182,15 +222,52 @@ def format_sizing_output(sizing_result, graph):
     for detail in sizing_result["segment_detail"]:
         edge = graph.edges.get(detail["pipe_id"])
         length_str = "{:.1f}'".format(edge.length_feet) if edge else "?"
+
+        # Downstream fixture label
+        fixture_label = ""
+        if edge and edge.to_node_id is not None:
+            fixtures = _downstream_fixtures(edge.to_node_id, graph)
+            if len(fixtures) == 1:
+                fixture_label = "  -> {}".format(fixtures[0])
+            elif len(fixtures) > 1:
+                fixture_label = "  -> trunk ({}: {})".format(
+                    len(fixtures), ", ".join(fixtures[:3]) +
+                    (" ..." if len(fixtures) > 3 else ""))
+
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
         lines.append(
-            "  [{}]  {:.1f} CFH  ->  {}\"  "
-            "(cap {} CFH)  {}{}".format(
+            "  [{}]  {:.1f} MBH  ->  {}\"  "
+            "(cap {} MBH)  {}{}{}".format(
                 detail["pipe_id"],
-                detail["demand_cfh"],
+                detail["demand_mbh"],
                 detail["selected_size"],
-                int(detail["capacity_cfh"]),
+                int(detail["capacity_mbh"]),
                 length_str,
+                fixture_label,
                 note))
 
+    return "\n".join(lines)
+
+
+def format_stub_report(skipped_stubs):
+    """Return a formatted section listing fixture stub pipes that were skipped.
+
+    Args:
+        skipped_stubs: list of dicts with keys:
+            pipe_id, fixture_name, demand_mbh, recommended_size
+
+    Returns:
+        str
+    """
+    if not skipped_stubs:
+        return ""
+
+    lines = ["=== FIXTURE STUB PIPES (not written - manually resize these) ==="]
+    for s in skipped_stubs:
+        lines.append(
+            "  [{}]  {}  {:.1f} MBH  ->  recommend {}\"".format(
+                s["pipe_id"],
+                s["fixture_name"],
+                s["demand_mbh"],
+                s["recommended_size"]))
     return "\n".join(lines)
