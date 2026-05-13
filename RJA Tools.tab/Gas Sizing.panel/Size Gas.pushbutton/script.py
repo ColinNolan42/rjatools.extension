@@ -202,9 +202,10 @@ def main():
                 "No changes were made to the model.")
             return
 
-    pressure_choice = forms.CommandSwitchWindow.show(
+    pressure_choice = forms.SelectFromList.show(
         _PRESSURE_OPTIONS,
-        message="Select inlet pressure at meter:"
+        title="Size Gas - Select Inlet Pressure",
+        multiselect=False
     )
     if not pressure_choice:
         output.print_md(
@@ -213,8 +214,6 @@ def main():
         return
 
     inlet_pressure_psi = _PRESSURE_PSI[pressure_choice]
-
-    output.print_md("**Material:**        {}".format(pipe_material))
     output.print_md("**Inlet pressure:**  {} PSI".format(inlet_pressure_psi))
 
     # ------------------------------------------------------------------
@@ -300,11 +299,13 @@ def main():
             for d in graph.disconnected:
                 output.print_md("  - Element ID {}".format(d))
 
-        proceed = forms.CommandSwitchWindow.show(
-            ["Proceed with sizing", "Cancel"],
-            message="Warnings found (see output window). Proceed anyway?"
+        proceed = forms.alert(
+            "Warnings found (see output window). Proceed with sizing anyway?",
+            title="Size Gas - Warnings",
+            yes=True,
+            no=True
         )
-        if proceed != "Proceed with sizing":
+        if not proceed:
             output.print_md(
                 "Sizing cancelled at pre-sizing warnings dialog. "
                 "No changes were made to the model.")
@@ -379,9 +380,6 @@ def main():
         )
         output.print_md(":cross_mark: Transaction ERROR: {}".format(str(e)))
         return
-
-    # Force fittings to update after pipe sizes change
-    doc.Regenerate()
 
     # ------------------------------------------------------------------
     # STEP 7 - Summary
