@@ -2,7 +2,7 @@
 
 ## Active Status
 **Active Phase: 1**
-**Current Sub-Task: 1.1 — shared_params.py**
+**Current Sub-Task: 1.5 — Diagnose.pushbutton/script.py**
 
 Update this block manually as phases and sub-tasks complete.
 
@@ -46,9 +46,9 @@ Single meter per system. User selects it. No auto-detection of meter.
 **Gas fixture families:**
 | Parameter | Type | Example |
 |---|---|---|
-| `Gas_BTU_Input` | Number | 64800 |
-| `Fixture_Name` | Text | "RTU-1" |
-| `Is_Gas_Fixture` | Yes/No | Yes |
+| `GAS_LOAD_MBH` | Number | 64.8 |
+| `FIXTURE_NAME` | Text | "RTU-1" |
+| `IS_GAS_FIXTURE` | Yes/No | Yes |
 
 **PRV families:** No custom shared parameters. Auto-detected during traversal by family name or Revit category.
 
@@ -193,6 +193,9 @@ TOTAL DEVELOPED LENGTH: [X]'
 ---
 
 ## Absolute Rules
+
+**0. ASK BEFORE MODIFYING CLAUDE.md.**
+Always ask the user for explicit permission before making any edit to this file. State what change is proposed and why. Do not modify CLAUDE.md without confirmation, even for small corrections.
 
 **1. NEVER GUESS AT REVIT API.**
 If unsure whether a property, method, or parameter exists, say: "I believe this works as follows, but please verify: [description]." Never assume.
