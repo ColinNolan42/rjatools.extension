@@ -257,8 +257,32 @@ BTU ÷ 1000 = CFH  (natural gas, 1000 BTU/cf)
 # Specific gravity
 SPECIFIC_GRAVITY = 0.60  (hardcoded, matches all IFGC tables)
 
-# Longest Run Method
-ONE longest run length sizes ALL segments in the system
+# Longest Run Method (2024 IFGC Appendix A)
+#
+# 1. Identify the single longest DEVELOPED LENGTH from meter to farthest outlet.
+#    Developed length = actual pipe run length + elbow equivalent lengths.
+#    Elbow equivalent = 5 ft per elbow (per IFGC).
+#    This one length is used for ALL segment table lookups in the system.
+#
+# 2. For each pipe segment, determine its MBH demand:
+#    - Terminal segment (feeds one fixture): that fixture's MBH load
+#    - Trunk segment (feeds multiple fixtures): sum of all downstream MBH loads
+#
+# 3. Look up the IFGC sizing table at the longest developed length row.
+#    Per IFGC A103.1 Step 5: if the actual length does not match a table row,
+#    use the NEXT LONGER row (conservative - lower capacity for same pipe size).
+#
+# 4. For each segment, select the SMALLEST nominal pipe size whose table
+#    capacity (CFH) >= that segment's MBH demand.
+#    1 MBH = 1 CFH for natural gas at 1000 BTU/cf.
+#
+# Key rule: Individual run lengths to each outlet are NOT used for sizing.
+# The single longest developed length drives ALL table lookups.
+#
+# Example:
+#   Outlet A: 100 MBH at 150 ft developed (farthest — sets system length)
+#   Outlet B: 250 MBH at 120 ft developed (closer, but still sized at 150 ft)
+#   Main trunk before first branch: 350 MBH, sized at 150 ft table row
 ```
 
 ---
