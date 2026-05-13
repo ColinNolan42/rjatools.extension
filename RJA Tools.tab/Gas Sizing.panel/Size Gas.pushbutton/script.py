@@ -133,7 +133,9 @@ def _resize_fittings(graph, result_sizes, doc):
     failures = []
 
     for node in graph.nodes.values():
-        if node.node_type not in ("tee", "fitting", "elbow", "fixture"):
+        if node.node_type not in ("tee", "fitting", "elbow"):
+            continue
+        if node.is_gas_fixture:
             continue
         if node.element is None:
             skipped += 1
@@ -398,7 +400,29 @@ def main():
             return
 
     # ------------------------------------------------------------------
-    # STEP 7 - Write sizes to Revit via Transaction
+    # STEP 7 - Backup fixture families before pipe resize
+    # Revit replaces Pipe Fitting category families when the connected
+    # pipe diameter changes. Save type + parameters so we can restore.
+    # ------------------------------------------------------------------
+    fixture_backups = {}
+    for pipe_id, nominal_size in result["sizes"].items():
+        edge = graph.edges.get(pipe_id)
+        if edge is None or edge.pipe is None:
+            continue
+        to_node = graph.nodes.get(edge.to_node_id)
+        if to_node is not None and to_node.is_gas_fixture and to_node.element is not None:
+            try:
+                fixture_backups[pipe_id] = {
+                    "type_id":       to_node.element.GetTypeId(),
+                    "from_node_id":  edge.from_node_id,
+                    "gas_load_mbh":  to_node.gas_load_mbh,
+                    "fixture_name":  to_node.fixture_name or "",
+                }
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # STEP 8 - Write sizes to Revit via Transaction
     # ------------------------------------------------------------------
     output.print_md("---")
     output.print_md("**Writing sizes to Revit model...**")
@@ -458,7 +482,82 @@ def main():
         return
 
     # ------------------------------------------------------------------
-    # STEP 7 - Resize fittings (separate transaction)
+    # STEP 9 - Restore fixture families replaced during pipe resize
+    # ------------------------------------------------------------------
+    if fixture_backups:
+        t_restore = Transaction(doc, "RJA Tools - Restore Fixture Families")
+        t_restore.Start()
+        restored_count = 0
+        try:
+            for pipe_id, backup in fixture_backups.items():
+                try:
+                    pipe_elem = doc.GetElement(ElementId(pipe_id))
+                    if pipe_elem is None:
+                        continue
+
+                    # Find the element now connected to the fixture end of the stub
+                    new_fixture = None
+                    from_id = backup["from_node_id"]
+                    for connector in pipe_elem.ConnectorManager.Connectors:
+                        if not connector.IsConnected:
+                            continue
+                        try:
+                            for ref in connector.AllRefs:
+                                if ref.Owner.Id.IntegerValue != from_id:
+                                    new_fixture = ref.Owner
+                                    break
+                        except Exception:
+                            pass
+                        if new_fixture is not None:
+                            break
+
+                    if new_fixture is None:
+                        continue
+
+                    # Restore original family type if it was swapped out
+                    if new_fixture.GetTypeId() != backup["type_id"]:
+                        new_fixture.ChangeTypeId(backup["type_id"])
+
+                    # Re-apply custom parameters
+                    p = new_fixture.LookupParameter(
+                        shared_params.PARAM_IS_GAS_FIXTURE)
+                    if p is not None and not p.IsReadOnly:
+                        p.Set(1)
+
+                    p2 = new_fixture.LookupParameter(
+                        shared_params.PARAM_GAS_LOAD_MBH)
+                    if p2 is not None and not p2.IsReadOnly:
+                        p2.Set(backup["gas_load_mbh"])
+
+                    p3 = new_fixture.LookupParameter(
+                        shared_params.PARAM_FIXTURE_NAME)
+                    if p3 is not None and not p3.IsReadOnly:
+                        p3.Set(backup["fixture_name"])
+
+                    restored_count += 1
+
+                except Exception as e:
+                    output.print_md(
+                        ":warning: Could not restore fixture at pipe {}: {}".format(
+                            pipe_id, str(e)))
+
+            t_restore.Commit()
+            output.print_md(
+                ":white_check_mark: Restored {} fixture famil(ies) after pipe "
+                "resize.".format(restored_count))
+
+        except Exception as e:
+            t_restore.RollBack()
+            output.print_md(
+                ":warning: Fixture restore transaction failed: {}".format(str(e)))
+            output.print_md(
+                "_Note: Long-term fix - change fixture cap families from "
+                "Pipe Fittings category to Mechanical Equipment. Revit only "
+                "auto-replaces Pipe Fittings category elements when pipe "
+                "sizes change._")
+
+    # ------------------------------------------------------------------
+    # STEP 10 - Resize fittings (separate transaction)
     # ------------------------------------------------------------------
     output.print_md("**Resizing fittings (Nominal Radius parameter)...**")
     fit_resized  = 0
