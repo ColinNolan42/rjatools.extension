@@ -199,23 +199,7 @@ def _resize_fittings(graph, result_sizes, doc):
     return resized, skipped, failures
 
 
-# ---------------------------------------------------------------------------
-# Startup dialog helpers
-# ---------------------------------------------------------------------------
-
-_PRESSURE_OPTIONS = [
-    "< 2 PSI  (Table 402.4(2), 0.5 in. w.c. drop)",
-    "2 PSI    (Table 402.4(5), 1.0 PSI drop)",
-    "3 PSI    (Table 402.4(6), 2.0 PSI drop)",
-    "5 PSI    (Table 402.4(7), 3.5 PSI drop)",
-]
-
-_PRESSURE_PSI = {
-    _PRESSURE_OPTIONS[0]: 1.5,
-    _PRESSURE_OPTIONS[1]: 2.0,
-    _PRESSURE_OPTIONS[2]: 3.0,
-    _PRESSURE_OPTIONS[3]: 5.0,
-}
+# (no startup dialog helpers - table options are loaded from gas_tables.py)
 
 
 # ---------------------------------------------------------------------------
@@ -267,39 +251,29 @@ def main():
     output.print_md(":white_check_mark: Meter validation passed.")
 
     # ------------------------------------------------------------------
-    # STEP 3 - Startup dialog: pipe material then inlet pressure
+    # STEP 3 - Startup dialog: select IFGC sizing table
     # ------------------------------------------------------------------
-    # If only one material is supported, skip the dialog and use it directly.
-    # Show a dialog only when multiple materials are available.
-    materials = sorted(gas_tables.SUPPORTED_MATERIALS)
-    if len(materials) == 1:
-        pipe_material = materials[0]
-        output.print_md("**Material:** {} (only supported material)".format(
-            pipe_material))
-    else:
-        pipe_material = forms.CommandSwitchWindow.show(
-            materials,
-            message="Select pipe material:"
-        )
-        if not pipe_material:
-            output.print_md(
-                "Cancelled at pipe material dialog. "
-                "No changes were made to the model.")
-            return
-
-    pressure_choice = forms.SelectFromList.show(
-        _PRESSURE_OPTIONS,
-        title="Size Gas - Select Inlet Pressure",
+    option_labels = gas_tables.get_table_option_labels()
+    selected_label = forms.SelectFromList.show(
+        option_labels,
+        title="Size Gas - Select IFGC Sizing Table",
         multiselect=False
     )
-    if not pressure_choice:
+    if not selected_label:
         output.print_md(
-            "Cancelled at inlet pressure dialog. "
+            "Cancelled at table selection dialog. "
             "No changes were made to the model.")
         return
 
-    inlet_pressure_psi = _PRESSURE_PSI[pressure_choice]
-    output.print_md("**Inlet pressure:**  {} PSI".format(inlet_pressure_psi))
+    selected_opt       = gas_tables.get_table_option_by_label(selected_label)
+    table_id           = selected_opt["table_id"]
+    pipe_material      = selected_opt["material"]
+    inlet_pressure_psi = selected_opt["inlet_pressure_psi"]
+
+    output.print_md("**Table:**    {} ({})".format(
+        table_id, selected_opt["label"].split("  [")[0]))
+    output.print_md("**Material:** {}".format(pipe_material))
+    output.print_md("**Gas:**      {}".format(selected_opt["gas"]))
 
     # ------------------------------------------------------------------
     # STEP 4 - Traverse piping network
@@ -331,7 +305,8 @@ def main():
     # ------------------------------------------------------------------
     output.print_md("**Running IFGC sizing...**")
     try:
-        result = sizing_engine.size_system(graph, pipe_material, inlet_pressure_psi)
+        result = sizing_engine.size_system(
+            graph, pipe_material, inlet_pressure_psi, table_id)
     except ValueError as e:
         forms.alert(
             "Sizing failed:\n\n{}".format(str(e)),

@@ -16,6 +16,7 @@ import shared_params
 # ---------------------------------------------------------------------------
 
 NOMINAL_TO_INCHES = {
+    # Schedule 40 Steel and PE Plastic Pipe (standard nominal sizes)
     "1/2":   0.5,
     "3/4":   0.75,
     "1":     1.0,
@@ -30,6 +31,31 @@ NOMINAL_TO_INCHES = {
     "8":     8.0,
     "10":    10.0,
     "12":    12.0,
+    # Semirigid Copper Tubing (K&L nominal sizes per IFGC Table 402.4(8)-(14))
+    "3/8 K&L":   0.375,
+    "1/2 K&L":   0.5,
+    "5/8 K&L":   0.625,
+    "3/4 K&L":   0.75,
+    "1 K&L":     1.0,
+    "1-1/4 K&L": 1.25,
+    "1-1/2 K&L": 1.5,
+    "1-5/8 ACR": 1.625,
+    "2 K&L":     2.0,
+    # CSST (approximate nominal equivalent per EHD designation)
+    "EHD-13": 0.25,
+    "EHD-15": 0.375,
+    "EHD-18": 0.5,
+    "EHD-19": 0.5,
+    "EHD-23": 0.75,
+    "EHD-25": 0.75,
+    "EHD-30": 1.0,
+    "EHD-31": 1.0,
+    "EHD-37": 1.25,
+    "EHD-39": 1.25,
+    "EHD-46": 1.5,
+    "EHD-48": 1.5,
+    "EHD-60": 2.0,
+    "EHD-62": 2.0,
 }
 
 
@@ -37,7 +63,7 @@ NOMINAL_TO_INCHES = {
 # Main sizing function
 # ---------------------------------------------------------------------------
 
-def size_system(graph, pipe_material, inlet_pressure_psi):
+def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
     """Size every pipe segment using the IFGC Longest Run Method.
 
     Per IFGC A103.1:
@@ -49,7 +75,11 @@ def size_system(graph, pipe_material, inlet_pressure_psi):
     Args:
         graph:               NetworkGraph from pipe_graph.build_network()
         pipe_material:       str  e.g. "Schedule 40 Steel"
-        inlet_pressure_psi:  float  supply pressure at the meter
+        inlet_pressure_psi:  float  supply pressure at the meter (used if
+                             table_id is None)
+        table_id:            str  optional - IFGC table ID to use directly,
+                             e.g. "402.4(2)". When supplied, inlet_pressure_psi
+                             is stored in the result but not used for lookup.
 
     Returns:
         dict with keys:
@@ -74,7 +104,10 @@ def size_system(graph, pipe_material, inlet_pressure_psi):
         raise ValueError(
             "Longest run is 0 ft. Verify meter connection and traversal.")
 
-    table_id = gas_tables.select_table(inlet_pressure_psi, pipe_material)
+    if table_id is None:
+        table_id = gas_tables.select_table(inlet_pressure_psi, pipe_material)
+    else:
+        gas_tables.get_table(table_id)  # validate table exists
     pipe_sizes = gas_tables.list_pipe_sizes(table_id)
     table_length_used, _ = gas_tables.get_length_row(table_id, longest_run_ft)
 
