@@ -58,15 +58,15 @@ import sizing_engine
 # Layout constants  (all in Revit feet = view coordinates at 1:100)
 # ---------------------------------------------------------------------------
 VIEW_SCALE       = 100      # DraftingView.Scale
-LEVEL_HEIGHT     = 15.0    # ft vertical clearance per branch level (compressed)
-MIN_SEGMENT_FT   = 6.0     # ft minimum horizontal segment so text doesn't overlap
+LEVEL_HEIGHT     = 18.0    # ft vertical clearance per branch level (compressed)
+MIN_SEGMENT_FT   = 10.0    # ft minimum horizontal segment so text doesn't overlap
 SYMBOL_RADIUS    = 0.5     # ft  meter circle radius
-FIXTURE_HW       = 0.75    # ft  half-width of 3-line fixture symbol
-FIXTURE_SPACING  = 0.4     # ft  gap between 3 fixture lines
-VALVE_HW         = 0.6     # ft  half-width of bowtie
-VALVE_HH         = 0.35    # ft  half-height of bowtie triangle
-LABEL_ABOVE      = 1.0     # ft  above a horizontal pipe (must clear text height)
-LABEL_RIGHT      = 0.5     # ft  right of a vertical pipe
+FIXTURE_HW       = 1.5     # ft  half-width of 3-line fixture symbol (3 ft total)
+FIXTURE_SPACING  = 0.5     # ft  gap between 3 fixture lines
+VALVE_HW         = 1.0     # ft  half-width of bowtie (2 ft total)
+VALVE_HH         = 0.6     # ft  half-height of bowtie triangle
+LABEL_ABOVE      = 1.2     # ft  above a horizontal pipe (must clear text height)
+LABEL_RIGHT      = 0.6     # ft  right of a vertical pipe
 UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
 UPSTREAM_V       = 4.0     # ft  vertical drop of upstream stub
 TEXT_HEIGHT_FT   = 0.78    # ft  3/32" x (100/12) at 1:100
@@ -107,6 +107,7 @@ def _compute_layout(graph):
         trunk_set       set of pipe edge element IDs on the main trunk
         meter_nid       node_id of the gas meter
         meter_z         z-elevation of the meter in Revit feet
+        layout_log      list of dicts recording every BFS branch decision
     """
     # path_element_ids interleaves node and edge IDs:
     # [meter_nid, pipe1_id, node1_id, pipe2_id, node2_id, ..., fixture_nid]
@@ -177,7 +178,8 @@ def _compute_layout(graph):
     #     dropping another LEVEL_HEIGHT in branch_direc from the current y.
     # ------------------------------------------------------------------
     branch_counters = {}  # node_id -> branches dispatched from it
-    visited = set(positions.keys())
+    visited    = set(positions.keys())
+    layout_log = []  # records every BFS branch decision for debug output
 
     queue = [(nid, None, 1.0, positions[nid][0])
              for nid in sorted(trunk_nodes) if nid in positions]
@@ -198,7 +200,8 @@ def _compute_layout(graph):
 
             if branch_y is None:
                 # ---- First drop from a trunk tee ----
-                # Direction based on branch endpoint z vs THIS tee's z.
+                # Direction is purely from actual Revit z-elevation data:
+                # sign of (branch_endpoint_z - tee_z) determines UP vs DOWN.
                 tee_z = _node_z(graph, nid, meter_z)
                 to_z  = _node_z(graph, to_nid, tee_z)
                 direc = 1.0 if to_z > tee_z else -1.0
@@ -207,6 +210,17 @@ def _compute_layout(graph):
                 new_y   = ty + direc * LEVEL_HEIGHT * depth
                 new_pos = (tx, new_y)
                 queue.append((to_nid, new_y, direc, tx))
+                layout_log.append({
+                    "tee_nid":    nid,
+                    "tee_pos":    (tx, ty),
+                    "tee_z":      tee_z,
+                    "edge_id":    edge.element_id,
+                    "to_nid":     to_nid,
+                    "to_z":       to_z,
+                    "direc":      "UP" if direc > 0 else "DOWN",
+                    "result_pos": new_pos,
+                    "branch_y":   None,
+                })
             else:
                 # ---- Within a branch ----
                 # First outgoing edge from this node continues horizontally.
@@ -217,12 +231,34 @@ def _compute_layout(graph):
                     new_pos = (new_x, ty)
                     branch_counters[nid] = 1
                     queue.append((to_nid, branch_y, branch_direc, new_x))
+                    layout_log.append({
+                        "tee_nid":    nid,
+                        "tee_pos":    (tx, ty),
+                        "tee_z":      _node_z(graph, nid, meter_z),
+                        "edge_id":    edge.element_id,
+                        "to_nid":     to_nid,
+                        "to_z":       _node_z(graph, to_nid, meter_z),
+                        "direc":      "BRANCH-HORIZ",
+                        "result_pos": new_pos,
+                        "branch_y":   branch_y,
+                    })
                 else:
                     depth   = dispatched + 1
                     branch_counters[nid] = depth
                     new_y   = ty + branch_direc * LEVEL_HEIGHT
                     new_pos = (tx, new_y)
                     queue.append((to_nid, new_y, branch_direc, tx))
+                    layout_log.append({
+                        "tee_nid":    nid,
+                        "tee_pos":    (tx, ty),
+                        "tee_z":      _node_z(graph, nid, meter_z),
+                        "edge_id":    edge.element_id,
+                        "to_nid":     to_nid,
+                        "to_z":       _node_z(graph, to_nid, meter_z),
+                        "direc":      "BRANCH-SUB",
+                        "result_pos": new_pos,
+                        "branch_y":   branch_y,
+                    })
 
             positions[to_nid] = new_pos
 
@@ -234,7 +270,136 @@ def _compute_layout(graph):
             positions[child_nid] = positions[nid]
             queue.append((child_nid, branch_y, branch_direc, branch_x))
 
-    return positions, trunk_set, meter_nid, meter_z
+    return positions, trunk_set, meter_nid, meter_z, layout_log
+
+
+# ---------------------------------------------------------------------------
+# Layout diagnostic formatter
+# ---------------------------------------------------------------------------
+
+def _format_layout_diagnostic(graph, positions, trunk_set, trunk_all_ids,
+                               meter_nid, meter_z, layout_log, pipe_sizes):
+    """Build a full multi-section diagnostic string for the terminal output.
+
+    Mirrors the style of Diagnose and Size Gas debug output.
+    """
+    lines = []
+
+    def row(s):
+        lines.append(s)
+
+    trunk_edge_ids = [i for i in trunk_all_ids if i in graph.edges]
+    all_xy = list(positions.values())
+    min_x = min(p[0] for p in all_xy) if all_xy else 0.0
+    max_x = max(p[0] for p in all_xy) if all_xy else 0.0
+    min_y = min(p[1] for p in all_xy) if all_xy else 0.0
+    max_y = max(p[1] for p in all_xy) if all_xy else 0.0
+
+    row("=== ONE-LINE LAYOUT DIAGNOSTIC ===")
+    row("Meter node ID : {}  z = {:.2f} ft  diagram origin = (0.00, 0.00)".format(
+        meter_nid, meter_z))
+    row("Nodes positioned: {}/{}".format(len(positions), len(graph.nodes)))
+    row("Trunk pipe edges: {}".format(len(trunk_edge_ids)))
+    row("Diagram bounds  : x=[{:.1f}, {:.1f}]  y=[{:.1f}, {:.1f}]".format(
+        min_x, max_x, min_y, max_y))
+    row("")
+
+    # ------ TRUNK PATH ------
+    row("=== TRUNK PATH ({} edges) ===".format(len(trunk_edge_ids)))
+    row(" {:>4}  {:>10}  {:>9}  {:>10}  {:>16}  {:>10}  {:>16}  {}".format(
+        "idx", "edge_id", "length_ft", "from_nid", "from_pos",
+        "to_nid", "to_pos", "type"))
+    for i, eid in enumerate(trunk_edge_ids):
+        edge     = graph.edges.get(eid)
+        if edge is None:
+            continue
+        fp = positions.get(edge.from_node_id, (None, None))
+        tp = positions.get(edge.to_node_id,   (None, None))
+        fp_str = "({:6.1f},{:6.1f})".format(*fp) if fp[0] is not None else "UNPLACED"
+        tp_str = "({:6.1f},{:6.1f})".format(*tp) if tp[0] is not None else "UNPLACED"
+        from_z = _node_z(graph, edge.from_node_id, meter_z)
+        to_z   = _node_z(graph, edge.to_node_id,   meter_z)
+        z_delta = to_z - from_z
+        L = max(edge.length_feet, 0.001)
+        seg_type = "VERT" if abs(z_delta) >= 0.5 * L else "HORIZ"
+        row(" {:>4}  {:>10}  {:>9.1f}  {:>10}  {:>16}  {:>10}  {:>16}  {}".format(
+            i, eid, edge.length_feet,
+            edge.from_node_id, fp_str,
+            edge.to_node_id,   tp_str,
+            seg_type))
+    row("")
+
+    # ------ BRANCH DECISIONS ------
+    row("=== BRANCH DECISIONS (BFS log, {} entries) ===".format(len(layout_log)))
+    row(" {:>10}  {:>14}  {:>8}  {:>10}  {:>8}  {:>8}  {:>12}  {:>14}".format(
+        "tee_nid", "tee_pos", "tee_z", "edge_id", "to_nid",
+        "to_z", "direction", "result_pos"))
+    for entry in layout_log:
+        rp  = entry["result_pos"]
+        tp  = entry["tee_pos"]
+        row(" {:>10}  {:>14}  {:>8.2f}  {:>10}  {:>8}  {:>8.2f}  {:>12}  {:>14}".format(
+            entry["tee_nid"],
+            "({:.1f},{:.1f})".format(tp[0], tp[1]),
+            entry["tee_z"],
+            entry["edge_id"],
+            entry["to_nid"],
+            entry["to_z"],
+            entry["direc"],
+            "({:.1f},{:.1f})".format(rp[0], rp[1])))
+    row("")
+
+    # ------ ALL NODES ------
+    row("=== ALL NODES ({} total, {} positioned) ===".format(
+        len(graph.nodes), len(positions)))
+    row(" {:>10}  {:>8}  {:>24}  {:>8}  {:>8}  {:>28}  {:>14}".format(
+        "node_id", "type", "family", "fixture", "MBH",
+        "revit_xyz", "diagram_pos"))
+    for nid, node in sorted(graph.nodes.items()):
+        pos  = positions.get(nid)
+        pos_str  = "({:.1f},{:.1f})".format(*pos) if pos else "UNPOSITIONED"
+        xyz_str  = "({:.1f},{:.1f},{:.1f})".format(*node.location_xyz) \
+                   if node.location_xyz else "-"
+        fam  = (node.family_name or "-")[:22]
+        row(" {:>10}  {:>8}  {:>24}  {:>8}  {:>8}  {:>28}  {:>14}".format(
+            nid,
+            (node.node_type or "-")[:8],
+            fam,
+            "YES" if node.is_gas_fixture else "no",
+            "{:.1f}".format(node.gas_load_mbh),
+            xyz_str[:28],
+            pos_str))
+    row("")
+
+    # ------ ALL EDGES (drawing plan) ------
+    row("=== ALL EDGES - DRAWING PLAN ({} edges) ===".format(len(graph.edges)))
+    row(" {:>10}  {:>10}  {:>10}  {:>9}  {:>8}  {:>14}  {:>14}  {:>10}  {}".format(
+        "edge_id", "from_nid", "to_nid", "length_ft", "MBH",
+        "from_pos", "to_pos", "label?", "size"))
+    for eid, edge in sorted(graph.edges.items()):
+        if edge.to_node_id is None:
+            continue
+        fp  = positions.get(edge.from_node_id)
+        tp  = positions.get(edge.to_node_id)
+        fp_str = "({:.1f},{:.1f})".format(*fp) if fp else "UNPLACED"
+        tp_str = "({:.1f},{:.1f})".format(*tp) if tp else "UNPLACED"
+        nom  = pipe_sizes.get(eid, "")
+        if fp is None or tp is None:
+            label_flag = "SKIP(unpositioned)"
+        elif edge.length_feet < 5.0:
+            label_flag = "NO(<5ft)"
+        else:
+            label_flag = "YES"
+        row(" {:>10}  {:>10}  {:>10}  {:>9.1f}  {:>8.1f}  {:>14}  {:>14}  {:>10}  {}".format(
+            eid,
+            edge.from_node_id or "-",
+            edge.to_node_id or "-",
+            edge.length_feet,
+            edge.cumulative_load_mbh,
+            fp_str, tp_str,
+            label_flag,
+            nom or "unsized"))
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +486,7 @@ def _draw_meter_symbol(doc, view, cx, cy, tt_id):
     _note(doc, view, cx - 0.15, cy - 0.25, "M", tt_id)
 
 
-def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym):
+def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym, tt_id):
     sx = cx - SYMBOL_RADIUS
     # Horizontal stub going left
     _line(doc, view, sx, cy, sx - UPSTREAM_H, cy)
@@ -335,6 +500,8 @@ def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym):
                 XYZ(tip_x, cy - UPSTREAM_V, 0), squiggle_sym, view)
         except Exception:
             pass
+    # "GAS FROM UTILITY" label below the squiggle
+    _note(doc, view, tip_x - 0.5, cy - UPSTREAM_V - 1.6, "GAS FROM\nUTILITY", tt_id)
 
 
 def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id):
@@ -350,9 +517,9 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id):
     mbh  = round(edge.cumulative_load_mbh, 1)
     is_h = abs(y1 - y0) <= abs(x1 - x0)
 
-    # Label format: '2-1/2" G, 25'' on line 1, '350.0 MBH' on line 2
+    # Label format: '1-1/2"G, 25'' on line 1 (no space before G, matches firm standard)
     if nom:
-        line1 = '{}" G, {}\''.format(nom, lft)
+        line1 = '{}"G, {}\''.format(nom, lft)
     else:
         line1 = "{}\'".format(lft)
     label = line1 + "\n" + "{} MBH".format(mbh)
@@ -512,7 +679,7 @@ def main():
     # STEP 5 - Compute layout
     # ------------------------------------------------------------------
     output.print_md("**Computing layout...**")
-    positions, trunk_set, meter_nid, meter_z = _compute_layout(graph)
+    positions, trunk_set, meter_nid, meter_z, layout_log = _compute_layout(graph)
     n_positioned = len(positions)
     n_total      = len(graph.nodes)
     output.print_md(":white_check_mark: {}/{} nodes positioned.".format(
@@ -525,60 +692,33 @@ def main():
     min_y_d  = min(p[1] for p in all_xy) if all_xy else 0.0
     max_y_d  = max(p[1] for p in all_xy) if all_xy else 0.0
 
-    # Notes go above and to the left of the diagram, clear of all elements
-    notes_x = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
-    notes_y = max_y_d + 4.0
+    # Notes: left of upstream stub, above all diagram content
+    notes_x = -(UPSTREAM_H + SYMBOL_RADIUS + 4.0)
+    notes_y = max_y_d + 6.0
 
     # ------------------------------------------------------------------
-    # STEP 5b - Layout diagnostic (mirrors Diagnose/Size Gas output style)
+    # STEP 6 - Read pipe sizes from model (needed for full diagnostic)
     # ------------------------------------------------------------------
-    output.print_md("---")
-    output.print_md("## Layout Diagnostic")
-    output.print_md("| Item | Value |")
-    output.print_md("| --- | --- |")
-    output.print_md("| Nodes positioned | {}/{} |".format(n_positioned, n_total))
-    output.print_md("| Trunk pipe edges | {} |".format(len(trunk_set)))
-    output.print_md("| Meter z-elevation | {:.2f} ft |".format(meter_z))
-    output.print_md("| Diagram x range | {:.1f} to {:.1f} ft |".format(min_x_d, max_x_d))
-    output.print_md("| Diagram y range | {:.1f} to {:.1f} ft |".format(min_y_d, max_y_d))
-    output.print_md("| Notes placed at | ({:.1f}, {:.1f}) |".format(notes_x, notes_y))
-    output.print_md("")
-
-    output.print_md("### Fixture nodes")
-    output.print_md("| Name | MBH | Node ID | Revit z | Diagram (x, y) | Direction |")
-    output.print_md("| --- | --- | --- | --- | --- | --- |")
-    for nid, node in graph.nodes.items():
-        if not node.is_gas_fixture:
-            continue
-        pos  = positions.get(nid)
-        nz   = _node_z(graph, nid, meter_z)
-        if pos:
-            direc = "UP" if pos[1] > 0 else ("DOWN" if pos[1] < 0 else "TRUNK")
-            output.print_md("| {} | {:.1f} | {} | {:.2f} | ({:.1f}, {:.1f}) | {} |".format(
-                node.fixture_name or "UNNAMED", node.gas_load_mbh,
-                nid, nz, pos[0], pos[1], direc))
-        else:
-            output.print_md("| {} | {:.1f} | {} | {:.2f} | UNPOSITIONED | -- |".format(
-                node.fixture_name or "UNNAMED", node.gas_load_mbh, nid, nz))
-
-    unpositioned = [nid for nid in graph.nodes if nid not in positions]
-    if unpositioned:
-        output.print_md("")
-        output.print_md("### Unpositioned nodes ({})".format(len(unpositioned)))
-        output.print_md("| Node ID | Type | Family |")
-        output.print_md("| --- | --- | --- |")
-        for nid in unpositioned[:20]:
-            node = graph.nodes[nid]
-            output.print_md("| {} | {} | {} |".format(
-                nid, node.node_type, node.family_name or "-"))
-
-    output.print_md("---")
-
-    # ------------------------------------------------------------------
-    # STEP 6 - Read pipe sizes from model
-    # ------------------------------------------------------------------
-    pipe_sizes = _read_pipe_sizes(graph)
+    pipe_sizes  = _read_pipe_sizes(graph)
     sized_count = len(pipe_sizes)
+    output.print_md("**Pipe sizes read:** {} of {} segments.".format(
+        sized_count, len(graph.edges)))
+
+    # ------------------------------------------------------------------
+    # STEP 5b - Full layout diagnostic (copy/paste into conversation)
+    # ------------------------------------------------------------------
+    trunk_all_ids_diag = list(graph.longest_run["path_element_ids"])
+    diag_text = _format_layout_diagnostic(
+        graph, positions, trunk_set, trunk_all_ids_diag,
+        meter_nid, meter_z, layout_log, pipe_sizes)
+    output.print_md("---")
+    output.print_md("## Layout Diagnostic - Copy and paste below this line")
+    output.print_html(
+        "<pre style='font-family:monospace;font-size:11px;'>{}</pre>".format(
+            diag_text.replace("&", "&amp;")
+                     .replace("<", "&lt;")
+                     .replace(">", "&gt;")))
+    output.print_md("---")
     output.print_md("**Pipe sizes read:** {} of {} segments.".format(
         sized_count, len(graph.edges)))
 
@@ -653,8 +793,8 @@ def main():
     t = Transaction(doc, "RJA Tools - Gas One-Line Diagram")
     t.Start()
     try:
-        # a. Upstream stub + squiggle
-        _draw_upstream_stub(doc, view, mx, my, squiggle_sym)
+        # a. Upstream stub + squiggle + "GAS FROM UTILITY" label
+        _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id)
 
         # b. Meter circle + "M"
         _draw_meter_symbol(doc, view, mx, my, tt_id)
@@ -693,9 +833,26 @@ def main():
 
             fname = (node.family_name or "").lower()
             if any(kw in fname for kw in _VALVE_KW):
-                val_elems = _draw_valve_bowtie(doc, view, cx, cy)
-                _make_group(doc, val_elems)
-                drawn_valves += 1
+                # Draw bowtie at the MIDPOINT of the edge leading to this valve,
+                # so it appears on the branch pipe (matches firm standard).
+                valve_placed = False
+                for _eid, _edge in graph.edges.items():
+                    if (_edge.to_node_id == nid
+                            and _edge.element_id not in trunk_set):
+                        fp = positions.get(_edge.from_node_id)
+                        tp = positions.get(nid)
+                        if fp and tp:
+                            vmx = (fp[0] + tp[0]) / 2.0
+                            vmy = (fp[1] + tp[1]) / 2.0
+                            val_elems = _draw_valve_bowtie(doc, view, vmx, vmy)
+                            _make_group(doc, val_elems)
+                            drawn_valves += 1
+                            valve_placed = True
+                        break
+                if not valve_placed:
+                    val_elems = _draw_valve_bowtie(doc, view, cx, cy)
+                    _make_group(doc, val_elems)
+                    drawn_valves += 1
 
         # e. Notes block (single text box, positioned above diagram)
         _draw_notes_block(doc, view,
