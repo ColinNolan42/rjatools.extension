@@ -261,19 +261,19 @@ def _compute_layout(graph):
     # branch edges, trace the entire branch to its fixture(s) and place
     # each fixture DIRECTLY above or below the trunk tee (same x).
     #
-    # This collapses all intermediate CSST fittings, elbows, and short
-    # runs into one schematic vertical line per fixture, matching the
-    # firm's one-line standard where top-takeoff routing is implied.
+    # KEY: Branches in this Revit model start from node_children of trunk
+    # tees (e.g. Transition fittings directly connected to a Tee), NOT from
+    # the trunk tee node itself.  We must expand the tee candidate set to
+    # include ALL node_children reachable from trunk nodes.
     # ------------------------------------------------------------------
     layout_log         = []
-    branch_info        = []   # one entry per fixture branch for drawing
-    branch_counters    = {}   # tee_nid -> count of branches dispatched from it
-    trunk_fixture_nids = set()  # fixtures that are direct trunk endpoints
+    branch_info        = []
+    branch_counters    = {}
+    trunk_fixture_nids = set()
 
-    # Ordered trunk edge IDs for walking
     trunk_edge_ids_ordered = [i for i in trunk_all_ids if i in graph.edges]
 
-    # Fixtures that sit directly at the END of a trunk edge (no branch)
+    # Fixtures directly at the end of a trunk edge (no branch needed)
     for eid in trunk_edge_ids_ordered:
         edge    = graph.edges.get(eid)
         if edge is None:
@@ -281,14 +281,24 @@ def _compute_layout(graph):
         to_node = graph.nodes.get(edge.to_node_id)
         if to_node and to_node.is_gas_fixture:
             trunk_fixture_nids.add(edge.to_node_id)
-            # Position already set by Phase 1
 
-    # For each trunk node, find outgoing non-trunk branches
-    for eid in trunk_edge_ids_ordered:
-        edge = graph.edges.get(eid)
-        if edge is None:
-            continue
-        tee_nid = edge.from_node_id
+    # Build tee_candidates: trunk nodes + their node_children (transitively).
+    # Branches often start from Transition fittings that are node_children of
+    # the Tee fitting, so we must include these child nodes.
+    tee_candidates = set(trunk_nodes)
+    worklist = list(trunk_nodes)
+    while worklist:
+        nid = worklist.pop()
+        for child in graph.node_children.get(nid, []):
+            if child not in tee_candidates:
+                tee_candidates.add(child)
+                # Give the child the same diagram position as its parent
+                if nid in positions and child not in positions:
+                    positions[child] = positions[nid]
+                worklist.append(child)
+
+    # For each candidate tee node, find outgoing non-trunk branches
+    for tee_nid in tee_candidates:
         if tee_nid not in positions:
             continue
         tx, ty  = positions[tee_nid]
@@ -303,6 +313,10 @@ def _compute_layout(graph):
             # Trace entire branch to find fixture(s) and cumulative length
             fixtures = _trace_to_fixtures(graph, branch_edge.to_node_id, trunk_set)
             if not fixtures:
+                continue
+            # Skip if the primary fixture is already positioned by a sibling
+            # tee_candidate (avoids duplicate branches from the same physical tee)
+            if positions.get(fixtures[0]["fixture_nid"]) is not None:
                 continue
 
             # Direction from downstream fixture z vs this tee z
