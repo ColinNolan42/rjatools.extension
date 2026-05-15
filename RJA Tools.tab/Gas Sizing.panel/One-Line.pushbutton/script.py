@@ -129,6 +129,67 @@ def _find_fixture_z(graph, start_nid, trunk_set, default_z):
     return default_z
 
 
+def _trace_to_fixtures(graph, start_nid, trunk_set):
+    """Trace all pipe edges from start_nid (non-trunk) to find fixtures.
+
+    Collapses every intermediate fitting, elbow, transition, and CSST run
+    into one result entry per fixture.  This implements the firm standard
+    where top-takeoff routing (rise from trunk, horizontal, drop to equip)
+    is shown as a single schematic vertical line on the one-line diagram.
+
+    Returns list of dicts:
+      fixture_nid:     node_id of the fixture
+      total_length_ft: sum of all pipe segment lengths from start to fixture
+      branch_edge_ids: list of pipe edge element IDs in the branch path
+      has_valve:       True if any valve-type fitting was traversed
+      cum_mbh:         cumulative_load_mbh from the starting branch edge
+    """
+    results = []
+    # stack: (nid, acc_len_ft, acc_edge_ids, acc_valve)
+    stack = [(start_nid, 0.0, [], False)]
+    seen  = {start_nid}
+
+    while stack:
+        nid, acc_len, acc_eids, acc_valve = stack.pop()
+        node = graph.nodes.get(nid)
+        if not node:
+            continue
+
+        fname    = (node.family_name or "").lower()
+        is_valve = any(kw in fname for kw in _VALVE_KW)
+        nv       = acc_valve or is_valve
+
+        if node.is_gas_fixture:
+            results.append({
+                "fixture_nid":     nid,
+                "total_length_ft": acc_len,
+                "branch_edge_ids": acc_eids,
+                "has_valve":       nv,
+                "cum_mbh":         node.cumulative_load_mbh,
+            })
+            continue
+
+        for edge in graph.edges.values():
+            if (edge.from_node_id == nid
+                    and edge.element_id not in trunk_set
+                    and edge.to_node_id
+                    and edge.to_node_id not in seen):
+                seen.add(edge.to_node_id)
+                stack.append((
+                    edge.to_node_id,
+                    acc_len + edge.length_feet,
+                    acc_eids + [edge.element_id],
+                    nv,
+                ))
+
+        for child in graph.node_children.get(nid, []):
+            if child not in seen:
+                seen.add(child)
+                stack.append((child, acc_len, acc_eids, nv))
+
+    return results
+
+
 def _compute_layout(graph):
     """Assign (x, y) view positions to every graph node via two-phase BFS.
 
@@ -196,122 +257,95 @@ def _compute_layout(graph):
             trunk_nodes.add(item)
 
     # ------------------------------------------------------------------
-    # Phase 2: BFS from ALL trunk nodes to reach every branch node.
+    # Phase 2 (Simplified Schematic): For each trunk node with outgoing
+    # branch edges, trace the entire branch to its fixture(s) and place
+    # each fixture DIRECTLY above or below the trunk tee (same x).
     #
-    # Queue entries: (node_id, branch_y, branch_direc, branch_x)
-    #   branch_y     = y of this branch level (None = on trunk)
-    #   branch_direc = +1 up / -1 down for this branch
-    #   branch_x     = current x within the branch
-    #
-    # Branch direction rules (top-takeoff aware):
-    #   - First pipe off a trunk tee: direction = sign of (branch_end_z - tee_z).
-    #     Most pipes take off upward from the trunk (top takeoff) and come back
-    #     down to the equipment; the endpoint above the trunk -> UP.
-    #   - ALL subsequent pipes within a branch always continue HORIZONTALLY,
-    #     regardless of Revit z-delta.  This avoids showing the final drop-to-
-    #     equipment as a second vertical segment in the schematic.
-    #   - If a branch node has MORE THAN ONE outgoing non-trunk edge, the first
-    #     is the horizontal continuation; each additional edge sub-branches by
-    #     dropping another LEVEL_HEIGHT in branch_direc from the current y.
+    # This collapses all intermediate CSST fittings, elbows, and short
+    # runs into one schematic vertical line per fixture, matching the
+    # firm's one-line standard where top-takeoff routing is implied.
     # ------------------------------------------------------------------
-    branch_counters = {}  # node_id -> branches dispatched from it
-    visited    = set(positions.keys())
-    layout_log = []  # records every BFS branch decision for debug output
+    layout_log         = []
+    branch_info        = []   # one entry per fixture branch for drawing
+    branch_counters    = {}   # tee_nid -> count of branches dispatched from it
+    trunk_fixture_nids = set()  # fixtures that are direct trunk endpoints
 
-    queue = [(nid, None, 1.0, positions[nid][0])
-             for nid in sorted(trunk_nodes) if nid in positions]
-    qi = 0
-    while qi < len(queue):
-        nid, branch_y, branch_direc, branch_x = queue[qi]
-        qi += 1
-        tx, ty = positions[nid]
+    # Ordered trunk edge IDs for walking
+    trunk_edge_ids_ordered = [i for i in trunk_all_ids if i in graph.edges]
 
-        # Walk pipe edges from this node
-        for edge in _edges_from(graph, nid):
-            to_nid = edge.to_node_id
-            if to_nid is None or to_nid in visited:
+    # Fixtures that sit directly at the END of a trunk edge (no branch)
+    for eid in trunk_edge_ids_ordered:
+        edge    = graph.edges.get(eid)
+        if edge is None:
+            continue
+        to_node = graph.nodes.get(edge.to_node_id)
+        if to_node and to_node.is_gas_fixture:
+            trunk_fixture_nids.add(edge.to_node_id)
+            # Position already set by Phase 1
+
+    # For each trunk node, find outgoing non-trunk branches
+    for eid in trunk_edge_ids_ordered:
+        edge = graph.edges.get(eid)
+        if edge is None:
+            continue
+        tee_nid = edge.from_node_id
+        if tee_nid not in positions:
+            continue
+        tx, ty  = positions[tee_nid]
+        tee_z   = _node_z(graph, tee_nid, meter_z)
+
+        for branch_edge in _edges_from(graph, tee_nid):
+            if branch_edge.element_id in trunk_set:
                 continue
-            if edge.element_id in trunk_set:
+            if branch_edge.to_node_id is None:
                 continue
-            visited.add(to_nid)
 
-            if branch_y is None:
-                # ---- First drop from a trunk tee ----
-                # Direction is driven by the DOWNSTREAM FIXTURE z-elevation
-                # vs the tee z-elevation.  Using the first fitting's z would
-                # give the wrong answer for top-takeoff CSST runs that rise
-                # briefly above the main before routing down to equipment.
-                tee_z     = _node_z(graph, nid, meter_z)
-                to_z      = _node_z(graph, to_nid, tee_z)
-                fixture_z = _find_fixture_z(graph, to_nid, trunk_set, to_z)
-                direc = 1.0 if fixture_z > tee_z else -1.0
-                depth = branch_counters.get(nid, 0) + 1
-                branch_counters[nid] = depth
-                new_y   = ty + direc * LEVEL_HEIGHT * depth
-                new_pos = (tx, new_y)
-                queue.append((to_nid, new_y, direc, tx))
+            # Trace entire branch to find fixture(s) and cumulative length
+            fixtures = _trace_to_fixtures(graph, branch_edge.to_node_id, trunk_set)
+            if not fixtures:
+                continue
+
+            # Direction from downstream fixture z vs this tee z
+            first_fix_z = _node_z(graph, fixtures[0]["fixture_nid"], meter_z)
+            direc = 1.0 if first_fix_z > tee_z else -1.0
+
+            depth = branch_counters.get(tee_nid, 0) + 1
+            branch_counters[tee_nid] = depth
+            fix_y = ty + direc * LEVEL_HEIGHT * depth
+
+            for i, fix_info in enumerate(fixtures):
+                # If multiple fixtures from one tee, spread them horizontally
+                fix_x   = tx + i * MIN_SEGMENT_FT
+                fix_nid = fix_info["fixture_nid"]
+                positions[fix_nid] = (fix_x, fix_y)
+
+                branch_info.append({
+                    "tee_nid":         tee_nid,
+                    "tee_pos":         (tx, ty),
+                    "fixture_nid":     fix_nid,
+                    "fixture_pos":     (fix_x, fix_y),
+                    "total_ft":        fix_info["total_length_ft"],
+                    "branch_edge_ids": fix_info["branch_edge_ids"],
+                    "has_valve":       fix_info["has_valve"],
+                    "direc":           direc,
+                    "size":            "",  # filled after pipe_sizes known
+                    "cum_mbh":         fix_info["cum_mbh"],
+                })
                 layout_log.append({
-                    "tee_nid":    nid,
+                    "tee_nid":    tee_nid,
                     "tee_pos":    (tx, ty),
                     "tee_z":      tee_z,
-                    "edge_id":    edge.element_id,
-                    "to_nid":     to_nid,
-                    "to_z":       to_z,
-                    "fixture_z":  fixture_z,
+                    "edge_id":    branch_edge.element_id,
+                    "to_nid":     fix_nid,
+                    "to_z":       first_fix_z,
+                    "fixture_z":  first_fix_z,
                     "direc":      "UP" if direc > 0 else "DOWN",
-                    "result_pos": new_pos,
+                    "result_pos": (fix_x, fix_y),
                     "branch_y":   None,
                 })
-            else:
-                # ---- Within a branch ----
-                # First outgoing edge from this node continues horizontally.
-                # Additional edges (branch splits) sub-drop in branch_direc.
-                dispatched = branch_counters.get(nid, 0)
-                if dispatched == 0:
-                    new_x   = branch_x + max(edge.length_feet, MIN_SEGMENT_FT)
-                    new_pos = (new_x, ty)
-                    branch_counters[nid] = 1
-                    queue.append((to_nid, branch_y, branch_direc, new_x))
-                    layout_log.append({
-                        "tee_nid":    nid,
-                        "tee_pos":    (tx, ty),
-                        "tee_z":      _node_z(graph, nid, meter_z),
-                        "edge_id":    edge.element_id,
-                        "to_nid":     to_nid,
-                        "to_z":       _node_z(graph, to_nid, meter_z),
-                        "direc":      "BRANCH-HORIZ",
-                        "result_pos": new_pos,
-                        "branch_y":   branch_y,
-                    })
-                else:
-                    depth   = dispatched + 1
-                    branch_counters[nid] = depth
-                    new_y   = ty + branch_direc * LEVEL_HEIGHT
-                    new_pos = (tx, new_y)
-                    queue.append((to_nid, new_y, branch_direc, tx))
-                    layout_log.append({
-                        "tee_nid":    nid,
-                        "tee_pos":    (tx, ty),
-                        "tee_z":      _node_z(graph, nid, meter_z),
-                        "edge_id":    edge.element_id,
-                        "to_nid":     to_nid,
-                        "to_z":       _node_z(graph, to_nid, meter_z),
-                        "direc":      "BRANCH-SUB",
-                        "result_pos": new_pos,
-                        "branch_y":   branch_y,
-                    })
 
-            positions[to_nid] = new_pos
-
-        # Walk node_children connections (no pipe, same position as parent)
-        for child_nid in graph.node_children.get(nid, []):
-            if child_nid in visited:
-                continue
-            visited.add(child_nid)
-            positions[child_nid] = positions[nid]
-            queue.append((child_nid, branch_y, branch_direc, branch_x))
-
-    return positions, trunk_set, meter_nid, meter_z, layout_log
+    return (positions, trunk_set, meter_nid, meter_z,
+            layout_log, branch_info, trunk_fixture_nids)
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +518,54 @@ def _read_pipe_sizes(graph):
         except Exception:
             pass
     return sizes
+
+
+# ---------------------------------------------------------------------------
+# Schematic branch drawing
+# ---------------------------------------------------------------------------
+
+def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
+                            direc, total_ft, size, has_valve,
+                            fixture_node, tt_id):
+    """Draw one simplified schematic branch from trunk tee to fixture.
+
+    Collapses the entire physical branch routing (top-takeoff elbows,
+    horizontal runs, drop to equipment) into one clean schematic connection:
+      - ONE vertical line from the trunk tee down (or up) to the fixture level
+      - If fix_x != tee_x: ONE horizontal line at the fixture level
+      - Valve bowtie at 1/3 point on the vertical if a valve exists
+      - Pipe label (size + total length + MBH) beside the vertical
+      - Fixture symbol at the fixture endpoint
+    """
+    # Vertical segment from tee to fixture level
+    _line(doc, view, tee_x, tee_y, tee_x, fix_y)
+
+    # Horizontal segment if fixture is offset from tee
+    if abs(fix_x - tee_x) > 0.01:
+        _line(doc, view, tee_x, fix_y, fix_x, fix_y)
+
+    # Valve bowtie 1/3 of the way down the vertical
+    if has_valve:
+        val_y = tee_y + (fix_y - tee_y) * 0.4
+        val_elems = _draw_valve_bowtie(doc, view, tee_x, val_y)
+        _make_group(doc, val_elems)
+
+    # Label on right side of the vertical segment
+    mid_y = (tee_y + fix_y) / 2.0
+    if size:
+        lbl_line1 = '{}"G, {}\''.format(size, int(round(total_ft)))
+    else:
+        lbl_line1 = "{}\'".format(int(round(total_ft)))
+    mbh_val = fixture_node.gas_load_mbh if fixture_node else 0.0
+    lbl = lbl_line1 + "\n" + "{:.1f} MBH".format(mbh_val)
+    lbl_x = tee_x + (VALVE_HW + LABEL_RIGHT if has_valve else LABEL_RIGHT)
+    _note(doc, view, lbl_x, mid_y, lbl, tt_id)
+
+    # Fixture symbol and label at the fixture endpoint
+    going_up = fix_y > tee_y
+    fix_elems = _draw_fixture_symbol(
+        doc, view, fix_x, fix_y, going_up, fixture_node, tt_id)
+    _make_group(doc, fix_elems)
 
 
 # ---------------------------------------------------------------------------
@@ -734,7 +816,8 @@ def main():
     # STEP 5 - Compute layout
     # ------------------------------------------------------------------
     output.print_md("**Computing layout...**")
-    positions, trunk_set, meter_nid, meter_z, layout_log = _compute_layout(graph)
+    (positions, trunk_set, meter_nid, meter_z,
+     layout_log, branch_info, trunk_fixture_nids) = _compute_layout(graph)
     n_positioned = len(positions)
     n_total      = len(graph.nodes)
     output.print_md(":white_check_mark: {}/{} nodes positioned.".format(
@@ -758,6 +841,14 @@ def main():
     sized_count = len(pipe_sizes)
     output.print_md("**Pipe sizes read:** {} of {} segments.".format(
         sized_count, len(graph.edges)))
+
+    # Fill dominant size into each branch_info entry now that pipe_sizes is known
+    for bi in branch_info:
+        for eid in bi.get("branch_edge_ids", []):
+            s = pipe_sizes.get(eid, "")
+            if s:
+                bi["size"] = s
+                break
 
     # ------------------------------------------------------------------
     # STEP 5b - Full layout diagnostic (copy/paste into conversation)
@@ -885,12 +976,15 @@ def main():
         # b. Meter circle + "M" at distribution main level
         _draw_meter_symbol(doc, view, mx, my, tt_id)
 
-        # c. All pipe edges.
+        # c. Trunk pipe edges only.
+        #    Branch edges are NOT drawn here -- they are replaced by the
+        #    simplified schematic branches drawn in step (d).
         #    Upstream edges (riser from meter to distribution main) are drawn
-        #    as lines but never labeled -- they are represented schematically
-        #    by the upstream stub.
+        #    as plain lines; the upstream stub represents them schematically.
         drawn_edges = 0
         for eid, edge in graph.edges.items():
+            if eid not in trunk_set:
+                continue  # branch edges: handled by _draw_schematic_branch
             if edge.to_node_id is None:
                 continue
             pos_from = positions.get(edge.from_node_id)
@@ -900,52 +994,45 @@ def main():
             x0, y0 = pos_from
             x1, y1 = pos_to
             if eid in upstream_draw_edges:
-                # Draw the line but no label (stub/riser covered by meter stub)
                 _line(doc, view, x0, y0, x1, y1)
             else:
                 _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id)
             drawn_edges += 1
 
-        # d. Fixture symbols and labels; valve/PRV symbols
+        # d. Schematic branches: one clean line per fixture from its trunk tee
         drawn_fixtures = 0
         drawn_valves   = 0
-        for nid, node in graph.nodes.items():
-            pos = positions.get(nid)
-            if pos is None:
+        for bi in branch_info:
+            tee_x, tee_y = bi["tee_pos"]
+            fix_x, fix_y = bi["fixture_pos"]
+            node = graph.nodes.get(bi["fixture_nid"])
+            if node is None:
+                continue
+            _draw_schematic_branch(
+                doc, view,
+                tee_x, tee_y, fix_x, fix_y,
+                bi["direc"],
+                bi["total_ft"],
+                bi["size"],
+                bi["has_valve"],
+                node,
+                tt_id)
+            drawn_fixtures += 1
+            if bi["has_valve"]:
+                drawn_valves += 1
+
+        # d2. Trunk-endpoint fixtures (e.g. last fixture on the trunk itself)
+        for fix_nid in trunk_fixture_nids:
+            pos  = positions.get(fix_nid)
+            node = graph.nodes.get(fix_nid)
+            if pos is None or node is None:
                 continue
             cx, cy = pos
-
-            if node.is_gas_fixture:
-                # going_up = fixture z above the trunk (y=0 level)
-                going_up = cy > 0.0
-                fix_elems = _draw_fixture_symbol(
-                    doc, view, cx, cy, going_up, node, tt_id)
-                _make_group(doc, fix_elems)
-                drawn_fixtures += 1
-                continue
-
-            fname = (node.family_name or "").lower()
-            if any(kw in fname for kw in _VALVE_KW):
-                # Draw bowtie at the MIDPOINT of the edge leading to this valve,
-                # so it appears on the branch pipe (matches firm standard).
-                valve_placed = False
-                for _eid, _edge in graph.edges.items():
-                    if (_edge.to_node_id == nid
-                            and _edge.element_id not in trunk_set):
-                        fp = positions.get(_edge.from_node_id)
-                        tp = positions.get(nid)
-                        if fp and tp:
-                            vmx = (fp[0] + tp[0]) / 2.0
-                            vmy = (fp[1] + tp[1]) / 2.0
-                            val_elems = _draw_valve_bowtie(doc, view, vmx, vmy)
-                            _make_group(doc, val_elems)
-                            drawn_valves += 1
-                            valve_placed = True
-                        break
-                if not valve_placed:
-                    val_elems = _draw_valve_bowtie(doc, view, cx, cy)
-                    _make_group(doc, val_elems)
-                    drawn_valves += 1
+            going_up = cy > 0.0
+            fix_elems = _draw_fixture_symbol(
+                doc, view, cx, cy, going_up, node, tt_id)
+            _make_group(doc, fix_elems)
+            drawn_fixtures += 1
 
         # e. Notes block (single text box, positioned above diagram)
         _draw_notes_block(doc, view,
