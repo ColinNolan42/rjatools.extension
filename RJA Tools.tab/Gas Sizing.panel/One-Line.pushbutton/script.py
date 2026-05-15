@@ -89,113 +89,143 @@ def _edges_from(graph, node_id):
 
 
 def _compute_layout(graph):
-    """Assign (x, y) view positions to every graph node.
+    """Assign (x, y) view positions to every graph node via two-phase BFS.
+
+    Phase 1: Walk path_element_ids (which interleaves node and edge IDs) to
+             position every node on the main trunk, including direct fitting
+             connections that have no pipe between them.
+    Phase 2: BFS from ALL trunk nodes (not just from_node_ids of trunk edges)
+             through both pipe edges and node_children to reach every branch
+             node in the system.
 
     Returns:
         positions dict  {node_id: (x, y)}  in view feet
-        trunk_set       set of edge element IDs on the main trunk
+        trunk_set       set of pipe edge element IDs on the main trunk
+        meter_nid       node_id of the gas meter
+        meter_z         z-elevation of the meter in Revit feet
     """
     # path_element_ids interleaves node and edge IDs:
     # [meter_nid, pipe1_id, node1_id, pipe2_id, node2_id, ..., fixture_nid]
-    # The meter node ID is always the first element.
     trunk_all_ids  = list(graph.longest_run["path_element_ids"])
     meter_nid      = trunk_all_ids[0]
     meter_z        = _node_z(graph, meter_nid)
-    # Keep only IDs that are actual pipe edges for the trunk walk
-    trunk_ordered  = [eid for eid in trunk_all_ids if eid in graph.edges]
-    trunk_set      = set(trunk_ordered)
+    trunk_set      = set(eid for eid in trunk_all_ids if eid in graph.edges)
 
     positions = {meter_nid: (0.0, 0.0)}
-    x = 0.0
+    trunk_x   = 0.0
+    prev_pos  = (0.0, 0.0)
 
-    # Walk the trunk, classifying each edge as horizontal or vertical
-    for eid in trunk_ordered:
-        edge    = graph.edges.get(eid)
-        if edge is None:
-            continue
-        from_z  = _node_z(graph, edge.from_node_id, meter_z)
-        to_z    = _node_z(graph, edge.to_node_id,   meter_z)
-        z_delta = to_z - from_z
-        L       = max(edge.length_feet, 0.001)
-        is_vert = abs(z_delta) >= 0.5 * L
-
-        fx, fy = positions.get(edge.from_node_id, (x, 0.0))
-
-        if is_vert:
-            direc = 1.0 if z_delta > 0 else -1.0
-            positions[edge.to_node_id] = (fx, fy + direc * LEVEL_HEIGHT)
+    # ------------------------------------------------------------------
+    # Phase 1: Walk the full trunk path (nodes AND pipe edges)
+    # ------------------------------------------------------------------
+    for item in trunk_all_ids[1:]:
+        if item in graph.edges:
+            edge     = graph.edges[item]
+            from_pos = positions.get(edge.from_node_id, prev_pos)
+            if edge.from_node_id not in positions:
+                positions[edge.from_node_id] = from_pos
+            from_z  = _node_z(graph, edge.from_node_id, meter_z)
+            to_z    = _node_z(graph, edge.to_node_id,   meter_z)
+            z_delta = to_z - from_z
+            L       = max(edge.length_feet, 0.001)
+            fx, fy  = from_pos
+            if abs(z_delta) >= 0.5 * L:
+                d = 1.0 if z_delta > 0 else -1.0
+                new_pos = (fx, fy + d * LEVEL_HEIGHT)
+            else:
+                trunk_x = fx + edge.length_feet
+                new_pos = (trunk_x, fy)
+            positions[edge.to_node_id] = new_pos
+            prev_pos = new_pos
         else:
-            x += edge.length_feet
-            positions[edge.to_node_id] = (x, fy)
+            # Direct node-to-node connection (node_children) on the trunk
+            positions[item] = prev_pos
 
-    # Place branches off each trunk node
-    branch_counters = {}
-    for eid in trunk_ordered:
-        edge = graph.edges.get(eid)
-        if edge is None:
-            continue
-        tee_nid = edge.from_node_id
-        tx, ty  = positions.get(tee_nid, (0.0, 0.0))
-        _place_branches_from(graph, trunk_set, positions, meter_z,
-                             tee_nid, tx, ty, branch_counters)
+    # Collect ALL trunk node IDs (from the path AND from edge endpoints)
+    trunk_nodes = set()
+    for item in trunk_all_ids:
+        if item in graph.edges:
+            e = graph.edges[item]
+            trunk_nodes.add(e.from_node_id)
+            trunk_nodes.add(e.to_node_id)
+        else:
+            trunk_nodes.add(item)
 
-    # Propagate positions to nodes linked via node_children (no pipe between them)
-    for parent_nid, child_nids in graph.node_children.items():
-        if parent_nid not in positions:
-            continue
-        for child_nid in child_nids:
-            if child_nid not in positions:
-                positions[child_nid] = positions[parent_nid]
+    # ------------------------------------------------------------------
+    # Phase 2: BFS from ALL positioned nodes to reach every branch node.
+    #
+    # Queue entries: (node_id, branch_y, branch_direc, branch_x)
+    #   branch_y    = current y level of this branch (None if on trunk)
+    #   branch_direc= +1 up / -1 down (inherited from initial drop)
+    #   branch_x    = current x within this branch
+    #
+    # Rules:
+    #   - trunk edges:           skip (already done in Phase 1)
+    #   - node_children link:    same position as parent
+    #   - non-trunk pipe, first drop from a trunk node:
+    #                            drop LEVEL_HEIGHT vertically (dir by z)
+    #   - non-trunk pipe, within an existing branch:
+    #       mostly vertical:     sub-drop LEVEL_HEIGHT further in branch_direc
+    #       mostly horizontal:   advance x by edge.length_feet, same y
+    # ------------------------------------------------------------------
+    branch_counters = {}  # node_id -> int, prevents y overlap when >1 branch per tee
+    visited = set(positions.keys())
+
+    queue = [(nid, None, 1.0, positions[nid][0]) for nid in sorted(trunk_nodes)
+             if nid in positions]
+    qi = 0
+    while qi < len(queue):
+        nid, branch_y, branch_direc, branch_x = queue[qi]
+        qi += 1
+        tx, ty = positions[nid]
+
+        # Walk pipe edges from this node
+        for edge in _edges_from(graph, nid):
+            to_nid = edge.to_node_id
+            if to_nid is None or to_nid in visited:
+                continue
+            if edge.element_id in trunk_set:
+                continue
+            visited.add(to_nid)
+
+            from_z  = _node_z(graph, nid, meter_z)
+            to_z    = _node_z(graph, to_nid, meter_z)
+            z_delta = to_z - from_z
+            L       = max(edge.length_feet, 0.001)
+            is_vert = abs(z_delta) >= 0.5 * L
+
+            if branch_y is None:
+                # First drop from a trunk node: go vertical
+                direc = 1.0 if to_z > meter_z else -1.0
+                depth = branch_counters.get(nid, 0) + 1
+                branch_counters[nid] = depth
+                new_y   = ty + direc * LEVEL_HEIGHT * depth
+                new_pos = (tx, new_y)
+                queue.append((to_nid, new_y, direc, tx))
+            elif is_vert:
+                # Sub-drop within a branch
+                depth = branch_counters.get(nid, 0) + 1
+                branch_counters[nid] = depth
+                new_y   = ty + branch_direc * LEVEL_HEIGHT * depth
+                new_pos = (tx, new_y)
+                queue.append((to_nid, new_y, branch_direc, tx))
+            else:
+                # Horizontal continuation within a branch
+                new_x   = branch_x + edge.length_feet
+                new_pos = (new_x, ty)
+                queue.append((to_nid, branch_y, branch_direc, new_x))
+
+            positions[to_nid] = new_pos
+
+        # Walk node_children connections (no pipe, same position)
+        for child_nid in graph.node_children.get(nid, []):
+            if child_nid in visited:
+                continue
+            visited.add(child_nid)
+            positions[child_nid] = positions[nid]
+            queue.append((child_nid, branch_y, branch_direc, branch_x))
 
     return positions, trunk_set, meter_nid, meter_z
-
-
-def _place_branches_from(graph, trunk_set, positions, meter_z,
-                          tee_nid, tx, ty, branch_counters):
-    for branch_edge in _edges_from(graph, tee_nid):
-        if branch_edge.element_id in trunk_set:
-            continue
-        if branch_edge.to_node_id in positions:
-            continue
-        to_z  = _node_z(graph, branch_edge.to_node_id, meter_z)
-        direc = 1.0 if to_z > meter_z else -1.0
-        depth = branch_counters.get(tee_nid, 0) + 1
-        branch_counters[tee_nid] = depth
-        by = ty + direc * LEVEL_HEIGHT * depth
-        positions[branch_edge.to_node_id] = (tx, by)
-        _layout_subtree(graph, trunk_set, positions, meter_z,
-                        branch_edge.to_node_id, tx, by, direc)
-
-
-def _layout_subtree(graph, trunk_set, positions, meter_z,
-                    start_nid, x_start, y_start, direc):
-    """After a vertical drop to start_nid, walk its children.
-    Horizontal children advance x; vertical children drop further."""
-    x = x_start
-    sub_counters = {}
-    for edge in _edges_from(graph, start_nid):
-        if edge.element_id in trunk_set:
-            continue
-        if edge.to_node_id in positions:
-            continue
-        from_z  = _node_z(graph, start_nid, 0.0)
-        to_z    = _node_z(graph, edge.to_node_id, 0.0)
-        z_delta = to_z - from_z
-        L       = max(edge.length_feet, 0.001)
-        is_vert = abs(z_delta) >= 0.5 * L
-
-        if is_vert:
-            depth = sub_counters.get(start_nid, 0) + 1
-            sub_counters[start_nid] = depth
-            sy = y_start + direc * LEVEL_HEIGHT * depth
-            positions[edge.to_node_id] = (x, sy)
-            _layout_subtree(graph, trunk_set, positions, meter_z,
-                            edge.to_node_id, x, sy, direc)
-        else:
-            x += edge.length_feet
-            positions[edge.to_node_id] = (x, y_start)
-            _layout_subtree(graph, trunk_set, positions, meter_z,
-                            edge.to_node_id, x, y_start, direc)
 
 
 # ---------------------------------------------------------------------------
