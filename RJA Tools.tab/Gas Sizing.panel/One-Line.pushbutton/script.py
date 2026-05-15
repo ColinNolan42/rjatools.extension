@@ -22,6 +22,7 @@ import datetime
 from pyrevit import script, forms
 from Autodesk.Revit.DB import (
     BuiltInParameter,
+    ElementId,
     Line,
     Arc,
     XYZ,
@@ -35,6 +36,7 @@ from Autodesk.Revit.DB import (
     Transaction,
 )
 from Autodesk.Revit.UI.Selection import ObjectType
+from System.Collections.Generic import List as _CSList
 
 doc    = __revit__.ActiveUIDocument.Document
 uidoc  = __revit__.ActiveUIDocument
@@ -55,20 +57,22 @@ import sizing_engine
 # ---------------------------------------------------------------------------
 # Layout constants  (all in Revit feet = view coordinates at 1:100)
 # ---------------------------------------------------------------------------
-VIEW_SCALE      = 100      # DraftingView.Scale
-LEVEL_HEIGHT    = 10.0     # ft per branch depth (not actual elevation)
-SYMBOL_RADIUS   = 0.5      # ft  meter circle radius
-FIXTURE_HW      = 0.75     # ft  half-width of 3-line fixture symbol
-FIXTURE_SPACING = 0.3      # ft  gap between 3 fixture lines
-VALVE_HW        = 0.5      # ft  half-width of bowtie
-VALVE_HH        = 0.3      # ft  half-height of bowtie triangle
-LABEL_ABOVE     = 0.8      # ft  above a horizontal pipe
-LABEL_RIGHT     = 0.4      # ft  right of a vertical pipe
-UPSTREAM_H      = 6.0      # ft  horizontal stub left of meter
-UPSTREAM_V      = 4.0      # ft  vertical drop of upstream stub
-TEXT_GAP        = 0.78 * 1.8   # ft  spacing between note lines (3/32" x 1.8 at 1:100)
-NOTES_X_BASE    = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
-NOTES_Y_BASE    = LEVEL_HEIGHT + 2.0
+VIEW_SCALE       = 100      # DraftingView.Scale
+LEVEL_HEIGHT     = 15.0    # ft vertical clearance per branch level (compressed)
+MIN_SEGMENT_FT   = 6.0     # ft minimum horizontal segment so text doesn't overlap
+SYMBOL_RADIUS    = 0.5     # ft  meter circle radius
+FIXTURE_HW       = 0.75    # ft  half-width of 3-line fixture symbol
+FIXTURE_SPACING  = 0.4     # ft  gap between 3 fixture lines
+VALVE_HW         = 0.6     # ft  half-width of bowtie
+VALVE_HH         = 0.35    # ft  half-height of bowtie triangle
+LABEL_ABOVE      = 1.0     # ft  above a horizontal pipe (must clear text height)
+LABEL_RIGHT      = 0.5     # ft  right of a vertical pipe
+UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
+UPSTREAM_V       = 4.0     # ft  vertical drop of upstream stub
+TEXT_HEIGHT_FT   = 0.78    # ft  3/32" x (100/12) at 1:100
+TEXT_GAP         = TEXT_HEIGHT_FT * 2.0  # ft  between note lines
+NOTES_X_BASE     = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
+NOTES_Y_BASE     = LEVEL_HEIGHT + 4.0
 
 _VALVE_KW = ("valve", "prv", "regulator", "ball", "gate", "check", "shutoff")
 
@@ -117,6 +121,7 @@ def _compute_layout(graph):
 
     # ------------------------------------------------------------------
     # Phase 1: Walk the full trunk path (nodes AND pipe edges)
+    # Apply MIN_SEGMENT_FT so labels never overlap adjacent trunk segments.
     # ------------------------------------------------------------------
     for item in trunk_all_ids[1:]:
         if item in graph.edges:
@@ -133,7 +138,8 @@ def _compute_layout(graph):
                 d = 1.0 if z_delta > 0 else -1.0
                 new_pos = (fx, fy + d * LEVEL_HEIGHT)
             else:
-                trunk_x = fx + edge.length_feet
+                seg_len = max(edge.length_feet, MIN_SEGMENT_FT)
+                trunk_x = fx + seg_len
                 new_pos = (trunk_x, fy)
             positions[edge.to_node_id] = new_pos
             prev_pos = new_pos
@@ -152,27 +158,29 @@ def _compute_layout(graph):
             trunk_nodes.add(item)
 
     # ------------------------------------------------------------------
-    # Phase 2: BFS from ALL positioned nodes to reach every branch node.
+    # Phase 2: BFS from ALL trunk nodes to reach every branch node.
     #
     # Queue entries: (node_id, branch_y, branch_direc, branch_x)
-    #   branch_y    = current y level of this branch (None if on trunk)
-    #   branch_direc= +1 up / -1 down (inherited from initial drop)
-    #   branch_x    = current x within this branch
+    #   branch_y     = y of this branch level (None = on trunk)
+    #   branch_direc = +1 up / -1 down for this branch
+    #   branch_x     = current x within the branch
     #
-    # Rules:
-    #   - trunk edges:           skip (already done in Phase 1)
-    #   - node_children link:    same position as parent
-    #   - non-trunk pipe, first drop from a trunk node:
-    #                            drop LEVEL_HEIGHT vertically (dir by z)
-    #   - non-trunk pipe, within an existing branch:
-    #       mostly vertical:     sub-drop LEVEL_HEIGHT further in branch_direc
-    #       mostly horizontal:   advance x by edge.length_feet, same y
+    # Branch direction rules (top-takeoff aware):
+    #   - First pipe off a trunk tee: direction = sign of (branch_end_z - tee_z).
+    #     Most pipes take off upward from the trunk (top takeoff) and come back
+    #     down to the equipment; the endpoint above the trunk -> UP.
+    #   - ALL subsequent pipes within a branch always continue HORIZONTALLY,
+    #     regardless of Revit z-delta.  This avoids showing the final drop-to-
+    #     equipment as a second vertical segment in the schematic.
+    #   - If a branch node has MORE THAN ONE outgoing non-trunk edge, the first
+    #     is the horizontal continuation; each additional edge sub-branches by
+    #     dropping another LEVEL_HEIGHT in branch_direc from the current y.
     # ------------------------------------------------------------------
-    branch_counters = {}  # node_id -> int, prevents y overlap when >1 branch per tee
+    branch_counters = {}  # node_id -> branches dispatched from it
     visited = set(positions.keys())
 
-    queue = [(nid, None, 1.0, positions[nid][0]) for nid in sorted(trunk_nodes)
-             if nid in positions]
+    queue = [(nid, None, 1.0, positions[nid][0])
+             for nid in sorted(trunk_nodes) if nid in positions]
     qi = 0
     while qi < len(queue):
         nid, branch_y, branch_direc, branch_x = queue[qi]
@@ -188,36 +196,37 @@ def _compute_layout(graph):
                 continue
             visited.add(to_nid)
 
-            from_z  = _node_z(graph, nid, meter_z)
-            to_z    = _node_z(graph, to_nid, meter_z)
-            z_delta = to_z - from_z
-            L       = max(edge.length_feet, 0.001)
-            is_vert = abs(z_delta) >= 0.5 * L
-
             if branch_y is None:
-                # First drop from a trunk node: go vertical
-                direc = 1.0 if to_z > meter_z else -1.0
+                # ---- First drop from a trunk tee ----
+                # Direction based on branch endpoint z vs THIS tee's z.
+                tee_z = _node_z(graph, nid, meter_z)
+                to_z  = _node_z(graph, to_nid, tee_z)
+                direc = 1.0 if to_z > tee_z else -1.0
                 depth = branch_counters.get(nid, 0) + 1
                 branch_counters[nid] = depth
                 new_y   = ty + direc * LEVEL_HEIGHT * depth
                 new_pos = (tx, new_y)
                 queue.append((to_nid, new_y, direc, tx))
-            elif is_vert:
-                # Sub-drop within a branch
-                depth = branch_counters.get(nid, 0) + 1
-                branch_counters[nid] = depth
-                new_y   = ty + branch_direc * LEVEL_HEIGHT * depth
-                new_pos = (tx, new_y)
-                queue.append((to_nid, new_y, branch_direc, tx))
             else:
-                # Horizontal continuation within a branch
-                new_x   = branch_x + edge.length_feet
-                new_pos = (new_x, ty)
-                queue.append((to_nid, branch_y, branch_direc, new_x))
+                # ---- Within a branch ----
+                # First outgoing edge from this node continues horizontally.
+                # Additional edges (branch splits) sub-drop in branch_direc.
+                dispatched = branch_counters.get(nid, 0)
+                if dispatched == 0:
+                    new_x   = branch_x + max(edge.length_feet, MIN_SEGMENT_FT)
+                    new_pos = (new_x, ty)
+                    branch_counters[nid] = 1
+                    queue.append((to_nid, branch_y, branch_direc, new_x))
+                else:
+                    depth   = dispatched + 1
+                    branch_counters[nid] = depth
+                    new_y   = ty + branch_direc * LEVEL_HEIGHT
+                    new_pos = (tx, new_y)
+                    queue.append((to_nid, new_y, branch_direc, tx))
 
             positions[to_nid] = new_pos
 
-        # Walk node_children connections (no pipe, same position)
+        # Walk node_children connections (no pipe, same position as parent)
         for child_nid in graph.node_children.get(nid, []):
             if child_nid in visited:
                 continue
@@ -262,21 +271,39 @@ def _read_pipe_sizes(graph):
 # ---------------------------------------------------------------------------
 
 def _line(doc, view, x0, y0, x1, y1):
+    """Draw a detail line and return the element (or None on failure)."""
     try:
-        if (x0 == x1 and y0 == y1):
-            return
-        doc.Create.NewDetailCurve(
+        if abs(x1 - x0) < 0.001 and abs(y1 - y0) < 0.001:
+            return None
+        return doc.Create.NewDetailCurve(
             view,
             Line.CreateBound(XYZ(x0, y0, 0), XYZ(x1, y1, 0)))
     except Exception:
-        pass
+        return None
 
 
 def _note(doc, view, x, y, text, tt_id):
+    """Create a TextNote and return the element (or None on failure)."""
     try:
-        TextNote.Create(doc, view.Id, XYZ(x, y, 0), text, tt_id)
+        return TextNote.Create(doc, view.Id, XYZ(x, y, 0), text, tt_id)
     except Exception:
-        pass
+        return None
+
+
+def _make_group(doc, elements):
+    """Group a list of drawn elements into a Revit Detail Group."""
+    ids = _CSList[ElementId]()
+    for e in elements:
+        if e is not None:
+            try:
+                ids.Add(e.Id)
+            except Exception:
+                pass
+    if ids.Count > 1:
+        try:
+            doc.Create.NewGroup(ids)
+        except Exception:
+            pass
 
 
 def _draw_meter_symbol(doc, view, cx, cy, tt_id):
@@ -318,11 +345,12 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id):
     mbh  = round(edge.cumulative_load_mbh, 1)
     is_h = abs(y1 - y0) <= abs(x1 - x0)
 
+    # Label format: "2-1/2\", 25'" on line 1, "350.0 MBH" on line 2
     if nom:
-        line1 = '{}\"G, {}\''.format(nom, lft)
+        line1 = '{}\", {}\''.format(nom, lft)
     else:
-        line1 = '{}\''.format(lft)
-    label = line1 + "\n" + '{} MBH'.format(mbh)
+        line1 = "{}\'".format(lft)
+    label = line1 + "\n" + "{} MBH".format(mbh)
 
     if is_h:
         lx = (x0 + x1) / 2.0
@@ -334,21 +362,26 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id):
 
 
 def _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id):
+    """Draw 3-line equipment symbol and label. Returns elements for grouping."""
+    elems = []
     for i in range(3):
         yy = cy + i * FIXTURE_SPACING
-        _line(doc, view, cx - FIXTURE_HW, yy, cx + FIXTURE_HW, yy)
+        elems.append(_line(doc, view, cx - FIXTURE_HW, yy, cx + FIXTURE_HW, yy))
 
     name  = node.fixture_name or "UNNAMED"
-    label = name + "\n" + '{} MBH'.format(round(node.gas_load_mbh, 1))
+    label = name + "\n" + "{} MBH".format(round(node.gas_load_mbh, 1))
     top_y = cy + 2 * FIXTURE_SPACING
     if going_up:
         ly = top_y + LABEL_ABOVE
     else:
         ly = cy - LABEL_ABOVE * 1.5
-    _note(doc, view, cx, ly, label, tt_id)
+    elems.append(_note(doc, view, cx, ly, label, tt_id))
+    return elems
 
 
 def _draw_valve_bowtie(doc, view, cx, cy):
+    """Draw bowtie valve symbol. Returns elements for grouping."""
+    elems = []
     for pts in [
         [(cx - VALVE_HW, cy + VALVE_HH),
          (cx - VALVE_HW, cy - VALVE_HH),
@@ -360,7 +393,8 @@ def _draw_valve_bowtie(doc, view, cx, cy):
         for i in range(3):
             p1 = pts[i]
             p2 = pts[(i + 1) % 3]
-            _line(doc, view, p1[0], p1[1], p2[0], p2[1])
+            elems.append(_line(doc, view, p1[0], p1[1], p2[0], p2[1]))
+    return elems
 
 
 def _draw_notes_block(doc, view, table_id, inlet_psi,
@@ -589,14 +623,18 @@ def main():
             cx, cy = pos
 
             if node.is_gas_fixture:
-                going_up = _node_z(graph, nid, meter_z) > meter_z
-                _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id)
+                # going_up = fixture z above the trunk (y=0 level)
+                going_up = cy > 0.0
+                fix_elems = _draw_fixture_symbol(
+                    doc, view, cx, cy, going_up, node, tt_id)
+                _make_group(doc, fix_elems)
                 drawn_fixtures += 1
                 continue
 
             fname = (node.family_name or "").lower()
             if any(kw in fname for kw in _VALVE_KW):
-                _draw_valve_bowtie(doc, view, cx, cy)
+                val_elems = _draw_valve_bowtie(doc, view, cx, cy)
+                _make_group(doc, val_elems)
                 drawn_valves += 1
 
         # e. Notes block
