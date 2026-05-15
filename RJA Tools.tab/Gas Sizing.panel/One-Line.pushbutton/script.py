@@ -92,6 +92,43 @@ def _edges_from(graph, node_id):
     return [e for e in graph.edges.values() if e.from_node_id == node_id]
 
 
+def _find_fixture_z(graph, start_nid, trunk_set, default_z):
+    """BFS downstream from start_nid (ignoring trunk edges) to find the first
+    gas fixture node, then return its Revit z-elevation.
+
+    This is used so branch direction (UP vs DOWN in the diagram) is driven by
+    where the EQUIPMENT actually is, not where the first branch fitting is.
+    A top-takeoff CSST stub that goes UP briefly before routing DOWN to a
+    water heater at floor level will correctly read DOWN.
+
+    Args:
+        graph:      NetworkGraph
+        start_nid:  node_id to start searching from
+        trunk_set:  set of trunk edge element IDs (skip these)
+        default_z:  z to return if no fixture is found
+
+    Returns:
+        float z-elevation in Revit feet
+    """
+    queue   = [start_nid]
+    seen    = {start_nid}
+    while queue:
+        nid  = queue.pop(0)
+        node = graph.nodes.get(nid)
+        if node and node.is_gas_fixture:
+            return _node_z(graph, nid, default_z)
+        for edge in graph.edges.values():
+            if edge.from_node_id == nid and edge.element_id not in trunk_set:
+                if edge.to_node_id and edge.to_node_id not in seen:
+                    seen.add(edge.to_node_id)
+                    queue.append(edge.to_node_id)
+        for child_nid in graph.node_children.get(nid, []):
+            if child_nid not in seen:
+                seen.add(child_nid)
+                queue.append(child_nid)
+    return default_z
+
+
 def _compute_layout(graph):
     """Assign (x, y) view positions to every graph node via two-phase BFS.
 
@@ -200,11 +237,14 @@ def _compute_layout(graph):
 
             if branch_y is None:
                 # ---- First drop from a trunk tee ----
-                # Direction is purely from actual Revit z-elevation data:
-                # sign of (branch_endpoint_z - tee_z) determines UP vs DOWN.
-                tee_z = _node_z(graph, nid, meter_z)
-                to_z  = _node_z(graph, to_nid, tee_z)
-                direc = 1.0 if to_z > tee_z else -1.0
+                # Direction is driven by the DOWNSTREAM FIXTURE z-elevation
+                # vs the tee z-elevation.  Using the first fitting's z would
+                # give the wrong answer for top-takeoff CSST runs that rise
+                # briefly above the main before routing down to equipment.
+                tee_z     = _node_z(graph, nid, meter_z)
+                to_z      = _node_z(graph, to_nid, tee_z)
+                fixture_z = _find_fixture_z(graph, to_nid, trunk_set, to_z)
+                direc = 1.0 if fixture_z > tee_z else -1.0
                 depth = branch_counters.get(nid, 0) + 1
                 branch_counters[nid] = depth
                 new_y   = ty + direc * LEVEL_HEIGHT * depth
@@ -217,6 +257,7 @@ def _compute_layout(graph):
                     "edge_id":    edge.element_id,
                     "to_nid":     to_nid,
                     "to_z":       to_z,
+                    "fixture_z":  fixture_z,
                     "direc":      "UP" if direc > 0 else "DOWN",
                     "result_pos": new_pos,
                     "branch_y":   None,
@@ -331,19 +372,21 @@ def _format_layout_diagnostic(graph, positions, trunk_set, trunk_all_ids,
 
     # ------ BRANCH DECISIONS ------
     row("=== BRANCH DECISIONS (BFS log, {} entries) ===".format(len(layout_log)))
-    row(" {:>10}  {:>14}  {:>8}  {:>10}  {:>8}  {:>8}  {:>12}  {:>14}".format(
+    row(" {:>10}  {:>14}  {:>8}  {:>10}  {:>8}  {:>8}  {:>10}  {:>12}  {:>14}".format(
         "tee_nid", "tee_pos", "tee_z", "edge_id", "to_nid",
-        "to_z", "direction", "result_pos"))
+        "to_z", "fixture_z", "direction", "result_pos"))
     for entry in layout_log:
         rp  = entry["result_pos"]
         tp  = entry["tee_pos"]
-        row(" {:>10}  {:>14}  {:>8.2f}  {:>10}  {:>8}  {:>8.2f}  {:>12}  {:>14}".format(
+        fz  = entry.get("fixture_z", entry.get("to_z", 0.0))
+        row(" {:>10}  {:>14}  {:>8.2f}  {:>10}  {:>8}  {:>8.2f}  {:>10.2f}  {:>12}  {:>14}".format(
             entry["tee_nid"],
             "({:.1f},{:.1f})".format(tp[0], tp[1]),
             entry["tee_z"],
             entry["edge_id"],
             entry["to_nid"],
             entry["to_z"],
+            fz,
             entry["direc"],
             "({:.1f},{:.1f})".format(rp[0], rp[1])))
     row("")
@@ -406,14 +449,26 @@ def _format_layout_diagnostic(graph, positions, trunk_set, trunk_all_ids,
 # Pipe size reading
 # ---------------------------------------------------------------------------
 
+_STEEL_NOMINALS = frozenset([
+    "1/2","3/4","1","1-1/4","1-1/2","2","2-1/2","3","4","5","6","8","10","12"])
+
+
 def _read_pipe_sizes(graph):
     """Read nominal pipe sizes from Revit model.
+
+    Builds the inverse map in two passes so standard steel sizes always win
+    over EHD/copper designations for the same diameter value.
 
     Returns {edge_element_id: nominal_size_str} for all readable edges.
     """
     inv = {}
+    # Pass 1: non-steel (EHD, K&L, ACR, PE) -- populate but can be overwritten
     for nom, inches in sizing_engine.NOMINAL_TO_INCHES.items():
-        if inches not in inv:
+        if nom not in _STEEL_NOMINALS:
+            inv[inches] = nom
+    # Pass 2: standard steel -- overwrite any EHD/copper that shares the same inch value
+    for nom, inches in sizing_engine.NOMINAL_TO_INCHES.items():
+        if nom in _STEEL_NOMINALS:
             inv[inches] = nom
     sizes = {}
     for eid, edge in graph.edges.items():
@@ -788,18 +843,52 @@ def main():
     # ------------------------------------------------------------------
     output.print_md("**Drawing diagram...**")
 
-    mx, my = positions.get(meter_nid, (0.0, 0.0))
+    # Find the distribution main start position.
+    # If the trunk begins with a riser (VERT section between meter and the
+    # horizontal main), place the meter symbol at the TOP of that riser so the
+    # diagram shows a clean horizontal trunk.  The upstream stub then extends
+    # DOWN from the meter circle to represent the utility service entry.
+    trunk_all_ids_draw = list(graph.longest_run["path_element_ids"])
+    trunk_edge_ids_ord = [i for i in trunk_all_ids_draw if i in graph.edges]
+
+    # Identify edges that are "upstream" (initial riser + any leading stub).
+    # These are trunk edges before the FIRST horizontal segment that follows a
+    # VERT section.  They will still be drawn as lines but not labeled.
+    upstream_draw_edges = set()
+    main_origin         = positions.get(meter_nid, (0.0, 0.0))
+    found_vert          = False
+    for eid in trunk_edge_ids_ord:
+        edge = graph.edges[eid]
+        fp = positions.get(edge.from_node_id, (0.0, 0.0))
+        tp = positions.get(edge.to_node_id,   (0.0, 0.0))
+        seg_is_vert = abs(tp[1] - fp[1]) > abs(tp[0] - fp[0])
+        if seg_is_vert:
+            found_vert = True
+            upstream_draw_edges.add(eid)
+        elif found_vert:
+            # First horizontal after the riser = distribution main start.
+            main_origin = fp
+            break
+        else:
+            upstream_draw_edges.add(eid)  # short stubs before the riser
+
+    mx, my = main_origin
 
     t = Transaction(doc, "RJA Tools - Gas One-Line Diagram")
     t.Start()
     try:
         # a. Upstream stub + squiggle + "GAS FROM UTILITY" label
+        #    Drawn at the distribution main level; stub goes left then DOWN
+        #    to represent the underground utility service entry.
         _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id)
 
-        # b. Meter circle + "M"
+        # b. Meter circle + "M" at distribution main level
         _draw_meter_symbol(doc, view, mx, my, tt_id)
 
-        # c. All pipe edges
+        # c. All pipe edges.
+        #    Upstream edges (riser from meter to distribution main) are drawn
+        #    as lines but never labeled -- they are represented schematically
+        #    by the upstream stub.
         drawn_edges = 0
         for eid, edge in graph.edges.items():
             if edge.to_node_id is None:
@@ -810,7 +899,11 @@ def main():
                 continue
             x0, y0 = pos_from
             x1, y1 = pos_to
-            _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id)
+            if eid in upstream_draw_edges:
+                # Draw the line but no label (stub/riser covered by meter stub)
+                _line(doc, view, x0, y0, x1, y1)
+            else:
+                _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id)
             drawn_edges += 1
 
         # d. Fixture symbols and labels; valve/PRV symbols
