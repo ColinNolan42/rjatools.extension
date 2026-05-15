@@ -23,6 +23,7 @@ from pyrevit import script, forms
 from Autodesk.Revit.DB import (
     BuiltInParameter,
     ElementId,
+    ElementTransformUtils,
     Line,
     Arc,
     XYZ,
@@ -535,21 +536,70 @@ def _read_pipe_sizes(graph):
 
 
 # ---------------------------------------------------------------------------
+# Annotation symbol helpers
+# ---------------------------------------------------------------------------
+
+def _get_annotation_symbol(doc, family_name):
+    """Return the first FamilySymbol whose Family.Name matches family_name."""
+    for s in FilteredElementCollector(doc).OfClass(FamilySymbol):
+        try:
+            if s.Family and s.Family.Name == family_name:
+                return s
+        except Exception:
+            pass
+    return None
+
+
+def _activate_sym(doc, sym):
+    """Activate a FamilySymbol if not already active. Returns sym or None."""
+    if sym is None:
+        return None
+    if sym.IsActive:
+        return sym
+    t_act = Transaction(doc, "Activate " + (sym.Family.Name or "Symbol"))
+    t_act.Start()
+    try:
+        sym.Activate()
+        t_act.Commit()
+        return sym
+    except Exception:
+        t_act.RollBack()
+        return None
+
+
+def _place_sym(doc, view, sym, x, y, rotate_90=False):
+    """Place a generic annotation instance at (x, y) in the view.
+
+    If rotate_90 is True, rotate the instance 90 degrees around the Z-axis
+    through the placement point.  Returns the placed element or None.
+    """
+    if sym is None:
+        return None
+    try:
+        inst = doc.Create.NewFamilyInstance(XYZ(x, y, 0), sym, view)
+        if rotate_90 and inst is not None:
+            axis = Line.CreateBound(XYZ(x, y, 0), XYZ(x, y, 1))
+            ElementTransformUtils.RotateElement(doc, inst.Id, axis, math.pi / 2.0)
+        return inst
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Schematic branch drawing
 # ---------------------------------------------------------------------------
 
 def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
                             direc, total_ft, size, has_valve,
-                            fixture_node, tt_id):
+                            fixture_node, tt_id,
+                            valve_sym=None, equip_sym=None):
     """Draw one simplified schematic branch from trunk tee to fixture.
 
-    Collapses the entire physical branch routing (top-takeoff elbows,
-    horizontal runs, drop to equipment) into one clean schematic connection:
-      - ONE vertical line from the trunk tee down (or up) to the fixture level
-      - If fix_x != tee_x: ONE horizontal line at the fixture level
-      - Valve bowtie at 1/3 point on the vertical if a valve exists
-      - Pipe label (size + total length + MBH) beside the vertical
-      - Fixture symbol at the fixture endpoint
+    Uses project annotation families when available:
+      valve_sym  -- RJA - P Symbols - Gate Valve  (rotated 90 degrees)
+      equip_sym  -- RJA - P Symbols - Equipment
+
+    Symbol label is placed as a separate TextNote (not grouped with symbol).
     """
     # Vertical segment from tee to fixture level
     _line(doc, view, tee_x, tee_y, tee_x, fix_y)
@@ -558,11 +608,14 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     if abs(fix_x - tee_x) > 0.01:
         _line(doc, view, tee_x, fix_y, fix_x, fix_y)
 
-    # Valve bowtie 1/3 of the way down the vertical
+    # Valve symbol 40% down the vertical (rotated 90 to sit on branch line)
     if has_valve:
         val_y = tee_y + (fix_y - tee_y) * 0.4
-        val_elems = _draw_valve_bowtie(doc, view, tee_x, val_y)
-        _make_group(doc, val_elems)
+        v_inst = _place_sym(doc, view, valve_sym, tee_x, val_y, rotate_90=True)
+        if v_inst is None:
+            # Fallback: drawn bowtie lines
+            val_elems = _draw_valve_bowtie(doc, view, tee_x, val_y)
+            _make_group(doc, val_elems)
 
     # Label on right side of the vertical segment
     mid_y = (tee_y + fix_y) / 2.0
@@ -575,11 +628,28 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     lbl_x = tee_x + (VALVE_HW + LABEL_RIGHT if has_valve else LABEL_RIGHT)
     _note(doc, view, lbl_x, mid_y, lbl, tt_id)
 
-    # Fixture symbol and label at the fixture endpoint
+    # Equipment symbol at the fixture endpoint
     going_up = fix_y > tee_y
-    fix_elems = _draw_fixture_symbol(
-        doc, view, fix_x, fix_y, going_up, fixture_node, tt_id)
-    _make_group(doc, fix_elems)
+    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y)
+    if e_inst is None:
+        # Fallback: drawn 3-line symbol (without label -- label added below)
+        sym_elems = []
+        for i in range(3):
+            yy = fix_y + i * FIXTURE_SPACING
+            sym_elems.append(_line(doc, view, fix_x - FIXTURE_HW, yy,
+                                   fix_x + FIXTURE_HW, yy))
+        _make_group(doc, sym_elems)
+
+    # Fixture name + MBH as a SEPARATE TextNote (not grouped with symbol)
+    if fixture_node:
+        name  = fixture_node.fixture_name or "UNNAMED"
+        label = name + "\n" + "{:.1f} MBH".format(fixture_node.gas_load_mbh)
+        sym_top_y = fix_y + 2 * FIXTURE_SPACING
+        if going_up:
+            lbl_y = sym_top_y + LABEL_ABOVE
+        else:
+            lbl_y = fix_y - LABEL_ABOVE * 1.5
+        _note(doc, view, fix_x, lbl_y, label, tt_id)
 
 
 # ---------------------------------------------------------------------------
@@ -622,35 +692,35 @@ def _make_group(doc, elements):
             pass
 
 
-def _draw_meter_symbol(doc, view, cx, cy, tt_id):
-    try:
-        arc = Arc.Create(
-            XYZ(cx, cy, 0),
-            SYMBOL_RADIUS,
-            0.0,
-            2.0 * math.pi - 0.001,
-            XYZ(1, 0, 0),
-            XYZ(0, 1, 0))
-        doc.Create.NewDetailCurve(view, arc)
-    except Exception:
-        pass
-    _note(doc, view, cx - 0.15, cy - 0.25, "M", tt_id)
+def _draw_meter_symbol(doc, view, cx, cy, tt_id, meter_sym=None):
+    """Place meter symbol. Uses RJA - P Symbols - Meter when available."""
+    inst = _place_sym(doc, view, meter_sym, cx, cy)
+    if inst is None:
+        # Fallback: draw circle + "M" label
+        try:
+            arc = Arc.Create(
+                XYZ(cx, cy, 0),
+                SYMBOL_RADIUS,
+                0.0,
+                2.0 * math.pi - 0.001,
+                XYZ(1, 0, 0),
+                XYZ(0, 1, 0))
+            doc.Create.NewDetailCurve(view, arc)
+        except Exception:
+            pass
+        _note(doc, view, cx - 0.15, cy - 0.25, "M", tt_id)
 
 
 def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym, tt_id):
+    """Draw horizontal stub + vertical drop + squiggle (rotated 90 deg)."""
     sx = cx - SYMBOL_RADIUS
-    # Horizontal stub going left
+    # Horizontal stub going left from meter
     _line(doc, view, sx, cy, sx - UPSTREAM_H, cy)
-    # Vertical drop
+    # Vertical drop to utility
     tip_x = sx - UPSTREAM_H
     _line(doc, view, tip_x, cy, tip_x, cy - UPSTREAM_V)
-    # Squiggle at tip
-    if squiggle_sym is not None:
-        try:
-            doc.Create.NewFamilyInstance(
-                XYZ(tip_x, cy - UPSTREAM_V, 0), squiggle_sym, view)
-        except Exception:
-            pass
+    # Squiggle at tip -- rotated 90 degrees so it reads vertically
+    _place_sym(doc, view, squiggle_sym, tip_x, cy - UPSTREAM_V, rotate_90=True)
     # "GAS FROM UTILITY" label below the squiggle
     _note(doc, view, tip_x - 0.5, cy - UPSTREAM_V - 1.6, "GAS FROM\nUTILITY", tt_id)
 
@@ -901,24 +971,26 @@ def main():
                     title="One-Line - Error")
         return
 
-    squiggle_sym = next(
-        (s for s in FilteredElementCollector(doc).OfClass(FamilySymbol)
-         if "Squiggle" in (s.Family.Name if s.Family else "")),
-        None
-    )
+    # Locate project annotation families (RJA - P Symbols - *)
+    squiggle_sym = _activate_sym(doc, _get_annotation_symbol(doc, "RJA- Squiggle"))
     if squiggle_sym is None:
-        output.print_md(
-            ":warning: RJA-Squiggle annotation family not found in project. "
-            "Upstream stub will be drawn without squiggle symbol.")
-    elif not squiggle_sym.IsActive:
-        t_act = Transaction(doc, "Activate Squiggle Symbol")
-        t_act.Start()
-        try:
-            squiggle_sym.Activate()
-            t_act.Commit()
-        except Exception:
-            t_act.RollBack()
-            squiggle_sym = None
+        squiggle_sym = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - Squiggle"))
+    meter_sym    = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - P Symbols - Meter"))
+    valve_sym    = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - P Symbols - Gate Valve"))
+    prv_sym      = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - P Symbols - Pressure Reducing Valve"))
+    equip_sym    = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - P Symbols - Equipment"))
+
+    found_syms = [("Squiggle",      squiggle_sym),
+                  ("Meter",         meter_sym),
+                  ("Gate Valve",    valve_sym),
+                  ("PRV",           prv_sym),
+                  ("Equipment",     equip_sym)]
+    for sym_label, sym in found_syms:
+        if sym is None:
+            output.print_md(":warning: {} symbol not found - using fallback.".format(
+                sym_label))
+        else:
+            output.print_md(":white_check_mark: {} symbol loaded.".format(sym_label))
 
     # ------------------------------------------------------------------
     # STEP 8 - Create DraftingView
@@ -987,8 +1059,8 @@ def main():
         #    to represent the underground utility service entry.
         _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id)
 
-        # b. Meter circle + "M" at distribution main level
-        _draw_meter_symbol(doc, view, mx, my, tt_id)
+        # b. Meter symbol (uses RJA - P Symbols - Meter when available)
+        _draw_meter_symbol(doc, view, mx, my, tt_id, meter_sym)
 
         # c. Trunk pipe edges only.
         #    Branch edges are NOT drawn here -- they are replaced by the
@@ -1008,7 +1080,7 @@ def main():
             x0, y0 = pos_from
             x1, y1 = pos_to
             if eid in upstream_draw_edges:
-                _line(doc, view, x0, y0, x1, y1)
+                continue  # skip: service connection shown by upstream stub
             else:
                 _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id)
             drawn_edges += 1
@@ -1030,12 +1102,14 @@ def main():
                 bi["size"],
                 bi["has_valve"],
                 node,
-                tt_id)
+                tt_id,
+                valve_sym=valve_sym,
+                equip_sym=equip_sym)
             drawn_fixtures += 1
             if bi["has_valve"]:
                 drawn_valves += 1
 
-        # d2. Trunk-endpoint fixtures (e.g. last fixture on the trunk itself)
+        # d2. Trunk-endpoint fixtures (e.g. MAU-1 at end of trunk)
         for fix_nid in trunk_fixture_nids:
             pos  = positions.get(fix_nid)
             node = graph.nodes.get(fix_nid)
@@ -1043,9 +1117,19 @@ def main():
                 continue
             cx, cy = pos
             going_up = cy > 0.0
-            fix_elems = _draw_fixture_symbol(
-                doc, view, cx, cy, going_up, node, tt_id)
-            _make_group(doc, fix_elems)
+            e_inst = _place_sym(doc, view, equip_sym, cx, cy)
+            if e_inst is None:
+                sym_elems = []
+                for i in range(3):
+                    yy = cy + i * FIXTURE_SPACING
+                    sym_elems.append(_line(doc, view, cx - FIXTURE_HW, yy,
+                                           cx + FIXTURE_HW, yy))
+                _make_group(doc, sym_elems)
+            name  = node.fixture_name or "UNNAMED"
+            label = name + "\n" + "{:.1f} MBH".format(node.gas_load_mbh)
+            sym_top_y = cy + 2 * FIXTURE_SPACING
+            lbl_y = sym_top_y + LABEL_ABOVE if going_up else cy - LABEL_ABOVE * 1.5
+            _note(doc, view, cx, lbl_y, label, tt_id)
             drawn_fixtures += 1
 
         # e. Notes block (single text box, positioned above diagram)
