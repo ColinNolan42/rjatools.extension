@@ -630,25 +630,29 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
 
     # Equipment symbol at the fixture endpoint
     going_up = fix_y > tee_y
+    # Direction sign: +1 for upward branch (lines extend up), -1 for downward
+    # (lines extend down away from trunk so the outer line connects to the branch)
+    sign = 1.0 if going_up else -1.0
+
     e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y)
     if e_inst is None:
-        # Fallback: drawn 3-line symbol (without label -- label added below)
+        # Fallback: drawn 3-line symbol.
+        # Line 0 (outer, connects to branch) is at fix_y.
+        # Lines 1 and 2 extend AWAY from trunk.
         sym_elems = []
         for i in range(3):
-            yy = fix_y + i * FIXTURE_SPACING
+            yy = fix_y + sign * i * FIXTURE_SPACING
             sym_elems.append(_line(doc, view, fix_x - FIXTURE_HW, yy,
                                    fix_x + FIXTURE_HW, yy))
         _make_group(doc, sym_elems)
 
-    # Fixture name + MBH as a SEPARATE TextNote (not grouped with symbol)
+    # Fixture name + MBH as a SEPARATE TextNote (not grouped with symbol).
+    # Label is placed beyond the outermost (far) line of the symbol.
     if fixture_node:
-        name  = fixture_node.fixture_name or "UNNAMED"
-        label = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
-        sym_top_y = fix_y + 2 * FIXTURE_SPACING
-        if going_up:
-            lbl_y = sym_top_y + LABEL_ABOVE
-        else:
-            lbl_y = fix_y - LABEL_ABOVE * 1.5
+        name     = fixture_node.fixture_name or "UNNAMED"
+        label    = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
+        far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
+        lbl_y    = far_y + sign * LABEL_ABOVE           # beyond that
         _note(doc, view, fix_x, lbl_y, label, tt_id)
 
 
@@ -755,19 +759,21 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
 
 
 def _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id):
-    """Draw 3-line equipment symbol and label. Returns elements for grouping."""
+    """Draw 3-line equipment symbol and label. Returns elements for grouping.
+
+    Line 0 (outer, at cy) connects to the branch. Lines 1 and 2 extend
+    AWAY from the trunk so the symbol hangs in the correct direction.
+    """
+    sign = 1.0 if going_up else -1.0
     elems = []
     for i in range(3):
-        yy = cy + i * FIXTURE_SPACING
+        yy = cy + sign * i * FIXTURE_SPACING
         elems.append(_line(doc, view, cx - FIXTURE_HW, yy, cx + FIXTURE_HW, yy))
 
-    name  = node.fixture_name or "UNNAMED"
-    label = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
-    top_y = cy + 2 * FIXTURE_SPACING
-    if going_up:
-        ly = top_y + LABEL_ABOVE
-    else:
-        ly = cy - LABEL_ABOVE * 1.5
+    name   = node.fixture_name or "UNNAMED"
+    label  = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
+    far_y  = cy + sign * 2 * FIXTURE_SPACING
+    ly     = far_y + sign * LABEL_ABOVE
     elems.append(_note(doc, view, cx, ly, label, tt_id))
     return elems
 
@@ -799,7 +805,7 @@ def _draw_notes_block(doc, view, table_id, inlet_psi,
         "GAS PIPING SIZED FOR {} PSI".format(inlet_psi),
         "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id),
         "TOTAL CONNECTED LOAD: {} MBH".format(int(round(total_mbh))),
-        "TOTAL DEVELOPED LENGTH: {}'".format(int(round(longest_ft))),
+        "TOTAL PIPE LENGTH: {}'".format(int(round(longest_ft))),
     ])
     _note(doc, view, notes_x, notes_y, text, tt_id)
 
@@ -893,8 +899,11 @@ def main():
                     title="One-Line - Error")
         return
 
-    total_mbh  = sum(n.gas_load_mbh for n in fixture_nodes)
-    longest_ft = graph.longest_run["total_length_feet"]
+    total_mbh    = sum(n.gas_load_mbh for n in fixture_nodes)
+    longest_ft   = graph.longest_run["total_length_feet"]  # used for IFGC sizing
+    # For the notes display use pipe_length_feet (actual pipe only, no elbow
+    # equivalents) so the labeled segment lengths on the diagram add up to match.
+    display_ft   = graph.longest_run.get("pipe_length_feet", longest_ft)
 
     # ------------------------------------------------------------------
     # STEP 5 - Compute layout
@@ -1117,18 +1126,19 @@ def main():
                 continue
             cx, cy = pos
             going_up = cy > 0.0
+            sign     = 1.0 if going_up else -1.0
             e_inst = _place_sym(doc, view, equip_sym, cx, cy)
             if e_inst is None:
                 sym_elems = []
                 for i in range(3):
-                    yy = cy + i * FIXTURE_SPACING
+                    yy = cy + sign * i * FIXTURE_SPACING
                     sym_elems.append(_line(doc, view, cx - FIXTURE_HW, yy,
                                            cx + FIXTURE_HW, yy))
                 _make_group(doc, sym_elems)
-            name  = node.fixture_name or "UNNAMED"
-            label = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
-            sym_top_y = cy + 2 * FIXTURE_SPACING
-            lbl_y = sym_top_y + LABEL_ABOVE if going_up else cy - LABEL_ABOVE * 1.5
+            name   = node.fixture_name or "UNNAMED"
+            label  = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
+            far_y  = cy + sign * 2 * FIXTURE_SPACING
+            lbl_y  = far_y + sign * LABEL_ABOVE
             _note(doc, view, cx, lbl_y, label, tt_id)
             drawn_fixtures += 1
 
@@ -1137,7 +1147,7 @@ def main():
                           table_id   = table_id,
                           inlet_psi  = inlet_pressure_psi,
                           total_mbh  = total_mbh,
-                          longest_ft = longest_ft,
+                          longest_ft = display_ft,   # pipe length only (no elbows)
                           tt_id      = tt_id,
                           notes_x    = notes_x,
                           notes_y    = notes_y)
