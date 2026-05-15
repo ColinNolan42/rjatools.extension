@@ -2,7 +2,7 @@
 
 ## Active Status
 **Active Phase: 2**
-**Current Sub-Task: 2.1 — Fix cumulative load calculation**
+**Current Sub-Task: One-Line Diagram — implemented, pending Revit test**
 
 Update this block manually as phases and sub-tasks complete.
 
@@ -32,7 +32,7 @@ Claude may answer questions about future phases but shall not write code for the
 ## Runtime UX
 
 - **Phase 1:** User clicks Diagnose → Revit prompts to pick gas meter → user picks element → traversal runs → output printed to PyRevit window. One pick is the only input.
-- **Phase 2:** User selects gas meter → clicks Size Gas → one startup dialog (pipe material, inlet pressure, pressure drop) → fully automatic. Specific gravity hardcoded 0.60.
+- **Phase 2:** User selects gas meter → clicks Size Gas → SelectFromList of 37 IFGC table options (material + pressure + pressure drop + table ID) → fully automatic. Specific gravity hardcoded 0.60. One-Line button generates a schematic DraftingView diagram after sizing.
 - **Phase 3:** User selects water meter → clicks Size Water → one startup dialog (pipe material, street supply pressure, system type) → fully automatic. Sizing per IPC: WSFUs → GPM → velocity/pressure. Three system types: DCW, DHW, HWR.
 
 Single meter per system. User selects it. No auto-detection of meter.
@@ -290,27 +290,25 @@ SPECIFIC_GRAVITY = 0.60  (hardcoded, matches all IFGC tables)
 ## File Structure
 
 ```
-RevitPipeSizing.extension/
+Comcheck.extension/
 ├── CLAUDE.md
-├── RevitPipeSizing.tab/
+├── RJA Tools.tab/
 │   ├── Gas Sizing.panel/
 │   │   ├── Diagnose.pushbutton/
 │   │   │   └── script.py
 │   │   ├── Size Gas.pushbutton/
 │   │   │   └── script.py
-│   │   ├── Gas Report.pushbutton/
-│   │   │   └── script.py
 │   │   └── One-Line.pushbutton/
 │   │       └── script.py
-│   └── Water Sizing.panel/        ← Phase 3
+│   └── Water Sizing.panel/        <- Phase 3
 └── lib/
     ├── shared_params.py
     ├── revit_helpers.py
     ├── pipe_graph.py
     ├── report_generator.py
-    ├── gas_tables.py              ← Phase 2
-    ├── sizing_engine.py           ← Phase 2
-    └── ifgc_gas_sizing_tables.json
+    ├── gas_tables.py
+    ├── sizing_engine.py
+    └── ifgc_gas_sizing_tables.json  (37 tables, 4 materials)
 ```
 
 ---
@@ -326,9 +324,25 @@ RevitPipeSizing.extension/
 
 ---
 
-## Phase 2 Reference (LOCKED — do not implement)
+## Phase 2 Summary (complete — do not re-implement core)
 
-Gas pipe sizing per IFGC Longest Run Method. One startup dialog: pipe material, inlet pressure, pressure drop. Sizes every segment. Writes sizes back to Revit model via Transaction. Table selection logic is in `gas_sizing_engine.py`. Tables are in `ifgc_gas_sizing_tables.json`.
+Gas pipe sizing per IFGC Longest Run Method. Built and working:
+- `gas_tables.py` — 37 IFGC Table 402.4 tables, 4 materials (Schedule 40 Steel,
+  Semirigid Copper Tubing, CSST, Polyethylene Plastic Pipe), natural gas and propane.
+  `TABLE_OPTIONS` list drives the startup SelectFromList in Size Gas and One-Line.
+- `sizing_engine.py` — Longest Run Method engine, writes sizes back to Revit model
+  via three transactions (pipes, fittings, fixture stub pipes).
+- `Size Gas.pushbutton` — full flow: pick meter, pick table, traverse, size, write to model.
+- `One-Line.pushbutton` — traverses graph, computes elevation-aware schematic layout,
+  draws DraftingView with meter symbol, pipe lines, fixture symbols, valve bowties, labels,
+  and notes block.
+- `Diagnose.pushbutton` — diagnostic traversal and report. Gas Report button removed
+  (redundant with Diagnose + Size Gas terminal output).
+
+Remaining Phase 2 deferred items (do not implement without user request):
+- Fixture Editor: WPF DataGrid for assigning IS_GAS_FIXTURE / Name / MBH to unknown
+  equipment families (RTUs, water heaters without the custom params).
+- Minor fitting resize: transitions, ball valves, PRVs skip Nominal Radius approach.
 
 ## Phase 3 Reference (LOCKED — do not implement)
 
