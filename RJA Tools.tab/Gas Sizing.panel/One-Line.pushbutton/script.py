@@ -623,8 +623,8 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         lbl_line1 = '{}"G, {}\''.format(size, int(round(total_ft)))
     else:
         lbl_line1 = "{}\'".format(int(round(total_ft)))
-    mbh_val = fixture_node.gas_load_mbh if fixture_node else 0.0
-    lbl = lbl_line1 + "\n" + "{:.1f} MBH".format(mbh_val)
+    mbh_val = int(round(fixture_node.gas_load_mbh)) if fixture_node else 0
+    lbl = lbl_line1 + "\n" + "{} MBH".format(mbh_val)
     lbl_x = tee_x + (VALVE_HW + LABEL_RIGHT if has_valve else LABEL_RIGHT)
     _note(doc, view, lbl_x, mid_y, lbl, tt_id)
 
@@ -643,7 +643,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     # Fixture name + MBH as a SEPARATE TextNote (not grouped with symbol)
     if fixture_node:
         name  = fixture_node.fixture_name or "UNNAMED"
-        label = name + "\n" + "{:.1f} MBH".format(fixture_node.gas_load_mbh)
+        label = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
         sym_top_y = fix_y + 2 * FIXTURE_SPACING
         if going_up:
             lbl_y = sym_top_y + LABEL_ABOVE
@@ -725,20 +725,20 @@ def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym, tt_id):
     _note(doc, view, tip_x - 0.5, cy - UPSTREAM_V - 1.6, "GAS FROM\nUTILITY", tt_id)
 
 
-def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id):
+def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
+                        force_label=False):
     _line(doc, view, x0, y0, x1, y1)
 
-    # Skip label for very short pipes to reduce clutter.
-    # Total length in the notes block still includes these segments.
-    if edge.length_feet < 5.0:
+    # Skip very short pipes unless this is a trunk segment (force_label=True).
+    if edge.length_feet < 5.0 and not force_label:
         return
 
     nom  = pipe_sizes.get(edge.element_id, "")
     lft  = int(round(edge.length_feet))
-    mbh  = round(edge.cumulative_load_mbh, 1)
+    mbh  = int(round(edge.cumulative_load_mbh))
     is_h = abs(y1 - y0) <= abs(x1 - x0)
 
-    # Label format: '1-1/2"G, 25'' on line 1 (no space before G, matches firm standard)
+    # Label: size + length on line 1, MBH on line 2 (no decimals)
     if nom:
         line1 = '{}"G, {}\''.format(nom, lft)
     else:
@@ -762,7 +762,7 @@ def _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id):
         elems.append(_line(doc, view, cx - FIXTURE_HW, yy, cx + FIXTURE_HW, yy))
 
     name  = node.fixture_name or "UNNAMED"
-    label = name + "\n" + "{} MBH".format(round(node.gas_load_mbh, 1))
+    label = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
     top_y = cy + 2 * FIXTURE_SPACING
     if going_up:
         ly = top_y + LABEL_ABOVE
@@ -798,7 +798,7 @@ def _draw_notes_block(doc, view, table_id, inlet_psi,
         " AND COORDINATE NEW METER SERVICE",
         "GAS PIPING SIZED FOR {} PSI".format(inlet_psi),
         "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id),
-        "TOTAL CONNECTED LOAD: {:.1f} MBH".format(total_mbh),
+        "TOTAL CONNECTED LOAD: {} MBH".format(int(round(total_mbh))),
         "TOTAL DEVELOPED LENGTH: {}'".format(int(round(longest_ft))),
     ])
     _note(doc, view, notes_x, notes_y, text, tt_id)
@@ -1081,8 +1081,8 @@ def main():
             x1, y1 = pos_to
             if eid in upstream_draw_edges:
                 continue  # skip: service connection shown by upstream stub
-            else:
-                _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id)
+            _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
+                                force_label=True)
             drawn_edges += 1
 
         # d. Schematic branches: one clean line per fixture from its trunk tee
@@ -1126,7 +1126,7 @@ def main():
                                            cx + FIXTURE_HW, yy))
                 _make_group(doc, sym_elems)
             name  = node.fixture_name or "UNNAMED"
-            label = name + "\n" + "{:.1f} MBH".format(node.gas_load_mbh)
+            label = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
             sym_top_y = cy + 2 * FIXTURE_SPACING
             lbl_y = sym_top_y + LABEL_ABOVE if going_up else cy - LABEL_ABOVE * 1.5
             _note(doc, view, cx, lbl_y, label, tt_id)
