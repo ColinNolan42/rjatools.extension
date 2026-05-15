@@ -340,14 +340,19 @@ def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym):
 def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id):
     _line(doc, view, x0, y0, x1, y1)
 
+    # Skip label for very short pipes to reduce clutter.
+    # Total length in the notes block still includes these segments.
+    if edge.length_feet < 5.0:
+        return
+
     nom  = pipe_sizes.get(edge.element_id, "")
     lft  = int(round(edge.length_feet))
     mbh  = round(edge.cumulative_load_mbh, 1)
     is_h = abs(y1 - y0) <= abs(x1 - x0)
 
-    # Label format: "2-1/2\", 25'" on line 1, "350.0 MBH" on line 2
+    # Label format: '2-1/2" G, 25'' on line 1, '350.0 MBH' on line 2
     if nom:
-        line1 = '{}\", {}\''.format(nom, lft)
+        line1 = '{}" G, {}\''.format(nom, lft)
     else:
         line1 = "{}\'".format(lft)
     label = line1 + "\n" + "{} MBH".format(mbh)
@@ -398,20 +403,17 @@ def _draw_valve_bowtie(doc, view, cx, cy):
 
 
 def _draw_notes_block(doc, view, table_id, inlet_psi,
-                      total_mbh, longest_ft, tt_id):
-    lines = [
+                      total_mbh, longest_ft, tt_id, notes_x, notes_y):
+    """Draw the 5-line notes block as a SINGLE multi-line TextNote."""
+    text = "\n".join([
         "CONTRACTOR SHALL SUBMIT APPLICATIONS TO UTILITY"
         " AND COORDINATE NEW METER SERVICE",
         "GAS PIPING SIZED FOR {} PSI".format(inlet_psi),
         "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id),
         "TOTAL CONNECTED LOAD: {:.1f} MBH".format(total_mbh),
         "TOTAL DEVELOPED LENGTH: {}'".format(int(round(longest_ft))),
-    ]
-    for i, line in enumerate(lines):
-        _note(doc, view,
-              NOTES_X_BASE,
-              NOTES_Y_BASE - i * TEXT_GAP,
-              line, tt_id)
+    ])
+    _note(doc, view, notes_x, notes_y, text, tt_id)
 
 
 # ---------------------------------------------------------------------------
@@ -511,8 +513,66 @@ def main():
     # ------------------------------------------------------------------
     output.print_md("**Computing layout...**")
     positions, trunk_set, meter_nid, meter_z = _compute_layout(graph)
-    output.print_md(":white_check_mark: {} nodes positioned.".format(
-        len(positions)))
+    n_positioned = len(positions)
+    n_total      = len(graph.nodes)
+    output.print_md(":white_check_mark: {}/{} nodes positioned.".format(
+        n_positioned, n_total))
+
+    # Compute diagram bounding box for notes placement and diagnostics
+    all_xy   = list(positions.values())
+    min_x_d  = min(p[0] for p in all_xy) if all_xy else 0.0
+    max_x_d  = max(p[0] for p in all_xy) if all_xy else 0.0
+    min_y_d  = min(p[1] for p in all_xy) if all_xy else 0.0
+    max_y_d  = max(p[1] for p in all_xy) if all_xy else 0.0
+
+    # Notes go above and to the left of the diagram, clear of all elements
+    notes_x = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
+    notes_y = max_y_d + 4.0
+
+    # ------------------------------------------------------------------
+    # STEP 5b - Layout diagnostic (mirrors Diagnose/Size Gas output style)
+    # ------------------------------------------------------------------
+    output.print_md("---")
+    output.print_md("## Layout Diagnostic")
+    output.print_md("| Item | Value |")
+    output.print_md("| --- | --- |")
+    output.print_md("| Nodes positioned | {}/{} |".format(n_positioned, n_total))
+    output.print_md("| Trunk pipe edges | {} |".format(len(trunk_set)))
+    output.print_md("| Meter z-elevation | {:.2f} ft |".format(meter_z))
+    output.print_md("| Diagram x range | {:.1f} to {:.1f} ft |".format(min_x_d, max_x_d))
+    output.print_md("| Diagram y range | {:.1f} to {:.1f} ft |".format(min_y_d, max_y_d))
+    output.print_md("| Notes placed at | ({:.1f}, {:.1f}) |".format(notes_x, notes_y))
+    output.print_md("")
+
+    output.print_md("### Fixture nodes")
+    output.print_md("| Name | MBH | Node ID | Revit z | Diagram (x, y) | Direction |")
+    output.print_md("| --- | --- | --- | --- | --- | --- |")
+    for nid, node in graph.nodes.items():
+        if not node.is_gas_fixture:
+            continue
+        pos  = positions.get(nid)
+        nz   = _node_z(graph, nid, meter_z)
+        if pos:
+            direc = "UP" if pos[1] > 0 else ("DOWN" if pos[1] < 0 else "TRUNK")
+            output.print_md("| {} | {:.1f} | {} | {:.2f} | ({:.1f}, {:.1f}) | {} |".format(
+                node.fixture_name or "UNNAMED", node.gas_load_mbh,
+                nid, nz, pos[0], pos[1], direc))
+        else:
+            output.print_md("| {} | {:.1f} | {} | {:.2f} | UNPOSITIONED | -- |".format(
+                node.fixture_name or "UNNAMED", node.gas_load_mbh, nid, nz))
+
+    unpositioned = [nid for nid in graph.nodes if nid not in positions]
+    if unpositioned:
+        output.print_md("")
+        output.print_md("### Unpositioned nodes ({})".format(len(unpositioned)))
+        output.print_md("| Node ID | Type | Family |")
+        output.print_md("| --- | --- | --- |")
+        for nid in unpositioned[:20]:
+            node = graph.nodes[nid]
+            output.print_md("| {} | {} | {} |".format(
+                nid, node.node_type, node.family_name or "-"))
+
+    output.print_md("---")
 
     # ------------------------------------------------------------------
     # STEP 6 - Read pipe sizes from model
@@ -637,13 +697,15 @@ def main():
                 _make_group(doc, val_elems)
                 drawn_valves += 1
 
-        # e. Notes block
+        # e. Notes block (single text box, positioned above diagram)
         _draw_notes_block(doc, view,
-                          table_id      = table_id,
-                          inlet_psi     = inlet_pressure_psi,
-                          total_mbh     = total_mbh,
-                          longest_ft    = longest_ft,
-                          tt_id         = tt_id)
+                          table_id   = table_id,
+                          inlet_psi  = inlet_pressure_psi,
+                          total_mbh  = total_mbh,
+                          longest_ft = longest_ft,
+                          tt_id      = tt_id,
+                          notes_x    = notes_x,
+                          notes_y    = notes_y)
 
         t.Commit()
 
