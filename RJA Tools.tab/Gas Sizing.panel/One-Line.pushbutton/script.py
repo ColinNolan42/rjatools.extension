@@ -95,13 +95,15 @@ def _compute_layout(graph):
         positions dict  {node_id: (x, y)}  in view feet
         trunk_set       set of edge element IDs on the main trunk
     """
-    trunk_ordered = list(graph.longest_run["path_element_ids"])
-    trunk_set     = set(trunk_ordered)
-
-    # Meter node = from_node_id of the first trunk edge
-    meter_edge = graph.edges[trunk_ordered[0]]
-    meter_nid  = meter_edge.from_node_id
-    meter_z    = _node_z(graph, meter_nid)
+    # path_element_ids interleaves node and edge IDs:
+    # [meter_nid, pipe1_id, node1_id, pipe2_id, node2_id, ..., fixture_nid]
+    # The meter node ID is always the first element.
+    trunk_all_ids  = list(graph.longest_run["path_element_ids"])
+    meter_nid      = trunk_all_ids[0]
+    meter_z        = _node_z(graph, meter_nid)
+    # Keep only IDs that are actual pipe edges for the trunk walk
+    trunk_ordered  = [eid for eid in trunk_all_ids if eid in graph.edges]
+    trunk_set      = set(trunk_ordered)
 
     positions = {meter_nid: (0.0, 0.0)}
     x = 0.0
