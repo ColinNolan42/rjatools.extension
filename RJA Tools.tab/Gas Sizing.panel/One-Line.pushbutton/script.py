@@ -619,12 +619,13 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
 
     # Label on right side of the vertical segment
     mid_y = (tee_y + fix_y) / 2.0
-    mbh_val = int(round(fixture_node.gas_load_mbh)) if fixture_node else 0
-    if total_ft > 0:
+    mbh_val  = int(round(fixture_node.gas_load_mbh)) if fixture_node else 0
+    lft_rounded = int(round(total_ft))
+    if lft_rounded > 0:
         if size:
-            lbl_line1 = '{}"G, {}\''.format(size, int(round(total_ft)))
+            lbl_line1 = '{}"G, {}\''.format(size, lft_rounded)
         else:
-            lbl_line1 = "{}\'".format(int(round(total_ft)))
+            lbl_line1 = "{}\'".format(lft_rounded)
         lbl = lbl_line1 + "\n" + "{} MBH".format(mbh_val)
     else:
         lbl = "{} MBH".format(mbh_val)
@@ -800,7 +801,7 @@ def _draw_valve_bowtie(doc, view, cx, cy):
 
 
 def _draw_notes_block(doc, view, table_id, inlet_psi,
-                      total_mbh, longest_ft, tt_id, notes_x, notes_y):
+                      total_mbh, total_developed_ft, tt_id, notes_x, notes_y):
     """Draw the 5-line notes block as a SINGLE multi-line TextNote."""
     text = "\n".join([
         "CONTRACTOR SHALL SUBMIT APPLICATIONS TO UTILITY"
@@ -808,7 +809,7 @@ def _draw_notes_block(doc, view, table_id, inlet_psi,
         "GAS PIPING SIZED FOR {} PSI".format(inlet_psi),
         "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id),
         "TOTAL CONNECTED LOAD: {} MBH".format(int(round(total_mbh))),
-        "TOTAL PIPE LENGTH: {}'".format(int(round(longest_ft))),
+        "TOTAL DEVELOPED LENGTH: {}'".format(int(round(total_developed_ft))),
     ])
     _note(doc, view, notes_x, notes_y, text, tt_id)
 
@@ -904,9 +905,9 @@ def main():
 
     total_mbh    = sum(n.gas_load_mbh for n in fixture_nodes)
     longest_ft   = graph.longest_run["total_length_feet"]  # used for IFGC sizing
-    # For the notes display use pipe_length_feet (actual pipe only, no elbow
-    # equivalents) so the labeled segment lengths on the diagram add up to match.
-    display_ft   = graph.longest_run.get("pipe_length_feet", longest_ft)
+    # Total developed length = sum of ALL pipe segments in the system (trunk + branches).
+    # Distinct from the IFGC sizing length (longest single run) which drives table lookup.
+    total_developed_ft = sum(e.length_feet for e in graph.edges.values())
 
     # ------------------------------------------------------------------
     # STEP 5 - Compute layout
@@ -1147,13 +1148,13 @@ def main():
 
         # e. Notes block (single text box, positioned above diagram)
         _draw_notes_block(doc, view,
-                          table_id   = table_id,
-                          inlet_psi  = inlet_pressure_psi,
-                          total_mbh  = total_mbh,
-                          longest_ft = display_ft,   # pipe length only (no elbows)
-                          tt_id      = tt_id,
-                          notes_x    = notes_x,
-                          notes_y    = notes_y)
+                          table_id          = table_id,
+                          inlet_psi         = inlet_pressure_psi,
+                          total_mbh         = total_mbh,
+                          total_developed_ft = total_developed_ft,
+                          tt_id             = tt_id,
+                          notes_x           = notes_x,
+                          notes_y           = notes_y)
 
         t.Commit()
 
