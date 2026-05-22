@@ -619,12 +619,15 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
 
     # Label on right side of the vertical segment
     mid_y = (tee_y + fix_y) / 2.0
-    if size:
-        lbl_line1 = '{}"G, {}\''.format(size, int(round(total_ft)))
-    else:
-        lbl_line1 = "{}\'".format(int(round(total_ft)))
     mbh_val = int(round(fixture_node.gas_load_mbh)) if fixture_node else 0
-    lbl = lbl_line1 + "\n" + "{} MBH".format(mbh_val)
+    if total_ft > 0:
+        if size:
+            lbl_line1 = '{}"G, {}\''.format(size, int(round(total_ft)))
+        else:
+            lbl_line1 = "{}\'".format(int(round(total_ft)))
+        lbl = lbl_line1 + "\n" + "{} MBH".format(mbh_val)
+    else:
+        lbl = "{} MBH".format(mbh_val)
     lbl_x = tee_x + (VALVE_HW + LABEL_RIGHT if has_valve else LABEL_RIGHT)
     _note(doc, view, lbl_x, mid_y, lbl, tt_id)
 
