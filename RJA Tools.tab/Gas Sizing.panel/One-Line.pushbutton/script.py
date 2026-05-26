@@ -658,6 +658,9 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
         lbl_y    = far_y + sign * LABEL_ABOVE           # beyond that
         _note(doc, view, fix_x, lbl_y, label, tt_id)
+        # Underline under fixture name (firm standard: equipment tags are underlined)
+        _line(doc, view, fix_x - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
+              fix_x + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
 
 
 # ---------------------------------------------------------------------------
@@ -903,11 +906,9 @@ def main():
                     title="One-Line - Error")
         return
 
-    total_mbh    = sum(n.gas_load_mbh for n in fixture_nodes)
-    longest_ft   = graph.longest_run["total_length_feet"]  # used for IFGC sizing
-    # Total developed length = sum of ALL pipe segments in the system (trunk + branches).
-    # Distinct from the IFGC sizing length (longest single run) which drives table lookup.
-    total_developed_ft = sum(e.length_feet for e in graph.edges.values())
+    total_mbh          = sum(n.gas_load_mbh for n in fixture_nodes)
+    longest_ft         = graph.longest_run["total_length_feet"]  # used for IFGC sizing
+    total_developed_ft = longest_ft  # longest run (pipe + elbow equiv) per IFGC A103.1
 
     # ------------------------------------------------------------------
     # STEP 5 - Compute layout
@@ -1144,6 +1145,8 @@ def main():
             far_y  = cy + sign * 2 * FIXTURE_SPACING
             lbl_y  = far_y + sign * LABEL_ABOVE
             _note(doc, view, cx, lbl_y, label, tt_id)
+            _line(doc, view, cx - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
+                  cx + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
             drawn_fixtures += 1
 
         # e. Notes block (single text box, positioned above diagram)
