@@ -1,0 +1,246 @@
+- generic [ref=e2]:
+  - generic [ref=e211]:
+    - generic [ref=e212]:
+      - heading "Friday, May 29, 2026" [level=1] [ref=e213]
+      - paragraph [ref=e214]: Updated 02:56 PM
+    - text: "SHEET: DAILY TASK SCHEDULE — REV A"
+  - generic [ref=e216]:
+    - button "Today" [ref=e217] [cursor=pointer]
+    - button "Calendar" [ref=e218] [cursor=pointer]
+  - generic [ref=e219]:
+    - generic [ref=e220]:
+      - button "‹" [ref=e221] [cursor=pointer]
+      - generic [ref=e222]: May 2026
+      - button "›" [ref=e224] [cursor=pointer]
+    - generic [ref=e225]:
+      - generic [ref=e226]: Sun
+      - generic [ref=e227]: Mon
+      - generic [ref=e228]: Tue
+      - generic [ref=e229]: Wed
+      - generic [ref=e230]: Thu
+      - generic [ref=e231]: Fri
+      - generic [ref=e232]: Sat
+    - generic [ref=e233]:
+      - generic [ref=e234]:
+        - generic [ref=e235]: "26"
+        - generic [ref=e236]: "27"
+        - generic [ref=e237]: "28"
+        - generic [ref=e238]: "29"
+        - generic [ref=e239]: "30"
+        - generic [ref=e240]: "1"
+        - generic [ref=e241]: "2"
+      - generic [ref=e242]:
+        - generic [ref=e244]: 3535 S Platte Core and Shell
+        - generic [ref=e246]: Park Place Apartments
+    - generic [ref=e255]:
+      - generic [ref=e256]:
+        - generic [ref=e257]: "3"
+        - generic [ref=e258]: "4"
+        - generic [ref=e259]: "5"
+        - generic [ref=e260]: "6"
+        - generic [ref=e261]: "7"
+        - generic [ref=e262]: "8"
+        - generic [ref=e263]: "9"
+      - generic [ref=e264]:
+        - generic [ref=e266]: 3535 S Platte Core and Shell
+        - generic [ref=e268]: Green Spaces
+        - generic [ref=e270]: KOTA Saunas
+        - generic [ref=e272]: KOTA Saunas
+        - generic [ref=e274]: KOTA Saunas
+    - generic [ref=e283]:
+      - generic [ref=e284]:
+        - generic [ref=e285]: "10"
+        - generic [ref=e286]: "11"
+        - generic [ref=e287]: "12"
+        - generic [ref=e288]: "13"
+        - generic [ref=e289]: "14"
+        - generic [ref=e290]: "15"
+        - generic [ref=e291]: "16"
+      - generic [ref=e292]:
+        - generic [ref=e294]: Sterling Ranch
+        - generic [ref=e296]: "Tower Plaza Marketplace: Core Shell"
+        - generic [ref=e298]: Sterling Ranch
+        - generic [ref=e300]: Sterling Ranch
+        - generic [ref=e302]: Van Life Customs
+    - generic [ref=e311]:
+      - generic [ref=e312]:
+        - generic [ref=e313]: "17"
+        - generic [ref=e314]: "18"
+        - generic [ref=e315]: "19"
+        - generic [ref=e316]: "20"
+        - generic [ref=e317]: "21"
+        - generic [ref=e318]: "22"
+        - generic [ref=e319]: "23"
+      - generic [ref=e320]:
+        - generic [ref=e322]: "Tower Plaza Marketplace: Core Shell"
+        - generic [ref=e324]: Fraser Public Works
+        - generic [ref=e326]: Sterling Ranch
+        - generic [ref=e328]: Sterling Ranch
+        - generic [ref=e330]: Sterling Ranch
+        - generic [ref=e332]: Time Off
+        - generic [ref=e333]: +3 more
+    - generic [ref=e342]:
+      - generic [ref=e343]:
+        - generic [ref=e344]: "24"
+        - generic [ref=e345]: "25"
+        - generic [ref=e346]: "26"
+        - generic [ref=e347]: "27"
+        - generic [ref=e348]: "28"
+        - generic [ref=e349]: "29"
+        - generic [ref=e350]: "30"
+      - generic [ref=e351]:
+        - generic [ref=e353]: Fraser Public Works
+        - generic [ref=e355]: BACB TI
+        - generic [ref=e357]: Sterling Ranch
+        - generic [ref=e359]: "Tower Plaza Marketplace: Core Shell"
+      - generic [ref=e366]:
+        - generic [ref=e367]: ⚑ Permit to Bil…
+        - generic [ref=e368]: ⚑ Permit to D2C…
+    - generic [ref=e370]:
+      - generic [ref=e371]:
+        - generic [ref=e372]: "31"
+        - generic [ref=e373]: "1"
+        - generic [ref=e374]: "2"
+        - generic [ref=e375]: "3"
+        - generic [ref=e376]: "4"
+        - generic [ref=e377]: "5"
+        - generic [ref=e378]: "6"
+      - generic [ref=e379]:
+        - generic [ref=e381]: Sterling Ranch
+        - generic [ref=e383]: "Tower Plaza Marketplace: Core Shell"
+        - generic [ref=e385]: West Side Books
+        - generic [ref=e387]: BACB TI
+        - generic [ref=e389]: Taylor Residence
+        - generic [ref=e391]: Sterling Ranch
+      - generic [ref=e392]:
+        - generic [ref=e395]: ⚑ Permit
+        - generic [ref=e398]: ⚑ Permit
+        - generic [ref=e400]: ⚑ DBAT Plumbing…
+        - generic [ref=e402]: ⚑ Permit Delive…
+  - generic [ref=e404]:
+    - heading "My Tasks" [level=2] [ref=e405]
+    - generic [ref=e406] [cursor=pointer]:
+      - generic [ref=e407]: ○
+      - generic [ref=e409]: BLUEBEAM MAX RESEARCH
+    - generic [ref=e410]:
+      - textbox "Add a task…" [ref=e411]
+      - button "Add" [ref=e412] [cursor=pointer]
+  - generic [ref=e413]:
+    - heading "Forecast — This Week" [level=2] [ref=e414]
+    - generic [ref=e415] [cursor=pointer]:
+      - generic [ref=e416]: ○
+      - generic [ref=e418]:
+        - strong [ref=e419]: BACB TI
+        - text: (4.0h · due 2026-06-03)
+    - generic [ref=e420] [cursor=pointer]:
+      - generic [ref=e421]: ○
+      - generic [ref=e422]:
+        - generic [ref=e423]:
+          - strong [ref=e424]: Sterling Ranch
+          - text: (3.0h ·
+          - strong [ref=e425]: due today
+          - text: )
+        - generic [ref=e426]: Scotts QC Comments
+    - generic [ref=e427] [cursor=pointer]:
+      - generic [ref=e428]: ○
+      - generic [ref=e430]:
+        - strong [ref=e431]: West Side Books
+        - text: (5.5h · due 2026-06-02)
+    - generic [ref=e432] [cursor=pointer]:
+      - generic [ref=e433]: ○
+      - generic [ref=e435]:
+        - strong [ref=e436]: "Tower Plaza Marketplace: Core Shell"
+        - text: (1.5h · due 2026-06-12)
+    - generic [ref=e437] [cursor=pointer]:
+      - generic [ref=e438]: ○
+      - generic [ref=e440]:
+        - strong [ref=e441]: Fraser Public Works
+        - text: (5.7h ·
+        - strong [ref=e442]: due today
+        - text: )
+    - generic [ref=e443] [cursor=pointer]:
+      - generic [ref=e444]: ○
+      - generic [ref=e446]:
+        - strong [ref=e447]: "Tower Plaza Marketplace: Core Shell"
+        - text: (2.0h ·
+        - strong [ref=e448]: due today
+        - text: )
+    - generic [ref=e449] [cursor=pointer]:
+      - generic [ref=e450]: ○
+      - generic [ref=e452]:
+        - strong [ref=e453]: Sterling Ranch
+        - text: (3.0h · due 2026-06-04)
+  - generic [ref=e454]:
+    - heading "Permit & Deadline Notes — Next 30 Days" [level=2] [ref=e455]
+    - generic [ref=e456] [cursor=pointer]:
+      - generic [ref=e457]: ○
+      - generic [ref=e459]:
+        - strong [ref=e460]: Sterling Ranch
+        - text: — Permit to BiloBuck ·
+        - strong [ref=e461]: today
+        - text: · 2026-05-29
+    - generic [ref=e462] [cursor=pointer]:
+      - generic [ref=e463]: ○
+      - generic [ref=e465]:
+        - strong [ref=e466]: Fraser Public Works
+        - text: — Permit to D2C EOD ·
+        - strong [ref=e467]: today
+        - text: · 2026-05-29
+    - generic [ref=e468] [cursor=pointer]:
+      - generic [ref=e469]: ○
+      - generic [ref=e471]:
+        - strong [ref=e472]: Fraser Public Works
+        - text: — Permit ⚠️ · 2026-06-01
+    - generic [ref=e473] [cursor=pointer]:
+      - generic [ref=e474]: ○
+      - generic [ref=e476]:
+        - strong [ref=e477]: Park Place Apartments
+        - text: — Permit · this week · 2026-06-03
+    - generic [ref=e478] [cursor=pointer]:
+      - generic [ref=e479]: ○
+      - generic [ref=e481]:
+        - strong [ref=e482]: Sterling Ranch
+        - text: — Permit Deliverable to Owner · this week · 2026-06-05
+    - generic [ref=e483] [cursor=pointer]:
+      - generic [ref=e484]: ○
+      - generic [ref=e486]:
+        - strong [ref=e487]: BACB TI
+        - text: — DD Check Set · 2026-06-10
+    - generic [ref=e488] [cursor=pointer]:
+      - generic [ref=e489]: ○
+      - generic [ref=e491]:
+        - strong [ref=e492]: Sterling Ranch
+        - text: — actual permit issuance · 2026-06-10
+    - generic [ref=e493] [cursor=pointer]:
+      - generic [ref=e494]: ○
+      - generic [ref=e496]:
+        - strong [ref=e497]: "Tower Plaza Marketplace: Core Shell"
+        - text: — Likely Permit · 2026-06-12
+    - generic [ref=e498] [cursor=pointer]:
+      - generic [ref=e499]: ○
+      - generic [ref=e501]:
+        - strong [ref=e502]: BACB TI
+        - text: — DD Set · 2026-06-17
+    - generic [ref=e503] [cursor=pointer]:
+      - generic [ref=e504]: ○
+      - generic [ref=e506]:
+        - strong [ref=e507]: Taylor Residence
+        - text: — Builders Sets and Permit Docs · 2026-06-18
+    - generic [ref=e508] [cursor=pointer]:
+      - generic [ref=e509]: ○
+      - generic [ref=e511]:
+        - strong [ref=e512]: Van Life Customs
+        - text: — Permit · 2026-06-24
+  - generic [ref=e513]:
+    - heading "Gmail — Action Items" [level=2] [ref=e514]
+    - generic [ref=e515] [cursor=pointer]:
+      - generic [ref=e516]: ○
+      - generic [ref=e518]:
+        - strong [ref=e519]: DBAT Plumbing Submittal
+        - text: — review
+        - code [ref=e520]: VE Plumbing Submittals - 05.27.26 - DBAT TI.pdf
+        - text: ", QC, then Slack Chris Wood for his review before he stamps + sends — due"
+        - strong [ref=e521]: Wednesday 2026-06-04
+  - generic [ref=e522]:
+    - heading "Slack — Mentions & DMs" [level=2] [ref=e523]
+    - paragraph [ref=e524]: Pending Slack bot token
