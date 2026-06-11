@@ -32,8 +32,6 @@ from Autodesk.Revit.DB import (
     ViewFamily,
     TextNote,
     TextNoteType,
-    TextNoteOptions,
-    HorizontalTextAlignment,
     FilteredElementCollector,
     FamilySymbol,
     Transaction,
@@ -74,6 +72,7 @@ UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
 UPSTREAM_V       = 4.0     # ft  vertical drop of upstream stub
 TEXT_HEIGHT_FT   = 0.78    # ft  3/32" x (100/12) at 1:100
 TEXT_GAP         = TEXT_HEIGHT_FT * 2.0  # ft  between note lines
+TEXT_CHAR_WIDTH_FT = TEXT_HEIGHT_FT * 0.6  # ft  approx glyph width for centering
 NOTES_X_BASE     = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
 NOTES_Y_BASE     = LEVEL_HEIGHT + 4.0
 
@@ -733,16 +732,18 @@ def _line(doc, view, x0, y0, x1, y1):
 def _note(doc, view, x, y, text, tt_id, width=None):
     """Create a TextNote and return the element (or None on failure).
 
-    If width is given, the note is created horizontally centered on x
-    (origin shifted left by width/2) using TextNoteOptions with
-    HorizontalTextAlignment.Center.
+    If width is truthy, the insertion point is shifted left by roughly half
+    the text's rendered width so the note appears horizontally centered on
+    x. This is an approximation based on character count -- it deliberately
+    avoids the TextNote.Create(... width, TextNoteOptions) overload, which
+    forces the note's box to that exact width (often larger than the text)
+    and shifts its vertical anchor, causing oversized boxes and underlines
+    that land on top of the text instead of below it.
     """
     try:
         if width:
-            opts = TextNoteOptions(tt_id)
-            opts.HorizontalAlignment = HorizontalTextAlignment.Center
-            return TextNote.Create(doc, view.Id, XYZ(x - width / 2.0, y, 0),
-                                    width, text, opts)
+            max_chars = max(len(line) for line in text.split("\n"))
+            x = x - (max_chars * TEXT_CHAR_WIDTH_FT) / 2.0
         return TextNote.Create(doc, view.Id, XYZ(x, y, 0), text, tt_id)
     except Exception:
         return None
@@ -1142,16 +1143,18 @@ def main():
         #    simplified schematic branches drawn in step (d).
         #    Upstream edges (riser from meter to distribution main) are drawn
         #    as plain lines; the upstream stub represents them schematically.
-        #    Consecutive collinear trunk edges with no branch tap or fixture
-        #    between them, and equal cumulative load, are merged into a
-        #    single label (one straight run = one text box).
+        #    Consecutive trunk edges with no branch tap or fixture between
+        #    them, and equal cumulative load (i.e. no equipment takeoff in
+        #    between -- just elbows/fittings), are merged into a single
+        #    label, even when the run changes direction (horizontal-vertical-
+        #    horizontal, etc).
         trunk_dev_lengths      = _trunk_edge_developed_lengths(graph, trunk_all_ids_draw)
         branch_point_positions = set(bi["tee_pos"] for bi in branch_info)
 
         drawn_edges = 0
         runs        = []
         current_run = []
-        prev_geom   = None  # (is_h, x1, y1, to_node_id, cum_mbh)
+        prev_geom   = None  # (x1, y1, to_node_id, cum_mbh)
         for eid in trunk_edge_ids_ord:
             if eid in upstream_draw_edges:
                 continue  # skip: service connection shown by upstream stub
@@ -1162,21 +1165,16 @@ def main():
             pos_to   = positions.get(edge.to_node_id)
             if pos_from is None or pos_to is None:
                 continue
-            x0, y0 = pos_from
             x1, y1 = pos_to
-            is_h = abs(y1 - y0) <= abs(x1 - x0)
 
             continues_run = False
             if prev_geom is not None:
-                p_is_h, p_x1, p_y1, p_to_nid, p_mbh = prev_geom
+                p_x1, p_y1, p_to_nid, p_mbh = prev_geom
                 connects     = (p_to_nid == edge.from_node_id)
                 not_branch   = ((p_x1, p_y1) not in branch_point_positions
                                  and p_to_nid not in trunk_fixture_nids)
                 same_mbh     = abs(edge.cumulative_load_mbh - p_mbh) < 0.01
-                collinear    = (is_h == p_is_h) and (
-                    (is_h and abs(y0 - p_y1) < 0.01 and abs(y1 - p_y1) < 0.01)
-                    or (not is_h and abs(x0 - p_x1) < 0.01 and abs(x1 - p_x1) < 0.01))
-                continues_run = connects and not_branch and same_mbh and collinear
+                continues_run = connects and not_branch and same_mbh
 
             if continues_run:
                 current_run.append(eid)
@@ -1184,7 +1182,7 @@ def main():
                 if current_run:
                     runs.append(current_run)
                 current_run = [eid]
-            prev_geom = (is_h, x1, y1, edge.to_node_id, edge.cumulative_load_mbh)
+            prev_geom = (x1, y1, edge.to_node_id, edge.cumulative_load_mbh)
 
         if current_run:
             runs.append(current_run)
