@@ -194,37 +194,28 @@ TOTAL DEVELOPED LENGTH: [X]'
 
 ## Absolute Rules
 
-**0. ASK BEFORE MODIFYING CLAUDE.md.**
-Always ask the user for explicit permission before making any edit to this file. State what change is proposed and why. Do not modify CLAUDE.md without confirmation, even for small corrections.
-
 **1. NEVER GUESS AT REVIT API.**
 If unsure whether a property, method, or parameter exists, say: "I believe this works as follows, but please verify: [description]." Never assume.
 
-**2. VERIFY BEFORE CODING.**
-State assumptions explicitly. Ask user to confirm before writing code based on assumptions.
-
-**3. USE THE DIAGNOSTIC REPORT.**
+**2. USE THE DIAGNOSTIC REPORT.**
 When user pastes JSON, read it carefully. Base all analysis on report data, not assumptions about the model.
 
-**4. NEVER SIZE FROM MEMORY.**
+**3. NEVER SIZE FROM MEMORY.**
 All sizing shall reference IFGC/IPC tables in `ifgc_gas_sizing_tables.json` or uploaded code PDFs only.
 
-**5. MEP ENGINEERING LANGUAGE.**
+**4. MEP ENGINEERING LANGUAGE.**
 Use "shall" for requirements. Use MBH, CFH, GPM, WSFU. Professional engineering documentation standard.
 
-**6. PYREVIT PYTHON.**
+**5. PYREVIT PYTHON.**
 IronPython 2.7. Use `rpw` where available, `Autodesk.Revit.DB` otherwise. UI via `pyrevit.forms` for error messages only. No unnecessary dialogs.
 
-**7. LOG EVERYTHING.**
+**6. LOG EVERYTHING.**
 Every Revit API call result shall be captured. No silent failures. Every function logs element ID + what it found or "NOT FOUND."
 
-**8. MODULAR CODE.**
+**7. MODULAR CODE.**
 Modules: `shared_params.py`, `revit_helpers.py`, `pipe_graph.py`, `report_generator.py`, `gas_tables.py`, `sizing_engine.py`. No logic duplication across modules.
 
-**9. EXPLAIN BEFORE FIXING.**
-Never propose "try this." Explain WHY a fix works, state the reasoning, then propose the code.
-
-**10. MINIMIZE USER INPUT.**
+**8. MINIMIZE USER INPUT.**
 Phase 1: zero input. Phase 2: one startup dialog only, then automatic. No runtime prompts after startup.
 
 ---
