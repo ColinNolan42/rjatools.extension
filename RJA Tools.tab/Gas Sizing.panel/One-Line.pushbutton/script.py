@@ -32,6 +32,8 @@ from Autodesk.Revit.DB import (
     ViewFamily,
     TextNote,
     TextNoteType,
+    TextNoteOptions,
+    HorizontalTextAlignment,
     FilteredElementCollector,
     FamilySymbol,
     Transaction,
@@ -75,6 +77,9 @@ TEXT_GAP         = TEXT_HEIGHT_FT * 2.0  # ft  between note lines
 NOTES_X_BASE     = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
 NOTES_Y_BASE     = LEVEL_HEIGHT + 4.0
 
+ELBOW_EQUIV_FT   = 5.0  # ft per elbow, per IFGC A103.1 -- must match
+                        # pipe_graph._find_longest_run's ELBOW_EQUIV_FT
+
 _VALVE_KW = ("valve", "prv", "regulator", "ball", "gate", "check", "shutoff")
 
 
@@ -91,6 +96,50 @@ def _node_z(graph, node_id, default=0.0):
 
 def _edges_from(graph, node_id):
     return [e for e in graph.edges.values() if e.from_node_id == node_id]
+
+
+def _edge_developed_length(graph, edge):
+    """Pipe length + 5ft if this edge's downstream node is an elbow.
+
+    Matches pipe_graph._find_longest_run's elbow attribution: each is_elbow
+    node is counted exactly once, via the single edge that terminates at it
+    (the network is a tree, so every node has at most one parent edge).
+    """
+    length = edge.length_feet
+    to_node = graph.nodes.get(edge.to_node_id)
+    if to_node is not None and to_node.is_elbow:
+        length += ELBOW_EQUIV_FT
+    return length
+
+
+def _trunk_edge_developed_lengths(graph, trunk_all_ids):
+    """Map trunk edge_id -> developed length (pipe + elbow-equivalent).
+
+    Walks path_element_ids in order. Each edge starts with
+    _edge_developed_length (pipe length + 5ft if its own to_node is an
+    elbow). Any node reached via node_children (zero-length connection,
+    appears in the path with no preceding edge) that is itself an elbow
+    has its 5ft equivalent added onto the most recently seen trunk edge --
+    mirroring _find_longest_run's DFS, which counts every is_elbow node
+    along the path exactly once regardless of how it was reached.
+    """
+    dev = {}
+    last_edge_id = None
+    for item in trunk_all_ids:
+        if item in graph.edges:
+            edge = graph.edges[item]
+            dev[item] = _edge_developed_length(graph, edge)
+            last_edge_id = item
+        else:
+            node = graph.nodes.get(item)
+            if node is None:
+                continue
+            if (last_edge_id is not None
+                    and graph.edges[last_edge_id].to_node_id == item):
+                continue  # already counted via _edge_developed_length
+            if node.is_elbow and last_edge_id is not None:
+                dev[last_edge_id] += ELBOW_EQUIV_FT
+    return dev
 
 
 def _find_fixture_z(graph, start_nid, trunk_set, default_z):
@@ -178,7 +227,7 @@ def _trace_to_fixtures(graph, start_nid, trunk_set):
                 seen.add(edge.to_node_id)
                 stack.append((
                     edge.to_node_id,
-                    acc_len + edge.length_feet,
+                    acc_len + _edge_developed_length(graph, edge),
                     acc_eids + [edge.element_id],
                     nv,
                 ))
@@ -186,7 +235,9 @@ def _trace_to_fixtures(graph, start_nid, trunk_set):
         for child in graph.node_children.get(nid, []):
             if child not in seen:
                 seen.add(child)
-                stack.append((child, acc_len, acc_eids, nv))
+                child_node = graph.nodes.get(child)
+                extra = ELBOW_EQUIV_FT if (child_node and child_node.is_elbow) else 0.0
+                stack.append((child, acc_len + extra, acc_eids, nv))
 
     return results
 
@@ -657,7 +708,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         label    = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
         far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
         lbl_y    = far_y + sign * LABEL_ABOVE           # beyond that
-        _note(doc, view, fix_x, lbl_y, label, tt_id)
+        _note(doc, view, fix_x, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
         # Underline under fixture name (firm standard: equipment tags are underlined)
         _line(doc, view, fix_x - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
               fix_x + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
@@ -679,9 +730,19 @@ def _line(doc, view, x0, y0, x1, y1):
         return None
 
 
-def _note(doc, view, x, y, text, tt_id):
-    """Create a TextNote and return the element (or None on failure)."""
+def _note(doc, view, x, y, text, tt_id, width=None):
+    """Create a TextNote and return the element (or None on failure).
+
+    If width is given, the note is created horizontally centered on x
+    (origin shifted left by width/2) using TextNoteOptions with
+    HorizontalTextAlignment.Center.
+    """
     try:
+        if width:
+            opts = TextNoteOptions(tt_id)
+            opts.HorizontalAlignment = HorizontalTextAlignment.Center
+            return TextNote.Create(doc, view.Id, XYZ(x - width / 2.0, y, 0),
+                                    width, text, opts)
         return TextNote.Create(doc, view.Id, XYZ(x, y, 0), text, tt_id)
     except Exception:
         return None
@@ -1081,10 +1142,20 @@ def main():
         #    simplified schematic branches drawn in step (d).
         #    Upstream edges (riser from meter to distribution main) are drawn
         #    as plain lines; the upstream stub represents them schematically.
+        #    Consecutive collinear trunk edges with no branch tap or fixture
+        #    between them, and equal cumulative load, are merged into a
+        #    single label (one straight run = one text box).
+        trunk_dev_lengths      = _trunk_edge_developed_lengths(graph, trunk_all_ids_draw)
+        branch_point_positions = set(bi["tee_pos"] for bi in branch_info)
+
         drawn_edges = 0
-        for eid, edge in graph.edges.items():
-            if eid not in trunk_set:
-                continue  # branch edges: handled by _draw_schematic_branch
+        runs        = []
+        current_run = []
+        prev_geom   = None  # (is_h, x1, y1, to_node_id, cum_mbh)
+        for eid in trunk_edge_ids_ord:
+            if eid in upstream_draw_edges:
+                continue  # skip: service connection shown by upstream stub
+            edge = graph.edges[eid]
             if edge.to_node_id is None:
                 continue
             pos_from = positions.get(edge.from_node_id)
@@ -1093,11 +1164,68 @@ def main():
                 continue
             x0, y0 = pos_from
             x1, y1 = pos_to
-            if eid in upstream_draw_edges:
-                continue  # skip: service connection shown by upstream stub
-            _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
-                                force_label=True)
-            drawn_edges += 1
+            is_h = abs(y1 - y0) <= abs(x1 - x0)
+
+            continues_run = False
+            if prev_geom is not None:
+                p_is_h, p_x1, p_y1, p_to_nid, p_mbh = prev_geom
+                connects     = (p_to_nid == edge.from_node_id)
+                not_branch   = ((p_x1, p_y1) not in branch_point_positions
+                                 and p_to_nid not in trunk_fixture_nids)
+                same_mbh     = abs(edge.cumulative_load_mbh - p_mbh) < 0.01
+                collinear    = (is_h == p_is_h) and (
+                    (is_h and abs(y0 - p_y1) < 0.01 and abs(y1 - p_y1) < 0.01)
+                    or (not is_h and abs(x0 - p_x1) < 0.01 and abs(x1 - p_x1) < 0.01))
+                continues_run = connects and not_branch and same_mbh and collinear
+
+            if continues_run:
+                current_run.append(eid)
+            else:
+                if current_run:
+                    runs.append(current_run)
+                current_run = [eid]
+            prev_geom = (is_h, x1, y1, edge.to_node_id, edge.cumulative_load_mbh)
+
+        if current_run:
+            runs.append(current_run)
+
+        for run in runs:
+            for eid in run:
+                edge     = graph.edges[eid]
+                pos_from = positions[edge.from_node_id]
+                pos_to   = positions[edge.to_node_id]
+                _line(doc, view, pos_from[0], pos_from[1], pos_to[0], pos_to[1])
+                drawn_edges += 1
+
+            first_edge = graph.edges[run[0]]
+            last_edge  = graph.edges[run[-1]]
+            x0, y0     = positions[first_edge.from_node_id]
+            x1, y1     = positions[last_edge.to_node_id]
+            is_h       = abs(y1 - y0) <= abs(x1 - x0)
+
+            dev_len = sum(trunk_dev_lengths.get(e, graph.edges[e].length_feet)
+                           for e in run)
+            lft = int(round(dev_len))
+            mbh = int(round(first_edge.cumulative_load_mbh))
+            nom = ""
+            for e in run:
+                nom = pipe_sizes.get(e, "")
+                if nom:
+                    break
+
+            if nom:
+                line1 = '{}"G, {}\''.format(nom, lft)
+            else:
+                line1 = "{}\'".format(lft)
+            label = line1 + "\n" + "{} MBH".format(mbh)
+
+            if is_h:
+                lx = (x0 + x1) / 2.0
+                ly = max(y0, y1) + LABEL_ABOVE
+            else:
+                lx = max(x0, x1) + LABEL_RIGHT
+                ly = (y0 + y1) / 2.0
+            _note(doc, view, lx, ly, label, tt_id)
 
         # d. Schematic branches: one clean line per fixture from its trunk tee
         drawn_fixtures = 0
@@ -1123,30 +1251,69 @@ def main():
             if bi["has_valve"]:
                 drawn_valves += 1
 
-        # d2. Trunk-endpoint fixtures (e.g. MAU-1 at end of trunk)
+        # d2. Trunk-endpoint fixtures (e.g. MAU-1 at end of trunk).
+        #     If the trunk runs INTO the fixture horizontally (e.g. RTU-2 at
+        #     the end of the line), the 3-line equipment symbol is rotated
+        #     90 degrees so the lines run vertically, perpendicular to the
+        #     trunk -- per firm standard.
         for fix_nid in trunk_fixture_nids:
             pos  = positions.get(fix_nid)
             node = graph.nodes.get(fix_nid)
             if pos is None or node is None:
                 continue
             cx, cy = pos
-            going_up = cy > 0.0
-            sign     = 1.0 if going_up else -1.0
-            e_inst = _place_sym(doc, view, equip_sym, cx, cy)
-            if e_inst is None:
-                sym_elems = []
-                for i in range(3):
-                    yy = cy + sign * i * FIXTURE_SPACING
-                    sym_elems.append(_line(doc, view, cx - FIXTURE_HW, yy,
-                                           cx + FIXTURE_HW, yy))
-                _make_group(doc, sym_elems)
-            name   = node.fixture_name or "UNNAMED"
-            label  = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
-            far_y  = cy + sign * 2 * FIXTURE_SPACING
-            lbl_y  = far_y + sign * LABEL_ABOVE
-            _note(doc, view, cx, lbl_y, label, tt_id)
-            _line(doc, view, cx - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
-                  cx + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
+
+            incoming_edge = None
+            for eid in trunk_set:
+                e = graph.edges.get(eid)
+                if e and e.to_node_id == fix_nid:
+                    incoming_edge = e
+                    break
+            from_pos = positions.get(incoming_edge.from_node_id) if incoming_edge else None
+
+            horiz_approach = True
+            if from_pos is not None:
+                horiz_approach = abs(cx - from_pos[0]) >= abs(cy - from_pos[1])
+
+            name  = node.fixture_name or "UNNAMED"
+            label = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
+
+            if horiz_approach:
+                # Trunk runs horizontally into this fixture: rotate the
+                # 3-line symbol 90 degrees (vertical lines, stacked along x
+                # in the direction the trunk approached from).
+                sign = 1.0 if (from_pos is None or cx >= from_pos[0]) else -1.0
+                e_inst = _place_sym(doc, view, equip_sym, cx, cy, rotate_90=True)
+                if e_inst is None:
+                    sym_elems = []
+                    for i in range(3):
+                        xx = cx + sign * i * FIXTURE_SPACING
+                        sym_elems.append(_line(doc, view, xx, cy - FIXTURE_HW,
+                                               xx, cy + FIXTURE_HW))
+                    _make_group(doc, sym_elems)
+                x_center = cx + sign * 1.0 * FIXTURE_SPACING
+                lbl_y    = cy - FIXTURE_HW - LABEL_ABOVE
+                _note(doc, view, x_center, lbl_y, label, tt_id,
+                      width=2 * FIXTURE_SPACING)
+                _line(doc, view, x_center - FIXTURE_SPACING, lbl_y - TEXT_HEIGHT_FT,
+                      x_center + FIXTURE_SPACING, lbl_y - TEXT_HEIGHT_FT)
+            else:
+                going_up = cy > 0.0
+                sign     = 1.0 if going_up else -1.0
+                e_inst = _place_sym(doc, view, equip_sym, cx, cy)
+                if e_inst is None:
+                    sym_elems = []
+                    for i in range(3):
+                        yy = cy + sign * i * FIXTURE_SPACING
+                        sym_elems.append(_line(doc, view, cx - FIXTURE_HW, yy,
+                                               cx + FIXTURE_HW, yy))
+                    _make_group(doc, sym_elems)
+                far_y = cy + sign * 2 * FIXTURE_SPACING
+                lbl_y = far_y + sign * LABEL_ABOVE
+                _note(doc, view, cx, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
+                _line(doc, view, cx - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
+                      cx + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
+
             drawn_fixtures += 1
 
         # e. Notes block (single text box, positioned above diagram)
