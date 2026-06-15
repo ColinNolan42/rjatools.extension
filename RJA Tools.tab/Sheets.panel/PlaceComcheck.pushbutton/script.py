@@ -87,8 +87,8 @@ def fit_dimensions(cell_w, cell_h, content_w, content_h):
 # Per-sheet-size layout defaults. Advanced overrides in the form fall back to
 # these values when left blank.
 LAYOUT_DEFAULTS = {
-    '24 x 36': dict(sheet_w=3.0, sheet_h=2.0, margin_left=0.20, margin_top=0.06, margin_right=0.39, margin_bottom=0.20, gap_col=0.05, gap_row=0.06, cols=4, rows=2),
-    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=-0.40, margin_top=0.15, margin_right=0.65, margin_bottom=0.25, gap_col=0.06, gap_row=0.08, cols=4, rows=2),
+    '24 x 36': dict(sheet_w=3.0, sheet_h=2.0, margin_left=0.20, margin_top=0.06, margin_right=0.39, margin_bottom=0.20, gap_col=0.05, gap_row=0.06, cols=4, rows=2, image_scale=1.00),
+    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=-0.40, margin_top=0.15, margin_right=0.65, margin_bottom=0.25, gap_col=0.06, gap_row=0.08, cols=4, rows=2, image_scale=0.85),
 }
 DEFAULT_RESOLUTION = 600
 
@@ -168,6 +168,8 @@ COMCHECK_FORM_XAML = """
                     <TextBox Name="rows_box" Margin="0,0,0,6"/>
                     <Label Content="Resolution (DPI)"/>
                     <TextBox Name="resolution_box" Margin="0,0,0,6"/>
+                    <Label Content="Image Scale (1.0 = fill cell, smaller = smaller PDFs)"/>
+                    <TextBox Name="image_scale_box" Margin="0,0,0,6"/>
                     <Label Content="Page Count Override"/>
                     <TextBox Name="page_count_box" Margin="0,0,0,6"/>
                 </StackPanel>
@@ -211,6 +213,7 @@ class ComcheckPlacementForm(forms.WPFWindow):
         self.cols_box.Text = str(defaults['cols'])
         self.rows_box.Text = str(defaults['rows'])
         self.resolution_box.Text = str(DEFAULT_RESOLUTION)
+        self.image_scale_box.Text = str(defaults['image_scale'])
 
     def place_click(self, sender, args):
         self.values = {
@@ -227,6 +230,7 @@ class ComcheckPlacementForm(forms.WPFWindow):
             'cols': self.cols_box.Text,
             'rows': self.rows_box.Text,
             'resolution': self.resolution_box.Text,
+            'image_scale': self.image_scale_box.Text,
             'page_count': self.page_count_box.Text,
         }
         self.Close()
@@ -317,6 +321,7 @@ GAP_ROW       = _override_float('gap_row')
 COLS          = _override_int('cols', defaults['cols'])
 ROWS          = _override_int('rows', defaults['rows'])
 RESOLUTION    = _override_int('resolution', DEFAULT_RESOLUTION)
+IMAGE_SCALE   = _override_float('image_scale')
 
 PAGES_PER_SHEET = COLS * ROWS
 
@@ -391,7 +396,7 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             place_opts.Location = origin
 
             img_instance = ImageInstance.Create(doc, sheet, img_type.Id, place_opts)
-            img_w, img_h = fit_dimensions(CELL_W, CELL_H, PAGE_W, PAGE_H)
+            img_w, img_h = fit_dimensions(CELL_W * IMAGE_SCALE, CELL_H * IMAGE_SCALE, PAGE_W, PAGE_H)
             img_instance.Width = img_w
             img_instance.Height = img_h
 
