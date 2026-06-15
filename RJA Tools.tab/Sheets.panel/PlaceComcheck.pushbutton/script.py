@@ -10,7 +10,8 @@ clr.AddReference('RevitAPIUI')
 
 from Autodesk.Revit.DB import *
 from Autodesk.Revit.UI import *
-from pyrevit import forms, revit
+from pyrevit import forms, revit, script
+from pyrevit.forms import FlexForm, Label, TextBox, ComboBox, Separator, Button
 import System
 from System import Array
 
@@ -84,6 +85,15 @@ def fit_dimensions(cell_w, cell_h, content_w, content_h):
     return content_w * scale, content_h * scale
 
 
+# Per-sheet-size layout defaults. Advanced overrides in the form fall back to
+# these values when left blank.
+LAYOUT_DEFAULTS = {
+    '24 x 36': dict(sheet_w=3.0, sheet_h=2.0, margin_left=0.20, margin_top=0.06, margin_right=0.39, margin_bottom=0.20, gap_col=0.05, gap_row=0.06, cols=4, rows=2),
+    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=0.00, margin_top=0.15, margin_right=0.65, margin_bottom=0.25, gap_col=0.06, gap_row=0.08, cols=4, rows=2),
+}
+DEFAULT_RESOLUTION = 600
+
+
 # 1. User picks PDF
 pdf_path = forms.pick_file(file_ext='pdf', title='Select Comcheck PDF')
 if not pdf_path:
@@ -96,36 +106,78 @@ with open(pdf_path, 'rb') as f:
 # or overlap into neighboring cells. Falls back to US Letter portrait (COMcheck default).
 PAGE_W, PAGE_H = detect_pdf_page_size(pdf_bytes) or (8.5, 11.0)
 
-# 2. Auto-detect total page count (falls back to manual entry if detection fails)
-page_count = detect_pdf_page_count(pdf_bytes)
-if not page_count:
-    page_count = forms.ask_for_string(
-        prompt='Could not auto-detect page count. How many pages is your Comcheck PDF?',
-        title='Page Count',
-        default='8'
-    )
-    if not page_count:
-        script.exit()
-    page_count = int(page_count)
+# 2. Titleblock collection (needed to populate the form's combobox)
+tb_collector = FilteredElementCollector(doc)\
+    .OfCategory(BuiltInCategory.OST_TitleBlocks)\
+    .WhereElementIsElementType()
+tb_types = list(tb_collector)
+if not tb_types:
+    forms.alert("No titleblock types found in project.", exitscript=True)
 
-# 3. Ask for sheet prefix
-sheet_prefix = forms.ask_for_string(
-    prompt='Enter sheet prefix (e.g. M, E, P)',
-    title='Sheet Prefix',
-    default='M'
-)
+tb_dict = {}
+for tb in tb_types:
+    family_name = tb.Family.Name
+    type_name = tb.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM).AsString()
+    display_name = "{} : {}".format(family_name, type_name)
+    tb_dict[display_name] = tb
+
+# 3. Consolidated form: sheet prefix/number, titleblock, sheet size, and
+# optional advanced layout overrides.
+#
+# NOTE: This FlexForm layout uses the standard documented components
+# (Label, TextBox, ComboBox, Separator, Button) from pyrevit.forms.
+# This could not be tested outside Revit - if any component class name
+# does not match the installed pyRevit version, it will need adjusting.
+components = [
+    Label('Sheet Prefix (e.g. M, E, P)'),
+    TextBox('sheet_prefix', Text='M'),
+    Label('Sheet Number (e.g. 04, 0.4, 005)'),
+    TextBox('sheet_number', Text='005'),
+    Label('Titleblock'),
+    ComboBox('titleblock', sorted(tb_dict.keys())),
+    Label('Sheet Size'),
+    ComboBox('sheet_size', ['24 x 36', '30 x 42'], default='24 x 36'),
+    Separator(),
+    Label('Advanced (optional overrides - leave blank to use defaults for the selected sheet size)'),
+    Label('Margin Left'),
+    TextBox('margin_left', Text=''),
+    Label('Margin Top'),
+    TextBox('margin_top', Text=''),
+    Label('Margin Right'),
+    TextBox('margin_right', Text=''),
+    Label('Margin Bottom'),
+    TextBox('margin_bottom', Text=''),
+    Label('Gap Col'),
+    TextBox('gap_col', Text=''),
+    Label('Gap Row'),
+    TextBox('gap_row', Text=''),
+    Label('Columns'),
+    TextBox('cols', Text=''),
+    Label('Rows'),
+    TextBox('rows', Text=''),
+    Label('Resolution (DPI)'),
+    TextBox('resolution', Text=''),
+    Label('Page Count Override'),
+    TextBox('page_count', Text=''),
+    Button('Place Comcheck Sheets')
+]
+
+form = FlexForm('Comcheck Sheet Placement', components)
+form.show()
+
+if not form.values:
+    script.exit()
+
+values = form.values
+
+# Sheet prefix
+sheet_prefix = values.get('sheet_prefix', '')
 if not sheet_prefix:
     script.exit()
 sheet_prefix = sheet_prefix.upper().strip()
 
-# 4. Ask for sheet number
-# Handles any format - M0.4, M04, M005, M4 etc
-# Only the LAST number in the sequence will increment
-sheet_number_input = forms.ask_for_string(
-    prompt='Enter sheet number (e.g. 04, 0.4, 005)\nOnly the last number will increment for additional sheets.',
-    title='Sheet Number',
-    default='005'
-)
+# Sheet number
+sheet_number_input = values.get('sheet_number', '')
 if not sheet_number_input:
     script.exit()
 sheet_number_input = sheet_number_input.strip()
@@ -149,65 +201,65 @@ def make_sheet_number(idx):
 # Sheet name always defaults to COMCHECK
 sheet_name = "COMCHECK"
 
-# 5. Titleblock picker
-tb_collector = FilteredElementCollector(doc)\
-    .OfCategory(BuiltInCategory.OST_TitleBlocks)\
-    .WhereElementIsElementType()
-tb_types = list(tb_collector)
-if not tb_types:
-    forms.alert("No titleblock types found in project.", exitscript=True)
-
-tb_dict = {}
-for tb in tb_types:
-    family_name = tb.Family.Name
-    type_name = tb.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM).AsString()
-    display_name = "{} : {}".format(family_name, type_name)
-    tb_dict[display_name] = tb
-
-selected_tb_name = forms.SelectFromList.show(
-    sorted(tb_dict.keys()),
-    title='Select Titleblock',
-    prompt='Choose a titleblock for the Comcheck sheets:',
-    multiselect=False
-)
-if not selected_tb_name:
+# Titleblock
+selected_tb_name = values.get('titleblock')
+if not selected_tb_name or selected_tb_name not in tb_dict:
     script.exit()
 
 selected_tb = tb_dict[selected_tb_name]
 tb_id = selected_tb.Id
 
-# 6. User picks sheet size
-sheet_size = forms.SelectFromList.show(
-    ['24 x 36', '30 x 42'],
-    title='Select Sheet Size',
-    prompt='Choose your sheet size:',
-    multiselect=False
-)
+# Sheet size
+sheet_size = values.get('sheet_size')
 if not sheet_size:
     script.exit()
 
-PAGES_PER_SHEET = 8
-COLS = 4
-ROWS = 2
+defaults = LAYOUT_DEFAULTS[sheet_size]
 
-if sheet_size == '24 x 36':
-    sheet_w       = 3.0
-    sheet_h       = 2.0
-    MARGIN_LEFT   = 0.20
-    MARGIN_TOP    = 0.06
-    MARGIN_RIGHT  = 0.39
-    MARGIN_BOTTOM = 0.20
-    GAP_COL       = 0.05
-    GAP_ROW       = 0.06
+def _override_float(key):
+    raw = values.get(key)
+    if raw:
+        raw = raw.strip()
+    if raw:
+        return float(raw)
+    return defaults[key]
+
+def _override_int(key, default_value):
+    raw = values.get(key)
+    if raw:
+        raw = raw.strip()
+    if raw:
+        return int(raw)
+    return default_value
+
+sheet_w       = defaults['sheet_w']
+sheet_h       = defaults['sheet_h']
+MARGIN_LEFT   = _override_float('margin_left')
+MARGIN_TOP    = _override_float('margin_top')
+MARGIN_RIGHT  = _override_float('margin_right')
+MARGIN_BOTTOM = _override_float('margin_bottom')
+GAP_COL       = _override_float('gap_col')
+GAP_ROW       = _override_float('gap_row')
+COLS          = _override_int('cols', defaults['cols'])
+ROWS          = _override_int('rows', defaults['rows'])
+RESOLUTION    = _override_int('resolution', DEFAULT_RESOLUTION)
+
+PAGES_PER_SHEET = COLS * ROWS
+
+# Page count: use override if provided, otherwise auto-detect
+page_count_override = values.get('page_count')
+if page_count_override:
+    page_count_override = page_count_override.strip()
+if page_count_override:
+    page_count = int(page_count_override)
 else:
-    sheet_w       = 3.5
-    sheet_h       = 2.5
-    MARGIN_LEFT   = 0.20
-    MARGIN_TOP    = 0.15
-    MARGIN_RIGHT  = 0.45
-    MARGIN_BOTTOM = 0.25
-    GAP_COL       = 0.06
-    GAP_ROW       = 0.08
+    page_count = detect_pdf_page_count(pdf_bytes)
+    if not page_count:
+        forms.alert(
+            "Could not auto-detect the page count from this PDF.\n"
+            "Please enter a value in the 'Page Count Override' field and rerun.",
+            exitscript=True
+        )
 
 # Auto calculate cell sizes
 available_w = sheet_w - MARGIN_LEFT - MARGIN_RIGHT - (GAP_COL * (COLS - 1))
@@ -219,10 +271,10 @@ CELL_H = available_h / ROWS
 SHEET_ORIGIN_X = MARGIN_LEFT
 SHEET_ORIGIN_Y = sheet_h - MARGIN_TOP
 
-# 7. Calculate Sheet Count
+# 4. Calculate Sheet Count
 num_sheets = (page_count + PAGES_PER_SHEET - 1) // PAGES_PER_SHEET
 
-# 8. Create Sheets and Place Pages
+# 5. Create Sheets and Place Pages
 with revit.Transaction("Place Comcheck PDF Pages"):
     for sheet_idx in range(num_sheets):
 
@@ -256,7 +308,7 @@ with revit.Transaction("Place Comcheck PDF Pages"):
                 )
 
             img_opts.PageNumber = page_num + 1
-            img_opts.Resolution = 600
+            img_opts.Resolution = RESOLUTION
 
             img_type = ImageType.Create(doc, img_opts)
 
