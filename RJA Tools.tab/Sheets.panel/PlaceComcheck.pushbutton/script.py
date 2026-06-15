@@ -353,6 +353,22 @@ SHEET_ORIGIN_Y = sheet_h - MARGIN_TOP
 # 4. Calculate Sheet Count
 num_sheets = (page_count + PAGES_PER_SHEET - 1) // PAGES_PER_SHEET
 
+# Check for sheet number collisions before starting the transaction
+existing_sheet_numbers = set(
+    s.SheetNumber for s in
+    FilteredElementCollector(doc).OfClass(ViewSheet)
+)
+proposed_sheet_numbers = [make_sheet_number(idx) for idx in range(num_sheets)]
+conflicts = [n for n in proposed_sheet_numbers if n in existing_sheet_numbers]
+if conflicts:
+    forms.alert(
+        "The following sheet number(s) already exist in this project:\n{}\n\n"
+        "Please rerun with a different Sheet Number and try again.".format(
+            ", ".join(conflicts)
+        ),
+        exitscript=True
+    )
+
 # 5. Create Sheets and Place Pages
 with revit.Transaction("Place Comcheck PDF Pages"):
     for sheet_idx in range(num_sheets):
