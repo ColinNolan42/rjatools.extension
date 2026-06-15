@@ -1,6 +1,6 @@
 # encoding: utf-8
 # COMCHECK PDF PLACER - pyRevit Script
-# Place Comcheck PDF pages on Revit sheets in a 3x2 grid
+# Place Comcheck PDF pages on Revit sheets in a 4x2 grid
 
 import os
 import re
@@ -44,20 +44,43 @@ else:
         ])
     )
 
+def detect_pdf_page_count(path):
+    """Best-effort PDF page count from raw bytes (no external libraries).
+
+    Tries the /Type /Pages object's /Count value first (most reliable for the
+    root page tree), then falls back to counting /Type /Page object headers.
+    Returns None if neither approach finds anything.
+    """
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    counts = [int(c) for c in re.findall(r'/Type\s*/Pages.*?/Count\s+(\d+)', data, re.DOTALL)]
+    if counts:
+        return max(counts)
+
+    page_objs = re.findall(r'/Type\s*/Page(?!s)', data)
+    if page_objs:
+        return len(page_objs)
+
+    return None
+
+
 # 1. User picks PDF
 pdf_path = forms.pick_file(file_ext='pdf', title='Select Comcheck PDF')
 if not pdf_path:
     script.exit()
 
-# 2. User enters total page count
-page_count = forms.ask_for_string(
-    prompt='How many pages is your Comcheck PDF?',
-    title='Page Count',
-    default='6'
-)
+# 2. Auto-detect total page count (falls back to manual entry if detection fails)
+page_count = detect_pdf_page_count(pdf_path)
 if not page_count:
-    script.exit()
-page_count = int(page_count)
+    page_count = forms.ask_for_string(
+        prompt='Could not auto-detect page count. How many pages is your Comcheck PDF?',
+        title='Page Count',
+        default='8'
+    )
+    if not page_count:
+        script.exit()
+    page_count = int(page_count)
 
 # 3. Ask for sheet prefix
 sheet_prefix = forms.ask_for_string(
@@ -137,27 +160,27 @@ sheet_size = forms.SelectFromList.show(
 if not sheet_size:
     script.exit()
 
-PAGES_PER_SHEET = 6
-COLS = 3
+PAGES_PER_SHEET = 8
+COLS = 4
 ROWS = 2
 
 if sheet_size == '24 x 36':
     sheet_w       = 3.0
     sheet_h       = 2.0
-    MARGIN_LEFT   = 0.18
+    MARGIN_LEFT   = 0.12
     MARGIN_TOP    = 0.10
     MARGIN_RIGHT  = 0.70
     MARGIN_BOTTOM = 0.20
-    GAP_COL       = 0.04
+    GAP_COL       = 0.03
     GAP_ROW       = 0.06
 else:
     sheet_w       = 3.5
     sheet_h       = 2.5
-    MARGIN_LEFT   = 0.03
+    MARGIN_LEFT   = 0.05
     MARGIN_TOP    = 0.15
     MARGIN_RIGHT  = 0.85
     MARGIN_BOTTOM = 0.25
-    GAP_COL       = 0.05
+    GAP_COL       = 0.04
     GAP_ROW       = 0.08
 
 # Auto calculate cell sizes
