@@ -11,7 +11,6 @@ clr.AddReference('RevitAPIUI')
 from Autodesk.Revit.DB import *
 from Autodesk.Revit.UI import *
 from pyrevit import forms, revit, script
-from pyrevit.forms import FlexForm, Label, TextBox, ComboBox, Separator, Button
 import System
 from System import Array
 
@@ -124,46 +123,102 @@ for tb in tb_types:
 # 3. Consolidated form: sheet prefix/number, titleblock, sheet size, and
 # optional advanced layout overrides.
 #
-# NOTE: This FlexForm layout uses the standard documented components
-# (Label, TextBox, ComboBox, Separator, Button) from pyrevit.forms.
-# This could not be tested outside Revit - if any component class name
-# does not match the installed pyRevit version, it will need adjusting.
-components = [
-    Label('Sheet Prefix (e.g. M, E, P)'),
-    TextBox('sheet_prefix', Text='M'),
-    Label('Sheet Number (e.g. 04, 0.4, 005)'),
-    TextBox('sheet_number', Text='005'),
-    Label('Titleblock'),
-    ComboBox('titleblock', sorted(tb_dict.keys())),
-    Label('Sheet Size'),
-    ComboBox('sheet_size', ['24 x 36', '30 x 42'], default='24 x 36'),
-    Separator(),
-    Label('Advanced (optional overrides - leave blank to use defaults for the selected sheet size)'),
-    Label('Margin Left'),
-    TextBox('margin_left', Text=''),
-    Label('Margin Top'),
-    TextBox('margin_top', Text=''),
-    Label('Margin Right'),
-    TextBox('margin_right', Text=''),
-    Label('Margin Bottom'),
-    TextBox('margin_bottom', Text=''),
-    Label('Gap Col'),
-    TextBox('gap_col', Text=''),
-    Label('Gap Row'),
-    TextBox('gap_row', Text=''),
-    Label('Columns'),
-    TextBox('cols', Text=''),
-    Label('Rows'),
-    TextBox('rows', Text=''),
-    Label('Resolution (DPI)'),
-    TextBox('resolution', Text=''),
-    Label('Page Count Override'),
-    TextBox('page_count', Text=''),
-    Button('Place Comcheck Sheets')
-]
+# This pyRevit version's pyrevit.forms has no FlexForm/Label/TextBox/etc.
+# Build the dialog directly on top of forms.WPFWindow with inline XAML.
+COMCHECK_FORM_XAML = """
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Comcheck Sheet Placement"
+    Height="600" Width="440"
+    WindowStartupLocation="CenterScreen"
+    ResizeMode="NoResize"
+    ShowInTaskbar="False">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12">
+        <StackPanel>
+            <Label Content="Sheet Prefix (e.g. M, E, P)"/>
+            <TextBox Name="prefix_box" Text="M" Margin="0,0,0,8"/>
 
-form = FlexForm('Comcheck Sheet Placement', components)
-form.show()
+            <Label Content="Sheet Number (e.g. 04, 0.4, 005)"/>
+            <TextBox Name="number_box" Text="005" Margin="0,0,0,8"/>
+
+            <Label Content="Titleblock"/>
+            <ComboBox Name="titleblock_combo" Margin="0,0,0,8"/>
+
+            <Label Content="Sheet Size"/>
+            <ComboBox Name="sheetsize_combo" Margin="0,0,0,8"/>
+
+            <Expander Header="Advanced (optional overrides - leave blank to use defaults for the selected sheet size)" Margin="0,4,0,0">
+                <StackPanel Margin="12,8,0,0">
+                    <Label Content="Margin Left (ft)"/>
+                    <TextBox Name="margin_left_box" Margin="0,0,0,6"/>
+                    <Label Content="Margin Top (ft)"/>
+                    <TextBox Name="margin_top_box" Margin="0,0,0,6"/>
+                    <Label Content="Margin Right (ft)"/>
+                    <TextBox Name="margin_right_box" Margin="0,0,0,6"/>
+                    <Label Content="Margin Bottom (ft)"/>
+                    <TextBox Name="margin_bottom_box" Margin="0,0,0,6"/>
+                    <Label Content="Gap Col (ft)"/>
+                    <TextBox Name="gap_col_box" Margin="0,0,0,6"/>
+                    <Label Content="Gap Row (ft)"/>
+                    <TextBox Name="gap_row_box" Margin="0,0,0,6"/>
+                    <Label Content="Columns"/>
+                    <TextBox Name="cols_box" Margin="0,0,0,6"/>
+                    <Label Content="Rows"/>
+                    <TextBox Name="rows_box" Margin="0,0,0,6"/>
+                    <Label Content="Resolution (DPI)"/>
+                    <TextBox Name="resolution_box" Margin="0,0,0,6"/>
+                    <Label Content="Page Count Override"/>
+                    <TextBox Name="page_count_box" Margin="0,0,0,6"/>
+                </StackPanel>
+            </Expander>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                <Button Name="cancel_button" Content="Cancel" Width="80" Margin="0,0,8,0" Click="cancel_click"/>
+                <Button Name="place_button" Content="Place Comcheck Sheets" Width="170" Click="place_click"/>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>
+"""
+
+
+class ComcheckPlacementForm(forms.WPFWindow):
+    def __init__(self, xaml_source, titleblock_names):
+        forms.WPFWindow.__init__(self, xaml_source, literal_string=True)
+        self.titleblock_combo.ItemsSource = titleblock_names
+        if titleblock_names:
+            self.titleblock_combo.SelectedIndex = 0
+        self.sheetsize_combo.ItemsSource = ['24 x 36', '30 x 42']
+        self.sheetsize_combo.SelectedIndex = 0
+        self.values = None
+
+    def place_click(self, sender, args):
+        self.values = {
+            'sheet_prefix': self.prefix_box.Text,
+            'sheet_number': self.number_box.Text,
+            'titleblock': self.titleblock_combo.SelectedItem,
+            'sheet_size': self.sheetsize_combo.SelectedItem,
+            'margin_left': self.margin_left_box.Text,
+            'margin_top': self.margin_top_box.Text,
+            'margin_right': self.margin_right_box.Text,
+            'margin_bottom': self.margin_bottom_box.Text,
+            'gap_col': self.gap_col_box.Text,
+            'gap_row': self.gap_row_box.Text,
+            'cols': self.cols_box.Text,
+            'rows': self.rows_box.Text,
+            'resolution': self.resolution_box.Text,
+            'page_count': self.page_count_box.Text,
+        }
+        self.Close()
+
+    def cancel_click(self, sender, args):
+        self.values = None
+        self.Close()
+
+
+form = ComcheckPlacementForm(COMCHECK_FORM_XAML, sorted(tb_dict.keys()))
+form.ShowDialog()
 
 if not form.values:
     script.exit()
