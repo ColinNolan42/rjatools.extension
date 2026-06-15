@@ -88,7 +88,7 @@ def fit_dimensions(cell_w, cell_h, content_w, content_h):
 # these values when left blank.
 LAYOUT_DEFAULTS = {
     '24 x 36': dict(sheet_w=3.0, sheet_h=2.0, margin_left=0.20, margin_top=0.06, margin_right=0.39, margin_bottom=0.20, gap_col=0.05, gap_row=0.06, cols=4, rows=2),
-    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=0.00, margin_top=0.15, margin_right=0.65, margin_bottom=0.25, gap_col=0.06, gap_row=0.08, cols=4, rows=2),
+    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=-0.40, margin_top=0.15, margin_right=0.65, margin_bottom=0.25, gap_col=0.06, gap_row=0.08, cols=4, rows=2),
 }
 DEFAULT_RESOLUTION = 600
 
@@ -146,7 +146,7 @@ COMCHECK_FORM_XAML = """
             <ComboBox Name="titleblock_combo" Margin="0,0,0,8"/>
 
             <Label Content="Sheet Size"/>
-            <ComboBox Name="sheetsize_combo" Margin="0,0,0,8"/>
+            <ComboBox Name="sheetsize_combo" Margin="0,0,0,8" SelectionChanged="sheetsize_changed"/>
 
             <Expander Header="Advanced (optional overrides - leave blank to use defaults for the selected sheet size)" Margin="0,4,0,0">
                 <StackPanel Margin="12,8,0,0">
@@ -192,6 +192,25 @@ class ComcheckPlacementForm(forms.WPFWindow):
         self.sheetsize_combo.ItemsSource = ['24 x 36', '30 x 42']
         self.sheetsize_combo.SelectedIndex = 0
         self.values = None
+        self._populate_advanced_defaults()
+
+    def sheetsize_changed(self, sender, args):
+        self._populate_advanced_defaults()
+
+    def _populate_advanced_defaults(self):
+        sheet_size = self.sheetsize_combo.SelectedItem
+        if not sheet_size:
+            return
+        defaults = LAYOUT_DEFAULTS[sheet_size]
+        self.margin_left_box.Text = str(defaults['margin_left'])
+        self.margin_top_box.Text = str(defaults['margin_top'])
+        self.margin_right_box.Text = str(defaults['margin_right'])
+        self.margin_bottom_box.Text = str(defaults['margin_bottom'])
+        self.gap_col_box.Text = str(defaults['gap_col'])
+        self.gap_row_box.Text = str(defaults['gap_row'])
+        self.cols_box.Text = str(defaults['cols'])
+        self.rows_box.Text = str(defaults['rows'])
+        self.resolution_box.Text = str(DEFAULT_RESOLUTION)
 
     def place_click(self, sender, args):
         self.values = {
