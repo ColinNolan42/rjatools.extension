@@ -44,25 +44,44 @@ else:
         ])
     )
 
-def detect_pdf_page_count(path):
+def detect_pdf_page_count(pdf_bytes):
     """Best-effort PDF page count from raw bytes (no external libraries).
 
     Tries the /Type /Pages object's /Count value first (most reliable for the
     root page tree), then falls back to counting /Type /Page object headers.
     Returns None if neither approach finds anything.
     """
-    with open(path, 'rb') as f:
-        data = f.read()
-
-    counts = [int(c) for c in re.findall(r'/Type\s*/Pages.*?/Count\s+(\d+)', data, re.DOTALL)]
+    counts = [int(c) for c in re.findall(r'/Type\s*/Pages.*?/Count\s+(\d+)', pdf_bytes, re.DOTALL)]
     if counts:
         return max(counts)
 
-    page_objs = re.findall(r'/Type\s*/Page(?!s)', data)
+    page_objs = re.findall(r'/Type\s*/Page(?!s)', pdf_bytes)
     if page_objs:
         return len(page_objs)
 
     return None
+
+
+def detect_pdf_page_size(pdf_bytes):
+    """Best-effort PDF page size (width, height) from the first /MediaBox found.
+
+    Returns None if no MediaBox is found.
+    """
+    match = re.search(r'/MediaBox\s*\[\s*([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s*\]', pdf_bytes)
+    if not match:
+        return None
+
+    x0, y0, x1, y1 = (float(v) for v in match.groups())
+    width, height = abs(x1 - x0), abs(y1 - y0)
+    if width <= 0 or height <= 0:
+        return None
+    return (width, height)
+
+
+def fit_dimensions(cell_w, cell_h, content_w, content_h):
+    """Scale (content_w, content_h) to fit within (cell_w, cell_h), preserving aspect ratio."""
+    scale = min(cell_w / content_w, cell_h / content_h)
+    return content_w * scale, content_h * scale
 
 
 # 1. User picks PDF
@@ -70,8 +89,15 @@ pdf_path = forms.pick_file(file_ext='pdf', title='Select Comcheck PDF')
 if not pdf_path:
     script.exit()
 
+with open(pdf_path, 'rb') as f:
+    pdf_bytes = f.read()
+
+# Page size used to fit each placed image within its grid cell without distortion
+# or overlap into neighboring cells. Falls back to US Letter portrait (COMcheck default).
+PAGE_W, PAGE_H = detect_pdf_page_size(pdf_bytes) or (8.5, 11.0)
+
 # 2. Auto-detect total page count (falls back to manual entry if detection fails)
-page_count = detect_pdf_page_count(pdf_path)
+page_count = detect_pdf_page_count(pdf_bytes)
 if not page_count:
     page_count = forms.ask_for_string(
         prompt='Could not auto-detect page count. How many pages is your Comcheck PDF?',
@@ -167,20 +193,20 @@ ROWS = 2
 if sheet_size == '24 x 36':
     sheet_w       = 3.0
     sheet_h       = 2.0
-    MARGIN_LEFT   = 0.12
+    MARGIN_LEFT   = 0.18
     MARGIN_TOP    = 0.10
     MARGIN_RIGHT  = 0.70
     MARGIN_BOTTOM = 0.20
-    GAP_COL       = 0.03
+    GAP_COL       = 0.05
     GAP_ROW       = 0.06
 else:
     sheet_w       = 3.5
     sheet_h       = 2.5
-    MARGIN_LEFT   = 0.05
+    MARGIN_LEFT   = 0.02
     MARGIN_TOP    = 0.15
-    MARGIN_RIGHT  = 0.85
+    MARGIN_RIGHT  = 0.75
     MARGIN_BOTTOM = 0.25
-    GAP_COL       = 0.04
+    GAP_COL       = 0.06
     GAP_ROW       = 0.08
 
 # Auto calculate cell sizes
@@ -239,8 +265,9 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             place_opts.Location = origin
 
             img_instance = ImageInstance.Create(doc, sheet, img_type.Id, place_opts)
-            img_instance.Width = CELL_W
-            img_instance.Height = CELL_H
+            img_w, img_h = fit_dimensions(CELL_W, CELL_H, PAGE_W, PAGE_H)
+            img_instance.Width = img_w
+            img_instance.Height = img_h
 
 forms.alert(
     "Done! {} sheet(s) created: {} to {}\nSheet size: {}".format(
