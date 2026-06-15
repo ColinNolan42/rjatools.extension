@@ -369,6 +369,19 @@ if conflicts:
         exitscript=True
     )
 
+# Pre-compute values that are constant across every page/sheet so the loop
+# below only does per-page work (img_opts construction + the unavoidable
+# ImageType.Create rasterization call).
+if revit_version >= 2021:
+    ctor_args = Array[System.Object]([pdf_path, False, ImageTypeSource.Import])
+else:
+    ctor_args = Array[System.Object]([pdf_path])
+
+place_opts = ImagePlacementOptions()
+place_opts.PlacementPoint = BoxPlacement.TopLeft
+
+img_w, img_h = fit_dimensions(CELL_W * IMAGE_SCALE, CELL_H * IMAGE_SCALE, PAGE_W, PAGE_H)
+
 # 5. Create Sheets and Place Pages
 with revit.Transaction("Place Comcheck PDF Pages"):
     for sheet_idx in range(num_sheets):
@@ -393,26 +406,17 @@ with revit.Transaction("Place Comcheck PDF Pages"):
             y = SHEET_ORIGIN_Y - row * (CELL_H + GAP_ROW)
             origin = XYZ(x, y, 0)
 
-            if revit_version >= 2021:
-                img_opts = ctor.Invoke(
-                    Array[System.Object]([pdf_path, False, ImageTypeSource.Import])
-                )
-            else:
-                img_opts = ctor.Invoke(
-                    Array[System.Object]([pdf_path])
-                )
-
+            # ImageTypeOptions cannot be reused across ImageType.Create calls,
+            # so a fresh instance is still required per page - but the ctor
+            # args array and ImagePlacementOptions are now shared.
+            img_opts = ctor.Invoke(ctor_args)
             img_opts.PageNumber = page_num + 1
             img_opts.Resolution = RESOLUTION
 
             img_type = ImageType.Create(doc, img_opts)
 
-            place_opts = ImagePlacementOptions()
-            place_opts.PlacementPoint = BoxPlacement.TopLeft
             place_opts.Location = origin
-
             img_instance = ImageInstance.Create(doc, sheet, img_type.Id, place_opts)
-            img_w, img_h = fit_dimensions(CELL_W * IMAGE_SCALE, CELL_H * IMAGE_SCALE, PAGE_W, PAGE_H)
             img_instance.Width = img_w
             img_instance.Height = img_h
 
