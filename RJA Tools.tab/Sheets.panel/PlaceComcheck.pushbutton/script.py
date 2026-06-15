@@ -88,7 +88,7 @@ def fit_dimensions(cell_w, cell_h, content_w, content_h):
 # these values when left blank.
 LAYOUT_DEFAULTS = {
     '24 x 36': dict(sheet_w=3.0, sheet_h=2.0, margin_left=0.20, margin_top=0.06, margin_right=0.39, margin_bottom=0.20, gap_col=0.05, gap_row=0.06, cols=4, rows=2, image_scale=1.00),
-    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=-0.40, margin_top=0.15, margin_right=0.65, margin_bottom=0.25, gap_col=0.06, gap_row=0.08, cols=4, rows=2, image_scale=0.85),
+    '30 x 42': dict(sheet_w=3.5, sheet_h=2.5, margin_left=-0.30, margin_top=0.15, margin_right=0.75, margin_bottom=0.25, gap_col=0.01, gap_row=0.04, cols=4, rows=2, image_scale=0.95),
 }
 DEFAULT_RESOLUTION = 600
 
