@@ -193,8 +193,8 @@ ROWS = 2
 if sheet_size == '24 x 36':
     sheet_w       = 3.0
     sheet_h       = 2.0
-    MARGIN_LEFT   = 0.25
-    MARGIN_TOP    = 0.10
+    MARGIN_LEFT   = 0.20
+    MARGIN_TOP    = 0.06
     MARGIN_RIGHT  = 0.39
     MARGIN_BOTTOM = 0.20
     GAP_COL       = 0.05
@@ -202,9 +202,9 @@ if sheet_size == '24 x 36':
 else:
     sheet_w       = 3.5
     sheet_h       = 2.5
-    MARGIN_LEFT   = 0.01
+    MARGIN_LEFT   = 0.00
     MARGIN_TOP    = 0.15
-    MARGIN_RIGHT  = 0.45
+    MARGIN_RIGHT  = 0.65
     MARGIN_BOTTOM = 0.25
     GAP_COL       = 0.06
     GAP_ROW       = 0.08
