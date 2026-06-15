@@ -202,9 +202,9 @@ if sheet_size == '24 x 36':
 else:
     sheet_w       = 3.5
     sheet_h       = 2.5
-    MARGIN_LEFT   = 0.00
+    MARGIN_LEFT   = 0.20
     MARGIN_TOP    = 0.15
-    MARGIN_RIGHT  = 0.65
+    MARGIN_RIGHT  = 0.45
     MARGIN_BOTTOM = 0.25
     GAP_COL       = 0.06
     GAP_ROW       = 0.08
@@ -256,7 +256,7 @@ with revit.Transaction("Place Comcheck PDF Pages"):
                 )
 
             img_opts.PageNumber = page_num + 1
-            img_opts.Resolution = 150
+            img_opts.Resolution = 600
 
             img_type = ImageType.Create(doc, img_opts)
 
