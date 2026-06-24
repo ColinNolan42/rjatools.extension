@@ -124,10 +124,12 @@ def _trunk_edge_developed_lengths(graph, trunk_all_ids):
     """
     dev = {}
     last_edge_id = None
+    pending_elbow_ft = 0.0
     for item in trunk_all_ids:
         if item in graph.edges:
             edge = graph.edges[item]
-            dev[item] = _edge_developed_length(graph, edge)
+            dev[item] = _edge_developed_length(graph, edge) + pending_elbow_ft
+            pending_elbow_ft = 0.0
             last_edge_id = item
         else:
             node = graph.nodes.get(item)
@@ -136,8 +138,11 @@ def _trunk_edge_developed_lengths(graph, trunk_all_ids):
             if (last_edge_id is not None
                     and graph.edges[last_edge_id].to_node_id == item):
                 continue  # already counted via _edge_developed_length
-            if node.is_elbow and last_edge_id is not None:
-                dev[last_edge_id] += ELBOW_EQUIV_FT
+            if node.is_elbow:
+                if last_edge_id is not None:
+                    dev[last_edge_id] += ELBOW_EQUIV_FT
+                else:
+                    pending_elbow_ft += ELBOW_EQUIV_FT
     return dev
 
 
@@ -706,11 +711,8 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         name     = fixture_node.fixture_name or "UNNAMED"
         label    = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
         far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
-        lbl_y    = far_y + sign * LABEL_ABOVE           # beyond that
+        lbl_y    = far_y                                # baseline at outermost line
         _note(doc, view, fix_x, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
-        # Underline under fixture name (firm standard: equipment tags are underlined)
-        _line(doc, view, fix_x - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
-              fix_x + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
 
 
 # ---------------------------------------------------------------------------
@@ -1096,36 +1098,13 @@ def main():
     # ------------------------------------------------------------------
     output.print_md("**Drawing diagram...**")
 
-    # Find the distribution main start position.
-    # If the trunk begins with a riser (VERT section between meter and the
-    # horizontal main), place the meter symbol at the TOP of that riser so the
-    # diagram shows a clean horizontal trunk.  The upstream stub then extends
-    # DOWN from the meter circle to represent the utility service entry.
     trunk_all_ids_draw = list(graph.longest_run["path_element_ids"])
     trunk_edge_ids_ord = [i for i in trunk_all_ids_draw if i in graph.edges]
 
-    # Identify edges that are "upstream" (initial riser + any leading stub).
-    # These are trunk edges before the FIRST horizontal segment that follows a
-    # VERT section.  They will still be drawn as lines but not labeled.
-    upstream_draw_edges = set()
-    main_origin         = positions.get(meter_nid, (0.0, 0.0))
-    found_vert          = False
-    for eid in trunk_edge_ids_ord:
-        edge = graph.edges[eid]
-        fp = positions.get(edge.from_node_id, (0.0, 0.0))
-        tp = positions.get(edge.to_node_id,   (0.0, 0.0))
-        seg_is_vert = abs(tp[1] - fp[1]) > abs(tp[0] - fp[0])
-        if seg_is_vert:
-            found_vert = True
-            upstream_draw_edges.add(eid)
-        elif found_vert:
-            # First horizontal after the riser = distribution main start.
-            main_origin = fp
-            break
-        else:
-            upstream_draw_edges.add(eid)  # short stubs before the riser
-
-    mx, my = main_origin
+    # Meter symbol and upstream stub drawn at the meter's diagram origin.
+    # All trunk edges (including any initial riser) are drawn and labeled so
+    # segment labels sum to the TOTAL DEVELOPED LENGTH in the notes block.
+    mx, my = positions.get(meter_nid, (0.0, 0.0))
 
     t = Transaction(doc, "RJA Tools - Gas One-Line Diagram")
     t.Start()
@@ -1156,8 +1135,6 @@ def main():
         current_run = []
         prev_geom   = None  # (x1, y1, to_node_id, cum_mbh)
         for eid in trunk_edge_ids_ord:
-            if eid in upstream_draw_edges:
-                continue  # skip: service connection shown by upstream stub
             edge = graph.edges[eid]
             if edge.to_node_id is None:
                 continue
@@ -1290,11 +1267,9 @@ def main():
                                                xx, cy + FIXTURE_HW))
                     _make_group(doc, sym_elems)
                 x_center = cx + sign * 1.0 * FIXTURE_SPACING
-                lbl_y    = cy - FIXTURE_HW - LABEL_ABOVE
+                lbl_y    = cy - FIXTURE_HW
                 _note(doc, view, x_center, lbl_y, label, tt_id,
                       width=2 * FIXTURE_SPACING)
-                _line(doc, view, x_center - FIXTURE_SPACING, lbl_y - TEXT_HEIGHT_FT,
-                      x_center + FIXTURE_SPACING, lbl_y - TEXT_HEIGHT_FT)
             else:
                 going_up = cy > 0.0
                 sign     = 1.0 if going_up else -1.0
@@ -1307,10 +1282,8 @@ def main():
                                                cx + FIXTURE_HW, yy))
                     _make_group(doc, sym_elems)
                 far_y = cy + sign * 2 * FIXTURE_SPACING
-                lbl_y = far_y + sign * LABEL_ABOVE
+                lbl_y = far_y
                 _note(doc, view, cx, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
-                _line(doc, view, cx - FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT,
-                      cx + FIXTURE_HW, lbl_y - TEXT_HEIGHT_FT)
 
             drawn_fixtures += 1
 
