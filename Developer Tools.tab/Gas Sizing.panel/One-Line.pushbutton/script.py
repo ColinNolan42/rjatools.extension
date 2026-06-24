@@ -1142,7 +1142,7 @@ def main():
         drawn_edges = 0
         runs        = []
         current_run = []
-        prev_geom   = None  # (x1, y1, to_node_id, cum_mbh, is_h)
+        prev_geom   = None  # (x1, y1, to_node_id, cum_mbh)
         for eid in trunk_edge_ids_ord:
             edge = graph.edges[eid]
             if edge.to_node_id is None:
@@ -1151,19 +1151,16 @@ def main():
             pos_to   = positions.get(edge.to_node_id)
             if pos_from is None or pos_to is None:
                 continue
-            x0_e, y0_e = pos_from
-            x1, y1     = pos_to
-            is_h_cur   = abs(y1 - y0_e) <= abs(x1 - x0_e)
+            x1, y1 = pos_to
 
             continues_run = False
             if prev_geom is not None:
-                p_x1, p_y1, p_to_nid, p_mbh, p_is_h = prev_geom
+                p_x1, p_y1, p_to_nid, p_mbh = prev_geom
                 connects     = (p_to_nid == edge.from_node_id)
                 not_branch   = ((p_x1, p_y1) not in branch_point_positions
                                  and p_to_nid not in trunk_fixture_nids)
                 same_mbh     = abs(edge.cumulative_load_mbh - p_mbh) < 0.01
-                same_dir     = is_h_cur == p_is_h
-                continues_run = connects and not_branch and same_mbh and same_dir
+                continues_run = connects and not_branch and same_mbh
 
             if continues_run:
                 current_run.append(eid)
@@ -1171,7 +1168,7 @@ def main():
                 if current_run:
                     runs.append(current_run)
                 current_run = [eid]
-            prev_geom = (x1, y1, edge.to_node_id, edge.cumulative_load_mbh, is_h_cur)
+            prev_geom = (x1, y1, edge.to_node_id, edge.cumulative_load_mbh)
 
         if current_run:
             runs.append(current_run)
@@ -1186,9 +1183,11 @@ def main():
 
             first_edge = graph.edges[run[0]]
             last_edge  = graph.edges[run[-1]]
-            x0, y0     = positions[first_edge.from_node_id]
-            x1, y1     = positions[last_edge.to_node_id]
-            is_h       = abs(y1 - y0) <= abs(x1 - x0)
+            # Label position uses the LAST segment so an L-shaped run
+            # (riser + horizontal) labels the horizontal, not the corner.
+            lbl_from_x, lbl_from_y = positions[last_edge.from_node_id]
+            lbl_to_x,   lbl_to_y   = positions[last_edge.to_node_id]
+            is_h = abs(lbl_to_y - lbl_from_y) <= abs(lbl_to_x - lbl_from_x)
 
             dev_len = sum(trunk_dev_lengths.get(e, graph.edges[e].length_feet)
                            for e in run)
@@ -1207,12 +1206,12 @@ def main():
             label = line1 + "\n" + "{} MBH".format(mbh)
 
             if is_h:
-                lx = (x0 + x1) / 2.0
-                ly = max(y0, y1) + LABEL_ABOVE
+                lx = (lbl_from_x + lbl_to_x) / 2.0
+                ly = max(lbl_from_y, lbl_to_y) + LABEL_ABOVE
                 _note(doc, view, lx, ly, label, tt_id, width=True)
             else:
-                lx = max(x0, x1) + LABEL_RIGHT
-                ly = (y0 + y1) / 2.0
+                lx = max(lbl_from_x, lbl_to_x) + LABEL_RIGHT
+                ly = (lbl_from_y + lbl_to_y) / 2.0
                 _note(doc, view, lx, ly, label, tt_id)
 
         # d. Schematic branches: one clean line per fixture from its trunk tee
