@@ -678,14 +678,15 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     mid_y = (tee_y + fix_y) / 2.0
     mbh_val  = int(round(fixture_node.gas_load_mbh)) if fixture_node else 0
     lft_rounded = int(round(total_ft))
-    if lft_rounded > 0:
-        if size:
-            lbl_line1 = '{}"G, {}\''.format(size, lft_rounded)
-        else:
-            lbl_line1 = "{}\'".format(lft_rounded)
-        lbl = lbl_line1 + "\n" + "{} MBH".format(mbh_val)
+    if size and lft_rounded > 0:
+        lbl_line1 = '{}"G, {}\''.format(size, lft_rounded)
+    elif size:
+        lbl_line1 = '{}\"G'.format(size)
+    elif lft_rounded > 0:
+        lbl_line1 = "{}\'".format(lft_rounded)
     else:
-        lbl = "{} MBH".format(mbh_val)
+        lbl_line1 = None
+    lbl = (lbl_line1 + "\n" + "{} MBH".format(mbh_val)) if lbl_line1 else "{} MBH".format(mbh_val)
     lbl_x = tee_x + (VALVE_HW + LABEL_RIGHT if has_valve else LABEL_RIGHT)
     _note(doc, view, lbl_x, mid_y, lbl, tt_id)
 
