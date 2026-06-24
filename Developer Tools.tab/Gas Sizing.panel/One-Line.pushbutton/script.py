@@ -64,6 +64,7 @@ MIN_SEGMENT_FT   = 10.0    # ft minimum horizontal segment so text doesn't overl
 SYMBOL_RADIUS    = 0.5     # ft  meter circle radius
 FIXTURE_HW       = 1.5     # ft  half-width of 3-line fixture symbol (3 ft total)
 FIXTURE_SPACING  = 0.5     # ft  gap between 3 fixture lines
+FIXTURE_LABEL_GAP = 0.4   # ft  gap between outermost symbol line and label baseline
 VALVE_HW         = 1.0     # ft  half-width of bowtie (2 ft total)
 VALVE_HH         = 0.6     # ft  half-height of bowtie triangle
 LABEL_ABOVE      = 1.2     # ft  above a horizontal pipe (must clear text height)
@@ -711,7 +712,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         name     = fixture_node.fixture_name or "UNNAMED"
         label    = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
         far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
-        lbl_y    = far_y                                # baseline at outermost line
+        lbl_y    = far_y + sign * FIXTURE_LABEL_GAP
         _note(doc, view, fix_x, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
 
 
@@ -1267,7 +1268,7 @@ def main():
                                                xx, cy + FIXTURE_HW))
                     _make_group(doc, sym_elems)
                 x_center = cx + sign * 1.0 * FIXTURE_SPACING
-                lbl_y    = cy - FIXTURE_HW
+                lbl_y    = cy - FIXTURE_HW - FIXTURE_LABEL_GAP
                 _note(doc, view, x_center, lbl_y, label, tt_id,
                       width=2 * FIXTURE_SPACING)
             else:
@@ -1282,7 +1283,7 @@ def main():
                                                cx + FIXTURE_HW, yy))
                     _make_group(doc, sym_elems)
                 far_y = cy + sign * 2 * FIXTURE_SPACING
-                lbl_y = far_y
+                lbl_y = far_y + sign * FIXTURE_LABEL_GAP
                 _note(doc, view, cx, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
 
             drawn_fixtures += 1
