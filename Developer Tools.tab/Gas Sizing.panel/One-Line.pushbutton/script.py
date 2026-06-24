@@ -679,11 +679,11 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     mbh_val  = int(round(fixture_node.gas_load_mbh)) if fixture_node else 0
     lft_rounded = int(round(total_ft))
     if size and lft_rounded > 0:
-        lbl_line1 = '{}"G, {} ft'.format(size, lft_rounded)
+        lbl_line1 = '{}"G, {} FT'.format(size, lft_rounded)
     elif size:
         lbl_line1 = '{}\"G'.format(size)
     elif lft_rounded > 0:
-        lbl_line1 = "{} ft".format(lft_rounded)
+        lbl_line1 = "{} FT".format(lft_rounded)
     else:
         lbl_line1 = None
     lbl = (lbl_line1 + "\n" + "{} MBH".format(mbh_val)) if lbl_line1 else "{} MBH".format(mbh_val)
@@ -824,9 +824,9 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
 
     # Label: size + length on line 1, MBH on line 2 (no decimals)
     if nom:
-        line1 = '{}"G, {} ft'.format(nom, lft)
+        line1 = '{}"G, {} FT'.format(nom, lft)
     else:
-        line1 = "{} ft".format(lft)
+        line1 = "{} FT".format(lft)
     label = line1 + "\n" + "{} MBH".format(mbh)
 
     if is_h:
@@ -1224,9 +1224,9 @@ def main():
                         break
 
             if nom:
-                line1 = '{}"G, {} ft'.format(nom, lft)
+                line1 = '{}"G, {} FT'.format(nom, lft)
             else:
-                line1 = "{} ft".format(lft)
+                line1 = "{} FT".format(lft)
             label = line1 + "\n" + "{} MBH".format(mbh)
 
             if is_h:
