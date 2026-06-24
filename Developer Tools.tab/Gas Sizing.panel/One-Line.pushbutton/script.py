@@ -1021,6 +1021,24 @@ def main():
                 bi["size"] = s
                 break
 
+    # Fallback for stub / side-takeoff branches whose pipe element wasn't written
+    # by the sizing engine (e.g. short tee stubs, bottom take-offs).  Look up the
+    # minimum IFGC size that handles the branch MBH demand at the system length.
+    try:
+        _fb_sizes = gas_tables.list_pipe_sizes(table_id)
+        _, _fb_caps = gas_tables.get_length_row(table_id, total_developed_ft)
+        _fb_pairs = list(zip(_fb_sizes, _fb_caps))
+    except Exception:
+        _fb_pairs = []
+
+    for bi in branch_info:
+        if not bi["size"] and _fb_pairs:
+            demand = bi["cum_mbh"]
+            for nom, cap in _fb_pairs:
+                if cap is not None and cap >= demand:
+                    bi["size"] = nom
+                    break
+
     # ------------------------------------------------------------------
     # STEP 5b - Full layout diagnostic (copy/paste into conversation)
     # ------------------------------------------------------------------
