@@ -139,7 +139,14 @@ def main():
     warnings = []
 
     if len(fixtures) == 0:
-        errors.append("No gas fixtures found.")
+        errors.append(
+            "No gas fixtures found (IS_GAS_FIXTURE = Yes). "
+            "Common causes: (1) pipe caps were inadvertently changed when "
+            "resizing all piping in Revit — verify cap families have not "
+            "replaced fixture families at pipe terminations; "
+            "(2) fixture families are not physically connected to the piping; "
+            "(3) IS_GAS_FIXTURE parameter is not set to Yes on the appliances."
+        )
     if total_load <= 0:
         errors.append("Total load is 0 MBH.")
     if graph.longest_run is None:

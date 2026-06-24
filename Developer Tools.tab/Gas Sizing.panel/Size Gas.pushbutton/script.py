@@ -292,6 +292,21 @@ def main():
     output.print_md(":white_check_mark: {} nodes, {} pipe segments.".format(
         len(graph.nodes), len(graph.edges)))
 
+    fixture_nodes = [n for n in graph.nodes.values() if n.is_gas_fixture]
+    if len(fixture_nodes) == 0:
+        forms.alert(
+            "No gas fixtures found (IS_GAS_FIXTURE = Yes).\n\n"
+            "Common causes:\n"
+            "  1. Pipe caps were inadvertently changed when resizing all "
+            "piping in Revit -- verify cap families have not replaced fixture "
+            "families at pipe terminations.\n"
+            "  2. Fixture families are not physically connected to the piping.\n"
+            "  3. IS_GAS_FIXTURE parameter is not set to Yes on the appliances.\n\n"
+            "Run Diagnose to see which terminal elements were found.",
+            title="Size Gas - No Fixtures"
+        )
+        return
+
     if graph.longest_run is None:
         forms.alert(
             "Could not determine longest run. "
