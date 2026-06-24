@@ -824,10 +824,11 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
     if is_h:
         lx = (x0 + x1) / 2.0
         ly = max(y0, y1) + LABEL_ABOVE
+        _note(doc, view, lx, ly, label, tt_id, width=True)
     else:
         lx = max(x0, x1) + LABEL_RIGHT
         ly = (y0 + y1) / 2.0
-    _note(doc, view, lx, ly, label, tt_id)
+        _note(doc, view, lx, ly, label, tt_id)
 
 
 def _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id):
@@ -1198,10 +1199,11 @@ def main():
             if is_h:
                 lx = (x0 + x1) / 2.0
                 ly = max(y0, y1) + LABEL_ABOVE
+                _note(doc, view, lx, ly, label, tt_id, width=True)
             else:
                 lx = max(x0, x1) + LABEL_RIGHT
                 ly = (y0 + y1) / 2.0
-            _note(doc, view, lx, ly, label, tt_id)
+                _note(doc, view, lx, ly, label, tt_id)
 
         # d. Schematic branches: one clean line per fixture from its trunk tee
         drawn_fixtures = 0
