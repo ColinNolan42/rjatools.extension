@@ -1216,6 +1216,11 @@ def main():
                 nom = pipe_sizes.get(e, "")
                 if nom:
                     break
+            if not nom and _fb_pairs:
+                for fb_nom, fb_cap in _fb_pairs:
+                    if fb_cap is not None and fb_cap >= mbh:
+                        nom = fb_nom
+                        break
 
             if nom:
                 line1 = '{}"G, {}\''.format(nom, lft)
