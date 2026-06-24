@@ -32,6 +32,7 @@ from Autodesk.Revit.DB import (
     ViewFamily,
     TextNote,
     TextNoteType,
+    HorizontalTextAlignment,
     FilteredElementCollector,
     FamilySymbol,
     Transaction,
@@ -713,7 +714,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         label    = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
         far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
         lbl_y    = far_y + sign * FIXTURE_LABEL_GAP
-        _note(doc, view, fix_x, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
+        _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
 
 
 # ---------------------------------------------------------------------------
@@ -732,22 +733,28 @@ def _line(doc, view, x0, y0, x1, y1):
         return None
 
 
-def _note(doc, view, x, y, text, tt_id, width=None):
+def _note(doc, view, x, y, text, tt_id, width=None, center_align=False):
     """Create a TextNote and return the element (or None on failure).
 
     If width is truthy, the insertion point is shifted left by roughly half
-    the text's rendered width so the note appears horizontally centered on
-    x. This is an approximation based on character count -- it deliberately
-    avoids the TextNote.Create(... width, TextNoteOptions) overload, which
-    forces the note's box to that exact width (often larger than the text)
-    and shifts its vertical anchor, causing oversized boxes and underlines
-    that land on top of the text instead of below it.
+    the text's rendered width so the note appears horizontally centered on x
+    (char-count approximation).
+
+    If center_align is True, sets HorizontalTextAlignment.Center on the note
+    so Revit centers the text on x directly -- more accurate than the width
+    shift. Don't combine both; use one or the other.
     """
     try:
         if width:
             max_chars = max(len(line) for line in text.split("\n"))
             x = x - (max_chars * TEXT_CHAR_WIDTH_FT) / 2.0
-        return TextNote.Create(doc, view.Id, XYZ(x, y, 0), text, tt_id)
+        tn = TextNote.Create(doc, view.Id, XYZ(x, y, 0), text, tt_id)
+        if center_align and tn is not None:
+            try:
+                tn.HorizontalAlignment = HorizontalTextAlignment.Center
+            except Exception:
+                pass
+        return tn
     except Exception:
         return None
 
@@ -847,7 +854,7 @@ def _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id):
     label  = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
     far_y  = cy + sign * 2 * FIXTURE_SPACING
     ly     = far_y + sign * LABEL_ABOVE
-    elems.append(_note(doc, view, cx, ly, label, tt_id))
+    elems.append(_note(doc, view, cx, ly, label, tt_id, center_align=True))
     return elems
 
 
@@ -1135,7 +1142,7 @@ def main():
         drawn_edges = 0
         runs        = []
         current_run = []
-        prev_geom   = None  # (x1, y1, to_node_id, cum_mbh)
+        prev_geom   = None  # (x1, y1, to_node_id, cum_mbh, is_h)
         for eid in trunk_edge_ids_ord:
             edge = graph.edges[eid]
             if edge.to_node_id is None:
@@ -1144,16 +1151,19 @@ def main():
             pos_to   = positions.get(edge.to_node_id)
             if pos_from is None or pos_to is None:
                 continue
-            x1, y1 = pos_to
+            x0_e, y0_e = pos_from
+            x1, y1     = pos_to
+            is_h_cur   = abs(y1 - y0_e) <= abs(x1 - x0_e)
 
             continues_run = False
             if prev_geom is not None:
-                p_x1, p_y1, p_to_nid, p_mbh = prev_geom
+                p_x1, p_y1, p_to_nid, p_mbh, p_is_h = prev_geom
                 connects     = (p_to_nid == edge.from_node_id)
                 not_branch   = ((p_x1, p_y1) not in branch_point_positions
                                  and p_to_nid not in trunk_fixture_nids)
                 same_mbh     = abs(edge.cumulative_load_mbh - p_mbh) < 0.01
-                continues_run = connects and not_branch and same_mbh
+                same_dir     = is_h_cur == p_is_h
+                continues_run = connects and not_branch and same_mbh and same_dir
 
             if continues_run:
                 current_run.append(eid)
@@ -1161,7 +1171,7 @@ def main():
                 if current_run:
                     runs.append(current_run)
                 current_run = [eid]
-            prev_geom = (x1, y1, edge.to_node_id, edge.cumulative_load_mbh)
+            prev_geom = (x1, y1, edge.to_node_id, edge.cumulative_load_mbh, is_h_cur)
 
         if current_run:
             runs.append(current_run)
@@ -1271,8 +1281,7 @@ def main():
                     _make_group(doc, sym_elems)
                 x_center = cx + sign * 1.0 * FIXTURE_SPACING
                 lbl_y    = cy - FIXTURE_HW - FIXTURE_LABEL_GAP
-                _note(doc, view, x_center, lbl_y, label, tt_id,
-                      width=2 * FIXTURE_SPACING)
+                _note(doc, view, x_center, lbl_y, label, tt_id, center_align=True)
             else:
                 going_up = cy > 0.0
                 sign     = 1.0 if going_up else -1.0
@@ -1286,7 +1295,7 @@ def main():
                     _make_group(doc, sym_elems)
                 far_y = cy + sign * 2 * FIXTURE_SPACING
                 lbl_y = far_y + sign * FIXTURE_LABEL_GAP
-                _note(doc, view, cx, lbl_y, label, tt_id, width=2 * FIXTURE_HW)
+                _note(doc, view, cx, lbl_y, label, tt_id, center_align=True)
 
             drawn_fixtures += 1
 
