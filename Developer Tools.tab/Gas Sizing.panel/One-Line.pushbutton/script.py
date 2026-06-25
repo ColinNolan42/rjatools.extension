@@ -67,7 +67,7 @@ MIN_SEGMENT_FT   = 10.0    # ft minimum horizontal segment so text doesn't overl
 SYMBOL_RADIUS    = 0.5     # ft  meter circle radius
 FIXTURE_HW       = 1.5     # ft  half-width of 3-line fixture symbol (3 ft total)
 FIXTURE_SPACING  = 0.7     # ft  gap between 3 fixture lines
-FIXTURE_LABEL_GAP = 8.0   # ft  gap between outermost symbol line and label baseline (~1" at 1:100)
+FIXTURE_LABEL_GAP = 1.0   # ft  gap between outermost symbol line and nearest text edge
 VALVE_HW          = 1.0     # ft  half-width of bowtie (2 ft total)
 VALVE_HH          = 0.6     # ft  half-height of bowtie triangle
 VALVE_GAP         = 0.3     # ft  gap between valve edge and fixture connection line (fallback)
@@ -870,12 +870,17 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         _make_group(doc, sym_elems)
 
     # Fixture name + MBH as a SEPARATE TextNote (not grouped with symbol).
-    # Label is placed beyond the outermost (far) line of the symbol.
+    # TextNote origin = top of text box; text flows DOWN in model space.
+    # For going-up branches the origin must clear the outer line by one text
+    # block height so the text bottom (not origin) sits above the symbol.
     if fixture_node:
         name     = fixture_node.fixture_name or "UNNAMED"
         label    = name + "\n" + "{} MBH".format(int(round(fixture_node.gas_load_mbh)))
-        far_y    = fix_y + sign * 2 * FIXTURE_SPACING  # outermost line position
-        lbl_y    = far_y + sign * FIXTURE_LABEL_GAP
+        far_y    = fix_y + sign * 2 * FIXTURE_SPACING
+        if sign > 0:  # going up: shift origin up by gap + 2 text lines
+            lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
+        else:         # going down: origin just below outer line, text flows further down
+            lbl_y = far_y - FIXTURE_LABEL_GAP
         _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
 
 
@@ -961,7 +966,10 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
             name  = sfnd.fixture_name or "UNNAMED"
             label = name + "\n{} MBH".format(int(round(sfnd.gas_load_mbh)))
             far_y = fy + sign * 2 * FIXTURE_SPACING
-            lbl_y = far_y + sign * FIXTURE_LABEL_GAP
+            if sign > 0:
+                lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
+            else:
+                lbl_y = far_y - FIXTURE_LABEL_GAP
             _note(doc, view, sx, lbl_y, label, tt_id, center_align=True)
 
         # Pipe label above the horizontal leg — uses remaining_ft (sub-tee to
@@ -998,7 +1006,10 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
         name  = primary_node.fixture_name or "UNNAMED"
         label = name + "\n{} MBH".format(int(round(primary_node.gas_load_mbh)))
         far_y = fix_y + sign * 2 * FIXTURE_SPACING
-        lbl_y = far_y + sign * FIXTURE_LABEL_GAP
+        if sign > 0:
+            lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
+        else:
+            lbl_y = far_y - FIXTURE_LABEL_GAP
         _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
 
     # Two pipe labels on the main vertical when sub-fixtures are present:
@@ -1830,7 +1841,10 @@ def main():
                                                cx + FIXTURE_HW, yy))
                     _make_group(doc, sym_elems)
                 far_y = cy + sign * 2 * FIXTURE_SPACING
-                lbl_y = far_y + sign * FIXTURE_LABEL_GAP
+                if sign > 0:
+                    lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
+                else:
+                    lbl_y = far_y - FIXTURE_LABEL_GAP
                 _note(doc, view, cx, lbl_y, label, tt_id, center_align=True)
 
             drawn_fixtures += 1
