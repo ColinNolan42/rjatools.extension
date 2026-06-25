@@ -79,13 +79,21 @@ def format_diagnostic_output(graph, origin_element):
         lines.append("  NONE")
     for e in graph.edges.values():
         to_display = "OPEN-END" if e.to_node_id is None else str(e.to_node_id)
-        lines.append("  [{}]  {}\"  {:.1f}'  from={} to={}  cumulative={:.1f} MBH".format(
+        lines.append("  [{}]  {}\"  {:.2f} FT  from={} to={}  cumulative={:.1f} MBH".format(
             e.element_id,
             round(e.diameter_inches, 4),
             e.length_feet,
             e.from_node_id,
             to_display,
             e.cumulative_load_mbh))
+        start = e.start_xyz
+        end   = e.end_xyz
+        if start:
+            lines.append("    start=({:.3f}, {:.3f}, {:.3f})".format(
+                float(start[0]), float(start[1]), float(start[2])))
+        if end:
+            lines.append("    end=({:.3f}, {:.3f}, {:.3f})".format(
+                float(end[0]), float(end[1]), float(end[2])))
 
     # -------------------------------------------------------------------------
     # FITTINGS
@@ -96,9 +104,14 @@ def format_diagnostic_output(graph, origin_element):
     if not fittings:
         lines.append("  NONE")
     for n in fittings:
-        lines.append("  [{}]  {}  connectors={}  branch_point={}".format(
+        loc = n.location_xyz
+        loc_str = ""
+        if loc:
+            loc_str = "  loc=({:.3f}, {:.3f}, {:.3f})".format(
+                float(loc[0]), float(loc[1]), float(loc[2]))
+        lines.append("  [{}]  {}  connectors={}  branch_point={}{}".format(
             n.element_id, n.node_type, n.connector_count,
-            n.node_type == "tee"))
+            n.node_type == "tee", loc_str))
 
     # -------------------------------------------------------------------------
     # NETWORK GRAPH
