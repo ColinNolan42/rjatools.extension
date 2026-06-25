@@ -186,13 +186,16 @@ def _find_fixture_z(graph, start_nid, trunk_set, default_z):
     return default_z
 
 
-def _trace_to_fixtures(graph, start_nid, trunk_set):
+def _trace_to_fixtures(graph, start_nid, trunk_set, initial_len=0.0):
     """Trace all pipe edges from start_nid (non-trunk) to find fixtures.
 
     Collapses every intermediate fitting, elbow, transition, and CSST run
     into one result entry per fixture.  This implements the firm standard
     where top-takeoff routing (rise from trunk, horizontal, drop to equip)
     is shown as a single schematic vertical line on the one-line diagram.
+
+    initial_len: seed length to add to every path (used to include the
+                 caller's branch edge pipe + elbow-at-start-node).
 
     Returns list of dicts:
       fixture_nid:     node_id of the fixture
@@ -203,7 +206,7 @@ def _trace_to_fixtures(graph, start_nid, trunk_set):
     """
     results = []
     # stack: (nid, acc_len_ft, acc_edge_ids, acc_valve)
-    stack = [(start_nid, 0.0, [], False)]
+    stack = [(start_nid, initial_len, [], False)]
     seen  = {start_nid}
 
     while stack:
@@ -369,8 +372,12 @@ def _compute_layout(graph):
             if branch_edge.to_node_id is None:
                 continue
 
-            # Trace entire branch to find fixture(s) and cumulative length
-            fixtures = _trace_to_fixtures(graph, branch_edge.to_node_id, trunk_set)
+            # Trace entire branch to find fixture(s) and cumulative length.
+            # Seed with the branch edge's developed length (pipe + elbow equiv
+            # at its to_node) so that elbow at the first branch node is counted.
+            branch_seed_len = _edge_developed_length(graph, branch_edge)
+            fixtures = _trace_to_fixtures(graph, branch_edge.to_node_id, trunk_set,
+                                          initial_len=branch_seed_len)
             if not fixtures:
                 continue
             # Skip if the primary fixture is already positioned by a sibling
@@ -429,11 +436,14 @@ def _compute_layout(graph):
                 sub_info = []
                 for i, sf in enumerate(stubs):
                     sx = tx + (i + 1) * MIN_SEGMENT_FT
-                    positions[sf["fixture_nid"]] = (sx, junction_y)
+                    # Stub symbol lands at fix_y (same level as primary) so
+                    # the L-shape: horizontal at junction_y then down to fix_y.
+                    positions[sf["fixture_nid"]] = (sx, fix_y)
                     sub_info.append({
                         "fixture_nid":     sf["fixture_nid"],
                         "stub_x":          sx,
                         "junction_y":      junction_y,
+                        "fixture_y":       fix_y,
                         "total_ft":        sf["total_length_ft"],
                         "cum_mbh":         sf["cum_mbh"],
                         "has_valve":       sf["has_valve"],
@@ -771,6 +781,116 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
         _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
 
 
+def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
+                                       valve_sym=None, equip_sym=None):
+    """Draw a branch where multiple fixtures share one branch off the trunk.
+
+    The primary fixture (longest pipe path) hangs at the end of the main
+    vertical.  Each shorter path branches off as a horizontal stub at the
+    junction midpoint, keeping all fixture labels spatially separated.
+    """
+    tee_x, tee_y = bi["tee_pos"]
+    fix_x, fix_y = bi["fixture_pos"]
+    has_valve     = bi["has_valve"]
+    sub_fixtures  = bi.get("sub_fixtures", [])
+    size          = bi.get("size", "")
+    total_ft      = bi.get("total_ft", 0)
+    cum_mbh       = bi.get("cum_mbh", 0)
+    going_up      = fix_y > tee_y
+    sign          = 1.0 if going_up else -1.0
+
+    # Main vertical: trunk tee to primary fixture level
+    _line(doc, view, tee_x, tee_y, tee_x, fix_y)
+
+    if has_valve:
+        val_y  = tee_y + (fix_y - tee_y) * 0.4
+        v_inst = _place_sym(doc, view, valve_sym, tee_x, val_y, rotate_90=True)
+        if v_inst is None:
+            _make_group(doc, _draw_valve_bowtie(doc, view, tee_x, val_y))
+
+    # L-shaped stubs for sub-fixtures: horizontal at junction_y then
+    # vertical down to fixture_y (same level as primary fixture).
+    for sf in sub_fixtures:
+        jy    = sf["junction_y"]
+        fy    = sf.get("fixture_y", fix_y)
+        sx    = sf["stub_x"]
+        sfnd  = graph.nodes.get(sf["fixture_nid"])
+
+        # Horizontal leg at junction_y
+        _line(doc, view, tee_x, jy, sx, jy)
+        # Vertical leg down to fixture level
+        _line(doc, view, sx, jy, sx, fy)
+
+        # Equipment symbol at fixture level (same Y as primary)
+        e_inst = _place_sym(doc, view, equip_sym, sx, fy)
+        if e_inst is None:
+            sym_elems = []
+            for i in range(3):
+                yy = fy + sign * i * FIXTURE_SPACING
+                sym_elems.append(
+                    _line(doc, view, sx - FIXTURE_HW, yy, sx + FIXTURE_HW, yy))
+            _make_group(doc, sym_elems)
+
+        if sfnd:
+            name  = sfnd.fixture_name or "UNNAMED"
+            label = name + "\n{} MBH".format(int(round(sfnd.gas_load_mbh)))
+            far_y = fy + sign * 2 * FIXTURE_SPACING
+            lbl_y = far_y + sign * FIXTURE_LABEL_GAP
+            _note(doc, view, sx, lbl_y, label, tt_id, center_align=True)
+
+        # Pipe label above the horizontal stub
+        sf_size = sf.get("size", "")
+        sf_lft  = int(round(sf.get("total_ft", 0)))
+        sf_mbh  = int(round(sfnd.gas_load_mbh)) if sfnd else 0
+        if sf_size and sf_lft > 0:
+            sub_l1 = '{}"G, {} FT'.format(sf_size, sf_lft)
+        elif sf_size:
+            sub_l1 = '{}"G'.format(sf_size)
+        elif sf_lft > 0:
+            sub_l1 = '{} FT'.format(sf_lft)
+        else:
+            sub_l1 = None
+        if sub_l1:
+            mid_x      = (tee_x + sx) / 2.0
+            stub_lbl_y = jy + sign * LABEL_ABOVE
+            _note(doc, view, mid_x, stub_lbl_y,
+                  sub_l1 + "\n{} MBH".format(sf_mbh), tt_id, width=True)
+
+    # Primary fixture symbol at end of main vertical
+    primary_node = graph.nodes.get(bi["fixture_nid"])
+    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y)
+    if e_inst is None:
+        sym_elems = []
+        for i in range(3):
+            yy = fix_y + sign * i * FIXTURE_SPACING
+            sym_elems.append(
+                _line(doc, view, fix_x - FIXTURE_HW, yy, fix_x + FIXTURE_HW, yy))
+        _make_group(doc, sym_elems)
+
+    if primary_node:
+        name  = primary_node.fixture_name or "UNNAMED"
+        label = name + "\n{} MBH".format(int(round(primary_node.gas_load_mbh)))
+        far_y = fix_y + sign * 2 * FIXTURE_SPACING
+        lbl_y = far_y + sign * FIXTURE_LABEL_GAP
+        _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
+
+    # Branch pipe label right of main vertical at midpoint
+    mid_y = (tee_y + fix_y) / 2.0
+    lft   = int(round(total_ft))
+    mbh   = int(round(cum_mbh))
+    if size and lft > 0:
+        l1 = '{}"G, {} FT'.format(size, lft)
+    elif size:
+        l1 = '{}"G'.format(size)
+    elif lft > 0:
+        l1 = '{} FT'.format(lft)
+    else:
+        l1 = None
+    if l1:
+        _note(doc, view, tee_x + LABEL_RIGHT, mid_y,
+              l1 + "\n{} MBH".format(mbh), tt_id)
+
+
 # ---------------------------------------------------------------------------
 # Drawing helpers
 # ---------------------------------------------------------------------------
@@ -1072,6 +1192,12 @@ def main():
             if s:
                 bi["size"] = s
                 break
+        for sf in bi.get("sub_fixtures", []):
+            for eid in sf.get("branch_edge_ids", []):
+                s = pipe_sizes.get(eid, "")
+                if s:
+                    sf["size"] = s
+                    break
 
     # Fallback for stub / side-takeoff branches whose pipe element wasn't written
     # by the sizing engine (e.g. short tee stubs, bottom take-offs).  Look up the
@@ -1090,6 +1216,13 @@ def main():
                 if cap is not None and cap >= demand:
                     bi["size"] = nom
                     break
+        for sf in bi.get("sub_fixtures", []):
+            if not sf.get("size") and _fb_pairs:
+                demand = sf["cum_mbh"]
+                for nom, cap in _fb_pairs:
+                    if cap is not None and cap >= demand:
+                        sf["size"] = nom
+                        break
 
     # ------------------------------------------------------------------
     # STEP 5b - Full layout diagnostic (copy/paste into conversation)
@@ -1298,18 +1431,24 @@ def main():
             node = graph.nodes.get(bi["fixture_nid"])
             if node is None:
                 continue
-            _draw_schematic_branch(
-                doc, view,
-                tee_x, tee_y, fix_x, fix_y,
-                bi["direc"],
-                bi["total_ft"],
-                bi["size"],
-                bi["has_valve"],
-                node,
-                tt_id,
-                valve_sym=valve_sym,
-                equip_sym=equip_sym)
-            drawn_fixtures += 1
+            if bi.get("sub_fixtures"):
+                _draw_schematic_branch_with_stubs(
+                    doc, view, bi, graph, tt_id,
+                    valve_sym=valve_sym, equip_sym=equip_sym)
+                drawn_fixtures += 1 + len(bi["sub_fixtures"])
+            else:
+                _draw_schematic_branch(
+                    doc, view,
+                    tee_x, tee_y, fix_x, fix_y,
+                    bi["direc"],
+                    bi["total_ft"],
+                    bi["size"],
+                    bi["has_valve"],
+                    node,
+                    tt_id,
+                    valve_sym=valve_sym,
+                    equip_sym=equip_sym)
+                drawn_fixtures += 1
             if bi["has_valve"]:
                 drawn_valves += 1
 
