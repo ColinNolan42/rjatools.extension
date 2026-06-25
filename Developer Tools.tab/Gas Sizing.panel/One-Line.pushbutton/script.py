@@ -424,47 +424,69 @@ def _compute_layout(graph):
                 })
             else:
                 # Multiple fixtures: longest path = primary (end of main
-                # vertical), shorter paths = horizontal stubs at mid-height.
+                # vertical), shorter paths = L-shaped stubs at mid-height.
                 fixes_sorted = sorted(fixtures,
                                       key=lambda f: f["total_length_ft"])
                 primary = fixes_sorted[-1]
                 stubs   = fixes_sorted[:-1]
                 junction_y = ty + direc * LEVEL_HEIGHT * depth * 0.5
 
+                # Find the common edge prefix shared by all fixture paths.
+                # These are the pipes from the branch tee to the sub-tee.
+                all_eids = [f["branch_edge_ids"] for f in fixes_sorted]
+                shared_eids = []
+                for group in zip(*all_eids):
+                    if len(set(group)) == 1:
+                        shared_eids.append(group[0])
+                    else:
+                        break
+                shared_eids_dev = sum(
+                    _edge_developed_length(graph, graph.edges[eid])
+                    for eid in shared_eids if eid in graph.edges)
+                # shared_ft = branch_seed already in total_ft + shared pipe
+                shared_ft = branch_seed_len + shared_eids_dev
+
                 positions[primary["fixture_nid"]] = (tx, fix_y)
 
                 sub_info = []
                 for i, sf in enumerate(stubs):
                     sx = tx + (i + 1) * MIN_SEGMENT_FT
-                    # Stub symbol lands at fix_y (same level as primary) so
-                    # the L-shape: horizontal at junction_y then down to fix_y.
                     positions[sf["fixture_nid"]] = (sx, fix_y)
                     sub_info.append({
-                        "fixture_nid":     sf["fixture_nid"],
-                        "stub_x":          sx,
-                        "junction_y":      junction_y,
-                        "fixture_y":       fix_y,
-                        "total_ft":        sf["total_length_ft"],
-                        "cum_mbh":         sf["cum_mbh"],
-                        "has_valve":       sf["has_valve"],
-                        "branch_edge_ids": sf["branch_edge_ids"],
-                        "size":            "",
+                        "fixture_nid":      sf["fixture_nid"],
+                        "stub_x":           sx,
+                        "junction_y":       junction_y,
+                        "fixture_y":        fix_y,
+                        "total_ft":         sf["total_length_ft"],
+                        "remaining_ft":     sf["total_length_ft"] - shared_ft,
+                        "cum_mbh":          sf["cum_mbh"],
+                        "has_valve":        sf["has_valve"],
+                        "branch_edge_ids":  sf["branch_edge_ids"],
+                        "remaining_eids":   sf["branch_edge_ids"][len(shared_eids):],
+                        "size":             "",
+                        "remaining_size":   "",
                     })
 
                 total_branch_mbh = (sum(s["cum_mbh"] for s in sub_info)
                                     + primary["cum_mbh"])
                 branch_info.append({
-                    "tee_nid":         tee_nid,
-                    "tee_pos":         (tx, ty),
-                    "fixture_nid":     primary["fixture_nid"],
-                    "fixture_pos":     (tx, fix_y),
-                    "total_ft":        primary["total_length_ft"],
-                    "branch_edge_ids": primary["branch_edge_ids"],
-                    "has_valve":       primary["has_valve"],
-                    "direc":           direc,
-                    "size":            "",
-                    "cum_mbh":         total_branch_mbh,
-                    "sub_fixtures":    sub_info,
+                    "tee_nid":          tee_nid,
+                    "tee_pos":          (tx, ty),
+                    "fixture_nid":      primary["fixture_nid"],
+                    "fixture_pos":      (tx, fix_y),
+                    "total_ft":         primary["total_length_ft"],
+                    "shared_ft":        shared_ft,
+                    "shared_eids":      shared_eids,
+                    "remaining_ft":     primary["total_length_ft"] - shared_ft,
+                    "remaining_eids":   primary["branch_edge_ids"][len(shared_eids):],
+                    "branch_edge_ids":  primary["branch_edge_ids"],
+                    "has_valve":        primary["has_valve"],
+                    "direc":            direc,
+                    "size":             "",
+                    "shared_size":      "",
+                    "remaining_size":   "",
+                    "cum_mbh":          total_branch_mbh,
+                    "sub_fixtures":     sub_info,
                 })
                 layout_log.append({
                     "tee_nid":    tee_nid,
@@ -838,9 +860,10 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
             lbl_y = far_y + sign * FIXTURE_LABEL_GAP
             _note(doc, view, sx, lbl_y, label, tt_id, center_align=True)
 
-        # Pipe label above the horizontal stub
-        sf_size = sf.get("size", "")
-        sf_lft  = int(round(sf.get("total_ft", 0)))
+        # Pipe label above the horizontal leg — uses remaining_ft (sub-tee to
+        # stub fixture only, not the full path from trunk tee).
+        sf_size = sf.get("remaining_size", "") or sf.get("size", "")
+        sf_lft  = int(round(sf.get("remaining_ft", 0)))
         sf_mbh  = int(round(sfnd.gas_load_mbh)) if sfnd else 0
         if sf_size and sf_lft > 0:
             sub_l1 = '{}"G, {} FT'.format(sf_size, sf_lft)
@@ -874,21 +897,61 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
         lbl_y = far_y + sign * FIXTURE_LABEL_GAP
         _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
 
-    # Branch pipe label right of main vertical at midpoint
-    mid_y = (tee_y + fix_y) / 2.0
-    lft   = int(round(total_ft))
-    mbh   = int(round(cum_mbh))
-    if size and lft > 0:
-        l1 = '{}"G, {} FT'.format(size, lft)
-    elif size:
-        l1 = '{}"G'.format(size)
-    elif lft > 0:
-        l1 = '{} FT'.format(lft)
+    # Two pipe labels on the main vertical when sub-fixtures are present:
+    #   Label 1 (trunk tee → sub-tee junction): shared_ft + combined cum_mbh
+    #   Label 2 (sub-tee junction → primary fixture): remaining_ft + primary MBH
+    junction_y = sub_fixtures[0]["junction_y"] if sub_fixtures else None
+    if junction_y is not None:
+        shared_size   = bi.get("shared_size", "") or size
+        shared_ft     = int(round(bi.get("shared_ft", 0)))
+        combined_mbh  = int(round(cum_mbh))
+        rem_size      = bi.get("remaining_size", "") or size
+        rem_ft        = int(round(bi.get("remaining_ft", 0)))
+        prim_mbh      = int(round(primary_node.gas_load_mbh)) if primary_node else 0
+
+        # Label 1: on the shared section (tee_y → junction_y)
+        mid1 = (tee_y + junction_y) / 2.0
+        if shared_size and shared_ft > 0:
+            l1 = '{}"G, {} FT'.format(shared_size, shared_ft)
+        elif shared_size:
+            l1 = '{}"G'.format(shared_size)
+        elif shared_ft > 0:
+            l1 = '{} FT'.format(shared_ft)
+        else:
+            l1 = None
+        if l1:
+            _note(doc, view, tee_x + LABEL_RIGHT, mid1,
+                  l1 + "\n{} MBH".format(combined_mbh), tt_id)
+
+        # Label 2: on the individual section (junction_y → fix_y)
+        mid2 = (junction_y + fix_y) / 2.0
+        if rem_size and rem_ft > 0:
+            l2 = '{}"G, {} FT'.format(rem_size, rem_ft)
+        elif rem_size:
+            l2 = '{}"G'.format(rem_size)
+        elif rem_ft > 0:
+            l2 = '{} FT'.format(rem_ft)
+        else:
+            l2 = None
+        if l2:
+            _note(doc, view, tee_x + LABEL_RIGHT, mid2,
+                  l2 + "\n{} MBH".format(prim_mbh), tt_id)
     else:
-        l1 = None
-    if l1:
-        _note(doc, view, tee_x + LABEL_RIGHT, mid_y,
-              l1 + "\n{} MBH".format(mbh), tt_id)
+        # Fallback: single label if no sub-fixtures (shouldn't happen here)
+        mid_y = (tee_y + fix_y) / 2.0
+        lft   = int(round(total_ft))
+        mbh   = int(round(cum_mbh))
+        if size and lft > 0:
+            l1 = '{}"G, {} FT'.format(size, lft)
+        elif size:
+            l1 = '{}"G'.format(size)
+        elif lft > 0:
+            l1 = '{} FT'.format(lft)
+        else:
+            l1 = None
+        if l1:
+            _note(doc, view, tee_x + LABEL_RIGHT, mid_y,
+                  l1 + "\n{} MBH".format(mbh), tt_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1192,11 +1255,28 @@ def main():
             if s:
                 bi["size"] = s
                 break
+        # For multi-fixture branches: fill shared_size and remaining_size
+        if bi.get("sub_fixtures"):
+            for eid in bi.get("shared_eids", []):
+                s = pipe_sizes.get(eid, "")
+                if s:
+                    bi["shared_size"] = s
+                    break
+            for eid in bi.get("remaining_eids", []):
+                s = pipe_sizes.get(eid, "")
+                if s:
+                    bi["remaining_size"] = s
+                    break
         for sf in bi.get("sub_fixtures", []):
             for eid in sf.get("branch_edge_ids", []):
                 s = pipe_sizes.get(eid, "")
                 if s:
                     sf["size"] = s
+                    break
+            for eid in sf.get("remaining_eids", []):
+                s = pipe_sizes.get(eid, "")
+                if s:
+                    sf["remaining_size"] = s
                     break
 
     # Fallback for stub / side-takeoff branches whose pipe element wasn't written
@@ -1216,12 +1296,32 @@ def main():
                 if cap is not None and cap >= demand:
                     bi["size"] = nom
                     break
+        if bi.get("sub_fixtures"):
+            if not bi.get("shared_size") and _fb_pairs:
+                demand = bi["cum_mbh"]
+                for nom, cap in _fb_pairs:
+                    if cap is not None and cap >= demand:
+                        bi["shared_size"] = nom
+                        break
+            if not bi.get("remaining_size") and _fb_pairs:
+                demand = bi.get("cum_mbh", 0) - sum(
+                    s["cum_mbh"] for s in bi["sub_fixtures"])
+                for nom, cap in _fb_pairs:
+                    if cap is not None and cap >= demand:
+                        bi["remaining_size"] = nom
+                        break
         for sf in bi.get("sub_fixtures", []):
             if not sf.get("size") and _fb_pairs:
                 demand = sf["cum_mbh"]
                 for nom, cap in _fb_pairs:
                     if cap is not None and cap >= demand:
                         sf["size"] = nom
+                        break
+            if not sf.get("remaining_size") and _fb_pairs:
+                demand = sf["cum_mbh"]
+                for nom, cap in _fb_pairs:
+                    if cap is not None and cap >= demand:
+                        sf["remaining_size"] = nom
                         break
 
     # ------------------------------------------------------------------
