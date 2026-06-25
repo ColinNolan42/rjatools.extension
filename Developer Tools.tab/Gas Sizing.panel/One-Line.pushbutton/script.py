@@ -24,6 +24,7 @@ from Autodesk.Revit.DB import (
     BuiltInParameter,
     ElementId,
     ElementTransformUtils,
+    GraphicsStyle,
     Line,
     Arc,
     XYZ,
@@ -70,8 +71,8 @@ FIXTURE_LABEL_GAP = 0.4   # ft  gap between outermost symbol line and label base
 VALVE_HW          = 1.0     # ft  half-width of bowtie (2 ft total)
 VALVE_HH          = 0.6     # ft  half-height of bowtie triangle
 VALVE_GAP         = 0.3     # ft  gap between valve edge and fixture connection line (fallback)
-VALVE_FIXTURE_GAP = 4.0     # ft  fixture baseline → nearest valve center (≈ 0.5" at 1:100)
-VALVE_PITCH       = 4.0     # ft  center-to-center between consecutive valve symbols
+VALVE_FIXTURE_GAP = 2.0     # ft  fixture baseline → nearest valve center (≈ 0.24" at 1:100)
+VALVE_PITCH       = 2.0     # ft  center-to-center between consecutive valve symbols
 LABEL_ABOVE      = 1.2     # ft  above a horizontal pipe (must clear text height)
 LABEL_RIGHT      = 0.6     # ft  right of a vertical pipe
 UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
@@ -800,7 +801,8 @@ def _trunk_fixture_valves(graph, fix_nid, trunk_all_ids):
 def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
                             direc, total_ft, size, has_isolation, has_prv,
                             fixture_node, tt_id,
-                            valve_sym=None, prv_sym=None, equip_sym=None):
+                            valve_sym=None, prv_sym=None, equip_sym=None,
+                            line_style=None):
     """Draw one simplified schematic branch from trunk tee to fixture.
 
     Diagram order from branch tee toward fixture:
@@ -815,11 +817,11 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
       equip_sym  -- RJA - P Symbols - Equipment
     """
     # Vertical segment from tee to fixture level
-    _line(doc, view, tee_x, tee_y, tee_x, fix_y)
+    _line(doc, view, tee_x, tee_y, tee_x, fix_y, line_style=line_style)
 
     # Horizontal segment if fixture is offset from tee
     if abs(fix_x - tee_x) > 0.01:
-        _line(doc, view, tee_x, fix_y, fix_x, fix_y)
+        _line(doc, view, tee_x, fix_y, fix_x, fix_y, line_style=line_style)
 
     going_up = fix_y > tee_y
     sign     = 1.0 if going_up else -1.0
@@ -878,7 +880,8 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
 
 
 def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
-                                       valve_sym=None, prv_sym=None, equip_sym=None):
+                                       valve_sym=None, prv_sym=None, equip_sym=None,
+                                       line_style=None):
     """Draw a branch where multiple fixtures share one branch off the trunk.
 
     The primary fixture (longest pipe path) hangs at the end of the main
@@ -899,7 +902,7 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
     sign           = 1.0 if going_up else -1.0
 
     # Main vertical: trunk tee to primary fixture level
-    _line(doc, view, tee_x, tee_y, tee_x, fix_y)
+    _line(doc, view, tee_x, tee_y, tee_x, fix_y, line_style=line_style)
 
     # Isolation valve: VALVE_FIXTURE_GAP ft from primary fixture baseline
     iso_y = fix_y - sign * VALVE_FIXTURE_GAP
@@ -926,9 +929,9 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
         sf_prv = sf.get("has_prv", False)
 
         # Horizontal leg at junction_y
-        _line(doc, view, tee_x, jy, sx, jy)
+        _line(doc, view, tee_x, jy, sx, jy, line_style=line_style)
         # Vertical leg from junction to fixture level
-        _line(doc, view, sx, jy, sx, fy)
+        _line(doc, view, sx, jy, sx, fy, line_style=line_style)
 
         # Valves on stub vertical, VALVE_FIXTURE_GAP from stub fixture baseline
         stub_height = abs(fy - jy)
@@ -1059,14 +1062,55 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
 # Drawing helpers
 # ---------------------------------------------------------------------------
 
-def _line(doc, view, x0, y0, x1, y1):
-    """Draw a detail line and return the element (or None on failure)."""
+def _get_line_style(doc, style_name):
+    """Return the GraphicsStyle with the given name, or None if not found."""
+    for gs in FilteredElementCollector(doc).OfClass(GraphicsStyle):
+        try:
+            if gs.Name == style_name:
+                return gs
+        except Exception:
+            pass
+    return None
+
+
+def _build_new_construction_eids(graph, doc):
+    """Return set of edge element IDs whose pipe Phase Created name contains 'new'."""
+    new_eids = set()
+    for eid, edge in graph.edges.items():
+        if edge.pipe is None:
+            continue
+        try:
+            p = edge.pipe.get_Parameter(BuiltInParameter.PHASE_CREATED)
+            if p is None:
+                continue
+            phase_el = doc.GetElement(p.AsElementId())
+            if phase_el is None:
+                continue
+            if "new" in (phase_el.Name or "").lower():
+                new_eids.add(eid)
+        except Exception:
+            pass
+    return new_eids
+
+
+def _line(doc, view, x0, y0, x1, y1, line_style=None):
+    """Draw a detail line and return the element (or None on failure).
+
+    If line_style is a GraphicsStyle, it is applied to the detail curve.
+    Pass None to use the view's default line style (thin).
+    """
     try:
         if abs(x1 - x0) < 0.001 and abs(y1 - y0) < 0.001:
             return None
-        return doc.Create.NewDetailCurve(
+        dc = doc.Create.NewDetailCurve(
             view,
             Line.CreateBound(XYZ(x0, y0, 0), XYZ(x1, y1, 0)))
+        if dc is not None and line_style is not None:
+            try:
+                dc.LineStyle = line_style
+            except Exception:
+                pass
+        return dc
     except Exception:
         return None
 
@@ -1449,6 +1493,17 @@ def main():
                         break
 
     # ------------------------------------------------------------------
+    # STEP 5c - Phase-based line style
+    # ------------------------------------------------------------------
+    new_construction_eids = _build_new_construction_eids(graph, doc)
+    wide_line_style = _get_line_style(doc, "Line 4")
+    if wide_line_style is None:
+        output.print_md(":warning: Line style 'Line 4' not found - pipe segments will use default line weight.")
+    else:
+        output.print_md(":white_check_mark: Line style 'Line 4' loaded ({} New Construction segments).".format(
+            len(new_construction_eids)))
+
+    # ------------------------------------------------------------------
     # STEP 5b - Full layout diagnostic (copy/paste into conversation)
     # ------------------------------------------------------------------
     trunk_all_ids_diag = list(graph.longest_run["path_element_ids"])
@@ -1585,11 +1640,10 @@ def main():
             continues_run = False
             if prev_geom is not None:
                 p_x1, p_y1, p_to_nid, p_mbh = prev_geom
-                connects     = (p_to_nid == edge.from_node_id)
-                not_branch   = ((p_x1, p_y1) not in branch_point_positions
-                                 and p_to_nid not in trunk_fixture_nids)
-                same_mbh     = abs(edge.cumulative_load_mbh - p_mbh) < 0.01
-                continues_run = connects and not_branch and same_mbh
+                connects      = (p_to_nid == edge.from_node_id)
+                same_mbh      = abs(edge.cumulative_load_mbh - p_mbh) < 0.01
+                not_at_fix    = p_to_nid not in trunk_fixture_nids
+                continues_run = connects and same_mbh and not_at_fix
 
             if continues_run:
                 current_run.append(eid)
@@ -1607,7 +1661,9 @@ def main():
                 edge     = graph.edges[eid]
                 pos_from = positions[edge.from_node_id]
                 pos_to   = positions[edge.to_node_id]
-                _line(doc, view, pos_from[0], pos_from[1], pos_to[0], pos_to[1])
+                ls = wide_line_style if eid in new_construction_eids else None
+                _line(doc, view, pos_from[0], pos_from[1], pos_to[0], pos_to[1],
+                      line_style=ls)
                 drawn_edges += 1
 
             first_edge = graph.edges[run[0]]
@@ -1657,10 +1713,22 @@ def main():
             node = graph.nodes.get(bi["fixture_nid"])
             if node is None:
                 continue
+
+            # Line style for this branch: wide if any of its pipe edges are
+            # New Construction, default (None) otherwise.
+            bi_ls = None
+            if wide_line_style is not None:
+                all_bi_eids = list(bi.get("branch_edge_ids", []))
+                for sf in bi.get("sub_fixtures", []):
+                    all_bi_eids.extend(sf.get("branch_edge_ids", []))
+                if any(eid in new_construction_eids for eid in all_bi_eids):
+                    bi_ls = wide_line_style
+
             if bi.get("sub_fixtures"):
                 _draw_schematic_branch_with_stubs(
                     doc, view, bi, graph, tt_id,
-                    valve_sym=valve_sym, prv_sym=prv_sym, equip_sym=equip_sym)
+                    valve_sym=valve_sym, prv_sym=prv_sym, equip_sym=equip_sym,
+                    line_style=bi_ls)
                 drawn_fixtures += 1 + len(bi["sub_fixtures"])
             else:
                 _draw_schematic_branch(
@@ -1675,7 +1743,8 @@ def main():
                     tt_id,
                     valve_sym=valve_sym,
                     prv_sym=prv_sym,
-                    equip_sym=equip_sym)
+                    equip_sym=equip_sym,
+                    line_style=bi_ls)
                 drawn_fixtures += 1
             if bi.get("has_isolation") or bi.get("has_prv"):
                 drawn_valves += 1
