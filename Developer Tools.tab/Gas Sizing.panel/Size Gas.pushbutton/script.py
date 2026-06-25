@@ -27,6 +27,7 @@ import revit_helpers
 import pipe_graph
 import gas_tables
 import sizing_engine
+import ui_helpers
 
 
 # ---------------------------------------------------------------------------
@@ -251,24 +252,11 @@ def main():
     output.print_md(":white_check_mark: Meter validation passed.")
 
     # ------------------------------------------------------------------
-    # STEP 3 - Startup dialog: select pipe material then IFGC table
+    # STEP 3 - Startup dialog: select pipe material and IFGC table
     # ------------------------------------------------------------------
-    pipe_material = forms.SelectFromList.show(
-        gas_tables.get_material_labels(),
-        title="Size Gas - Select Pipe Material",
-        multiselect=False
-    )
-    if not pipe_material:
-        output.print_md(
-            "Cancelled at material selection. No changes were made to the model.")
-        return
-
-    selected_table_label = forms.SelectFromList.show(
-        gas_tables.get_table_option_labels_for_material(pipe_material),
-        title="Size Gas - Select IFGC Table ({})".format(pipe_material),
-        multiselect=False
-    )
-    if not selected_table_label:
+    pipe_material, selected_table_label = ui_helpers.show_table_picker(
+        "Size Gas - Select IFGC Table")
+    if not pipe_material or not selected_table_label:
         output.print_md(
             "Cancelled at table selection. No changes were made to the model.")
         return

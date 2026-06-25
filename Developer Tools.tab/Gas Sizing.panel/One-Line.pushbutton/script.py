@@ -54,6 +54,7 @@ import revit_helpers
 import pipe_graph
 import gas_tables
 import sizing_engine
+import ui_helpers
 
 
 # ---------------------------------------------------------------------------
@@ -385,23 +386,22 @@ def _compute_layout(graph):
             branch_counters[tee_nid] = depth
             fix_y = ty + direc * LEVEL_HEIGHT * depth
 
-            for i, fix_info in enumerate(fixtures):
-                # If multiple fixtures from one tee, spread them horizontally
-                fix_x   = tx + i * MIN_SEGMENT_FT
-                fix_nid = fix_info["fixture_nid"]
-                positions[fix_nid] = (fix_x, fix_y)
-
+            if len(fixtures) == 1:
+                fix_info = fixtures[0]
+                fix_nid  = fix_info["fixture_nid"]
+                positions[fix_nid] = (tx, fix_y)
                 branch_info.append({
                     "tee_nid":         tee_nid,
                     "tee_pos":         (tx, ty),
                     "fixture_nid":     fix_nid,
-                    "fixture_pos":     (fix_x, fix_y),
+                    "fixture_pos":     (tx, fix_y),
                     "total_ft":        fix_info["total_length_ft"],
                     "branch_edge_ids": fix_info["branch_edge_ids"],
                     "has_valve":       fix_info["has_valve"],
                     "direc":           direc,
-                    "size":            "",  # filled after pipe_sizes known
+                    "size":            "",
                     "cum_mbh":         fix_info["cum_mbh"],
+                    "sub_fixtures":    [],
                 })
                 layout_log.append({
                     "tee_nid":    tee_nid,
@@ -412,7 +412,60 @@ def _compute_layout(graph):
                     "to_z":       first_fix_z,
                     "fixture_z":  first_fix_z,
                     "direc":      "UP" if direc > 0 else "DOWN",
-                    "result_pos": (fix_x, fix_y),
+                    "result_pos": (tx, fix_y),
+                    "branch_y":   None,
+                })
+            else:
+                # Multiple fixtures: longest path = primary (end of main
+                # vertical), shorter paths = horizontal stubs at mid-height.
+                fixes_sorted = sorted(fixtures,
+                                      key=lambda f: f["total_length_ft"])
+                primary = fixes_sorted[-1]
+                stubs   = fixes_sorted[:-1]
+                junction_y = ty + direc * LEVEL_HEIGHT * depth * 0.5
+
+                positions[primary["fixture_nid"]] = (tx, fix_y)
+
+                sub_info = []
+                for i, sf in enumerate(stubs):
+                    sx = tx + (i + 1) * MIN_SEGMENT_FT
+                    positions[sf["fixture_nid"]] = (sx, junction_y)
+                    sub_info.append({
+                        "fixture_nid":     sf["fixture_nid"],
+                        "stub_x":          sx,
+                        "junction_y":      junction_y,
+                        "total_ft":        sf["total_length_ft"],
+                        "cum_mbh":         sf["cum_mbh"],
+                        "has_valve":       sf["has_valve"],
+                        "branch_edge_ids": sf["branch_edge_ids"],
+                        "size":            "",
+                    })
+
+                total_branch_mbh = (sum(s["cum_mbh"] for s in sub_info)
+                                    + primary["cum_mbh"])
+                branch_info.append({
+                    "tee_nid":         tee_nid,
+                    "tee_pos":         (tx, ty),
+                    "fixture_nid":     primary["fixture_nid"],
+                    "fixture_pos":     (tx, fix_y),
+                    "total_ft":        primary["total_length_ft"],
+                    "branch_edge_ids": primary["branch_edge_ids"],
+                    "has_valve":       primary["has_valve"],
+                    "direc":           direc,
+                    "size":            "",
+                    "cum_mbh":         total_branch_mbh,
+                    "sub_fixtures":    sub_info,
+                })
+                layout_log.append({
+                    "tee_nid":    tee_nid,
+                    "tee_pos":    (tx, ty),
+                    "tee_z":      tee_z,
+                    "edge_id":    branch_edge.element_id,
+                    "to_nid":     primary["fixture_nid"],
+                    "to_z":       first_fix_z,
+                    "fixture_z":  first_fix_z,
+                    "direc":      "UP" if direc > 0 else "DOWN",
+                    "result_pos": (tx, fix_y),
                     "branch_y":   None,
                 })
 
@@ -937,23 +990,11 @@ def main():
     output.print_md(":white_check_mark: Meter validation passed.")
 
     # ------------------------------------------------------------------
-    # STEP 3 - Select pipe material then IFGC table (populates notes block)
+    # STEP 3 - Select pipe material and IFGC table (populates notes block)
     # ------------------------------------------------------------------
-    pipe_material = forms.SelectFromList.show(
-        gas_tables.get_material_labels(),
-        title="One-Line - Select Pipe Material",
-        multiselect=False
-    )
-    if not pipe_material:
-        output.print_md("Cancelled at material selection. No changes made.")
-        return
-
-    selected_table_label = forms.SelectFromList.show(
-        gas_tables.get_table_option_labels_for_material(pipe_material),
-        title="One-Line - Select IFGC Table ({})".format(pipe_material),
-        multiselect=False
-    )
-    if not selected_table_label:
+    pipe_material, selected_table_label = ui_helpers.show_table_picker(
+        "One-Line - Select IFGC Table")
+    if not pipe_material or not selected_table_label:
         output.print_md("Cancelled at table selection. No changes made.")
         return
 
