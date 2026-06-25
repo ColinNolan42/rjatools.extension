@@ -67,9 +67,11 @@ SYMBOL_RADIUS    = 0.5     # ft  meter circle radius
 FIXTURE_HW       = 1.5     # ft  half-width of 3-line fixture symbol (3 ft total)
 FIXTURE_SPACING  = 0.5     # ft  gap between 3 fixture lines
 FIXTURE_LABEL_GAP = 0.4   # ft  gap between outermost symbol line and label baseline
-VALVE_HW         = 1.0     # ft  half-width of bowtie (2 ft total)
-VALVE_HH         = 0.6     # ft  half-height of bowtie triangle
-VALVE_GAP        = 0.3     # ft  gap between valve edge and fixture connection line
+VALVE_HW          = 1.0     # ft  half-width of bowtie (2 ft total)
+VALVE_HH          = 0.6     # ft  half-height of bowtie triangle
+VALVE_GAP         = 0.3     # ft  gap between valve edge and fixture connection line (fallback)
+VALVE_FIXTURE_GAP = 4.0     # ft  fixture baseline → nearest valve center (≈ 0.5" at 1:100)
+VALVE_PITCH       = 4.0     # ft  center-to-center between consecutive valve symbols
 LABEL_ABOVE      = 1.2     # ft  above a horizontal pipe (must clear text height)
 LABEL_RIGHT      = 0.6     # ft  right of a vertical pipe
 UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
@@ -742,48 +744,57 @@ def _place_sym(doc, view, sym, x, y, rotate_90=False):
 # Schematic branch drawing
 # ---------------------------------------------------------------------------
 
-def _trunk_fixture_valves(graph, fix_nid, trunk_set):
+def _trunk_fixture_valves(graph, fix_nid, trunk_all_ids):
     """Return (has_prv, has_isolation) for a trunk-endpoint fixture.
 
-    Checks valve-type fittings on the trunk just upstream of fix_nid.
-    A fitting matches as PRV if any _PRV_KW keyword is in its family name;
-    otherwise as isolation if any _ISOLATION_KW keyword matches.
+    Scans the full trunk path (trunk_all_ids, which includes both edge IDs
+    and node IDs) for valve-type nodes within 10 items upstream of fix_nid.
+    Valve fittings are NODES in the path, not edges, so this function must
+    search the ordered list rather than trunk_set (pipe edge IDs only).
     """
-    def _valve_type(nid):
+    has = [False, False]  # [has_prv, has_iso]  (IronPython 2.7: no nonlocal)
+
+    def _check(nid):
         n = graph.nodes.get(nid)
         if not n:
-            return (False, False)
-        fname  = (n.family_name or "").lower()
-        is_prv = any(kw in fname for kw in _PRV_KW)
-        is_iso = (not is_prv) and any(kw in fname for kw in _ISOLATION_KW)
-        return (is_prv, is_iso)
+            return
+        fname = (n.family_name or "").lower()
+        if any(kw in fname for kw in _PRV_KW):
+            has[0] = True
+        elif any(kw in fname for kw in _ISOLATION_KW):
+            has[1] = True
 
-    # Case 1: a trunk edge terminates directly at fix_nid
-    for eid in trunk_set:
-        e = graph.edges.get(eid)
-        if not e or e.to_node_id != fix_nid:
-            continue
-        has_prv = has_iso = False
-        for nid in [e.from_node_id] + list(graph.node_children.get(e.from_node_id, [])):
-            vp, vi = _valve_type(nid)
-            has_prv = has_prv or vp
-            has_iso = has_iso or vi
-        return (has_prv, has_iso)
+    # Find where fix_nid first appears in the path (as a node, or as the
+    # to_node / node_child-of-to_node of an edge).
+    idx = None
+    for i, item in enumerate(trunk_all_ids):
+        if item == fix_nid:
+            idx = i
+            break
+        if item in graph.edges:
+            e = graph.edges[item]
+            if e.to_node_id == fix_nid:
+                idx = i
+                break
+            if fix_nid in graph.node_children.get(e.to_node_id, []):
+                idx = i
+                break
 
-    # Case 2: fix_nid is a node_children entry of a trunk edge's destination
-    for eid in trunk_set:
-        e = graph.edges.get(eid)
-        if not e:
-            continue
-        if fix_nid in graph.node_children.get(e.to_node_id, []):
-            has_prv = has_iso = False
-            for nid in [e.to_node_id, e.from_node_id]:
-                vp, vi = _valve_type(nid)
-                has_prv = has_prv or vp
-                has_iso = has_iso or vi
-            return (has_prv, has_iso)
+    if idx is None:
+        return (False, False)
 
-    return (False, False)
+    # Inspect all items in the 10-element window immediately before idx.
+    # This covers the valve fitting nodes that precede the fixture in the path.
+    for item in trunk_all_ids[max(0, idx - 10): idx]:
+        _check(item)
+        if item in graph.edges:
+            e = graph.edges[item]
+            for child in graph.node_children.get(e.to_node_id, []):
+                _check(child)
+            for child in graph.node_children.get(e.from_node_id, []):
+                _check(child)
+
+    return (has[0], has[1])
 
 
 def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
@@ -813,19 +824,16 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     going_up = fix_y > tee_y
     sign     = 1.0 if going_up else -1.0
 
-    # Isolation valve: adjacent to fixture (sign flips so it sits between pipe and fixture)
-    iso_y = fix_y - sign * (VALVE_HH + VALVE_GAP)
+    # Isolation valve: VALVE_FIXTURE_GAP ft from fixture baseline
+    iso_y = fix_y - sign * VALVE_FIXTURE_GAP
     if has_isolation:
         v_inst = _place_sym(doc, view, valve_sym, tee_x, iso_y, rotate_90=True)
         if v_inst is None:
             _make_group(doc, _draw_valve_bowtie(doc, view, tee_x, iso_y))
 
-    # PRV: if both, one slot further from fixture than isolation; if PRV only, takes iso slot
+    # PRV: one VALVE_PITCH slot further from fixture than isolation (or takes iso slot if alone)
     if has_prv:
-        if has_isolation:
-            prv_y = iso_y - sign * (2 * VALVE_HH + VALVE_GAP)
-        else:
-            prv_y = iso_y
+        prv_y = (iso_y - sign * VALVE_PITCH) if has_isolation else iso_y
         p_inst = _place_sym(doc, view, prv_sym, tee_x, prv_y, rotate_90=True)
         if p_inst is None:
             _make_group(doc, _draw_valve_bowtie(doc, view, tee_x, prv_y))
@@ -893,17 +901,16 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
     # Main vertical: trunk tee to primary fixture level
     _line(doc, view, tee_x, tee_y, tee_x, fix_y)
 
-    # Isolation valve: adjacent to primary fixture
-    iso_y = fix_y - sign * (VALVE_HH + VALVE_GAP)
+    # Isolation valve: VALVE_FIXTURE_GAP ft from primary fixture baseline
+    iso_y = fix_y - sign * VALVE_FIXTURE_GAP
     if has_isolation:
         v_inst = _place_sym(doc, view, valve_sym, tee_x, iso_y, rotate_90=True)
         if v_inst is None:
             _make_group(doc, _draw_valve_bowtie(doc, view, tee_x, iso_y))
 
-    # PRV: one slot further from fixture than isolation (or takes iso slot if alone)
+    # PRV: one VALVE_PITCH slot further from fixture than isolation
     if has_prv:
-        prv_y = (iso_y - sign * (2 * VALVE_HH + VALVE_GAP)
-                 if has_isolation else iso_y)
+        prv_y = (iso_y - sign * VALVE_PITCH) if has_isolation else iso_y
         p_inst = _place_sym(doc, view, prv_sym, tee_x, prv_y, rotate_90=True)
         if p_inst is None:
             _make_group(doc, _draw_valve_bowtie(doc, view, tee_x, prv_y))
@@ -923,15 +930,16 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
         # Vertical leg from junction to fixture level
         _line(doc, view, sx, jy, sx, fy)
 
-        # Valves on stub vertical, adjacent to stub fixture
-        sf_iso_y = fy - sign * (VALVE_HH + VALVE_GAP)
+        # Valves on stub vertical, VALVE_FIXTURE_GAP from stub fixture baseline
+        stub_height = abs(fy - jy)
+        sf_gap = min(VALVE_FIXTURE_GAP, stub_height * 0.5)
+        sf_iso_y = fy - sign * sf_gap
         if sf_iso:
             sv_ins = _place_sym(doc, view, valve_sym, sx, sf_iso_y, rotate_90=True)
             if sv_ins is None:
                 _make_group(doc, _draw_valve_bowtie(doc, view, sx, sf_iso_y))
         if sf_prv:
-            sf_prv_y = (sf_iso_y - sign * (2 * VALVE_HH + VALVE_GAP)
-                        if sf_iso else sf_iso_y)
+            sf_prv_y = (sf_iso_y - sign * VALVE_PITCH) if sf_iso else sf_iso_y
             sp_ins = _place_sym(doc, view, prv_sym, sx, sf_prv_y, rotate_90=True)
             if sp_ins is None:
                 _make_group(doc, _draw_valve_bowtie(doc, view, sx, sf_prv_y))
@@ -1206,14 +1214,37 @@ def _draw_valve_bowtie(doc, view, cx, cy):
     return elems
 
 
+def _parse_pressure_drop(table_label):
+    """Extract pressure drop string from a TABLE_OPTIONS label.
+
+    Returns e.g. '0.3" W.C.' or '1 PSI', or '' if not found.
+    """
+    import re
+    lbl = table_label or ""
+    m = re.search(r'([\d.]+)"?\s*w\.c\.', lbl, re.IGNORECASE)
+    if m:
+        return '{}" W.C.'.format(m.group(1))
+    m = re.search(r'([\d.]+)\s*psi\s*drop', lbl, re.IGNORECASE)
+    if m:
+        return '{} PSI'.format(m.group(1))
+    return ""
+
+
 def _draw_notes_block(doc, view, table_id, inlet_psi,
-                      total_mbh, total_developed_ft, tt_id, notes_x, notes_y):
+                      total_mbh, total_developed_ft, tt_id, notes_x, notes_y,
+                      table_label=""):
     """Draw the 5-line notes block as a SINGLE multi-line TextNote."""
+    pressure_drop = _parse_pressure_drop(table_label)
+    if pressure_drop:
+        loss_line = "MAX PRESSURE LOSS OF {} PER IFGC TABLE {}".format(
+            pressure_drop, table_id)
+    else:
+        loss_line = "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id)
     text = "\n".join([
         "CONTRACTOR SHALL SUBMIT APPLICATIONS TO UTILITY"
         " AND COORDINATE NEW METER SERVICE",
         "GAS PIPING SIZED FOR {} PSI".format(inlet_psi),
-        "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id),
+        loss_line,
         "TOTAL CONNECTED LOAD: {} MBH".format(int(round(total_mbh))),
         "TOTAL DEVELOPED LENGTH: {}'".format(int(round(total_developed_ft))),
     ])
@@ -1676,22 +1707,21 @@ def main():
             name  = node.fixture_name or "UNNAMED"
             label = name + "\n" + "{} MBH".format(int(round(node.gas_load_mbh)))
 
-            tf_has_prv, tf_has_isolation = _trunk_fixture_valves(graph, fix_nid, trunk_set)
+            tf_has_prv, tf_has_isolation = _trunk_fixture_valves(graph, fix_nid, trunk_all_ids_draw)
 
             if horiz_approach:
                 # Trunk runs horizontally into this fixture: rotate the
                 # 3-line symbol 90 degrees (vertical lines, stacked along x
                 # in the direction the trunk approached from).
                 sign = 1.0 if (from_pos is None or cx >= from_pos[0]) else -1.0
-                # Isolation adjacent to fixture; PRV one slot further along trunk
-                iso_x = cx - sign * (FIXTURE_HW + VALVE_GAP + VALVE_HW)
+                # Isolation VALVE_FIXTURE_GAP from fixture; PRV one VALVE_PITCH further
+                iso_x = cx - sign * (FIXTURE_HW + VALVE_FIXTURE_GAP)
                 if tf_has_isolation:
                     v_inst = _place_sym(doc, view, valve_sym, iso_x, cy)
                     if v_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, iso_x, cy))
                 if tf_has_prv:
-                    prv_x = (iso_x - sign * (2 * VALVE_HW + VALVE_GAP)
-                             if tf_has_isolation else iso_x)
+                    prv_x = (iso_x - sign * VALVE_PITCH) if tf_has_isolation else iso_x
                     p_inst = _place_sym(doc, view, prv_sym, prv_x, cy)
                     if p_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, prv_x, cy))
@@ -1709,15 +1739,14 @@ def main():
             else:
                 going_up = cy > 0.0
                 sign     = 1.0 if going_up else -1.0
-                # Isolation adjacent to fixture; PRV one slot further from fixture
-                iso_y = cy - sign * (VALVE_HH + VALVE_GAP)
+                # Isolation VALVE_FIXTURE_GAP from fixture; PRV one VALVE_PITCH further
+                iso_y = cy - sign * VALVE_FIXTURE_GAP
                 if tf_has_isolation:
                     v_inst = _place_sym(doc, view, valve_sym, cx, iso_y, rotate_90=True)
                     if v_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, cx, iso_y))
                 if tf_has_prv:
-                    prv_y = (iso_y - sign * (2 * VALVE_HH + VALVE_GAP)
-                             if tf_has_isolation else iso_y)
+                    prv_y = (iso_y - sign * VALVE_PITCH) if tf_has_isolation else iso_y
                     p_inst = _place_sym(doc, view, prv_sym, cx, prv_y, rotate_90=True)
                     if p_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, cx, prv_y))
@@ -1737,13 +1766,14 @@ def main():
 
         # e. Notes block (single text box, positioned above diagram)
         _draw_notes_block(doc, view,
-                          table_id          = table_id,
-                          inlet_psi         = inlet_pressure_psi,
-                          total_mbh         = total_mbh,
+                          table_id           = table_id,
+                          inlet_psi          = inlet_pressure_psi,
+                          total_mbh          = total_mbh,
                           total_developed_ft = total_developed_ft,
-                          tt_id             = tt_id,
-                          notes_x           = notes_x,
-                          notes_y           = notes_y)
+                          tt_id              = tt_id,
+                          notes_x            = notes_x,
+                          notes_y            = notes_y,
+                          table_label        = selected_opt.get("label", ""))
 
         t.Commit()
 
