@@ -15,6 +15,8 @@ import shared_params
 # Keys must match pipe_sizes_nominal strings in ifgc_gas_sizing_tables.json.
 # ---------------------------------------------------------------------------
 
+MIN_PIPE_INCHES = 0.75  # 3/4" firm minimum regardless of table result
+
 NOMINAL_TO_INCHES = {
     # Schedule 40 Steel and PE Plastic Pipe (standard nominal sizes)
     "1/2":   0.5,
@@ -115,6 +117,16 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
     segment_detail = []
     sizing_errors = []
 
+    def _apply_minimum(nom, pipe_sizes_list):
+        """If nom is smaller than MIN_PIPE_INCHES, return the first size in
+        pipe_sizes_list whose decimal equivalent meets the minimum."""
+        if NOMINAL_TO_INCHES.get(nom, 0.0) >= MIN_PIPE_INCHES:
+            return nom, False
+        for s in pipe_sizes_list:
+            if NOMINAL_TO_INCHES.get(s, 0.0) >= MIN_PIPE_INCHES:
+                return s, True
+        return nom, False  # fallback: no larger size available
+
     for edge in graph.edges.values():
         # Skip open-ended pipes - no downstream node to size for
         if edge.to_node_id is None:
@@ -125,14 +137,18 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
         # Zero demand: assign minimum available pipe size
         if demand_mbh <= 0:
             selected = pipe_sizes[0]
+            selected, upsized = _apply_minimum(selected, pipe_sizes)
             capacity_at_size = gas_tables.get_capacity(
                 table_id, longest_run_ft, selected)
+            note = "zero demand - minimum size assigned"
+            if upsized:
+                note += " (upsized to 3/4\" firm minimum)"
             segment_detail.append({
                 "pipe_id":       edge.element_id,
                 "demand_mbh":    0.0,
                 "selected_size": selected,
                 "capacity_mbh":  capacity_at_size,
-                "note":          "zero demand - minimum size assigned"
+                "note":          note
             })
             sizes[edge.element_id] = selected
             continue
@@ -159,13 +175,18 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
                     edge.element_id, demand_mbh, table_length_used, table_id))
             continue
 
+        selected, upsized = _apply_minimum(selected, pipe_sizes)
+        if upsized:
+            selected_capacity = gas_tables.get_capacity(
+                table_id, longest_run_ft, selected)
+
         sizes[edge.element_id] = selected
         segment_detail.append({
             "pipe_id":       edge.element_id,
             "demand_mbh":    round(demand_mbh, 1),
             "selected_size": selected,
             "capacity_mbh":  selected_capacity,
-            "note":          ""
+            "note":          "upsized to 3/4\" firm minimum" if upsized else ""
         })
 
     if sizing_errors:
