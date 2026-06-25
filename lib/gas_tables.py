@@ -391,6 +391,61 @@ def get_table_option_by_label(label):
     return opt
 
 
+def get_material_labels():
+    """Return ordered list of unique pipe material names for the first dropdown."""
+    seen = []
+    for opt in TABLE_OPTIONS:
+        m = opt["material"]
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def _short_label(opt):
+    """Strip the material-abbreviation prefix from a TABLE_OPTIONS label.
+
+    Labels are formatted as '<material abbrev> - <pressure/table info>'.
+    Returns everything after the first ' - '.
+    """
+    label = opt["label"]
+    idx = label.find(" - ")
+    return label[idx + 3:] if idx >= 0 else label
+
+
+def get_table_option_labels_for_material(material):
+    """Return short label strings (pressure/table info only) for a given material.
+
+    Args:
+        material: Material string matching a TABLE_OPTIONS 'material' field.
+
+    Returns:
+        List of short label strings for the second dropdown.
+    """
+    return [_short_label(opt) for opt in TABLE_OPTIONS if opt["material"] == material]
+
+
+def get_table_option_by_material_and_short_label(material, short_label):
+    """Return the TABLE_OPTIONS entry matching a material and short label.
+
+    Args:
+        material:    Material string (e.g. 'Schedule 40 Steel').
+        short_label: Short label string from get_table_option_labels_for_material().
+
+    Returns:
+        Dict with keys: label, table_id, material, gas, inlet_pressure_psi.
+
+    Raises:
+        ValueError: If no matching entry is found.
+    """
+    for opt in TABLE_OPTIONS:
+        if opt["material"] == material and _short_label(opt) == short_label:
+            return opt
+    raise ValueError(
+        "No table option found for material='{}' label='{}'.".format(
+            material, short_label)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Table selection - legacy helper (Schedule 40 Steel default mapping)
 # ---------------------------------------------------------------------------

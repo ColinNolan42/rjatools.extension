@@ -937,22 +937,32 @@ def main():
     output.print_md(":white_check_mark: Meter validation passed.")
 
     # ------------------------------------------------------------------
-    # STEP 3 - Select IFGC table (populates notes block)
+    # STEP 3 - Select pipe material then IFGC table (populates notes block)
     # ------------------------------------------------------------------
-    option_labels = gas_tables.get_table_option_labels()
-    selected_label = forms.SelectFromList.show(
-        option_labels,
-        title="One-Line - Select IFGC Sizing Table",
+    pipe_material = forms.SelectFromList.show(
+        gas_tables.get_material_labels(),
+        title="One-Line - Select Pipe Material",
         multiselect=False
     )
-    if not selected_label:
+    if not pipe_material:
+        output.print_md("Cancelled at material selection. No changes made.")
+        return
+
+    selected_table_label = forms.SelectFromList.show(
+        gas_tables.get_table_option_labels_for_material(pipe_material),
+        title="One-Line - Select IFGC Table ({})".format(pipe_material),
+        multiselect=False
+    )
+    if not selected_table_label:
         output.print_md("Cancelled at table selection. No changes made.")
         return
 
-    selected_opt       = gas_tables.get_table_option_by_label(selected_label)
+    selected_opt       = gas_tables.get_table_option_by_material_and_short_label(
+        pipe_material, selected_table_label)
     table_id           = selected_opt["table_id"]
     inlet_pressure_psi = selected_opt["inlet_pressure_psi"]
-    output.print_md("**Table:** {}".format(table_id))
+    output.print_md("**Material:** {}  |  **Table:** {}".format(
+        pipe_material, table_id))
 
     # ------------------------------------------------------------------
     # STEP 4 - Traverse network
