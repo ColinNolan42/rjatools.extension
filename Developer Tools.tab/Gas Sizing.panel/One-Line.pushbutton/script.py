@@ -66,13 +66,13 @@ LEVEL_HEIGHT     = 18.0    # ft vertical clearance per branch level (compressed)
 MIN_SEGMENT_FT   = 10.0    # ft minimum horizontal segment so text doesn't overlap
 SYMBOL_RADIUS    = 0.5     # ft  meter circle radius
 FIXTURE_HW       = 1.5     # ft  half-width of 3-line fixture symbol (3 ft total)
-FIXTURE_SPACING  = 0.5     # ft  gap between 3 fixture lines
-FIXTURE_LABEL_GAP = 0.4   # ft  gap between outermost symbol line and label baseline
+FIXTURE_SPACING  = 0.7     # ft  gap between 3 fixture lines
+FIXTURE_LABEL_GAP = 8.0   # ft  gap between outermost symbol line and label baseline (~1" at 1:100)
 VALVE_HW          = 1.0     # ft  half-width of bowtie (2 ft total)
 VALVE_HH          = 0.6     # ft  half-height of bowtie triangle
 VALVE_GAP         = 0.3     # ft  gap between valve edge and fixture connection line (fallback)
-VALVE_FIXTURE_GAP = 2.0     # ft  fixture baseline → nearest valve center (≈ 0.24" at 1:100)
-VALVE_PITCH       = 2.0     # ft  center-to-center between consecutive valve symbols
+VALVE_FIXTURE_GAP = 2.5     # ft  fixture baseline → nearest valve center
+VALVE_PITCH       = 2.5     # ft  center-to-center between consecutive valve symbols
 LABEL_ABOVE      = 1.2     # ft  above a horizontal pipe (must clear text height)
 LABEL_RIGHT      = 0.6     # ft  right of a vertical pipe
 UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
@@ -1176,14 +1176,14 @@ def _draw_meter_symbol(doc, view, cx, cy, tt_id, meter_sym=None):
         _note(doc, view, cx - 0.15, cy - 0.25, "M", tt_id)
 
 
-def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym, tt_id):
+def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym, tt_id, line_style=None):
     """Draw horizontal stub + vertical drop + squiggle (rotated 90 deg)."""
     sx = cx - SYMBOL_RADIUS
     # Horizontal stub going left from meter
-    _line(doc, view, sx, cy, sx - UPSTREAM_H, cy)
+    _line(doc, view, sx, cy, sx - UPSTREAM_H, cy, line_style=line_style)
     # Vertical drop to utility
     tip_x = sx - UPSTREAM_H
-    _line(doc, view, tip_x, cy, tip_x, cy - UPSTREAM_V)
+    _line(doc, view, tip_x, cy, tip_x, cy - UPSTREAM_V, line_style=line_style)
     # Squiggle at tip -- rotated 90 degrees so it reads vertically
     _place_sym(doc, view, squiggle_sym, tip_x, cy - UPSTREAM_V, rotate_90=True)
     # "GAS FROM UTILITY" label below the squiggle
@@ -1605,7 +1605,9 @@ def main():
         # a. Upstream stub + squiggle + "GAS FROM UTILITY" label
         #    Drawn at the distribution main level; stub goes left then DOWN
         #    to represent the underground utility service entry.
-        _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id)
+        #    Always New Construction (new meter connection).
+        _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id,
+                            line_style=wide_line_style)
 
         # b. Meter symbol (uses RJA - P Symbols - Meter when available)
         _draw_meter_symbol(doc, view, mx, my, tt_id, meter_sym)
