@@ -734,16 +734,34 @@ def _place_sym(doc, view, sym, x, y, rotate_90=False):
 
 def _trunk_fixture_has_valve(graph, fix_nid, trunk_set):
     """Return True if a valve-type fitting sits on the trunk just upstream of fix_nid."""
+    def _is_valve_node(nid):
+        n = graph.nodes.get(nid)
+        if not n:
+            return False
+        return any(kw in (n.family_name or "").lower() for kw in _VALVE_KW)
+
+    # Case 1: a trunk edge terminates directly at fix_nid
     for eid in trunk_set:
         e = graph.edges.get(eid)
-        if e and e.to_node_id == fix_nid:
-            for nid in [e.from_node_id] + list(graph.node_children.get(e.from_node_id, [])):
-                node = graph.nodes.get(nid)
-                if node:
-                    fname = (node.family_name or "").lower()
-                    if any(kw in fname for kw in _VALVE_KW):
-                        return True
-            break
+        if not e or e.to_node_id != fix_nid:
+            continue
+        # Check the from_node and its node_children (e.g. valve as zero-length child)
+        for nid in [e.from_node_id] + list(graph.node_children.get(e.from_node_id, [])):
+            if _is_valve_node(nid):
+                return True
+        return False  # edge found but no valve upstream
+
+    # Case 2: fix_nid is a node_children entry of a trunk edge's destination
+    for eid in trunk_set:
+        e = graph.edges.get(eid)
+        if not e:
+            continue
+        if fix_nid in graph.node_children.get(e.to_node_id, []):
+            # The node at e.to_node_id is the connector between pipe and fixture
+            if _is_valve_node(e.to_node_id) or _is_valve_node(e.from_node_id):
+                return True
+            return False  # indirect connection found but no valve
+
     return False
 
 
@@ -766,12 +784,11 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     if abs(fix_x - tee_x) > 0.01:
         _line(doc, view, tee_x, fix_y, fix_x, fix_y)
 
-    # Valve symbol adjacent to fixture, between branch pipe and fixture connection
+    # Valve symbol near branch tee: pipe from trunk → valve → pipe → fixture
     going_up = fix_y > tee_y
     sign     = 1.0 if going_up else -1.0
     if has_valve:
-        # going_up: valve just below fixture inner line; going_down: just above it
-        val_y  = (fix_y - VALVE_HH - VALVE_GAP) if going_up else (fix_y + VALVE_HH + VALVE_GAP)
+        val_y  = tee_y + sign * (VALVE_HH + VALVE_GAP)
         v_inst = _place_sym(doc, view, valve_sym, tee_x, val_y, rotate_90=True)
         if v_inst is None:
             val_elems = _draw_valve_bowtie(doc, view, tee_x, val_y)
@@ -839,8 +856,9 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
     # Main vertical: trunk tee to primary fixture level
     _line(doc, view, tee_x, tee_y, tee_x, fix_y)
 
+    # Valve on main vertical: near tee so layout is tee → valve → pipe → fixture
     if has_valve:
-        val_y  = (fix_y - VALVE_HH - VALVE_GAP) if going_up else (fix_y + VALVE_HH + VALVE_GAP)
+        val_y  = tee_y + sign * (VALVE_HH + VALVE_GAP)
         v_inst = _place_sym(doc, view, valve_sym, tee_x, val_y, rotate_90=True)
         if v_inst is None:
             _make_group(doc, _draw_valve_bowtie(doc, view, tee_x, val_y))
@@ -855,8 +873,16 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
 
         # Horizontal leg at junction_y
         _line(doc, view, tee_x, jy, sx, jy)
-        # Vertical leg down to fixture level
+        # Vertical leg from junction to fixture level
         _line(doc, view, sx, jy, sx, fy)
+
+        # Valve on stub vertical: near junction (top of L) so layout is
+        # junction → valve → pipe → fixture
+        if sf.get("has_valve"):
+            sv_y   = jy + sign * (VALVE_HH + VALVE_GAP)
+            sv_ins = _place_sym(doc, view, valve_sym, sx, sv_y, rotate_90=True)
+            if sv_ins is None:
+                _make_group(doc, _draw_valve_bowtie(doc, view, sx, sv_y))
 
         # Equipment symbol at fixture level (same Y as primary)
         e_inst = _place_sym(doc, view, equip_sym, sx, fy)
@@ -1621,7 +1647,8 @@ def main():
                 going_up = cy > 0.0
                 sign     = 1.0 if going_up else -1.0
                 if tf_has_valve:
-                    val_y  = (cy - VALVE_HH - VALVE_GAP) if going_up else (cy + VALVE_HH + VALVE_GAP)
+                    # Valve near the trunk connection (y=0), not near the fixture
+                    val_y  = sign * (VALVE_HH + VALVE_GAP)
                     v_inst = _place_sym(doc, view, valve_sym, cx, val_y, rotate_90=True)
                     if v_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, cx, val_y))
