@@ -10,10 +10,11 @@ Update this block manually as phases and sub-tasks complete.
 
 ## Project Summary
 
-PyRevit extension for automated MEP pipe sizing in Revit. Three phases:
+PyRevit extension for automated MEP pipe and duct sizing in Revit. Four phases:
 - **Phase 1:** Traversal engine + diagnostic report + one-line diagram data
 - **Phase 2:** IFGC gas pipe sizing written back to Revit model (LOCKED)
-- **Phase 3:** IPC water pipe sizing — DCW, DHW, HWR (LOCKED)
+- **Phase 3:** IPC water pipe sizing — DCW, DHW, HWR + velocity visualizer in plan view (LOCKED)
+- **Phase 4:** SMACNA duct sizing + duct velocity visualizer in plan view (LOCKED — may precede Phase 3)
 
 ---
 
@@ -24,6 +25,8 @@ Claude shall NOT write implementation code for a future phase.
 - Phase 1 is active now.
 - Phase 2 begins ONLY when user says: "Phase 1 is complete. Move to Phase 2."
 - Phase 3 begins ONLY when user says: "Phase 2 is complete. Move to Phase 3."
+- Phase 4 begins ONLY when user says: "Move to Phase 4."
+- **Phase 4 is independent of Phase 3** — it may be started or completed before Phase 3.
 
 Claude may answer questions about future phases but shall not write code for them. If unclear which phase is active, ask.
 
@@ -33,7 +36,8 @@ Claude may answer questions about future phases but shall not write code for the
 
 - **Phase 1:** User clicks Diagnose → Revit prompts to pick gas meter → user picks element → traversal runs → output printed to PyRevit window. One pick is the only input.
 - **Phase 2:** User selects gas meter → clicks Size Gas → SelectFromList of 37 IFGC table options (material + pressure + pressure drop + table ID) → fully automatic. Specific gravity hardcoded 0.60. One-Line button generates a schematic DraftingView diagram after sizing.
-- **Phase 3:** User selects water meter → clicks Size Water → one startup dialog (pipe material, street supply pressure, system type) → fully automatic. Sizing per IPC: WSFUs → GPM → velocity/pressure. Three system types: DCW, DHW, HWR.
+- **Phase 3:** User selects water meter → clicks Size Water → one startup dialog (pipe material, street supply pressure, system type) → fully automatic. Sizing per IPC: WSFUs → GPM → velocity/pressure. Three system types: DCW, DHW, HWR. Velocity Visual button colors water pipes in a selected floor plan view by velocity range.
+- **Phase 4:** User selects AHU/fan unit → clicks Size Ducts → SelectFromList (duct shape, material, target friction rate) → fully automatic per SMACNA equal-friction method. Velocity Visual button colors ducts in a selected floor plan view by velocity range (green / yellow / red).
 
 Single meter per system. User selects it. No auto-detection of meter.
 
@@ -291,7 +295,16 @@ Comcheck.extension/
 │   │   │   └── script.py
 │   │   └── One-Line.pushbutton/
 │   │       └── script.py
-│   └── Water Sizing.panel/        <- Phase 3
+│   ├── Water Sizing.panel/        <- Phase 3
+│   │   ├── Size Water.pushbutton/
+│   │   │   └── script.py
+│   │   └── Velocity Visual.pushbutton/
+│   │       └── script.py
+│   └── Duct Sizing.panel/         <- Phase 4
+│       ├── Size Ducts.pushbutton/
+│       │   └── script.py
+│       └── Velocity Visual.pushbutton/
+│           └── script.py
 └── lib/
     ├── shared_params.py
     ├── revit_helpers.py
@@ -299,6 +312,10 @@ Comcheck.extension/
     ├── report_generator.py
     ├── gas_tables.py
     ├── sizing_engine.py
+    ├── duct_graph.py              <- Phase 4
+    ├── duct_tables.py             <- Phase 4
+    ├── duct_sizing_engine.py      <- Phase 4
+    ├── velocity_visual.py         <- Phases 3 + 4
     └── ifgc_gas_sizing_tables.json  (37 tables, 4 materials)
 ```
 
@@ -339,6 +356,26 @@ Remaining Phase 2 deferred items (do not implement without user request):
 
 Water pipe sizing per IPC. Three system types: DCW, DHW, HWR. WSFUs → GPM via IPC tables. Velocity-based sizing. Pressure loss calculations. Water heater as hot/cold split point. Recirculation loop handling required (circular graph, unlike gas tree).
 
+Velocity visualizer: After sizing, a separate Velocity Visual button colors each water pipe segment in a user-selected floor plan view using Revit `OverrideGraphicSettings`. Color bands: green (≤ 4 fps DCW / ≤ 3 fps DHW + HWR), yellow (approaching limit), red (exceeds limit). Existing overrides are cleared before applying new ones.
+
+---
+
+## Phase 4 Reference (LOCKED — do not implement; may precede Phase 3)
+
+Duct sizing per SMACNA equal-friction method. Supports rectangular and round ducts. System types: supply, return, exhaust.
+
+- User selects AHU/fan unit → script traverses duct network outward from the unit → sizes each segment by SMACNA friction-rate tables
+- Target friction rate and duct shape selected at startup via SelectFromList
+- Writes sized duct dimensions back to Revit model
+
+Velocity visualizer: Separate Velocity Visual button colors each duct segment in a user-selected floor plan view using `OverrideGraphicSettings`. Color bands: green (≤ 1,500 FPM supply/return / ≤ 1,000 FPM exhaust), yellow (approaching limit), red (exceeds limit). Existing overrides are cleared before applying new ones.
+
+Planned lib additions:
+- `duct_graph.py` — duct connector traversal engine (analogous to `pipe_graph.py`)
+- `duct_tables.py` — SMACNA friction-rate sizing tables for rectangular + round ducts
+- `duct_sizing_engine.py` — equal-friction sizing engine, writes to Revit
+- `velocity_visual.py` — shared velocity color-override helper used by both Phase 3 (water) and Phase 4 (ducts)
+
 ---
 
 ## Verification
@@ -358,8 +395,8 @@ Confirm project status:
 ```
 
 Expected answers:
-1. Phase 1. Sub-task 1.1 — shared_params.py.
-2. Decline. Phase 2 is locked. Can answer questions, will not write implementation code.
+1. Phase 2. Current sub-task: One-Line Diagram — implemented, pending further testing.
+2. Decline. Phases 3 and 4 are locked. Can answer questions about either, will not write implementation code.
 3. User selects meter → clicks button → traversal → diagnostic JSON saved → summary shown. No dialogs.
 4. Debugging tool. Pasted into conversation so Claude can see how the code is reading the model. Not a data pipeline.
 5. No. Phase 2 runs pipe_graph.py and revit_helpers.py directly against the Revit model.

@@ -460,9 +460,26 @@ def _compute_layout(graph):
 
                 positions[primary["fixture_nid"]] = (tx, fix_y)
 
+                # Trunk candidate X positions to the right of this tee.
+                # Used to push each stub past any adjacent branch that would
+                # otherwise draw its vertical line on top of the stub's.
+                _right_xs = sorted(set(
+                    positions[nid][0]
+                    for nid in tee_candidates
+                    if nid in positions and positions[nid][0] > tx + 0.01
+                ))
+                _BRANCH_GAP = FIXTURE_HW * 2.0 + 1.0  # min ft between branch verticals
+
                 sub_info = []
                 for i, sf in enumerate(stubs):
                     sx = tx + (i + 1) * MIN_SEGMENT_FT
+                    # Push stub rightward if it would land within BRANCH_GAP of
+                    # a trunk tee (which will draw its own branch vertical at that x).
+                    for rtx in _right_xs:
+                        if rtx > sx + _BRANCH_GAP:
+                            break  # this tee and all after are safely clear
+                        if abs(sx - rtx) < _BRANCH_GAP:
+                            sx = rtx + _BRANCH_GAP
                     positions[sf["fixture_nid"]] = (sx, fix_y)
                     sub_info.append({
                         "fixture_nid":      sf["fixture_nid"],
