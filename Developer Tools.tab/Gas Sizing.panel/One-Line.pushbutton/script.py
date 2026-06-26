@@ -263,6 +263,74 @@ def _trace_to_fixtures(graph, start_nid, trunk_set, initial_len=0.0):
     return results
 
 
+def _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates):
+    """Expand the trunk diagram when an L-branch stub would overlap an adjacent branch.
+
+    After layout, a sub-fixture stub from an L-branch may land within BRANCH_GAP
+    of the next trunk tee's X.  The fix is to shift that tee (and every subsequent
+    trunk node and branch) rightward, keeping the L-branch stubs in place.
+
+    Iterates until no conflicts remain (handles cascading shifts).
+    """
+    BRANCH_GAP = FIXTURE_HW * 2.0 + 2.0  # ft min clearance between branch verticals
+
+    trunk_candidate_nids = trunk_nodes | tee_candidates
+
+    changed = True
+    while changed:
+        changed = False
+        for bi in branch_info:
+            if not bi.get("sub_fixtures"):
+                continue
+            src_tee_x = bi["tee_pos"][0]
+
+            for sf in bi["sub_fixtures"]:
+                stub_x = sf["stub_x"]
+
+                for nid in trunk_candidate_nids:
+                    if nid not in positions:
+                        continue
+                    nx = positions[nid][0]
+                    if nx <= src_tee_x + 0.01:
+                        continue
+                    if abs(nx - stub_x) >= BRANCH_GAP:
+                        continue
+
+                    # Collision: shift this tee and everything to its right.
+                    # The current L-branch stubs stay fixed; downstream tees move.
+                    shift       = stub_x + BRANCH_GAP - nx
+                    threshold_x = nx - 0.01
+
+                    for node_id in trunk_candidate_nids:
+                        if node_id in positions:
+                            ox, oy = positions[node_id]
+                            if ox >= threshold_x:
+                                positions[node_id] = (ox + shift, oy)
+
+                    for other_bi in branch_info:
+                        if other_bi is bi:
+                            continue
+                        otx, oty = other_bi["tee_pos"]
+                        if otx < threshold_x:
+                            continue
+                        other_bi["tee_pos"] = (otx + shift, oty)
+                        ofx, ofy = other_bi["fixture_pos"]
+                        other_bi["fixture_pos"] = (ofx + shift, ofy)
+                        for osf in other_bi.get("sub_fixtures", []):
+                            osf["stub_x"] += shift
+                            sfn = osf["fixture_nid"]
+                            if sfn in positions:
+                                osx, osy = positions[sfn]
+                                positions[sfn] = (osx + shift, osy)
+
+                    changed = True
+                    break
+                if changed:
+                    break
+            if changed:
+                break
+
+
 def _compute_layout(graph):
     """Assign (x, y) view positions to every graph node via two-phase BFS.
 
@@ -414,7 +482,7 @@ def _compute_layout(graph):
                     "fixture_nid":     fix_nid,
                     "fixture_pos":     (tx, fix_y),
                     "total_ft":        fix_info["total_length_ft"],
-                    "branch_edge_ids": fix_info["branch_edge_ids"],
+                    "branch_edge_ids": [branch_edge.element_id] + fix_info["branch_edge_ids"],
                     "has_isolation":   fix_info["has_isolation"],
                     "has_prv":         fix_info["has_prv"],
                     "direc":           direc,
@@ -460,26 +528,9 @@ def _compute_layout(graph):
 
                 positions[primary["fixture_nid"]] = (tx, fix_y)
 
-                # Trunk candidate X positions to the right of this tee.
-                # Used to push each stub past any adjacent branch that would
-                # otherwise draw its vertical line on top of the stub's.
-                _right_xs = sorted(set(
-                    positions[nid][0]
-                    for nid in tee_candidates
-                    if nid in positions and positions[nid][0] > tx + 0.01
-                ))
-                _BRANCH_GAP = FIXTURE_HW * 2.0 + 1.0  # min ft between branch verticals
-
                 sub_info = []
                 for i, sf in enumerate(stubs):
                     sx = tx + (i + 1) * MIN_SEGMENT_FT
-                    # Push stub rightward if it would land within BRANCH_GAP of
-                    # a trunk tee (which will draw its own branch vertical at that x).
-                    for rtx in _right_xs:
-                        if rtx > sx + _BRANCH_GAP:
-                            break  # this tee and all after are safely clear
-                        if abs(sx - rtx) < _BRANCH_GAP:
-                            sx = rtx + _BRANCH_GAP
                     positions[sf["fixture_nid"]] = (sx, fix_y)
                     sub_info.append({
                         "fixture_nid":      sf["fixture_nid"],
@@ -509,7 +560,7 @@ def _compute_layout(graph):
                     "shared_eids":      shared_eids,
                     "remaining_ft":     primary["total_length_ft"] - shared_ft,
                     "remaining_eids":   primary["branch_edge_ids"][len(shared_eids):],
-                    "branch_edge_ids":  primary["branch_edge_ids"],
+                    "branch_edge_ids":  [branch_edge.element_id] + primary["branch_edge_ids"],
                     "has_isolation":    primary["has_isolation"],
                     "has_prv":          primary["has_prv"],
                     "direc":            direc,
@@ -531,6 +582,8 @@ def _compute_layout(graph):
                     "result_pos": (tx, fix_y),
                     "branch_y":   None,
                 })
+
+    _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates)
 
     return (positions, trunk_set, meter_nid, meter_z,
             layout_log, branch_info, trunk_fixture_nids)
