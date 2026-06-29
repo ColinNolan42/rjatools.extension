@@ -322,46 +322,55 @@ _ROUND_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26
 
 
 def _suggest_size(dr, custom_limits, tol_pct):
-    """Return smallest standard duct size that brings velocity into green zone.
+    """Return smallest standard duct size satisfying both velocity AND friction limits.
 
-    Round/spiral ducts → next standard diameter (inches).
-    Rectangular ducts  → same width, height stepped up in 2" increments.
-                         If aspect ratio would exceed 4:1, width steps up too.
-    Target velocity    = max_fpm  (green extends all the way to max).
+    Round/spiral: iterates standard diameters smallest-first; returns first that passes both.
+    Rectangular:  keeps width, steps height in 2" increments; expands width if AR > 4:1.
+    Both constraints must be satisfied — takes the binding (larger) of the two requirements.
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-    max_fpm, _ = custom_limits.get(dr.sys_class, defaults)
-    target_fpm = max_fpm
-    if dr.cfm <= 0 or target_fpm <= 0:
+    max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
+    if dr.cfm <= 0 or max_fpm <= 0:
         return '-'
-
-    req_area_ft2 = dr.cfm / target_fpm
-    req_area_in2 = req_area_ft2 * 144.0
 
     try:
         d = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
         if d is not None and d.AsDouble() > 0:
-            # Round / spiral — find next standard diameter
-            req_diam = math.sqrt(4.0 * req_area_in2 / math.pi)
+            # Round / spiral — first standard diameter satisfying both vel and friction
             for std_d in _ROUND_SIZES:
-                if std_d >= req_diam:
+                area_ft2 = math.pi * (std_d / 24.0) ** 2
+                vel      = dr.cfm / area_ft2
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
+                if vel <= max_fpm and fric <= max_friction:
                     return '{}"'.format(std_d)
             return '>{}"'.format(_ROUND_SIZES[-1])
 
         # Rectangular — keep width, step height up in 2" increments
         w_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
         h_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
-        if w_param and h_param and w_param.AsDouble() > 0:
+        if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
             w_in = round(w_param.AsDouble() * 12.0)
-            req_h = req_area_in2 / float(w_in)
-            new_h = int(math.ceil(req_h / 2.0)) * 2   # next even inch
-            if w_in > 0 and new_h / float(w_in) <= 4.0:
-                return '{}x{}"'.format(w_in, new_h)
-            # Aspect ratio would exceed 4:1 — step width up until it fits
-            for new_w in range(w_in + 2, w_in + 60, 2):
-                new_h2 = int(math.ceil(req_area_in2 / float(new_w) / 2.0)) * 2
-                if new_w > 0 and new_h2 / float(new_w) <= 4.0:
-                    return '{}x{}"'.format(new_w, new_h2)
+            h_in = int(round(h_param.AsDouble() * 12.0))
+            for new_h in range(h_in, h_in + 120, 2):
+                if w_in <= 0 or new_h / float(w_in) > 4.0:
+                    break
+                area_ft2 = w_in * new_h / 144.0
+                vel      = dr.cfm / area_ft2
+                d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                if vel <= max_fpm and fric <= max_friction:
+                    return '{}x{}"'.format(w_in, new_h)
+            # AR exceeded — expand width
+            for new_w in range(int(w_in) + 2, int(w_in) + 60, 2):
+                for new_h in range(h_in, h_in + 120, 2):
+                    if new_h / float(new_w) > 4.0:
+                        break
+                    area_ft2 = new_w * new_h / 144.0
+                    vel      = dr.cfm / area_ft2
+                    d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
+                    fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                    if vel <= max_fpm and fric <= max_friction:
+                        return '{}x{}"'.format(new_w, new_h)
     except Exception:
         pass
     return '-'
