@@ -251,9 +251,10 @@ def compute_cfm(root_id, nodes, children, terminal_cfms):
         nid, done = stack.pop()
         if done:
             if nid in terminal_cfms:
-                cfm_map[nid] = terminal_cfms[nid]
+                cfm_map[nid] = float(terminal_cfms[nid])
             else:
-                cfm_map[nid] = sum(cfm_map.get(c, 0.0) for c in children.get(nid, []))
+                # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
+                cfm_map[nid] = sum((cfm_map.get(c, 0.0) for c in children.get(nid, [])), 0.0)
         else:
             stack.append((nid, True))
             for cid in children.get(nid, []):

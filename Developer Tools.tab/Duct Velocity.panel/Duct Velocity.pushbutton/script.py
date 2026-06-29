@@ -96,7 +96,7 @@ def main():
 
     # 4. Find source sheet number
     source_sheet_num = 'NoSheet'
-    for sheet in FilteredElementCollector(doc).OfClass(ViewSheet).Cast[ViewSheet]():
+    for sheet in FilteredElementCollector(doc).OfClass(ViewSheet):
         for vpid in sheet.GetAllViewports():
             vp = doc.GetElement(vpid)
             if vp is not None and vp.ViewId == active_view.Id:
