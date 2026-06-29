@@ -10,11 +10,12 @@ Update this block manually as phases and sub-tasks complete.
 
 ## Project Summary
 
-PyRevit extension for automated MEP pipe and duct sizing in Revit. Four phases:
+PyRevit extension for automated MEP pipe sizing in Revit. Three phases:
 - **Phase 1:** Traversal engine + diagnostic report + one-line diagram data
 - **Phase 2:** IFGC gas pipe sizing written back to Revit model (LOCKED)
 - **Phase 3:** IPC water pipe sizing — DCW, DHW, HWR + velocity visualizer in plan view (LOCKED)
-- **Phase 4:** SMACNA duct sizing + duct velocity visualizer in plan view (LOCKED — may precede Phase 3)
+
+Duct sizing and duct velocity visualization live in a **separate project** — see "HVAC Duct Sizing Project" section below.
 
 ---
 
@@ -25,8 +26,6 @@ Claude shall NOT write implementation code for a future phase.
 - Phase 1 is active now.
 - Phase 2 begins ONLY when user says: "Phase 1 is complete. Move to Phase 2."
 - Phase 3 begins ONLY when user says: "Phase 2 is complete. Move to Phase 3."
-- Phase 4 begins ONLY when user says: "Move to Phase 4."
-- **Phase 4 is independent of Phase 3** — it may be started or completed before Phase 3.
 
 Claude may answer questions about future phases but shall not write code for them. If unclear which phase is active, ask.
 
@@ -37,7 +36,6 @@ Claude may answer questions about future phases but shall not write code for the
 - **Phase 1:** User clicks Diagnose → Revit prompts to pick gas meter → user picks element → traversal runs → output printed to PyRevit window. One pick is the only input.
 - **Phase 2:** User selects gas meter → clicks Size Gas → SelectFromList of 37 IFGC table options (material + pressure + pressure drop + table ID) → fully automatic. Specific gravity hardcoded 0.60. One-Line button generates a schematic DraftingView diagram after sizing.
 - **Phase 3:** User selects water meter → clicks Size Water → one startup dialog (pipe material, street supply pressure, system type) → fully automatic. Sizing per IPC: WSFUs → GPM → velocity/pressure. Three system types: DCW, DHW, HWR. Velocity Visual button colors water pipes in a selected floor plan view by velocity range.
-- **Phase 4:** User selects AHU/fan unit → clicks Size Ducts → SelectFromList (duct shape, material, target friction rate) → fully automatic per SMACNA equal-friction method. Velocity Visual button colors ducts in a selected floor plan view by velocity range (green / yellow / red).
 
 Single meter per system. User selects it. No auto-detection of meter.
 
@@ -300,10 +298,8 @@ Comcheck.extension/
 │   │   │   └── script.py
 │   │   └── Velocity Visual.pushbutton/
 │   │       └── script.py
-│   └── Duct Sizing.panel/         <- Phase 4
-│       ├── Size Ducts.pushbutton/
-│       │   └── script.py
-│       └── Velocity Visual.pushbutton/
+│   └── Duct Velocity.panel/       <- HVAC Duct Sizing Project Phase 1
+│       └── Duct Velocity.pushbutton/
 │           └── script.py
 └── lib/
     ├── shared_params.py
@@ -312,10 +308,6 @@ Comcheck.extension/
     ├── report_generator.py
     ├── gas_tables.py
     ├── sizing_engine.py
-    ├── duct_graph.py              <- Phase 4
-    ├── duct_tables.py             <- Phase 4
-    ├── duct_sizing_engine.py      <- Phase 4
-    ├── velocity_visual.py         <- Phases 3 + 4
     └── ifgc_gas_sizing_tables.json  (37 tables, 4 materials)
 ```
 
@@ -360,21 +352,44 @@ Velocity visualizer: After sizing, a separate Velocity Visual button colors each
 
 ---
 
-## Phase 4 Reference (LOCKED — do not implement; may precede Phase 3)
+## HVAC Duct Sizing Project
 
-Duct sizing per SMACNA equal-friction method. Supports rectangular and round ducts. System types: supply, return, exhaust.
+**Separate project** — independent of the pipe sizing phases above. Lives in the same Comcheck.extension but has its own panel and phase gating.
 
-- User selects AHU/fan unit → script traverses duct network outward from the unit → sizes each segment by SMACNA friction-rate tables
-- Target friction rate and duct shape selected at startup via SelectFromList
-- Writes sized duct dimensions back to Revit model
+**Active Phase: 1 — Duct Velocity Visualizer**
 
-Velocity visualizer: Separate Velocity Visual button colors each duct segment in a user-selected floor plan view using `OverrideGraphicSettings`. Color bands: green (≤ 1,500 FPM supply/return / ≤ 1,000 FPM exhaust), yellow (approaching limit), red (exceeds limit). Existing overrides are cleared before applying new ones.
+### Phase 1 Overview
 
-Planned lib additions:
-- `duct_graph.py` — duct connector traversal engine (analogous to `pipe_graph.py`)
-- `duct_tables.py` — SMACNA friction-rate sizing tables for rectangular + round ducts
-- `duct_sizing_engine.py` — equal-friction sizing engine, writes to Revit
-- `velocity_visual.py` — shared velocity color-override helper used by both Phase 3 (water) and Phase 4 (ducts)
+Color ductwork in a copied floor plan view by velocity (green / yellow / red) using SMACNA commercial low-velocity defaults. Activated by clicking an AHU or fan unit.
+
+**UX flow:**
+1. User clicks "Duct Velocity" button in the Duct Velocity panel
+2. Revit prompts: select AHU/fan/equipment element
+3. Script traverses all duct systems connected to that equipment (SA, RA, EA, OA)
+4. Copies the relevant floor plan view → places on a new sheet named "Ducting Velocities - [Source Sheet Number]"
+5. Applies `OverrideGraphicSettings` color fills to each duct in the copied view based on velocity
+6. Ducts with no CFM data → gray (flagged, not skipped silently)
+
+**Velocity thresholds — SMACNA commercial low-velocity (HVAC Systems – Duct Design, Table 2-1):**
+| System | Green ✓ | Yellow ⚠ | Red ✗ |
+|--------|---------|----------|-------|
+| Supply Air (SA) | ≤ 2,000 FPM | 2,001–2,500 | > 2,500 |
+| Return Air (RA) | ≤ 1,500 FPM | 1,501–2,000 | > 2,000 |
+| Exhaust Air (EA) | ≤ 1,200 FPM | 1,201–1,500 | > 1,500 |
+| Outside Air (OA) | ≤ 1,200 FPM | 1,201–1,500 | > 1,500 |
+
+**Design decisions (resolved 2026-06-29):**
+1. **CFM source — diffuser terminals only.** CFM is read from `OST_DuctTerminal` leaf nodes (diffusers, grilles, registers), NOT from duct segments or VAV boxes. VAV boxes are `OST_MechanicalEquipment` and are treated as pass-through nodes (traverse all their connectors like a tee). Each duct segment CFM = sum of all downstream terminal CFMs. Specific CFM parameter name on diffuser families TBD — must query model before coding.
+2. **Sheet naming** — new sheet named `"Ducting Velocities - [Source Sheet Number]"` (e.g. "Ducting Velocities - M1.01").
+3. **Multi-system** — color all connected systems (SA, RA, EA, OA) in one pass using per-system SMACNA thresholds.
+4. **Multi-floor** — plan for multi-level; copy all affected floor plan views, one per level.
+
+**Phase gating:**
+- Phase 1 (velocity visualizer) is **ACTIVE**
+- Phase 2 (SMACNA duct sizing — writes sizes back to model) begins ONLY when user says: "Move to HVAC Phase 2."
+- Never write Phase 2 code without that trigger.
+
+**Standalone tool:** `ductulator.py` at `C:\Users\Colin Nolan\Developer Tools\ductulator.py` — CLI sizing calculator with SMACNA color-coded velocity output. Already built and working.
 
 ---
 
@@ -396,7 +411,7 @@ Confirm project status:
 
 Expected answers:
 1. Phase 2. Current sub-task: One-Line Diagram — implemented, pending further testing.
-2. Decline. Phases 3 and 4 are locked. Can answer questions about either, will not write implementation code.
+2. Decline. Phase 3 is locked. Can answer questions about it, will not write implementation code. Duct sizing is a separate project — see HVAC Duct Sizing Project section.
 3. User selects meter → clicks button → traversal → diagnostic JSON saved → summary shown. No dialogs.
 4. Debugging tool. Pasted into conversation so Claude can see how the code is reading the model. Not a data pipeline.
 5. No. Phase 2 runs pipe_graph.py and revit_helpers.py directly against the Revit model.
