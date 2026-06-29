@@ -79,7 +79,6 @@ def show_velocity_settings_dialog():
     win.Width  = 440
     win.SizeToContent = SizeToContent.Height
     win.WindowStartupLocation = WindowStartupLocation.CenterScreen
-    win.ResizeMode = System.Windows.ResizeMode.NoResize
 
     outer = StackPanel()
     outer.Margin = Thickness(14)
