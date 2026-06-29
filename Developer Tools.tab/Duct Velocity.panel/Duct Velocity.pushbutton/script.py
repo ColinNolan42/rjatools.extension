@@ -61,41 +61,45 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY}
 
 # ── velocity settings dialog ───────────────────────────────────────────────────
 def show_velocity_settings_dialog():
-    """WPF dialog to edit SMACNA velocity thresholds.
-    Returns dict {sys_class: (green_fpm, yellow_fpm)} or None if cancelled.
-    """
-    ROWS = [
-        ('Supply Air',  2000, 2500),
-        ('Return Air',  1500, 2000),
-        ('Exhaust Air', 1200, 1500),
-        ('Outside Air', 1200, 1500),
-    ]
+    """WPF dialog — one Max Velocity per system type + tolerance band.
 
-    result = [None]  # mutable container — no nonlocal in Python 2.7
-    boxes  = {}      # (row_idx, col_idx) -> TextBox  col 0=green, 1=yellow
+    Returns dict {sys_class: (max_fpm, yellow_fpm)} or None if cancelled.
+    yellow_fpm = max_fpm * (1 + tolerance/100)
+    """
+    # Defaults: SMACNA commercial low-velocity design velocities
+    ROWS = [
+        ('Supply Air',  2000),
+        ('Return Air',  1500),
+        ('Exhaust Air', 1200),
+        ('Outside Air', 1200),
+    ]
+    DEFAULT_TOLERANCE = 15  # % over max before going red
+
+    result    = [None]  # no nonlocal in Python 2.7
+    max_boxes = {}      # row_idx -> TextBox
+    tol_box   = [None]  # mutable ref to tolerance TextBox
 
     win = Window()
     win.Title  = 'Duct Velocity Settings'
-    win.Width  = 440
+    win.Width  = 360
     win.SizeToContent = SizeToContent.Height
     win.WindowStartupLocation = WindowStartupLocation.CenterScreen
 
     outer = StackPanel()
     outer.Margin = Thickness(14)
 
-    # Instruction label
     intro = Label()
-    intro.Content = 'Edit SMACNA velocity limits (FPM) before coloring the view:'
+    intro.Content = 'Set max design velocity per system (FPM):'
     intro.Margin  = Thickness(0, 0, 0, 8)
     outer.Children.Add(intro)
 
-    # Header row + data rows in a Grid
+    # System rows
     grid = Grid()
-    for w in (140, 130, 130):
+    for w in (160, 120):
         cd = ColumnDefinition()
         cd.Width = GridLength(w)
         grid.ColumnDefinitions.Add(cd)
-    for _ in range(len(ROWS) + 1):   # 1 header + 4 data rows
+    for _ in range(len(ROWS) + 1):
         rd = RowDefinition()
         rd.Height = GridLength(32)
         grid.RowDefinitions.Add(rd)
@@ -108,32 +112,54 @@ def show_velocity_settings_dialog():
         Grid.SetRow(lb, row)
         grid.Children.Add(lb)
 
-    _lbl('System Type',    0, 0)
-    _lbl('Green ≤ FPM',  1, 0)
-    _lbl('Yellow ≤ FPM', 2, 0)
+    _lbl('System Type',      0, 0)
+    _lbl('Max Velocity FPM', 1, 0)
 
-    for i, (sys_class, g_def, y_def) in enumerate(ROWS):
+    for i, (sys_class, default_fpm) in enumerate(ROWS):
         r = i + 1
         _lbl(sys_class, 0, r)
-        for j, val in enumerate((g_def, y_def)):
-            tb = TextBox()
-            tb.Text = str(val)
-            tb.Width = 90
-            tb.Margin = Thickness(4, 4, 4, 4)
-            tb.VerticalAlignment = VerticalAlignment.Center
-            tb.HorizontalAlignment = HorizontalAlignment.Left
-            Grid.SetColumn(tb, j + 1)
-            Grid.SetRow(tb, r)
-            grid.Children.Add(tb)
-            boxes[(i, j)] = tb
+        tb = TextBox()
+        tb.Text  = str(default_fpm)
+        tb.Width = 80
+        tb.Margin = Thickness(4, 4, 4, 4)
+        tb.VerticalAlignment   = VerticalAlignment.Center
+        tb.HorizontalAlignment = HorizontalAlignment.Left
+        Grid.SetColumn(tb, 1)
+        Grid.SetRow(tb, r)
+        grid.Children.Add(tb)
+        max_boxes[i] = tb
 
     outer.Children.Add(grid)
 
-    # OK / Cancel buttons
+    # Tolerance band row
+    tol_panel = StackPanel()
+    tol_panel.Orientation = Orientation.Horizontal
+    tol_panel.Margin = Thickness(0, 10, 0, 0)
+
+    tol_lbl = Label()
+    tol_lbl.Content = 'Yellow tolerance:'
+    tol_lbl.VerticalAlignment = VerticalAlignment.Center
+    tol_panel.Children.Add(tol_lbl)
+
+    tb_tol = TextBox()
+    tb_tol.Text  = str(DEFAULT_TOLERANCE)
+    tb_tol.Width = 45
+    tb_tol.Margin = Thickness(4, 0, 4, 0)
+    tb_tol.VerticalAlignment = VerticalAlignment.Center
+    tol_panel.Children.Add(tb_tol)
+    tol_box[0] = tb_tol
+
+    tol_suffix = Label()
+    tol_suffix.Content = '% over max before red'
+    tol_suffix.VerticalAlignment = VerticalAlignment.Center
+    tol_panel.Children.Add(tol_suffix)
+    outer.Children.Add(tol_panel)
+
+    # OK / Cancel
     btn_panel = StackPanel()
     btn_panel.Orientation = Orientation.Horizontal
     btn_panel.HorizontalAlignment = HorizontalAlignment.Right
-    btn_panel.Margin = Thickness(0, 12, 0, 0)
+    btn_panel.Margin = Thickness(0, 14, 0, 0)
 
     ok_btn = Button()
     ok_btn.Content = 'OK'
@@ -145,17 +171,16 @@ def show_velocity_settings_dialog():
     cancel_btn.Width   = 72
 
     def on_ok(s, e):
-        out = {}
         try:
-            for i, (sys_class, _, _) in enumerate(ROWS):
-                g = float(boxes[(i, 0)].Text)
-                y = float(boxes[(i, 1)].Text)
-                if g >= y:
-                    forms.alert(
-                        'Green limit must be less than Yellow limit for {}.'.format(sys_class),
-                        title='Invalid Input')
-                    return
-                out[sys_class] = (g, y)
+            tol = float(tol_box[0].Text)
+            if tol < 0:
+                forms.alert('Tolerance must be 0 or greater.', title='Invalid Input')
+                return
+            out = {}
+            for i, (sys_class, _) in enumerate(ROWS):
+                max_fpm    = float(max_boxes[i].Text)
+                yellow_fpm = max_fpm * (1.0 + tol / 100.0)
+                out[sys_class] = (max_fpm, yellow_fpm)
             result[0] = out
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
@@ -355,23 +380,18 @@ def main():
         return
 
     # 9. Summary
-    sa = custom_limits.get('Supply Air',  (0, 0))
-    ra = custom_limits.get('Return Air',  (0, 0))
-    ea = custom_limits.get('Exhaust Air', (0, 0))
-    oa = custom_limits.get('Outside Air', (0, 0))
-
     output.print_md('---')
     output.print_md('## Done')
-    output.print_md('Sheet **DV-{}** created  |  {} FPM annotations placed.'.format(
+    output.print_md('Sheet **DV-{}** created  |  {} annotations placed.'.format(
         source_sheet_num, annotation_count))
     output.print_md('')
-    output.print_md('**Limits used:**')
-    output.print_md('| System | Green ≤ | Yellow ≤ | Red > |')
+    output.print_md('**Velocity limits used:**')
+    output.print_md('| System | Max (green) | Yellow to | Red above |')
     output.print_md('| --- | --- | --- | --- |')
-    output.print_md('| Supply Air  | {} FPM | {} FPM | {} FPM |'.format(sa[0], sa[1], sa[1]))
-    output.print_md('| Return Air  | {} FPM | {} FPM | {} FPM |'.format(ra[0], ra[1], ra[1]))
-    output.print_md('| Exhaust Air | {} FPM | {} FPM | {} FPM |'.format(ea[0], ea[1], ea[1]))
-    output.print_md('| Outside Air | {} FPM | {} FPM | {} FPM |'.format(oa[0], oa[1], oa[1]))
+    for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air'):
+        mx, yw = custom_limits.get(sys_class, (0, 0))
+        output.print_md('| {} | {:.0f} FPM | {:.0f} FPM | {:.0f} FPM |'.format(
+            sys_class, mx, mx, yw))
     output.print_md('')
     output.print_md('| Color | Duct Count | Meaning |')
     output.print_md('| --- | --- | --- |')
