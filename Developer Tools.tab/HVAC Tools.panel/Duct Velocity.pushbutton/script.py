@@ -68,9 +68,9 @@ def show_velocity_settings_dialog():
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct) or None.
 
-    Color bands (symmetric tolerance around max):
-      Green  : value < max * (1 - tol_pct/100)
-      Yellow : max * (1 - tol_pct/100) <= value <= max * (1 + tol_pct/100)
+    Color bands:
+      Green  : value <= max
+      Yellow : max < value <= max * (1 + tol_pct/100)
       Red    : value > max * (1 + tol_pct/100)
     """
     # Defaults: firm design standard (main and branch share same values)
@@ -160,7 +160,7 @@ def show_velocity_settings_dialog():
     gpct_box[0] = tb_gpct
 
     gpct_suffix = Label()
-    gpct_suffix.Content = '% tolerance  (green < max-tol,  yellow = ±tol around max,  red > max+tol)'
+    gpct_suffix.Content = '% above max before red  (at or under max = green,  within % = yellow)'
     gpct_suffix.VerticalAlignment = VerticalAlignment.Center
     gpct_panel.Children.Add(gpct_suffix)
     outer.Children.Add(gpct_panel)
@@ -252,13 +252,11 @@ _PRIORITY = {'RED': 3, 'YELLOW': 2, 'GREEN': 1, 'GRAY': 0}
 
 
 def _duct_label(dr, custom_limits, tol_pct):
-    """Symmetric tolerance band — worst of velocity and friction checks.
+    """One-sided tolerance — worst of velocity and friction checks.
 
-    tol_pct applies equally above and below max:
-      Green  : value < max * (1 - tol/100)        — comfortably below
-      Yellow : max * (1 - tol/100) <= value        — within tolerance band
-               AND value <= max * (1 + tol/100)
-      Red    : value > max * (1 + tol/100)         — exceeds tolerance
+      Green  : value <= max
+      Yellow : max < value <= max * (1 + tol_pct/100)
+      Red    : value > max * (1 + tol_pct/100)
 
     Returns (label, max_cap_cfm).
     """
@@ -271,10 +269,9 @@ def _duct_label(dr, custom_limits, tol_pct):
         vel_label = 'GRAY'
         max_cap   = 0.0
     else:
-        max_cap      = max_fpm * dr.area_ft2
-        green_cap    = max_cap * (1.0 - tol_fac)
-        red_cap      = max_cap * (1.0 + tol_fac)
-        if dr.cfm <= green_cap:
+        max_cap = max_fpm * dr.area_ft2
+        red_cap = max_cap * (1.0 + tol_fac)
+        if dr.cfm <= max_cap:
             vel_label = 'GREEN'
         elif dr.cfm <= red_cap:
             vel_label = 'YELLOW'
@@ -285,9 +282,8 @@ def _duct_label(dr, custom_limits, tol_pct):
     if dr.friction_per_100ft <= 0 or max_friction <= 0:
         fric_label = 'GRAY'
     else:
-        green_fric = max_friction * (1.0 - tol_fac)
-        red_fric   = max_friction * (1.0 + tol_fac)
-        if dr.friction_per_100ft <= green_fric:
+        red_fric = max_friction * (1.0 + tol_fac)
+        if dr.friction_per_100ft <= max_friction:
             fric_label = 'GREEN'
         elif dr.friction_per_100ft <= red_fric:
             fric_label = 'YELLOW'
@@ -331,11 +327,11 @@ def _suggest_size(dr, custom_limits, tol_pct):
     Round/spiral ducts → next standard diameter (inches).
     Rectangular ducts  → same width, height stepped up in 2" increments.
                          If aspect ratio would exceed 4:1, width steps up too.
-    Target velocity    = max_fpm * (1 - tol_pct/100)  (top of green zone).
+    Target velocity    = max_fpm  (green extends all the way to max).
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
     max_fpm, _ = custom_limits.get(dr.sys_class, defaults)
-    target_fpm = max_fpm * (1.0 - tol_pct / 100.0)
+    target_fpm = max_fpm
     if dr.cfm <= 0 or target_fpm <= 0:
         return '-'
 
@@ -585,8 +581,8 @@ def main():
     output.print_md('## Done')
     output.print_md('Sheet **DV-{}** created.'.format(source_sheet_num))
     output.print_md('')
-    output.print_md('**Design limits used  (green < max-{}%,  yellow = ±{}% around max,  red > max+{}%):**'.format(
-        int(tol_pct), int(tol_pct), int(tol_pct)))
+    output.print_md('**Design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%):**'.format(
+        int(tol_pct), int(tol_pct)))
     output.print_md('| System | Max Velocity | Max Friction |')
     output.print_md('| --- | --- | --- |')
     for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air'):
