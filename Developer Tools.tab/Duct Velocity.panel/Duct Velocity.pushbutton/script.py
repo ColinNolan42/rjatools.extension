@@ -345,25 +345,21 @@ def main():
         note_opts = TextNoteOptions()
         note_opts.HorizontalAlignment = HorizontalTextAlignment.Center
         annotation_count = 0
+        annotation_errors = []
         for eid, dr in net.duct_results.items():
             label, green_cap = duct_labels.get(eid, ('GRAY', 0.0))
             if label == 'GRAY':
                 continue
             mid = _duct_midpoint(dr.elem)
             if mid is None:
+                annotation_errors.append('id={} midpoint=None'.format(dr.element_id))
                 continue
             try:
-                # e.g. "1,050 / 698 CFM"
                 ann_text = '{:.0f} / {:.0f} CFM'.format(dr.cfm, green_cap)
-                TextNote.Create(doc, new_vid, mid, text_h_ft, ann_text, note_opts)
+                TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
                 annotation_count += 1
-            except Exception:
-                try:
-                    ann_text = '{:.0f} / {:.0f} CFM'.format(dr.cfm, green_cap)
-                    TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
-                    annotation_count += 1
-                except Exception:
-                    pass
+            except Exception as ex:
+                annotation_errors.append('id={} err={}'.format(dr.element_id, str(ex)))
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
@@ -384,14 +380,18 @@ def main():
     output.print_md('## Done')
     output.print_md('Sheet **DV-{}** created  |  {} annotations placed.'.format(
         source_sheet_num, annotation_count))
+    if annotation_errors:
+        output.print_md('**Annotation errors ({}):**'.format(len(annotation_errors)))
+        for msg in annotation_errors[:5]:   # first 5 only
+            output.print_md('- `{}`'.format(msg))
     output.print_md('')
     output.print_md('**Velocity limits used:**')
-    output.print_md('| System | Max (green) | Yellow to | Red above |')
+    output.print_md('| System | Green ≤ | Yellow ≤ | Red > |')
     output.print_md('| --- | --- | --- | --- |')
     for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air'):
         mx, yw = custom_limits.get(sys_class, (0, 0))
         output.print_md('| {} | {:.0f} FPM | {:.0f} FPM | {:.0f} FPM |'.format(
-            sys_class, mx, mx, yw))
+            sys_class, mx, yw, yw))
     output.print_md('')
     output.print_md('| Color | Duct Count | Meaning |')
     output.print_md('| --- | --- | --- |')
