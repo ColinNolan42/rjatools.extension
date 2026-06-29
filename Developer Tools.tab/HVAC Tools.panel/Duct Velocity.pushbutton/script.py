@@ -352,7 +352,7 @@ def _suggest_size(dr, custom_limits, tol_pct):
         w_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
         h_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
         if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
-            w_in = round(w_param.AsDouble() * 12.0)
+            w_in = int(round(w_param.AsDouble() * 12.0))
             h_in = int(round(h_param.AsDouble() * 12.0))
             for new_h in range(h_in, h_in + 120, 2):
                 if w_in <= 0 or new_h / float(w_in) > 4.0:
