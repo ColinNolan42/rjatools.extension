@@ -25,7 +25,8 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, Transaction,
     BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
     Viewport, ViewDuplicateOption, ElementId, XYZ,
-    OverrideGraphicSettings, Color
+    OverrideGraphicSettings, Color,
+    TextNote, TextNoteOptions, TextNoteType
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 
@@ -317,8 +318,8 @@ def _duct_size_label(elem):
     return '?'
 
 
-# Standard spiral/round sizes (inches)
-_ROUND_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
+# Standard spiral/round sizes in 2" increments (inches)
+_ROUND_SIZES = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
 
 
 def _suggest_size(dr, custom_limits, tol_pct):
@@ -570,6 +571,36 @@ def main():
             ogs.SetProjectionLineColor(color)
             new_view.SetElementOverrides(elem.Id, ogs)
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
+
+        # TextNote tags — yellow and red ducts only
+        tn_types = list(FilteredElementCollector(doc).OfClass(TextNoteType).ToElements())
+        if tn_types:
+            tn_type_id = tn_types[0].Id
+            for eid, (label, _) in duct_labels.items():
+                if label not in ('YELLOW', 'RED'):
+                    continue
+                dr = all_duct_results.get(eid)
+                if dr is None:
+                    continue
+                try:
+                    loc = dr.elem.Location
+                    if not hasattr(loc, 'Curve'):
+                        continue
+                    mid_pt   = loc.Curve.Evaluate(0.5, True)
+                    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+                    max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+                    suggested = _suggest_size(dr, custom_limits, tol_pct)
+                    note_text = (
+                        '{}\n'
+                        '{:.0f}/{:.0f} FPM\n'
+                        '{:.3f}/{:.3f} iwc\n'
+                        '-> {}'
+                    ).format(label, dr.fpm, max_fpm,
+                             dr.friction_per_100ft, max_fric, suggested)
+                    opts = TextNoteOptions(tn_type_id)
+                    TextNote.Create(doc, new_vid, mid_pt, note_text, opts)
+                except Exception:
+                    pass
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
