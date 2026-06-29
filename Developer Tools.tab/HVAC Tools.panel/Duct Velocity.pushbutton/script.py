@@ -273,7 +273,7 @@ def _duct_label(dr, custom_limits, tol_pct):
         max_cap      = max_fpm * dr.area_ft2
         green_cap    = max_cap * (1.0 - tol_fac)
         red_cap      = max_cap * (1.0 + tol_fac)
-        if dr.cfm < green_cap:
+        if dr.cfm <= green_cap:
             vel_label = 'GREEN'
         elif dr.cfm <= red_cap:
             vel_label = 'YELLOW'
@@ -286,7 +286,7 @@ def _duct_label(dr, custom_limits, tol_pct):
     else:
         green_fric = max_friction * (1.0 - tol_fac)
         red_fric   = max_friction * (1.0 + tol_fac)
-        if dr.friction_per_100ft < green_fric:
+        if dr.friction_per_100ft <= green_fric:
             fric_label = 'GREEN'
         elif dr.friction_per_100ft <= red_fric:
             fric_label = 'YELLOW'
