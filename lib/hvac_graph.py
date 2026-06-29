@@ -184,8 +184,12 @@ def find_ahu(elem):
 
 
 # ── BFS traversal ────────────────────────────────────────────────────────────
-def traverse(root):
+def traverse(root, allowed_ids=None):
     """BFS outward through all HVAC connectors from root.
+
+    allowed_ids: optional set of int element IDs.  When provided the BFS will
+    only visit nodes whose ID is in this set.  Use this to re-root the tree
+    after a first undirected pass without re-traversing the full model.
 
     Returns:
         nodes    dict  int_id -> element
@@ -224,6 +228,9 @@ def traverse(root):
                     owner    = ref.Owner
                     owner_id = owner.Id.IntegerValue
                     if owner_id in visited:
+                        continue
+                    # When re-rooting, stay within the already-known node set
+                    if allowed_ids is not None and owner_id not in allowed_ids:
                         continue
                     visited.add(owner_id)
                     nodes[owner_id]    = owner
@@ -336,20 +343,49 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
     """
     net = HvacNetwork()
 
-    # Find AHU
+    # PASS 1: try fast MEPSystem.BaseEquipment lookup
     ahu, method = find_ahu(selected_elem)
-    if ahu is None:
-        net.warnings.append(
-            'No base equipment (AHU) found. Traversing from selected element. '
-            'Results may be incomplete if selection is not the system root.')
-        net.root       = selected_elem
-        net.ahu_method = 'fallback: selected element used as root'
-    else:
+    if ahu is not None:
         net.root       = ahu
         net.ahu_method = method
+        net.nodes, net.children, net.traverse_log = traverse(net.root)
+    else:
+        # PASS 1 fallback: BFS from selected element to discover full network
+        all_nodes, all_children, all_log = traverse(selected_elem)
+        all_ids = set(all_nodes.keys())
 
-    # BFS
-    net.nodes, net.children, net.traverse_log = traverse(net.root)
+        # Scan traversal result for MechanicalEquipment (AHU / RTU / fan)
+        # Exclude the selected element itself if it happens to be equipment
+        sel_id = selected_elem.Id.IntegerValue
+        equip_found = [
+            elem for nid, elem in all_nodes.items()
+            if is_equipment(elem) and nid != sel_id
+        ]
+
+        if equip_found:
+            # PASS 2: re-root at the equipment using the known node set
+            net.root       = equip_found[0]
+            net.ahu_method = (
+                'found in traversal: OST_MechanicalEquipment id={}'
+                .format(net.root.Id.IntegerValue)
+            )
+            net.nodes, net.children, net.traverse_log = traverse(
+                net.root, allowed_ids=all_ids
+            )
+            net.traverse_log.insert(0,
+                'NOTE: re-rooted from selection id={} to equipment id={}'
+                .format(sel_id, net.root.Id.IntegerValue))
+        else:
+            # True fallback — no AHU found anywhere in the network
+            net.warnings.append(
+                'No base equipment (AHU) found in traversal. '
+                'CFM sums are computed away from the selected element '
+                'and may not reflect actual flow direction.')
+            net.root       = selected_elem
+            net.ahu_method = 'fallback: selected element used as root'
+            net.nodes      = all_nodes
+            net.children   = all_children
+            net.traverse_log = all_log
 
     if len(net.nodes) == 0:
         net.errors.append('No elements found in traversal. Check that the selected element is connected to a duct system.')
