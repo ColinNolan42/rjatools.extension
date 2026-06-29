@@ -482,6 +482,30 @@ def main():
     output.print_md('| Gray   | {} | — | No CFM data        |'.format(
         counts.get('GRAY',   0)))
 
+    # Flagged duct list — RED first, then YELLOW, sorted by velocity descending
+    flagged = []
+    for eid, dr in net.duct_results.items():
+        label, _ = duct_labels.get(eid, ('GRAY', 0.0))
+        if label not in ('RED', 'YELLOW'):
+            continue
+        fpm = dr.cfm / dr.area_ft2 if dr.area_ft2 > 0 else 0.0
+        defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+        max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+        flagged.append((label, fpm, dr, max_fpm, max_fric))
+
+    if flagged:
+        flagged.sort(key=lambda x: (0 if x[0] == 'RED' else 1, -x[1]))
+        output.print_md('')
+        output.print_md('### Flagged Ducts')
+        output.print_md('| # | Status | System | Duct ID | Size (in) | Velocity (FPM) | Max FPM | CFM | Friction (iwc/100) | Max Friction |')
+        output.print_md('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+        for idx, (label, fpm, dr, max_fpm, max_fric) in enumerate(flagged, 1):
+            d_h = '{:.1f}"'.format(dr.d_h_in) if dr.d_h_in > 0 else '?'
+            output.print_md('| {} | {} | {} | {} | {} | {:.0f} | {:.0f} | {:.0f} | {:.3f} | {:.3f} |'.format(
+                idx, label, dr.sys_class, dr.element_id,
+                d_h, fpm, max_fpm, dr.cfm,
+                dr.friction_per_100ft, max_fric))
+
     uidoc.ActiveView = new_sheet
 
 
