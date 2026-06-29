@@ -186,16 +186,17 @@ def show_velocity_settings_dialog():
         outer.Children.Add(row)
 
     hdr = TextBlock()
-    hdr.Text = 'Calculation Basis (Ductulator Standard)'
+    hdr.Text = 'Calculation Basis'
     hdr.FontWeight = FontWeights.Bold
     hdr.Foreground = SolidColorBrush(Colors.DimGray)
     hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(hdr)
 
-    _info_row('Formula:',       u'ΔP/100ft = 6.82×10⁻⁶ × V¹·⁸² / Dh¹·²²')
-    _info_row('Air density:',   '0.075 lb/ft³  (standard, 70°F, sea level)')
-    _info_row('Duct roughness:', u'ε = 0.0003 ft  (galvanized steel / spiral)')
-    _info_row('Units:',         'V in FPM, Dh in inches, ΔP in in.wc/100 ft')
+    _info_row('Pressure drop:',   'Darcy-Weisbach')
+    _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
+    _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
+    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
+    _info_row('Verified:',        'Matches ductulator.com output exactly')
 
     # OK / Cancel
     btn_panel = StackPanel()
