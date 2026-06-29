@@ -341,37 +341,92 @@ def main():
         return
     custom_limits, tol_pct = dialog_result
 
-    # 3. Select element
-    try:
-        ref = uidoc.Selection.PickObject(
-            ObjectType.Element,
-            'Select any duct, air terminal, or AHU in the system to visualize'
+    # 3. Find AHUs in active view and let user pick systems
+    equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
+                         .OfCategory(BuiltInCategory.OST_MechanicalEquipment)
+                         .WhereElementIsNotElementType())
+
+    if equip_in_view:
+        # Build display name → element map (deduplicate names)
+        name_to_elem = {}
+        for eq in equip_in_view:
+            try:
+                name = eq.Symbol.Family.Name + ' : ' + eq.Name
+            except Exception:
+                name = _elem_name(eq)
+            key = name
+            suffix = 2
+            while key in name_to_elem:
+                key = '{} ({})'.format(name, suffix)
+                suffix += 1
+            name_to_elem[key] = eq
+
+        selected_names = forms.SelectFromList.show(
+            sorted(name_to_elem.keys()),
+            title='Select AHU Systems to Visualize',
+            multiselect=True,
+            button_name='Run Duct Velocity'
         )
-    except Exception:
-        output.print_md('**Cancelled.**')
+        if not selected_names:
+            output.print_md('**Cancelled.**')
+            return
+        sel_elems = [name_to_elem[n] for n in selected_names]
+    else:
+        # No equipment found in view — fall back to manual pick
+        output.print_md('No mechanical equipment found in active view. Pick an element manually.')
+        try:
+            ref = uidoc.Selection.PickObject(
+                ObjectType.Element,
+                'Select any duct, air terminal, or AHU in the system to visualize'
+            )
+        except Exception:
+            output.print_md('**Cancelled.**')
+            return
+        sel_elems = [doc.GetElement(ref.ElementId)]
+
+    # 4. Traverse each system and merge results
+    all_duct_results = {}   # ElementId -> DuctResult  (worst-wins on overlap)
+    all_nodes        = {}   # merged for fitting adjacency
+    all_children     = {}   # merged
+    ahu_labels       = []
+
+    for sel_elem in sel_elems:
+        output.print_md('Traversing **{}** (id {})...'.format(
+            _elem_name(sel_elem), sel_elem.Id.IntegerValue))
+        net = hvac_graph.build_network(sel_elem, doc)
+
+        if net.errors:
+            for e in net.errors:
+                output.print_md('- :warning: {}'.format(e))
+            continue
+
+        ahu_labels.append('{} (id {})'.format(_elem_name(net.root), net.root.Id.IntegerValue))
+
+        if net.warnings:
+            for w in net.warnings:
+                output.print_md(':warning: {}'.format(w))
+
+        output.print_md('  {} ducts  |  {} terminals'.format(
+            len(net.duct_results), len(net.terminal_cfms)))
+
+        all_nodes.update(net.nodes)
+        all_children.update(net.children)
+
+        for eid, dr in net.duct_results.items():
+            if eid not in all_duct_results:
+                all_duct_results[eid] = dr
+            else:
+                # Keep worst label if duct appears in multiple networks
+                existing = all_duct_results[eid]
+                if _PRIORITY.get(dr.label, 0) > _PRIORITY.get(existing.label, 0):
+                    all_duct_results[eid] = dr
+
+    if not all_duct_results:
+        output.print_md('**No duct results — check errors above.**')
         return
 
-    sel_elem = doc.GetElement(ref.ElementId)
-    output.print_md('Selected id: **{}**'.format(sel_elem.Id.IntegerValue))
-
-    # 4. Build network (traversal + CFM + velocity)
-    output.print_md('Traversing duct network...')
-    net = hvac_graph.build_network(sel_elem, doc)
-
-    if net.root is None or len(net.errors) > 0:
-        output.print_md('**Errors found — run HVAC Diagnose for details:**')
-        for e in net.errors:
-            output.print_md('- {}'.format(e))
-        return
-
-    ahu_label = _elem_name(net.root)
-    output.print_md('AHU: **{}**  (id {})'.format(ahu_label, net.root.Id.IntegerValue))
-    output.print_md('Network: {} elements  |  {} ducts  |  {} terminals'.format(
-        len(net.nodes), len(net.duct_results), len(net.terminal_cfms)))
-
-    if net.warnings:
-        for w in net.warnings:
-            output.print_md(':warning: {}'.format(w))
+    output.print_md('**Total: {} systems  |  {} ducts**'.format(
+        len(ahu_labels), len(all_duct_results)))
 
     # 5. Find source sheet number
     source_sheet_num = 'NoSheet'
@@ -413,7 +468,7 @@ def main():
         # eid -> (label, green_cap_cfm) for fittings + annotations
         duct_labels = {}
 
-        for eid, dr in net.duct_results.items():
+        for eid, dr in all_duct_results.items():
             label, green_cap = _duct_label(dr, custom_limits, tol_pct)
             duct_labels[eid] = (label, green_cap)
             color = _COLOR_MAP.get(label, GRAY)
@@ -426,10 +481,8 @@ def main():
             counts[label] = counts.get(label, 0) + 1
 
         # Color fittings and accessories by worst adjacent duct color
-        # Transitions, boots, tees, elbows → inherit RED/YELLOW/GREEN from neighbors
-        # Build bidirectional adjacency from the BFS children dict
         adj = {}
-        for pid, cids in net.children.items():
+        for pid, cids in all_children.items():
             if pid not in adj:
                 adj[pid] = []
             for cid in cids:
@@ -440,12 +493,12 @@ def main():
 
         fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0}
 
-        for nid, elem in net.nodes.items():
+        for nid, elem in all_nodes.items():
             if not hvac_graph.is_fitting_or_accessory(elem):
                 continue
             worst = 'GRAY'
             for neighbor_id in adj.get(nid, []):
-                nb_elem = net.nodes.get(neighbor_id)
+                nb_elem = all_nodes.get(neighbor_id)
                 if nb_elem is None or not hvac_graph.is_duct(nb_elem):
                     continue
                 nb_label = duct_labels.get(nb_elem.Id, ('GRAY', 0.0))[0]
@@ -504,7 +557,7 @@ def main():
 
     # Flagged duct list — RED first, then YELLOW, sorted by velocity descending
     flagged = []
-    for eid, dr in net.duct_results.items():
+    for eid, dr in all_duct_results.items():
         label, _ = duct_labels.get(eid, ('GRAY', 0.0))
         if label not in ('RED', 'YELLOW'):
             continue
