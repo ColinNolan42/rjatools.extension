@@ -422,47 +422,51 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
     """
     net = HvacNetwork()
 
-    # PASS 1: try fast MEPSystem.BaseEquipment lookup
-    ahu, method = find_ahu(selected_elem)
-    if ahu is not None:
-        net.root       = ahu
-        net.ahu_method = method
+    # If the selected element is itself mechanical equipment (fan coil, VRF
+    # indoor unit, split system — no central AHU), use it as root directly.
+    if is_equipment(selected_elem):
+        net.root       = selected_elem
+        net.ahu_method = 'selected element is mechanical equipment'
         net.nodes, net.children, net.traverse_log = traverse(net.root)
     else:
-        # PASS 1 fallback: BFS from selected element to discover full network
-        all_nodes, all_children, all_log = traverse(selected_elem)
-        all_ids = set(all_nodes.keys())
-
-        # Scan traversal result for MechanicalEquipment (AHU / RTU / fan)
-        # Exclude the selected element itself if it happens to be equipment
-        sel_id = selected_elem.Id.IntegerValue
-        equip_found = [
-            elem for nid, elem in all_nodes.items()
-            if is_equipment(elem) and nid != sel_id
-        ]
-
-        if equip_found:
-            # PASS 2: re-root at the equipment using the known node set
-            net.root       = equip_found[0]
-            net.ahu_method = (
-                'found in traversal: OST_MechanicalEquipment id={}'
-                .format(net.root.Id.IntegerValue)
-            )
-            net.nodes, net.children, net.traverse_log = traverse(
-                net.root, allowed_ids=all_ids
-            )
-            net.traverse_log.insert(0,
-                'NOTE: re-rooted from selection id={} to equipment id={}'
-                .format(sel_id, net.root.Id.IntegerValue))
+        # PASS 1: try fast MEPSystem.BaseEquipment lookup
+        ahu, method = find_ahu(selected_elem)
+        if ahu is not None:
+            net.root       = ahu
+            net.ahu_method = method
+            net.nodes, net.children, net.traverse_log = traverse(net.root)
         else:
-            # True fallback — no AHU found anywhere in the network
-            net.warnings.append(
-                'No base equipment (AHU) found in traversal. '
-                'CFM sums are computed away from the selected element '
-                'and may not reflect actual flow direction.')
-            net.root       = selected_elem
-            net.ahu_method = 'fallback: selected element used as root'
-            net.nodes      = all_nodes
+            # PASS 2: undirected BFS then re-root at any equipment found
+            all_nodes, all_children, all_log = traverse(selected_elem)
+            all_ids = set(all_nodes.keys())
+
+            sel_id = selected_elem.Id.IntegerValue
+            equip_found = [
+                elem for nid, elem in all_nodes.items()
+                if is_equipment(elem) and nid != sel_id
+            ]
+
+            if equip_found:
+                net.root       = equip_found[0]
+                net.ahu_method = (
+                    'found in traversal: OST_MechanicalEquipment id={}'
+                    .format(net.root.Id.IntegerValue)
+                )
+                net.nodes, net.children, net.traverse_log = traverse(
+                    net.root, allowed_ids=all_ids
+                )
+                net.traverse_log.insert(0,
+                    'NOTE: re-rooted from selection id={} to equipment id={}'
+                    .format(sel_id, net.root.Id.IntegerValue))
+            else:
+                # True fallback — no AHU found anywhere in the network
+                net.warnings.append(
+                    'No base equipment (AHU) found in traversal. '
+                    'CFM sums are computed away from the selected element '
+                    'and may not reflect actual flow direction.')
+                net.root       = selected_elem
+                net.ahu_method = 'fallback: selected element used as root'
+                net.nodes      = all_nodes
             net.children   = all_children
             net.traverse_log = all_log
 
