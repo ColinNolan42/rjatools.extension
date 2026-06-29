@@ -22,13 +22,51 @@ from Autodesk.Revit.DB import (
 
 log = logging.getLogger(__name__)
 
-# ── SMACNA commercial low-velocity thresholds (FPM) ─────────────────────────
-SMACNA = {
-    'Supply Air':  (2000, 2500),
-    'Return Air':  (1500, 2000),
-    'Exhaust Air': (1200, 1500),
-    'Outside Air': (1200, 1500),
+# ── Firm design defaults ─────────────────────────────────────────────────────
+# {sys_class: (max_fpm, max_friction_inwc_per_100ft)}
+# Main and branch ducts share the same values — no split.
+FIRM_DEFAULTS = {
+    'Supply Air':  (800,  0.08),
+    'Return Air':  (600,  0.05),
+    'Exhaust Air': (600,  0.05),
+    'Outside Air': (600,  0.05),
 }
+
+# SMACNA labels for Diagnose report — derived from FIRM_DEFAULTS with 85% green band
+# (green_fpm = max*0.85, yellow_fpm = max)
+SMACNA = {
+    'Supply Air':  (680, 800),    # 800 * 0.85 = 680
+    'Return Air':  (510, 600),    # 600 * 0.85 = 510
+    'Exhaust Air': (510, 600),
+    'Outside Air': (510, 600),
+}
+
+# ── Flex duct sizing (SA and RA only — for future duct sizer tool) ────────────
+# ⚠ NOT wired to the velocity calculator. Reference constant only.
+# Source: firm standard. CFM > 750 → flag for rigid duct.
+_FLEX_DUCT_TABLE = [
+    (100,  6),
+    (225,  8),
+    (400, 10),
+    (600, 12),
+    (750, 14),
+]
+FLEX_DUCT_MAX_CFM = 750
+
+
+def flex_duct_size(cfm):
+    """Return minimum recommended flex duct diameter (inches) for given CFM.
+    Applies to Supply Air and Return Air only.
+    Returns (diameter_in, warning_or_None).
+    If CFM > 750, diameter is None and warning recommends rigid duct.
+    """
+    if cfm > FLEX_DUCT_MAX_CFM:
+        return None, 'CFM {:.0f} exceeds flex duct max ({} CFM) — use rigid duct'.format(
+            cfm, FLEX_DUCT_MAX_CFM)
+    for max_cfm, diam in _FLEX_DUCT_TABLE:
+        if cfm <= max_cfm:
+            return diam, None
+    return None, 'CFM {:.0f} not matched in flex duct table'.format(cfm)
 
 # ── Revit category IDs ───────────────────────────────────────────────────────
 _CAT_TERMINAL  = int(BuiltInCategory.OST_DuctTerminal)

@@ -61,31 +61,32 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY}
 
 # ── velocity settings dialog ───────────────────────────────────────────────────
 def show_velocity_settings_dialog():
-    """WPF dialog — one Max Velocity per system type + tolerance band.
+    """WPF dialog — per-system max velocity + friction, with green threshold %.
 
-    Returns (limits_dict, max_friction_inwc, tol_pct) or None if cancelled.
-      limits_dict  = {sys_class: (max_fpm, yellow_fpm)}
-      max_friction = max in. wc / 100 ft (same for all systems)
-      tol_pct      = % over max before going red (applied to both vel + friction)
+    Returns ({sys_class: (max_fpm, max_friction_inwc)}, green_pct) or None.
+
+    Color bands (percentage-based off max):
+      Green  : value < max * green_pct/100
+      Yellow : max * green_pct/100 <= value <= max
+      Red    : value > max
     """
-    # Defaults: SMACNA commercial low-velocity design velocities
+    # Defaults: firm design standard (main and branch share same values)
     ROWS = [
-        ('Supply Air',  2000),
-        ('Return Air',  1500),
-        ('Exhaust Air', 1200),
-        ('Outside Air', 1200),
+        ('Supply Air',  800,  0.08),
+        ('Return Air',  600,  0.05),
+        ('Exhaust Air', 600,  0.05),
+        ('Outside Air', 600,  0.05),
     ]
-    DEFAULT_TOLERANCE = 15    # % over max before going red
-    DEFAULT_FRICTION  = 0.10  # in. wc / 100 ft (SMACNA equal-friction target)
+    DEFAULT_GREEN_PCT = 85   # green if below this % of max
 
-    result    = [None]  # no nonlocal in Python 2.7
-    max_boxes = {}      # row_idx -> TextBox
-    tol_box   = [None]  # mutable ref to tolerance TextBox
-    fric_box  = [None]  # mutable ref to friction TextBox
+    result    = [None]
+    vel_boxes  = {}   # row_idx -> TextBox (velocity)
+    fric_boxes = {}   # row_idx -> TextBox (friction)
+    gpct_box   = [None]
 
     win = Window()
     win.Title  = 'Duct Velocity Settings'
-    win.Width  = 360
+    win.Width  = 460
     win.SizeToContent = SizeToContent.Height
     win.WindowStartupLocation = WindowStartupLocation.CenterScreen
 
@@ -93,13 +94,13 @@ def show_velocity_settings_dialog():
     outer.Margin = Thickness(14)
 
     intro = Label()
-    intro.Content = 'Set max design velocity per system (FPM):'
+    intro.Content = 'Max velocity (FPM) and pressure drop (in. wc/100 ft) per system:'
     intro.Margin  = Thickness(0, 0, 0, 8)
     outer.Children.Add(intro)
 
-    # System rows
+    # 3-column grid: system | velocity | friction
     grid = Grid()
-    for w in (160, 120):
+    for w in (150, 130, 150):
         cd = ColumnDefinition()
         cd.Width = GridLength(w)
         grid.ColumnDefinitions.Add(cd)
@@ -116,72 +117,50 @@ def show_velocity_settings_dialog():
         Grid.SetRow(lb, row)
         grid.Children.Add(lb)
 
-    _lbl('System Type',      0, 0)
-    _lbl('Max Velocity FPM', 1, 0)
+    _lbl('System Type',          0, 0)
+    _lbl('Max Velocity (FPM)',   1, 0)
+    _lbl('Max Friction (iwc/100)', 2, 0)
 
-    for i, (sys_class, default_fpm) in enumerate(ROWS):
+    for i, (sys_class, def_fpm, def_fric) in enumerate(ROWS):
         r = i + 1
         _lbl(sys_class, 0, r)
-        tb = TextBox()
-        tb.Text  = str(default_fpm)
-        tb.Width = 80
-        tb.Margin = Thickness(4, 4, 4, 4)
-        tb.VerticalAlignment   = VerticalAlignment.Center
-        tb.HorizontalAlignment = HorizontalAlignment.Left
-        Grid.SetColumn(tb, 1)
-        Grid.SetRow(tb, r)
-        grid.Children.Add(tb)
-        max_boxes[i] = tb
+        for col, val, store in ((1, def_fpm, vel_boxes), (2, def_fric, fric_boxes)):
+            tb = TextBox()
+            tb.Text  = str(val)
+            tb.Width = 80
+            tb.Margin = Thickness(4, 4, 4, 4)
+            tb.VerticalAlignment   = VerticalAlignment.Center
+            tb.HorizontalAlignment = HorizontalAlignment.Left
+            Grid.SetColumn(tb, col)
+            Grid.SetRow(tb, r)
+            grid.Children.Add(tb)
+            store[i] = tb
 
     outer.Children.Add(grid)
 
-    # Tolerance band row
-    tol_panel = StackPanel()
-    tol_panel.Orientation = Orientation.Horizontal
-    tol_panel.Margin = Thickness(0, 10, 0, 0)
+    # Green threshold row
+    gpct_panel = StackPanel()
+    gpct_panel.Orientation = Orientation.Horizontal
+    gpct_panel.Margin = Thickness(0, 10, 0, 0)
 
-    tol_lbl = Label()
-    tol_lbl.Content = 'Yellow tolerance:'
-    tol_lbl.VerticalAlignment = VerticalAlignment.Center
-    tol_panel.Children.Add(tol_lbl)
+    gpct_lbl = Label()
+    gpct_lbl.Content = 'Green if below'
+    gpct_lbl.VerticalAlignment = VerticalAlignment.Center
+    gpct_panel.Children.Add(gpct_lbl)
 
-    tb_tol = TextBox()
-    tb_tol.Text  = str(DEFAULT_TOLERANCE)
-    tb_tol.Width = 45
-    tb_tol.Margin = Thickness(4, 0, 4, 0)
-    tb_tol.VerticalAlignment = VerticalAlignment.Center
-    tol_panel.Children.Add(tb_tol)
-    tol_box[0] = tb_tol
+    tb_gpct = TextBox()
+    tb_gpct.Text  = str(DEFAULT_GREEN_PCT)
+    tb_gpct.Width = 45
+    tb_gpct.Margin = Thickness(4, 0, 4, 0)
+    tb_gpct.VerticalAlignment = VerticalAlignment.Center
+    gpct_panel.Children.Add(tb_gpct)
+    gpct_box[0] = tb_gpct
 
-    tol_suffix = Label()
-    tol_suffix.Content = '% over max before red'
-    tol_suffix.VerticalAlignment = VerticalAlignment.Center
-    tol_panel.Children.Add(tol_suffix)
-    outer.Children.Add(tol_panel)
-
-    # Friction loss row
-    fric_panel = StackPanel()
-    fric_panel.Orientation = Orientation.Horizontal
-    fric_panel.Margin = Thickness(0, 6, 0, 0)
-
-    fric_lbl = Label()
-    fric_lbl.Content = 'Max friction loss:'
-    fric_lbl.VerticalAlignment = VerticalAlignment.Center
-    fric_panel.Children.Add(fric_lbl)
-
-    tb_fric = TextBox()
-    tb_fric.Text  = str(DEFAULT_FRICTION)
-    tb_fric.Width = 52
-    tb_fric.Margin = Thickness(4, 0, 4, 0)
-    tb_fric.VerticalAlignment = VerticalAlignment.Center
-    fric_panel.Children.Add(tb_fric)
-    fric_box[0] = tb_fric
-
-    fric_suffix = Label()
-    fric_suffix.Content = 'in. wc / 100 ft'
-    fric_suffix.VerticalAlignment = VerticalAlignment.Center
-    fric_panel.Children.Add(fric_suffix)
-    outer.Children.Add(fric_panel)
+    gpct_suffix = Label()
+    gpct_suffix.Content = '% of max  (above = yellow, over max = red)'
+    gpct_suffix.VerticalAlignment = VerticalAlignment.Center
+    gpct_panel.Children.Add(gpct_suffix)
+    outer.Children.Add(gpct_panel)
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -200,20 +179,19 @@ def show_velocity_settings_dialog():
 
     def on_ok(s, e):
         try:
-            tol  = float(tol_box[0].Text)
-            fric = float(fric_box[0].Text)
-            if tol < 0:
-                forms.alert('Tolerance must be 0 or greater.', title='Invalid Input')
-                return
-            if fric <= 0:
-                forms.alert('Max friction loss must be greater than 0.', title='Invalid Input')
+            gpct = float(gpct_box[0].Text)
+            if not (0 < gpct < 100):
+                forms.alert('Green threshold must be between 0 and 100.', title='Invalid Input')
                 return
             out = {}
-            for i, (sys_class, _) in enumerate(ROWS):
-                max_fpm    = float(max_boxes[i].Text)
-                yellow_fpm = max_fpm * (1.0 + tol / 100.0)
-                out[sys_class] = (max_fpm, yellow_fpm)
-            result[0] = (out, fric, tol)
+            for i, (sys_class, _, _) in enumerate(ROWS):
+                max_fpm  = float(vel_boxes[i].Text)
+                max_fric = float(fric_boxes[i].Text)
+                if max_fpm <= 0 or max_fric <= 0:
+                    forms.alert('All values must be greater than 0.', title='Invalid Input')
+                    return
+                out[sys_class] = (max_fpm, max_fric)
+            result[0] = (out, gpct)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -237,48 +215,48 @@ def show_velocity_settings_dialog():
 _PRIORITY = {'RED': 3, 'YELLOW': 2, 'GREEN': 1, 'GRAY': 0}
 
 
-def _cfm_label(cfm, area_ft2, sys_class, custom_limits):
-    """Velocity check: actual CFM vs duct capacity at green/yellow FPM limits.
-    Returns (label, green_cap_cfm).
+def _duct_label(dr, custom_limits, green_pct):
+    """Percentage-based label — worst of velocity and friction checks.
+
+    Green  : value < max * green_pct/100
+    Yellow : max * green_pct/100 <= value <= max
+    Red    : value > max
+
+    Returns (label, max_cap_cfm).
     """
-    limits = custom_limits.get(sys_class, hvac_graph.SMACNA.get(sys_class, None))
-    if cfm <= 0 or area_ft2 <= 0 or limits is None:
-        return 'GRAY', 0.0
-    green_fpm, yellow_fpm = limits
-    green_cap  = green_fpm  * area_ft2
-    yellow_cap = yellow_fpm * area_ft2
-    if cfm <= green_cap:
-        return 'GREEN', green_cap
-    elif cfm <= yellow_cap:
-        return 'YELLOW', green_cap
+    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+    max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
+    green_fac = green_pct / 100.0
+
+    # Velocity check (CFM vs capacity at max FPM)
+    if dr.cfm <= 0 or dr.area_ft2 <= 0:
+        vel_label = 'GRAY'
+        max_cap   = 0.0
     else:
-        return 'RED', green_cap
+        max_cap   = max_fpm * dr.area_ft2
+        green_cap = max_cap * green_fac
+        if dr.cfm < green_cap:
+            vel_label = 'GREEN'
+        elif dr.cfm <= max_cap:
+            vel_label = 'YELLOW'
+        else:
+            vel_label = 'RED'
 
-
-def _friction_label(friction_per_100ft, max_friction, tol_pct):
-    """Friction check: actual in. wc/100ft vs design max.
-    Returns label string (GREEN / YELLOW / RED / GRAY).
-    """
-    if friction_per_100ft <= 0 or max_friction <= 0:
-        return 'GRAY'
-    yellow_friction = max_friction * (1.0 + tol_pct / 100.0)
-    if friction_per_100ft <= max_friction:
-        return 'GREEN'
-    elif friction_per_100ft <= yellow_friction:
-        return 'YELLOW'
+    # Friction check
+    if dr.friction_per_100ft <= 0 or max_friction <= 0:
+        fric_label = 'GRAY'
     else:
-        return 'RED'
+        green_fric = max_friction * green_fac
+        if dr.friction_per_100ft < green_fric:
+            fric_label = 'GREEN'
+        elif dr.friction_per_100ft <= max_friction:
+            fric_label = 'YELLOW'
+        else:
+            fric_label = 'RED'
 
-
-def _duct_label(dr, custom_limits, max_friction, tol_pct):
-    """Combined label: worst of velocity check and friction check.
-    Returns (label, green_cap_cfm).
-    """
-    vel_label,  green_cap = _cfm_label(dr.cfm, dr.area_ft2, dr.sys_class, custom_limits)
-    fric_label             = _friction_label(dr.friction_per_100ft, max_friction, tol_pct)
     if _PRIORITY.get(fric_label, 0) > _PRIORITY.get(vel_label, 0):
-        return fric_label, green_cap
-    return vel_label, green_cap
+        return fric_label, max_cap
+    return vel_label, max_cap
 
 
 def _duct_midpoint(duct):
@@ -314,7 +292,7 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    custom_limits, max_friction, tol_pct = dialog_result
+    custom_limits, green_pct = dialog_result
 
     # 3. Select element
     try:
@@ -389,7 +367,7 @@ def main():
         duct_labels = {}
 
         for eid, dr in net.duct_results.items():
-            label, green_cap = _duct_label(dr, custom_limits, max_friction, tol_pct)
+            label, green_cap = _duct_label(dr, custom_limits, green_pct)
             duct_labels[eid] = (label, green_cap)
             color = _COLOR_MAP.get(label, GRAY)
             ogs   = OverrideGraphicSettings()
@@ -483,16 +461,15 @@ def main():
         for msg in annotation_errors[:5]:   # first 5 only
             output.print_md('- `{}`'.format(msg))
     output.print_md('')
-    output.print_md('**Design limits used:**')
-    output.print_md('| System | Max vel (green) | Yellow ≤ | Red > |')
-    output.print_md('| --- | --- | --- | --- |')
+    output.print_md('**Design limits used  (green < {}% of max, yellow ≤ max, red > max):**'.format(
+        int(green_pct)))
+    output.print_md('| System | Max Velocity | Max Friction |')
+    output.print_md('| --- | --- | --- |')
     for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air'):
-        mx, yw = custom_limits.get(sys_class, (0, 0))
-        output.print_md('| {} | {:.0f} FPM | {:.0f} FPM | {:.0f} FPM |'.format(
-            sys_class, mx, yw, yw))
-    yellow_fric = max_friction * (1.0 + tol_pct / 100.0)
-    output.print_md('| Friction (all) | {:.3f} iwc/100 | {:.3f} iwc/100 | {:.3f} iwc/100 |'.format(
-        max_friction, yellow_fric, yellow_fric))
+        defaults = hvac_graph.FIRM_DEFAULTS.get(sys_class, (600, 0.05))
+        mx_fpm, mx_fric = custom_limits.get(sys_class, defaults)
+        output.print_md('| {} | {:.0f} FPM | {:.3f} iwc/100 |'.format(
+            sys_class, mx_fpm, mx_fric))
     output.print_md('')
     output.print_md('| Color | Ducts | Fittings & Accessories | Meaning |')
     output.print_md('| --- | --- | --- | --- |')
