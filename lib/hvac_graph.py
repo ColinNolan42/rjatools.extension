@@ -35,6 +35,8 @@ _CAT_TERMINAL  = int(BuiltInCategory.OST_DuctTerminal)
 _CAT_DUCT      = int(BuiltInCategory.OST_DuctCurves)
 _CAT_EQUIP     = int(BuiltInCategory.OST_MechanicalEquipment)
 _CAT_FLEX_DUCT = int(BuiltInCategory.OST_FlexDuctCurves)
+_CAT_FITTING   = int(BuiltInCategory.OST_DuctFitting)
+_CAT_ACCESSORY = int(BuiltInCategory.OST_DuctAccessory)
 
 
 # ── unit conversion ──────────────────────────────────────────────────────────
@@ -88,6 +90,16 @@ def is_duct(elem):
 
 def is_equipment(elem):
     return _cat_id(elem) == _CAT_EQUIP
+
+def is_fitting(elem):
+    return _cat_id(elem) == _CAT_FITTING
+
+def is_accessory(elem):
+    return _cat_id(elem) == _CAT_ACCESSORY
+
+def is_fitting_or_accessory(elem):
+    cid = _cat_id(elem)
+    return cid in (_CAT_FITTING, _CAT_ACCESSORY)
 
 def duct_area_ft2(duct):
     """Cross-section area in ft2. Returns 0.0 if dimensions unavailable."""

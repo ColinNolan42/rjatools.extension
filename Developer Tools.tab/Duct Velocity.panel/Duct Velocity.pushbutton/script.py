@@ -341,6 +341,44 @@ def main():
             new_view.SetElementOverrides(eid, ogs)
             counts[label] = counts.get(label, 0) + 1
 
+        # Color fittings and accessories by worst adjacent duct color
+        # Transitions, boots, tees, elbows → inherit RED/YELLOW/GREEN from neighbors
+        # Build bidirectional adjacency from the BFS children dict
+        adj = {}
+        for pid, cids in net.children.items():
+            if pid not in adj:
+                adj[pid] = []
+            for cid in cids:
+                adj[pid].append(cid)
+                if cid not in adj:
+                    adj[cid] = []
+                adj[cid].append(pid)
+
+        _PRIORITY = {'RED': 3, 'YELLOW': 2, 'GREEN': 1, 'GRAY': 0}
+        fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0}
+
+        for nid, elem in net.nodes.items():
+            if not hvac_graph.is_fitting_or_accessory(elem):
+                continue
+            worst = 'GRAY'
+            for neighbor_id in adj.get(nid, []):
+                nb_elem = net.nodes.get(neighbor_id)
+                if nb_elem is None or not hvac_graph.is_duct(nb_elem):
+                    continue
+                nb_label = duct_labels.get(nb_elem.Id, ('GRAY', 0.0))[0]
+                if _PRIORITY.get(nb_label, 0) > _PRIORITY.get(worst, 0):
+                    worst = nb_label
+            if worst == 'GRAY':
+                continue  # no adjacent colored duct — leave Revit default
+            color = _COLOR_MAP[worst]
+            ogs   = OverrideGraphicSettings()
+            ogs.SetSurfaceForegroundPatternColor(color)
+            if fill_id != ElementId.InvalidElementId:
+                ogs.SetSurfaceForegroundPatternId(fill_id)
+            ogs.SetProjectionLineColor(color)
+            new_view.SetElementOverrides(elem.Id, ogs)
+            fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
+
         # CFM annotations: "actual / capacity CFM" — skip GRAY (no CFM data)
         note_opts = TextNoteOptions()
         note_opts.HorizontalAlignment = HorizontalTextAlignment.Center
@@ -393,12 +431,16 @@ def main():
         output.print_md('| {} | {:.0f} FPM | {:.0f} FPM | {:.0f} FPM |'.format(
             sys_class, mx, yw, yw))
     output.print_md('')
-    output.print_md('| Color | Duct Count | Meaning |')
-    output.print_md('| --- | --- | --- |')
-    output.print_md('| Green  | {} | Within SMACNA limit |'.format(counts.get('GREEN',  0)))
-    output.print_md('| Yellow | {} | Approaching limit   |'.format(counts.get('YELLOW', 0)))
-    output.print_md('| Red    | {} | Exceeds limit       |'.format(counts.get('RED',    0)))
-    output.print_md('| Gray   | {} | No CFM data         |'.format(counts.get('GRAY',   0)))
+    output.print_md('| Color | Ducts | Fittings & Accessories | Meaning |')
+    output.print_md('| --- | --- | --- | --- |')
+    output.print_md('| Green  | {} | {} | Within limit       |'.format(
+        counts.get('GREEN',  0), fitting_counts.get('GREEN',  0)))
+    output.print_md('| Yellow | {} | {} | Approaching limit  |'.format(
+        counts.get('YELLOW', 0), fitting_counts.get('YELLOW', 0)))
+    output.print_md('| Red    | {} | {} | Exceeds limit      |'.format(
+        counts.get('RED',    0), fitting_counts.get('RED',    0)))
+    output.print_md('| Gray   | {} | — | No CFM data        |'.format(
+        counts.get('GRAY',   0)))
 
     uidoc.ActiveView = new_sheet
 
