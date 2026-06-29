@@ -177,17 +177,24 @@ def show_velocity_settings_dialog():
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-def _custom_smacna_label(fpm, sys_class, custom_limits):
+def _cfm_label(cfm, area_ft2, sys_class, custom_limits):
+    """Compare actual CFM to duct capacity at green/yellow FPM limits.
+    Returns (label, green_cap_cfm, yellow_cap_cfm).
+    This matches the ductulator mental model: 1,110 > 800 cap → RED.
+    """
     limits = custom_limits.get(sys_class, hvac_graph.SMACNA.get(sys_class, None))
-    if fpm <= 0 or limits is None:
-        return 'GRAY'
-    lo, hi = limits
-    if fpm <= lo:
-        return 'GREEN'
-    elif fpm <= hi:
-        return 'YELLOW'
+    if cfm <= 0 or area_ft2 <= 0 or limits is None:
+        return 'GRAY', 0.0, 0.0
+    green_fpm, yellow_fpm = limits
+    green_cap  = green_fpm  * area_ft2
+    yellow_cap = yellow_fpm * area_ft2
+    if cfm <= green_cap:
+        label = 'GREEN'
+    elif cfm <= yellow_cap:
+        label = 'YELLOW'
     else:
-        return 'RED'
+        label = 'RED'
+    return label, green_cap, yellow_cap
 
 
 def _duct_midpoint(duct):
@@ -291,15 +298,17 @@ def main():
         except Exception:
             new_view.Name = base_name + ' (2)'
 
-        # Color overrides — use custom limits
+        # Color overrides — compare actual CFM vs duct capacity CFM
         counts      = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0}
-        duct_labels = {}   # ElementId -> label string (used below for annotations)
+        # eid -> (label, green_cap_cfm) for use in annotations
+        duct_labels = {}
 
         for eid, dr in net.duct_results.items():
-            label             = _custom_smacna_label(dr.fpm, dr.sys_class, custom_limits)
-            duct_labels[eid]  = label
-            color             = _COLOR_MAP.get(label, GRAY)
-            ogs               = OverrideGraphicSettings()
+            label, green_cap, yellow_cap = _cfm_label(
+                dr.cfm, dr.area_ft2, dr.sys_class, custom_limits)
+            duct_labels[eid] = (label, green_cap)
+            color = _COLOR_MAP.get(label, GRAY)
+            ogs   = OverrideGraphicSettings()
             ogs.SetSurfaceForegroundPatternColor(color)
             if fill_id != ElementId.InvalidElementId:
                 ogs.SetSurfaceForegroundPatternId(fill_id)
@@ -307,27 +316,29 @@ def main():
             new_view.SetElementOverrides(eid, ogs)
             counts[label] = counts.get(label, 0) + 1
 
-        # FPM annotations — skip GRAY ducts (no reliable CFM)
+        # CFM annotations: "actual / capacity CFM" — skip GRAY (no CFM data)
         note_opts = TextNoteOptions()
         note_opts.HorizontalAlignment = HorizontalTextAlignment.Center
         annotation_count = 0
         for eid, dr in net.duct_results.items():
-            if duct_labels.get(eid, 'GRAY') == 'GRAY':
+            label, green_cap = duct_labels.get(eid, ('GRAY', 0.0))
+            if label == 'GRAY':
                 continue
             mid = _duct_midpoint(dr.elem)
             if mid is None:
                 continue
             try:
-                fpm_text = '{:.0f} FPM'.format(dr.fpm)
-                TextNote.Create(doc, new_vid, mid, text_h_ft, fpm_text, note_opts)
+                # e.g. "1,050 / 698 CFM"
+                ann_text = '{:.0f} / {:.0f} CFM'.format(dr.cfm, green_cap)
+                TextNote.Create(doc, new_vid, mid, text_h_ft, ann_text, note_opts)
                 annotation_count += 1
             except Exception:
-                # Alternate overload (Revit version difference)
                 try:
-                    TextNote.Create(doc, new_vid, mid, fpm_text, note_opts)
+                    ann_text = '{:.0f} / {:.0f} CFM'.format(dr.cfm, green_cap)
+                    TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
                     annotation_count += 1
                 except Exception:
-                    pass  # annotation is optional; never abort the transaction
+                    pass
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
