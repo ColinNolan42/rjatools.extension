@@ -470,11 +470,27 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
         net.errors.append('No elements found in traversal. Check that the selected element is connected to a duct system.')
         return net
 
-    # Collect terminal CFMs
+    # Collect terminal CFMs — try multiple param names to handle
+    # supply diffusers ("Flow"), return/exhaust grilles ("Airflow", built-in)
+    _FLOW_PARAM_NAMES = ['Flow', 'Airflow', 'Air Flow', 'CFM']
+
     for nid, elem in net.nodes.items():
         if not is_terminal(elem):
             continue
-        fp = elem.LookupParameter('Flow')
+
+        # Try named parameters first
+        fp = None
+        for pname in _FLOW_PARAM_NAMES:
+            candidate = elem.LookupParameter(pname)
+            if candidate is not None and candidate.AsDouble() > 0:
+                fp = candidate
+                break
+        # Fall back to built-in RBS_DUCT_FLOW_PARAM
+        if fp is None or fp.AsDouble() <= 0:
+            builtin = elem.get_Parameter(BuiltInParameter.RBS_DUCT_FLOW_PARAM)
+            if builtin is not None and builtin.AsDouble() > 0:
+                fp = builtin
+
         if fp is None:
             net.terminal_cfms[nid] = 0.0
             net.missing_flow.append(nid)
