@@ -24,8 +24,7 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, Transaction,
     BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
     Viewport, ViewDuplicateOption, ElementId, XYZ,
-    OverrideGraphicSettings, Color,
-    TextNote, TextNoteOptions, TextNoteType, HorizontalTextAlignment
+    OverrideGraphicSettings, Color
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 
@@ -259,13 +258,6 @@ def _duct_label(dr, custom_limits, green_pct):
     return vel_label, max_cap
 
 
-def _duct_midpoint(duct):
-    try:
-        return duct.Location.Curve.Evaluate(0.5, True)
-    except Exception:
-        return None
-
-
 def _elem_name(elem):
     try:
         return elem.Name
@@ -430,32 +422,6 @@ def main():
             new_view.SetElementOverrides(elem.Id, ogs)
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
 
-        # CFM annotations: "actual / capacity CFM" — skip GRAY (no CFM data)
-        _text_types = list(FilteredElementCollector(doc).OfClass(TextNoteType))
-        note_opts = TextNoteOptions(_text_types[0].Id) if _text_types else None
-        if note_opts is not None:
-            note_opts.HorizontalAlignment = HorizontalTextAlignment.Center
-        annotation_count = 0
-        annotation_errors = []
-        if note_opts is None:
-            annotation_errors.append('No TextNoteType found in document — annotations skipped')
-        else:
-            for eid, dr in net.duct_results.items():
-                label, green_cap = duct_labels.get(eid, ('GRAY', 0.0))
-                if label == 'GRAY':
-                    continue
-                mid = _duct_midpoint(dr.elem)
-                if mid is None:
-                    annotation_errors.append('id={} midpoint=None'.format(dr.element_id))
-                    continue
-                try:
-                    ann_text = '{:.0f}/{:.0f} CFM\n{:.3f} iwc/100'.format(
-                        dr.cfm, green_cap, dr.friction_per_100ft)
-                    TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
-                    annotation_count += 1
-                except Exception as ex:
-                    annotation_errors.append('id={} err={}'.format(dr.element_id, str(ex)))
-
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
         new_sheet.SheetNumber = 'DV-' + source_sheet_num
@@ -473,12 +439,7 @@ def main():
     # 9. Summary
     output.print_md('---')
     output.print_md('## Done')
-    output.print_md('Sheet **DV-{}** created  |  {} annotations placed.'.format(
-        source_sheet_num, annotation_count))
-    if annotation_errors:
-        output.print_md('**Annotation errors ({}):**'.format(len(annotation_errors)))
-        for msg in annotation_errors[:5]:   # first 5 only
-            output.print_md('- `{}`'.format(msg))
+    output.print_md('Sheet **DV-{}** created.'.format(source_sheet_num))
     output.print_md('')
     output.print_md('**Design limits used  (green < {}% of max, yellow ≤ max, red > max):**'.format(
         int(green_pct)))
