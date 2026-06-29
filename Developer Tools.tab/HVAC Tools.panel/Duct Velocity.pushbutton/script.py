@@ -324,11 +324,22 @@ def _duct_size_label(elem):
 _ROUND_SIZES = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
 
 
+def _snap_even(inches):
+    """Round up to the nearest even (2" interval) duct dimension — odd sizes
+    like 17" aren't stocked/installed; the next even size up (18") is used."""
+    n = int(math.ceil(inches))
+    if n % 2 != 0:
+        n += 1
+    return max(n, 2)
+
+
 def _suggest_size(dr, custom_limits, tol_pct):
     """Return smallest standard duct size satisfying both velocity AND friction limits.
 
     Round/spiral: iterates standard diameters smallest-first; returns first that passes both.
     Rectangular:  keeps width, steps height in 2" increments; expands width if AR > 4:1.
+    All suggested dimensions are snapped to 2" intervals (2, 4, 6, 8...) — odd sizes
+    are not stocked/installed.
     Both constraints must be satisfied — takes the binding (larger) of the two requirements.
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
@@ -352,8 +363,8 @@ def _suggest_size(dr, custom_limits, tol_pct):
         w_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
         h_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
         if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
-            w_in = int(round(w_param.AsDouble() * 12.0))
-            h_in = int(round(h_param.AsDouble() * 12.0))
+            w_in = _snap_even(w_param.AsDouble() * 12.0)
+            h_in = _snap_even(h_param.AsDouble() * 12.0)
             for new_h in range(h_in, h_in + 120, 2):
                 if w_in <= 0 or new_h / float(w_in) > 4.0:
                     break
