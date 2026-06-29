@@ -572,65 +572,29 @@ def main():
             new_view.SetElementOverrides(elem.Id, ogs)
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
 
-        # Numbered callout markers on yellow/red ducts + schedule chart in view
+        # Numbered callout markers on yellow/red ducts (placed in view)
         tn_types = list(FilteredElementCollector(doc).OfClass(TextNoteType).ToElements())
-        if tn_types:
-            tn_type_id = tn_types[0].Id
+        tn_type_id = tn_types[0].Id if tn_types else None
 
-            # Collect flagged ducts in stable element-id order
-            flagged_items = []
-            for eid in sorted(duct_labels.keys(), key=lambda e: e.IntegerValue):
-                lbl, _ = duct_labels[eid]
-                if lbl not in ('YELLOW', 'RED'):
-                    continue
-                dr = all_duct_results.get(eid)
-                if dr is None:
-                    continue
-                flagged_items.append((lbl, dr))
+        # Collect flagged ducts in stable element-id order
+        flagged_items = []
+        for eid in sorted(duct_labels.keys(), key=lambda e: e.IntegerValue):
+            lbl, _ = duct_labels[eid]
+            if lbl not in ('YELLOW', 'RED'):
+                continue
+            dr = all_duct_results.get(eid)
+            if dr is None:
+                continue
+            flagged_items.append((lbl, dr))
 
-            # Place (n) callout at each flagged duct midpoint
-            tag_pts = []
+        if tn_type_id is not None:
             for idx, (lbl, dr) in enumerate(flagged_items, 1):
                 try:
                     mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
-                    tag_pts.append(mid_pt)
-                    opts = TextNoteOptions(tn_type_id)
+                    opts   = TextNoteOptions(tn_type_id)
                     TextNote.Create(doc, new_vid, mid_pt, '({})'.format(idx), opts)
                 except Exception:
                     pass
-
-            # Build and place schedule chart
-            if flagged_items:
-                chart_lines = ['FLAGGED DUCT SCHEDULE', '']
-                for idx, (lbl, dr) in enumerate(flagged_items, 1):
-                    defaults  = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-                    max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-                    suggested = _suggest_size(dr, custom_limits, tol_pct)
-                    size      = _duct_size_label(dr.elem)
-                    chart_lines.append(
-                        '({})  {}  {}  {:.0f}/{:.0f} FPM  {:.3f}/{:.3f} iwc  -> {}'.format(
-                            idx, lbl, size,
-                            dr.fpm, max_fpm,
-                            dr.friction_per_100ft, max_fric,
-                            suggested))
-
-                chart_text = '\n'.join(chart_lines)
-
-                # Place at top-left of view crop box; fall back to above duct cluster
-                try:
-                    cb       = new_view.CropBox
-                    chart_pt = XYZ(cb.Min.X, cb.Max.Y, 0.0)
-                except Exception:
-                    if tag_pts:
-                        chart_pt = XYZ(
-                            min(p.X for p in tag_pts),
-                            max(p.Y for p in tag_pts) + 20.0,
-                            0.0)
-                    else:
-                        chart_pt = XYZ(0.0, 0.0, 0.0)
-
-                opts = TextNoteOptions(tn_type_id)
-                TextNote.Create(doc, new_vid, chart_pt, chart_text, opts)
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
@@ -639,6 +603,23 @@ def main():
 
         # Place viewport
         Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
+
+        # Schedule chart on the sheet — bottom-left corner, always findable
+        if tn_type_id is not None and flagged_items:
+            chart_lines = ['FLAGGED DUCT SCHEDULE', '']
+            for idx, (lbl, dr) in enumerate(flagged_items, 1):
+                defaults       = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+                max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+                suggested      = _suggest_size(dr, custom_limits, tol_pct)
+                size           = _duct_size_label(dr.elem)
+                chart_lines.append(
+                    '({})  {}  {}  {:.0f}/{:.0f} FPM  {:.3f}/{:.3f} iwc  -> {}'.format(
+                        idx, lbl, size,
+                        dr.fpm, max_fpm,
+                        dr.friction_per_100ft, max_fric,
+                        suggested))
+            opts = TextNoteOptions(tn_type_id)
+            TextNote.Create(doc, new_sheet.Id, XYZ(0.08, 0.18, 0), '\n'.join(chart_lines), opts)
 
         t.Commit()
     except Exception as ex:
