@@ -714,12 +714,26 @@ def main():
             keynote_sym.Activate()
             doc.Regenerate()
 
+        _param_names_logged = [False]
         for idx, (lbl, dr) in enumerate(flagged_items, 1):
             try:
                 mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
                 if keynote_sym is not None:
                     inst = doc.Create.NewFamilyInstance(mid_pt, keynote_sym, new_view)
-                    # Try common parameter names for the displayed number
+                    # Log all parameters on the first instance to identify the right name
+                    if not _param_names_logged[0]:
+                        _param_names_logged[0] = True
+                        param_lines = ['Keynote symbol parameters (id={}):'.format(inst.Id.IntegerValue)]
+                        for p in inst.Parameters:
+                            try:
+                                param_lines.append('  {} | {} | ro={} | val={}'.format(
+                                    p.Definition.Name,
+                                    p.StorageType,
+                                    p.IsReadOnly,
+                                    p.AsString() if p.StorageType == StorageType.String else p.AsInteger() if p.StorageType == StorageType.Integer else '?'))
+                            except Exception:
+                                pass
+                        output.print_md('\n'.join(param_lines))
                     num_param = (inst.LookupParameter('Keynote_Number') or
                                  inst.LookupParameter('Number') or
                                  inst.LookupParameter('Mark') or
