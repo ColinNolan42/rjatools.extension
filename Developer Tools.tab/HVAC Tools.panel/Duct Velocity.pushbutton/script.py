@@ -719,7 +719,7 @@ def main():
                 mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
                 if keynote_sym is not None:
                     inst      = doc.Create.NewFamilyInstance(mid_pt, keynote_sym, new_view)
-                    num_param = inst.LookupParameter('label')
+                    num_param = inst.LookupParameter('Label')
                     if num_param and not num_param.IsReadOnly:
                         if num_param.StorageType == StorageType.String:
                             num_param.Set(str(idx))
