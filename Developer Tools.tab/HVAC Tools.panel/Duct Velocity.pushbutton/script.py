@@ -420,12 +420,12 @@ def _build_schedule_view(doc, flagged_items, custom_limits, tol_pct,
 
         # (column header, width in ft)
         COLS = [
-            ('#',          0.050),
-            ('Status',     0.120),
-            ('Size',       0.100),
-            ('FPM / Max',  0.150),
-            ('Fric / Max', 0.170),
-            ('Suggested',  0.120),
+            ('#',                              0.050),
+            ('Status',                         0.120),
+            ('Size',                           0.100),
+            ('Actual FPM / Max FPM',           0.220),
+            ('Actual Fric / Max Fric (iwc/100)', 0.300),
+            ('Suggested',                      0.120),
         ]
         col_headers = [h for h, _ in COLS]
         col_widths  = [w for _, w in COLS]
@@ -719,7 +719,7 @@ def main():
                 source_sheet_num, tn_type_id)
             if sched_view is not None:
                 # Place below floor plan: centre of table at bottom-left of sheet
-                total_w  = 0.710   # must match COLS sum in _build_schedule_view
+                total_w  = 0.910   # must match COLS sum in _build_schedule_view
                 total_h  = 0.030 + 0.022 * len(flagged_items)
                 sched_x  = 0.10 + total_w / 2.0
                 sched_y  = 0.06 + total_h / 2.0
