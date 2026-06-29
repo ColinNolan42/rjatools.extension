@@ -196,7 +196,6 @@ def show_velocity_settings_dialog():
     _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
     _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
     _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
-    _info_row('Verified:',        'Matches ductulator.com output exactly')
 
     # OK / Cancel
     btn_panel = StackPanel()
