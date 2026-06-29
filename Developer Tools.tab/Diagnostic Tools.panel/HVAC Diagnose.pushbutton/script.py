@@ -240,29 +240,43 @@ def main():
 
     if net.terminal_cfms:
         output.print_md('\n### Air Terminals')
-        output.print_md('| ID | Family | System | CFM |')
-        output.print_md('| --- | --- | --- | --- |')
+        _T_COLS = [('ID', 12), ('Family', 46), ('System', 16), ('CFM', 10), ('', 18)]
+        def _t_row(cells):
+            return '  '.join(str(c).ljust(w) for c, (_, w) in zip(cells, _T_COLS))
+        t_lines = [_t_row([h for h, _ in _T_COLS]),
+                   _t_row(['-' * w for _, w in _T_COLS])]
         for nid, cfm in net.terminal_cfms.items():
             elem = net.nodes[nid]
-            flag = ' :warning:' if cfm <= 0 else ''
-            output.print_md('| {} | {} | {} | {:.1f}{} |'.format(
+            flag = '<-- Flow = 0' if cfm <= 0 else ''
+            t_lines.append(_t_row([
                 nid,
-                hvac_graph.terminal_family_name(elem),
-                hvac_graph.terminal_sys_class(elem),
-                cfm,
-                flag
-            ))
+                hvac_graph.terminal_family_name(elem)[:45],
+                hvac_graph.terminal_sys_class(elem)[:15],
+                '{:.1f} CFM'.format(cfm),
+                flag,
+            ]))
+        output.print_code('\n'.join(t_lines))
 
     if net.duct_results:
         output.print_md('\n### Duct Segments')
-        output.print_md('| ID | Size | System | CFM | FPM | SMACNA |')
-        output.print_md('| --- | --- | --- | --- | --- | --- |')
+        _D_COLS = [('ID', 12), ('Size', 9), ('System', 16),
+                   ('CFM', 8), ('FPM', 8), ('SMACNA', 8), ('', 14)]
+        def _d_row(cells):
+            return '  '.join(str(c).ljust(w) for c, (_, w) in zip(cells, _D_COLS))
+        d_lines = [_d_row([h for h, _ in _D_COLS]),
+                   _d_row(['-' * w for _, w in _D_COLS])]
         for eid, dr in net.duct_results.items():
-            flag = ' :warning:' if dr.label in ('RED', 'GRAY') else ''
-            output.print_md('| {} | {} | {} | {:.1f} | {:.0f} | {}{} |'.format(
-                dr.element_id, dr.size, dr.sys_class,
-                dr.cfm, dr.fpm, dr.label, flag
-            ))
+            flag = '<-- check' if dr.label in ('RED', 'GRAY') else ''
+            d_lines.append(_d_row([
+                dr.element_id,
+                dr.size,
+                dr.sys_class[:15],
+                '{:.1f}'.format(dr.cfm),
+                '{:.0f}'.format(dr.fpm),
+                dr.label,
+                flag,
+            ]))
+        output.print_code('\n'.join(d_lines))
 
     # ── STEP 5: Errors and warnings ────────────────────────────────────────
     if net.errors:
