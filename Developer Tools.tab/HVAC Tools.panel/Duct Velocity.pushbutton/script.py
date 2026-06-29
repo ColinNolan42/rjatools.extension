@@ -306,7 +306,7 @@ def _elem_name(elem):
 
 
 def _duct_size_label(elem):
-    """Return readable size: '10"' for round/spiral, '18x12"' for rectangular."""
+    """Return readable size: '10"' for round/spiral, '18"x12"' for rectangular."""
     try:
         d = elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
         if d is not None and d.AsDouble() > 0:
@@ -314,7 +314,7 @@ def _duct_size_label(elem):
         w = elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
         h = elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
         if w and h and w.AsDouble() > 0 and h.AsDouble() > 0:
-            return '{:.0f}x{:.0f}"'.format(w.AsDouble() * 12.0, h.AsDouble() * 12.0)
+            return '{:.0f}"x{:.0f}"'.format(w.AsDouble() * 12.0, h.AsDouble() * 12.0)
     except Exception:
         pass
     return '?'
@@ -362,7 +362,7 @@ def _suggest_size(dr, custom_limits, tol_pct):
                 d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
                 fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
                 if vel <= max_fpm and fric <= max_friction:
-                    return '{}x{}"'.format(w_in, new_h)
+                    return '{}"x{}"'.format(w_in, new_h)
             # AR exceeded — expand width
             for new_w in range(int(w_in) + 2, int(w_in) + 60, 2):
                 for new_h in range(h_in, h_in + 120, 2):
@@ -373,7 +373,7 @@ def _suggest_size(dr, custom_limits, tol_pct):
                     d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
                     fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
                     if vel <= max_fpm and fric <= max_friction:
-                        return '{}x{}"'.format(new_w, new_h)
+                        return '{}"x{}"'.format(new_w, new_h)
     except Exception:
         pass
     return '-'
