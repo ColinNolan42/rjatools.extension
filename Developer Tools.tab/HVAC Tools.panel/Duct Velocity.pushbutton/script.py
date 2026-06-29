@@ -22,10 +22,10 @@ clr.AddReference('WindowsBase')
 from pyrevit import script, forms
 from Autodesk.Revit.DB import (
     FilteredElementCollector, Transaction,
-    BuiltInCategory, ViewSheet, ViewType,
+    BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
     Viewport, ViewDuplicateOption, ElementId, XYZ,
     OverrideGraphicSettings, Color,
-    TextNote, TextNoteOptions, HorizontalTextAlignment
+    TextNote, TextNoteOptions, TextNoteType, HorizontalTextAlignment
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 
@@ -273,6 +273,21 @@ def _elem_name(elem):
         return str(elem.Id.IntegerValue)
 
 
+def _duct_size_label(elem):
+    """Return readable size: '10"' for round/spiral, '18x12"' for rectangular."""
+    try:
+        d = elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
+        if d is not None and d.AsDouble() > 0:
+            return '{:.0f}"'.format(d.AsDouble() * 12.0)
+        w = elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
+        h = elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
+        if w and h and w.AsDouble() > 0 and h.AsDouble() > 0:
+            return '{:.0f}x{:.0f}"'.format(w.AsDouble() * 12.0, h.AsDouble() * 12.0)
+    except Exception:
+        pass
+    return '?'
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 def main():
     output.print_md('## Duct Velocity Visualizer')
@@ -416,26 +431,30 @@ def main():
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
 
         # CFM annotations: "actual / capacity CFM" — skip GRAY (no CFM data)
-        note_opts = TextNoteOptions()
-        note_opts.HorizontalAlignment = HorizontalTextAlignment.Center
+        _text_types = list(FilteredElementCollector(doc).OfClass(TextNoteType))
+        note_opts = TextNoteOptions(_text_types[0].Id) if _text_types else None
+        if note_opts is not None:
+            note_opts.HorizontalAlignment = HorizontalTextAlignment.Center
         annotation_count = 0
         annotation_errors = []
-        for eid, dr in net.duct_results.items():
-            label, green_cap = duct_labels.get(eid, ('GRAY', 0.0))
-            if label == 'GRAY':
-                continue
-            mid = _duct_midpoint(dr.elem)
-            if mid is None:
-                annotation_errors.append('id={} midpoint=None'.format(dr.element_id))
-                continue
-            try:
-                # Line 1: CFM comparison  Line 2: friction rate
-                ann_text = '{:.0f}/{:.0f} CFM\n{:.3f} iwc/100'.format(
-                    dr.cfm, green_cap, dr.friction_per_100ft)
-                TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
-                annotation_count += 1
-            except Exception as ex:
-                annotation_errors.append('id={} err={}'.format(dr.element_id, str(ex)))
+        if note_opts is None:
+            annotation_errors.append('No TextNoteType found in document — annotations skipped')
+        else:
+            for eid, dr in net.duct_results.items():
+                label, green_cap = duct_labels.get(eid, ('GRAY', 0.0))
+                if label == 'GRAY':
+                    continue
+                mid = _duct_midpoint(dr.elem)
+                if mid is None:
+                    annotation_errors.append('id={} midpoint=None'.format(dr.element_id))
+                    continue
+                try:
+                    ann_text = '{:.0f}/{:.0f} CFM\n{:.3f} iwc/100'.format(
+                        dr.cfm, green_cap, dr.friction_per_100ft)
+                    TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
+                    annotation_count += 1
+                except Exception as ex:
+                    annotation_errors.append('id={} err={}'.format(dr.element_id, str(ex)))
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
@@ -500,10 +519,10 @@ def main():
         output.print_md('| # | Status | System | Duct ID | Size (in) | Velocity (FPM) | Max FPM | CFM | Friction (iwc/100) | Max Friction |')
         output.print_md('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
         for idx, (label, fpm, dr, max_fpm, max_fric) in enumerate(flagged, 1):
-            d_h = '{:.1f}"'.format(dr.d_h_in) if dr.d_h_in > 0 else '?'
+            size = _duct_size_label(dr.elem)
             output.print_md('| {} | {} | {} | {} | {} | {:.0f} | {:.0f} | {:.0f} | {:.3f} | {:.3f} |'.format(
                 idx, label, dr.sys_class, dr.element_id,
-                d_h, fpm, max_fpm, dr.cfm,
+                size, fpm, max_fpm, dr.cfm,
                 dr.friction_per_100ft, max_fric))
 
     uidoc.ActiveView = new_sheet
