@@ -27,7 +27,8 @@ from Autodesk.Revit.DB import (
     Viewport, ViewDuplicateOption, ElementId, XYZ,
     OverrideGraphicSettings, Color,
     TextNote, TextNoteOptions, TextNoteType,
-    Line, ViewDrafting, ViewFamilyType, ViewFamily
+    Line, ViewDrafting, ViewFamilyType, ViewFamily,
+    FamilySymbol, StorageType
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 
@@ -695,14 +696,44 @@ def main():
                 continue
             flagged_items.append((lbl, dr))
 
-        if tn_type_id is not None:
-            for idx, (lbl, dr) in enumerate(flagged_items, 1):
-                try:
-                    mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
-                    opts   = TextNoteOptions(tn_type_id)
+        # Find keynote circle symbol — search by family name
+        keynote_sym = None
+        for fs in FilteredElementCollector(doc).OfClass(FamilySymbol).ToElements():
+            try:
+                fn = fs.Family.Name
+                if 'RJA - Keynote Symbol' in fn and 'Circle' in fn:
+                    keynote_sym = fs
+                    break
+                if 'RJA - Keynote Symbol' in fn and 'Circle' in fs.Name:
+                    keynote_sym = fs
+                    break
+            except Exception:
+                pass
+
+        if keynote_sym is not None and not keynote_sym.IsActive:
+            keynote_sym.Activate()
+            doc.Regenerate()
+
+        for idx, (lbl, dr) in enumerate(flagged_items, 1):
+            try:
+                mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
+                if keynote_sym is not None:
+                    inst = doc.Create.NewFamilyInstance(mid_pt, keynote_sym, new_view)
+                    # Try common parameter names for the displayed number
+                    num_param = (inst.LookupParameter('Keynote_Number') or
+                                 inst.LookupParameter('Number') or
+                                 inst.LookupParameter('Mark') or
+                                 inst.LookupParameter('Value'))
+                    if num_param and not num_param.IsReadOnly:
+                        if num_param.StorageType == StorageType.String:
+                            num_param.Set(str(idx))
+                        elif num_param.StorageType == StorageType.Integer:
+                            num_param.Set(idx)
+                elif tn_type_id is not None:
+                    opts = TextNoteOptions(tn_type_id)
                     TextNote.Create(doc, new_vid, mid_pt, '({})'.format(idx), opts)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
