@@ -26,7 +26,8 @@ from Autodesk.Revit.DB import (
     BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
     Viewport, ViewDuplicateOption, ElementId, XYZ,
     OverrideGraphicSettings, Color,
-    TextNote, TextNoteOptions, TextNoteType
+    TextNote, TextNoteOptions, TextNoteType,
+    Line, ViewDrafting, ViewFamilyType, ViewFamily
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 
@@ -377,6 +378,113 @@ def _suggest_size(dr, custom_limits, tol_pct):
     return '-'
 
 
+# ── Schedule table in a Drafting View ─────────────────────────────────────────
+
+def _hline(doc, view, x0, x1, y):
+    doc.Create.NewDetailCurve(view, Line.CreateBound(XYZ(x0, y, 0.0), XYZ(x1, y, 0.0)))
+
+def _vline(doc, view, x, y0, y1):
+    doc.Create.NewDetailCurve(view, Line.CreateBound(XYZ(x, y0, 0.0), XYZ(x, y1, 0.0)))
+
+
+def _build_schedule_view(doc, flagged_items, custom_limits, tol_pct,
+                         source_sheet_num, tn_type_id):
+    """Create a Drafting View with a DetailLine grid + TextNote cells.
+
+    Returns the ViewDrafting element, or None on failure.
+    At scale 1:1, model feet = paper feet, so all dims below are paper inches / 12.
+    """
+    # Find a Drafting ViewFamilyType
+    drafting_type_id = None
+    for vft in FilteredElementCollector(doc).OfClass(ViewFamilyType).ToElements():
+        if vft.ViewFamily == ViewFamily.Drafting:
+            drafting_type_id = vft.Id
+            break
+    if drafting_type_id is None:
+        return None
+
+    try:
+        sched_view = ViewDrafting.Create(doc, drafting_type_id)
+        sched_view.Scale = 1
+        base_name = 'Duct Schedule - DV-' + source_sheet_num
+        try:
+            sched_view.Name = base_name
+        except Exception:
+            sched_view.Name = base_name + ' (2)'
+
+        # ── Layout (ft at 1:1 = inches on paper / 12) ─────────────────────
+        ox, oy = 0.0, 0.0   # table top-left origin
+        PAD    = 0.004       # text inset from cell edge (~1/24")
+        HEAD_H = 0.030       # header row height  (~3/8")
+        ROW_H  = 0.022       # data row height    (~1/4")
+
+        # (column header, width in ft)
+        COLS = [
+            ('#',          0.050),
+            ('Status',     0.120),
+            ('Size',       0.100),
+            ('FPM / Max',  0.150),
+            ('Fric / Max', 0.170),
+            ('Suggested',  0.120),
+        ]
+        col_headers = [h for h, _ in COLS]
+        col_widths  = [w for _, w in COLS]
+        total_w     = sum(col_widths)
+        total_h     = HEAD_H + ROW_H * len(flagged_items)
+
+        # Cumulative left-edge X per column (plus right border)
+        col_xs = [ox]
+        for w in col_widths:
+            col_xs.append(col_xs[-1] + w)
+
+        # ── Grid lines ─────────────────────────────────────────────────────
+        # Y of each horizontal line: top of table, below header, below each row
+        row_tops = [oy]
+        row_tops.append(oy - HEAD_H)
+        for _ in range(len(flagged_items)):
+            row_tops.append(row_tops[-1] - ROW_H)
+
+        for y in row_tops:
+            _hline(doc, sched_view, ox, ox + total_w, y)
+
+        for x in col_xs:
+            _vline(doc, sched_view, x, oy, oy - total_h)
+
+        # ── Text ───────────────────────────────────────────────────────────
+        opts = TextNoteOptions(tn_type_id)
+
+        # Header row
+        for ci, header in enumerate(col_headers):
+            TextNote.Create(doc, sched_view.Id,
+                            XYZ(col_xs[ci] + PAD, oy - PAD, 0.0),
+                            header, opts)
+
+        # Data rows
+        for ri, (lbl, dr) in enumerate(flagged_items):
+            row_y = row_tops[ri + 1] - PAD
+            defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+            max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+            suggested         = _suggest_size(dr, custom_limits, tol_pct)
+            size              = _duct_size_label(dr.elem)
+            cells = [
+                str(ri + 1),
+                lbl,
+                size,
+                '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm),
+                '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric),
+                suggested,
+            ]
+            for ci, cell_text in enumerate(cells):
+                TextNote.Create(doc, sched_view.Id,
+                                XYZ(col_xs[ci] + PAD, row_y, 0.0),
+                                cell_text, opts)
+
+        return sched_view
+
+    except Exception:
+        return None
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 def main():
     output.print_md('## Duct Velocity Visualizer')
@@ -604,22 +712,19 @@ def main():
         # Place viewport
         Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
 
-        # Schedule chart on the sheet — bottom-left corner, always findable
+        # Drafting view schedule table placed as second viewport on sheet
         if tn_type_id is not None and flagged_items:
-            chart_lines = ['FLAGGED DUCT SCHEDULE', '']
-            for idx, (lbl, dr) in enumerate(flagged_items, 1):
-                defaults       = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-                max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-                suggested      = _suggest_size(dr, custom_limits, tol_pct)
-                size           = _duct_size_label(dr.elem)
-                chart_lines.append(
-                    '({})  {}  {}  {:.0f}/{:.0f} FPM  {:.3f}/{:.3f} iwc  -> {}'.format(
-                        idx, lbl, size,
-                        dr.fpm, max_fpm,
-                        dr.friction_per_100ft, max_fric,
-                        suggested))
-            opts = TextNoteOptions(tn_type_id)
-            TextNote.Create(doc, new_sheet.Id, XYZ(0.08, 0.18, 0), '\n'.join(chart_lines), opts)
+            sched_view = _build_schedule_view(
+                doc, flagged_items, custom_limits, tol_pct,
+                source_sheet_num, tn_type_id)
+            if sched_view is not None:
+                # Place below floor plan: centre of table at bottom-left of sheet
+                total_w  = 0.710   # must match COLS sum in _build_schedule_view
+                total_h  = 0.030 + 0.022 * len(flagged_items)
+                sched_x  = 0.10 + total_w / 2.0
+                sched_y  = 0.06 + total_h / 2.0
+                Viewport.Create(doc, new_sheet.Id, sched_view.Id,
+                                XYZ(sched_x, sched_y, 0))
 
         t.Commit()
     except Exception as ex:
