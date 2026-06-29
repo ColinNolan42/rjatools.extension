@@ -63,8 +63,10 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY}
 def show_velocity_settings_dialog():
     """WPF dialog — one Max Velocity per system type + tolerance band.
 
-    Returns dict {sys_class: (max_fpm, yellow_fpm)} or None if cancelled.
-    yellow_fpm = max_fpm * (1 + tolerance/100)
+    Returns (limits_dict, max_friction_inwc, tol_pct) or None if cancelled.
+      limits_dict  = {sys_class: (max_fpm, yellow_fpm)}
+      max_friction = max in. wc / 100 ft (same for all systems)
+      tol_pct      = % over max before going red (applied to both vel + friction)
     """
     # Defaults: SMACNA commercial low-velocity design velocities
     ROWS = [
@@ -73,11 +75,13 @@ def show_velocity_settings_dialog():
         ('Exhaust Air', 1200),
         ('Outside Air', 1200),
     ]
-    DEFAULT_TOLERANCE = 15  # % over max before going red
+    DEFAULT_TOLERANCE = 15    # % over max before going red
+    DEFAULT_FRICTION  = 0.10  # in. wc / 100 ft (SMACNA equal-friction target)
 
     result    = [None]  # no nonlocal in Python 2.7
     max_boxes = {}      # row_idx -> TextBox
     tol_box   = [None]  # mutable ref to tolerance TextBox
+    fric_box  = [None]  # mutable ref to friction TextBox
 
     win = Window()
     win.Title  = 'Duct Velocity Settings'
@@ -155,6 +159,30 @@ def show_velocity_settings_dialog():
     tol_panel.Children.Add(tol_suffix)
     outer.Children.Add(tol_panel)
 
+    # Friction loss row
+    fric_panel = StackPanel()
+    fric_panel.Orientation = Orientation.Horizontal
+    fric_panel.Margin = Thickness(0, 6, 0, 0)
+
+    fric_lbl = Label()
+    fric_lbl.Content = 'Max friction loss:'
+    fric_lbl.VerticalAlignment = VerticalAlignment.Center
+    fric_panel.Children.Add(fric_lbl)
+
+    tb_fric = TextBox()
+    tb_fric.Text  = str(DEFAULT_FRICTION)
+    tb_fric.Width = 52
+    tb_fric.Margin = Thickness(4, 0, 4, 0)
+    tb_fric.VerticalAlignment = VerticalAlignment.Center
+    fric_panel.Children.Add(tb_fric)
+    fric_box[0] = tb_fric
+
+    fric_suffix = Label()
+    fric_suffix.Content = 'in. wc / 100 ft'
+    fric_suffix.VerticalAlignment = VerticalAlignment.Center
+    fric_panel.Children.Add(fric_suffix)
+    outer.Children.Add(fric_panel)
+
     # OK / Cancel
     btn_panel = StackPanel()
     btn_panel.Orientation = Orientation.Horizontal
@@ -172,16 +200,20 @@ def show_velocity_settings_dialog():
 
     def on_ok(s, e):
         try:
-            tol = float(tol_box[0].Text)
+            tol  = float(tol_box[0].Text)
+            fric = float(fric_box[0].Text)
             if tol < 0:
                 forms.alert('Tolerance must be 0 or greater.', title='Invalid Input')
+                return
+            if fric <= 0:
+                forms.alert('Max friction loss must be greater than 0.', title='Invalid Input')
                 return
             out = {}
             for i, (sys_class, _) in enumerate(ROWS):
                 max_fpm    = float(max_boxes[i].Text)
                 yellow_fpm = max_fpm * (1.0 + tol / 100.0)
                 out[sys_class] = (max_fpm, yellow_fpm)
-            result[0] = out
+            result[0] = (out, fric, tol)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -202,24 +234,51 @@ def show_velocity_settings_dialog():
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+_PRIORITY = {'RED': 3, 'YELLOW': 2, 'GREEN': 1, 'GRAY': 0}
+
+
 def _cfm_label(cfm, area_ft2, sys_class, custom_limits):
-    """Compare actual CFM to duct capacity at green/yellow FPM limits.
-    Returns (label, green_cap_cfm, yellow_cap_cfm).
-    This matches the ductulator mental model: 1,110 > 800 cap → RED.
+    """Velocity check: actual CFM vs duct capacity at green/yellow FPM limits.
+    Returns (label, green_cap_cfm).
     """
     limits = custom_limits.get(sys_class, hvac_graph.SMACNA.get(sys_class, None))
     if cfm <= 0 or area_ft2 <= 0 or limits is None:
-        return 'GRAY', 0.0, 0.0
+        return 'GRAY', 0.0
     green_fpm, yellow_fpm = limits
     green_cap  = green_fpm  * area_ft2
     yellow_cap = yellow_fpm * area_ft2
     if cfm <= green_cap:
-        label = 'GREEN'
+        return 'GREEN', green_cap
     elif cfm <= yellow_cap:
-        label = 'YELLOW'
+        return 'YELLOW', green_cap
     else:
-        label = 'RED'
-    return label, green_cap, yellow_cap
+        return 'RED', green_cap
+
+
+def _friction_label(friction_per_100ft, max_friction, tol_pct):
+    """Friction check: actual in. wc/100ft vs design max.
+    Returns label string (GREEN / YELLOW / RED / GRAY).
+    """
+    if friction_per_100ft <= 0 or max_friction <= 0:
+        return 'GRAY'
+    yellow_friction = max_friction * (1.0 + tol_pct / 100.0)
+    if friction_per_100ft <= max_friction:
+        return 'GREEN'
+    elif friction_per_100ft <= yellow_friction:
+        return 'YELLOW'
+    else:
+        return 'RED'
+
+
+def _duct_label(dr, custom_limits, max_friction, tol_pct):
+    """Combined label: worst of velocity check and friction check.
+    Returns (label, green_cap_cfm).
+    """
+    vel_label,  green_cap = _cfm_label(dr.cfm, dr.area_ft2, dr.sys_class, custom_limits)
+    fric_label             = _friction_label(dr.friction_per_100ft, max_friction, tol_pct)
+    if _PRIORITY.get(fric_label, 0) > _PRIORITY.get(vel_label, 0):
+        return fric_label, green_cap
+    return vel_label, green_cap
 
 
 def _duct_midpoint(duct):
@@ -250,11 +309,12 @@ def main():
             title='Wrong View Type', exitscript=True
         )
 
-    # 2. Velocity settings dialog
-    custom_limits = show_velocity_settings_dialog()
-    if custom_limits is None:
+    # 2. Velocity + friction settings dialog
+    dialog_result = show_velocity_settings_dialog()
+    if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
+    custom_limits, max_friction, tol_pct = dialog_result
 
     # 3. Select element
     try:
@@ -323,14 +383,13 @@ def main():
         except Exception:
             new_view.Name = base_name + ' (2)'
 
-        # Color overrides — compare actual CFM vs duct capacity CFM
+        # Color overrides — worst of velocity check and friction check
         counts      = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0}
-        # eid -> (label, green_cap_cfm) for use in annotations
+        # eid -> (label, green_cap_cfm) for fittings + annotations
         duct_labels = {}
 
         for eid, dr in net.duct_results.items():
-            label, green_cap, yellow_cap = _cfm_label(
-                dr.cfm, dr.area_ft2, dr.sys_class, custom_limits)
+            label, green_cap = _duct_label(dr, custom_limits, max_friction, tol_pct)
             duct_labels[eid] = (label, green_cap)
             color = _COLOR_MAP.get(label, GRAY)
             ogs   = OverrideGraphicSettings()
@@ -354,7 +413,6 @@ def main():
                     adj[cid] = []
                 adj[cid].append(pid)
 
-        _PRIORITY = {'RED': 3, 'YELLOW': 2, 'GREEN': 1, 'GRAY': 0}
         fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0}
 
         for nid, elem in net.nodes.items():
@@ -393,7 +451,9 @@ def main():
                 annotation_errors.append('id={} midpoint=None'.format(dr.element_id))
                 continue
             try:
-                ann_text = '{:.0f} / {:.0f} CFM'.format(dr.cfm, green_cap)
+                # Line 1: CFM comparison  Line 2: friction rate
+                ann_text = '{:.0f}/{:.0f} CFM\n{:.3f} iwc/100'.format(
+                    dr.cfm, green_cap, dr.friction_per_100ft)
                 TextNote.Create(doc, new_vid, mid, ann_text, note_opts)
                 annotation_count += 1
             except Exception as ex:
@@ -423,13 +483,16 @@ def main():
         for msg in annotation_errors[:5]:   # first 5 only
             output.print_md('- `{}`'.format(msg))
     output.print_md('')
-    output.print_md('**Velocity limits used:**')
-    output.print_md('| System | Green ≤ | Yellow ≤ | Red > |')
+    output.print_md('**Design limits used:**')
+    output.print_md('| System | Max vel (green) | Yellow ≤ | Red > |')
     output.print_md('| --- | --- | --- | --- |')
     for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air'):
         mx, yw = custom_limits.get(sys_class, (0, 0))
         output.print_md('| {} | {:.0f} FPM | {:.0f} FPM | {:.0f} FPM |'.format(
             sys_class, mx, yw, yw))
+    yellow_fric = max_friction * (1.0 + tol_pct / 100.0)
+    output.print_md('| Friction (all) | {:.3f} iwc/100 | {:.3f} iwc/100 | {:.3f} iwc/100 |'.format(
+        max_friction, yellow_fric, yellow_fric))
     output.print_md('')
     output.print_md('| Color | Ducts | Fittings & Accessories | Meaning |')
     output.print_md('| --- | --- | --- | --- |')

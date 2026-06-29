@@ -160,6 +160,33 @@ def smacna_label(fpm, sys_class):
         return 'RED'
 
 
+def duct_friction_loss_per_100ft(v_fpm, d_h_in):
+    """Friction loss in in. wc per 100 ft.
+
+    Formula: 6.82e-6 * V_fpm^1.82 / D_h_in^1.22
+    Derived from ASHRAE smooth-duct correlation for standard air
+    (70°F, sea level, galvanized sheet metal roughness).
+    Calibration: 10" duct at 910 FPM → 0.099 in. wc/100ft (SMACNA 0.1 target).
+    """
+    if v_fpm <= 0 or d_h_in <= 0:
+        return 0.0
+    return 6.82e-6 * (v_fpm ** 1.82) / (d_h_in ** 1.22)
+
+
+def _duct_d_h_in(duct):
+    """Hydraulic diameter in inches from duct element parameters. 0 if unavailable."""
+    d = duct.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
+    if d is not None and d.AsDouble() > 0:
+        return d.AsDouble() * 12.0   # ft → in
+    w = duct.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
+    h = duct.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
+    if w is not None and h is not None and w.AsDouble() > 0 and h.AsDouble() > 0:
+        w_in = w.AsDouble() * 12.0
+        h_in = h.AsDouble() * 12.0
+        return 4.0 * w_in * h_in / (2.0 * (w_in + h_in))
+    return 0.0
+
+
 # ── find AHU from any connected element ─────────────────────────────────────
 def find_ahu(elem):
     """Return (ahu_element, method_used) or (None, reason_string)."""
@@ -339,14 +366,16 @@ class HvacNetwork(object):
 
 class DuctResult(object):
     def __init__(self, elem, cfm, area, sys_class):
-        self.elem      = elem
-        self.element_id = elem.Id.IntegerValue
-        self.cfm       = cfm
-        self.area_ft2  = area
-        self.sys_class = sys_class
-        self.fpm       = (cfm / area) if area > 0 and cfm > 0 else 0.0
-        self.label     = smacna_label(self.fpm, sys_class)
-        self.size      = duct_size_label(elem)
+        self.elem              = elem
+        self.element_id        = elem.Id.IntegerValue
+        self.cfm               = cfm
+        self.area_ft2          = area
+        self.sys_class         = sys_class
+        self.fpm               = (cfm / area) if area > 0 and cfm > 0 else 0.0
+        self.label             = smacna_label(self.fpm, sys_class)
+        self.size              = duct_size_label(elem)
+        self.d_h_in            = _duct_d_h_in(elem)
+        self.friction_per_100ft = duct_friction_loss_per_100ft(self.fpm, self.d_h_in)
 
 
 def build_network(selected_elem, doc, cfm_is_direct=False):
