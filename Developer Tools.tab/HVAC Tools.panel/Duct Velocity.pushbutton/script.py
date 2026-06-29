@@ -34,8 +34,11 @@ from System.Windows import (
 )
 from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
-    ColumnDefinition, RowDefinition, Orientation
+    ColumnDefinition, RowDefinition, Orientation,
+    Separator, TextBlock
 )
+from System.Windows.Media import SolidColorBrush, Colors
+from System.Windows import FontWeights
 from System.Windows import GridLength
 
 doc    = __revit__.ActiveUIDocument.Document
@@ -160,6 +163,39 @@ def show_velocity_settings_dialog():
     gpct_suffix.VerticalAlignment = VerticalAlignment.Center
     gpct_panel.Children.Add(gpct_suffix)
     outer.Children.Add(gpct_panel)
+
+    # Assumptions / formula reference block
+    sep = Separator()
+    sep.Margin = Thickness(0, 12, 0, 8)
+    outer.Children.Add(sep)
+
+    def _info_row(label_text, value_text):
+        row = StackPanel()
+        row.Orientation = Orientation.Horizontal
+        row.Margin = Thickness(0, 1, 0, 1)
+        lbl = TextBlock()
+        lbl.Text = label_text
+        lbl.Width = 160
+        lbl.FontWeight = FontWeights.Bold
+        lbl.Foreground = SolidColorBrush(Colors.DimGray)
+        val = TextBlock()
+        val.Text = value_text
+        val.Foreground = SolidColorBrush(Colors.DimGray)
+        row.Children.Add(lbl)
+        row.Children.Add(val)
+        outer.Children.Add(row)
+
+    hdr = TextBlock()
+    hdr.Text = 'Calculation Basis (Ductulator Standard)'
+    hdr.FontWeight = FontWeights.Bold
+    hdr.Foreground = SolidColorBrush(Colors.DimGray)
+    hdr.Margin = Thickness(0, 0, 0, 4)
+    outer.Children.Add(hdr)
+
+    _info_row('Formula:',       u'ΔP/100ft = 6.82×10⁻⁶ × V¹·⁸² / Dh¹·²²')
+    _info_row('Air density:',   '0.075 lb/ft³  (standard, 70°F, sea level)')
+    _info_row('Duct roughness:', u'ε = 0.0003 ft  (galvanized steel / spiral)')
+    _info_row('Units:',         'V in FPM, Dh in inches, ΔP in in.wc/100 ft')
 
     # OK / Cancel
     btn_panel = StackPanel()
