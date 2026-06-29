@@ -13,6 +13,7 @@ IronPython 2.7 / pyRevit  --  no f-strings, no walrus, no nonlocal.
 
 import os
 import sys
+import math
 
 import clr
 clr.AddReference('PresentationFramework')
@@ -320,6 +321,56 @@ def _duct_size_label(elem):
     return '?'
 
 
+# Standard spiral/round sizes (inches)
+_ROUND_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
+
+
+def _suggest_size(dr, custom_limits, tol_pct):
+    """Return smallest standard duct size that brings velocity into green zone.
+
+    Round/spiral ducts → next standard diameter (inches).
+    Rectangular ducts  → same width, height stepped up in 2" increments.
+                         If aspect ratio would exceed 4:1, width steps up too.
+    Target velocity    = max_fpm * (1 - tol_pct/100)  (top of green zone).
+    """
+    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+    max_fpm, _ = custom_limits.get(dr.sys_class, defaults)
+    target_fpm = max_fpm * (1.0 - tol_pct / 100.0)
+    if dr.cfm <= 0 or target_fpm <= 0:
+        return '-'
+
+    req_area_ft2 = dr.cfm / target_fpm
+    req_area_in2 = req_area_ft2 * 144.0
+
+    try:
+        d = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
+        if d is not None and d.AsDouble() > 0:
+            # Round / spiral — find next standard diameter
+            req_diam = math.sqrt(4.0 * req_area_in2 / math.pi)
+            for std_d in _ROUND_SIZES:
+                if std_d >= req_diam:
+                    return '{}"'.format(std_d)
+            return '>{}"'.format(_ROUND_SIZES[-1])
+
+        # Rectangular — keep width, step height up in 2" increments
+        w_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
+        h_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
+        if w_param and h_param and w_param.AsDouble() > 0:
+            w_in = round(w_param.AsDouble() * 12.0)
+            req_h = req_area_in2 / float(w_in)
+            new_h = int(math.ceil(req_h / 2.0)) * 2   # next even inch
+            if w_in > 0 and new_h / float(w_in) <= 4.0:
+                return '{}x{}"'.format(w_in, new_h)
+            # Aspect ratio would exceed 4:1 — step width up until it fits
+            for new_w in range(w_in + 2, w_in + 60, 2):
+                new_h2 = int(math.ceil(req_area_in2 / float(new_w) / 2.0)) * 2
+                if new_w > 0 and new_h2 / float(new_w) <= 4.0:
+                    return '{}x{}"'.format(new_w, new_h2)
+    except Exception:
+        pass
+    return '-'
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 def main():
     output.print_md('## Duct Velocity Visualizer')
@@ -576,6 +627,7 @@ def main():
             ('System',         13),
             ('Duct ID',         9),
             ('Size',            8),
+            ('Suggested',      11),
             ('Vel (FPM)',       10),
             ('Max FPM',         8),
             ('CFM',             6),
@@ -591,13 +643,15 @@ def main():
         rows      = [header, separator]
 
         for idx, (label, fpm, dr, max_fpm, max_fric) in enumerate(flagged, 1):
-            size = _duct_size_label(dr.elem)
+            size      = _duct_size_label(dr.elem)
+            suggested = _suggest_size(dr, custom_limits, tol_pct)
             rows.append(_fmt_row([
                 idx,
                 label,
                 dr.sys_class,
                 dr.element_id,
                 size,
+                suggested,
                 '{:.0f}'.format(fpm),
                 '{:.0f}'.format(max_fpm),
                 '{:.0f}'.format(dr.cfm),
