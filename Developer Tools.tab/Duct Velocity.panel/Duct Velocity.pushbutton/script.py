@@ -106,9 +106,9 @@ def main():
     output.print_md('Source sheet: **{}**'.format(source_sheet_num))
 
     # 5. Get title block and solid fill
-    tb_list = FilteredElementCollector(doc)\
-        .OfCategory(BuiltInCategory.OST_TitleBlocks)\
-        .WhereElementIsElementType().ToList()
+    tb_list = list(FilteredElementCollector(doc)
+                   .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                   .WhereElementIsElementType())
     tb_id    = tb_list[0].Id if len(tb_list) > 0 else ElementId.InvalidElementId
     fill_id  = hvac_graph.solid_fill_pattern_id(doc)
 
