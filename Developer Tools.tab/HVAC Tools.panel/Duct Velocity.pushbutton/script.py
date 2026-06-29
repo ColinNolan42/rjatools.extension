@@ -511,16 +511,46 @@ def main():
 
     if flagged:
         flagged.sort(key=lambda x: (0 if x[0] == 'RED' else 1, -x[1]))
-        output.print_md('')
-        output.print_md('### Flagged Ducts')
-        output.print_md('| # | Status | System | Duct ID | Size (in) | Velocity (FPM) | Max FPM | CFM | Friction (iwc/100) | Max Friction |')
-        output.print_md('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+
+        # Fixed-width columns for monospace alignment
+        _COLS = [
+            ('#',               3),
+            ('Status',          7),
+            ('System',         13),
+            ('Duct ID',         9),
+            ('Size',            8),
+            ('Vel (FPM)',       10),
+            ('Max FPM',         8),
+            ('CFM',             6),
+            ('Fric (iwc/100)',  15),
+            ('Max Fric',        9),
+        ]
+
+        def _fmt_row(cells):
+            return '  '.join(str(c).ljust(w) for c, (_, w) in zip(cells, _COLS))
+
+        header    = _fmt_row([h for h, _ in _COLS])
+        separator = _fmt_row(['-' * w for _, w in _COLS])
+        rows      = [header, separator]
+
         for idx, (label, fpm, dr, max_fpm, max_fric) in enumerate(flagged, 1):
             size = _duct_size_label(dr.elem)
-            output.print_md('| {} | {} | {} | {} | {} | {:.0f} | {:.0f} | {:.0f} | {:.3f} | {:.3f} |'.format(
-                idx, label, dr.sys_class, dr.element_id,
-                size, fpm, max_fpm, dr.cfm,
-                dr.friction_per_100ft, max_fric))
+            rows.append(_fmt_row([
+                idx,
+                label,
+                dr.sys_class,
+                dr.element_id,
+                size,
+                '{:.0f}'.format(fpm),
+                '{:.0f}'.format(max_fpm),
+                '{:.0f}'.format(dr.cfm),
+                '{:.3f}'.format(dr.friction_per_100ft),
+                '{:.3f}'.format(max_fric),
+            ]))
+
+        output.print_md('')
+        output.print_md('### Flagged Ducts')
+        output.print_code('\n'.join(rows))
 
     uidoc.ActiveView = new_sheet
 
