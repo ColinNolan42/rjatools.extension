@@ -360,36 +360,47 @@ Velocity visualizer: After sizing, a separate Velocity Visual button colors each
 
 ### Phase 1 Overview
 
-Color ductwork in a copied floor plan view by velocity (green / yellow / red) using SMACNA commercial low-velocity defaults. Activated by clicking an AHU or fan unit.
+Color ductwork in a copied floor plan view by velocity (green / yellow / red) using firm design defaults. Activated by clicking an AHU or fan unit.
+
+**Current status:** Duct velocity coloring displays correctly. Pending further testing on real project scenarios to catch outlier errors and velocity bugs.
 
 **UX flow:**
 1. User clicks "Duct Velocity" button in the Duct Velocity panel
 2. Revit prompts: select AHU/fan/equipment element
-3. Script traverses all duct systems connected to that equipment (SA, RA, EA, OA)
-4. Copies the relevant floor plan view → places on a new sheet named "Ducting Velocities - [Source Sheet Number]"
-5. Applies `OverrideGraphicSettings` color fills to each duct in the copied view based on velocity
-6. Ducts with no CFM data → gray (flagged, not skipped silently)
+3. Settings dialog opens — per-system max velocity (FPM) + max friction (iwc/100ft) + green threshold %
+4. Script traverses all duct systems connected to that equipment (SA, RA, EA, OA)
+5. Copies the relevant floor plan view → places on a new sheet named "Ducting Velocities - [Source Sheet Number]"
+6. Applies `OverrideGraphicSettings` color fills to each duct in the copied view; fittings/accessories inherit color from worst adjacent duct
+7. Ducts with no CFM data → gray (flagged, not skipped silently)
+8. Terminal output: aligned flagged ducts table (RED first, then YELLOW, sorted by velocity)
 
-**Velocity thresholds — SMACNA commercial low-velocity (HVAC Systems – Duct Design, Table 2-1):**
-| System | Green ✓ | Yellow ⚠ | Red ✗ |
-|--------|---------|----------|-------|
-| Supply Air (SA) | ≤ 2,000 FPM | 2,001–2,500 | > 2,500 |
-| Return Air (RA) | ≤ 1,500 FPM | 1,501–2,000 | > 2,000 |
-| Exhaust Air (EA) | ≤ 1,200 FPM | 1,201–1,500 | > 1,500 |
-| Outside Air (OA) | ≤ 1,200 FPM | 1,201–1,500 | > 1,500 |
+**Velocity color logic — percentage-based off firm defaults:**
+| System | Default Max Vel | Default Max Friction | Green | Yellow | Red |
+|--------|----------------|---------------------|-------|--------|-----|
+| Supply Air (SA) | 800 FPM | 0.08 iwc/100ft | < 85% of max | 85–100% of max | > max |
+| Return Air (RA) | 600 FPM | 0.05 iwc/100ft | < 85% of max | 85–100% of max | > max |
+| Exhaust Air (EA) | 600 FPM | 0.05 iwc/100ft | < 85% of max | 85–100% of max | > max |
+| Outside Air (OA) | 600 FPM | 0.05 iwc/100ft | < 85% of max | 85–100% of max | > max |
+
+All defaults are editable in the settings dialog before each run.
+
+**Friction formula:** `ΔP/100ft = 6.82×10⁻⁶ × V^1.82 / Dh^1.22`
+Basis: standard air (0.075 lb/ft³, 70°F, sea level), ε = 0.0003 ft (galvanized steel). Matches ductulator.com output.
+
+**CFM source:** `OST_DuctTerminal` leaf nodes (diffusers, grilles, registers). Parameter lookup order: `Flow` → `Airflow` → `Air Flow` → `CFM` → `RBS_DUCT_FLOW_PARAM`. VAV boxes are pass-through nodes. Each duct segment CFM = sum of all downstream terminal CFMs.
 
 **Design decisions (resolved 2026-06-29):**
-1. **CFM source — diffuser terminals only.** CFM is read from `OST_DuctTerminal` leaf nodes (diffusers, grilles, registers), NOT from duct segments or VAV boxes. VAV boxes are `OST_MechanicalEquipment` and are treated as pass-through nodes (traverse all their connectors like a tee). Each duct segment CFM = sum of all downstream terminal CFMs. Specific CFM parameter name on diffuser families TBD — must query model before coding.
-2. **Sheet naming** — new sheet named `"Ducting Velocities - [Source Sheet Number]"` (e.g. "Ducting Velocities - M1.01").
-3. **Multi-system** — color all connected systems (SA, RA, EA, OA) in one pass using per-system SMACNA thresholds.
-4. **Multi-floor** — plan for multi-level; copy all affected floor plan views, one per level.
+1. CFM from terminal families only — NOT from duct segments or VAV box parameters.
+2. Sheet naming — `"Ducting Velocities - [Source Sheet Number]"`.
+3. Multi-system — all connected systems (SA, RA, EA, OA) colored in one pass.
+4. Multi-floor — traversal follows connectors across floors; copies all affected floor plan views.
 
 **Phase gating:**
 - Phase 1 (velocity visualizer) is **ACTIVE**
-- Phase 2 (SMACNA duct sizing — writes sizes back to model) begins ONLY when user says: "Move to HVAC Phase 2."
+- Phase 2 (duct sizing — writes sizes back to model) begins ONLY when user says: "Move to HVAC Phase 2."
 - Never write Phase 2 code without that trigger.
 
-**Standalone tool:** `ductulator.py` at `C:\Users\Colin Nolan\Developer Tools\ductulator.py` — CLI sizing calculator with SMACNA color-coded velocity output. Already built and working.
+**Standalone tool:** `ductulator.py` at `C:\Users\Colin Nolan\Developer Tools\ductulator.py` — CLI duct sizing calculator with color-coded velocity output. Already built and working.
 
 ---
 
