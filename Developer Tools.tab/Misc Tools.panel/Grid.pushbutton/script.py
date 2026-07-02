@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on plan views placed on sheets.
 
-VERSION 20.3.0 — eliminate all doc.Regenerate() calls inside the transaction.
+VERSION 20.3.1 — fix stale leader.Anchor in place_elbow computations.
 
 Root cause of crashes (journals 0256, 0257, 0258):
   Every doc.Regenerate() inside a transaction forces Revit to rebuild the
@@ -17,7 +17,7 @@ calls during the loop. Transaction commit handles the final regeneration.
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "20.3.0"
+__version__ = "20.3.1"
 __doc__     = ("Separates colliding grid bubbles using leader elbow nudging. "
                "Works for any grid orientation in Revit 2022-2025.")
 
@@ -452,7 +452,11 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys,
                 if leader is None:
                     continue
 
-                anchor = leader.Anchor
+                # Use mem_pos for anchor — leader.Anchor is a computed property
+                # that stays stale until doc.Regenerate(). Elbow and End are
+                # stored values and reliably updated by SetLeader immediately.
+                anchor = mem_pos.get(
+                    (move_grid.Id.IntegerValue, move_idx), leader.Anchor)
                 elbow  = leader.Elbow
                 end    = leader.End
 
@@ -463,20 +467,21 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys,
                                             move_idx, view)
                     if not repaired:
                         continue
-                    # No Regenerate — read leader directly (may be default pos)
                     leader = move_grid.GetLeader(move_end, view)
                     if leader is None:
                         continue
-                    anchor = leader.Anchor
+                    curve = get_grid_curve_in_view(move_grid, view)
+                    if curve:
+                        nat = curve.GetEndPoint(move_idx)
+                        mem_pos[(move_grid.Id.IntegerValue, move_idx)] = nat
+                        anchor = nat
+                    else:
+                        anchor = mem_pos.get(
+                            (move_grid.Id.IntegerValue, move_idx), leader.Anchor)
                     elbow  = leader.Elbow
                     end    = leader.End
-                    # Fallback: if anchor still degenerate, use natural endpoint
                     ae2 = ((anchor.X-elbow.X)**2 + (anchor.Y-elbow.Y)**2)**0.5
                     if ae2 < DEGENERATE_THRESHOLD:
-                        curve = get_grid_curve_in_view(move_grid, view)
-                        if curve:
-                            nat = curve.GetEndPoint(move_idx)
-                            mem_pos[(move_grid.Id.IntegerValue, move_idx)] = nat
                         continue
 
                 prop_x = elbow.X + nx
@@ -506,7 +511,8 @@ def run_pass(grids, view, threshold, nudge_step, existing_leader_keys,
                     leader2 = move_grid.GetLeader(move_end, view)
                     if leader2 is None:
                         continue
-                    anchor2 = leader2.Anchor
+                    anchor2 = mem_pos.get(
+                        (move_grid.Id.IntegerValue, move_idx), leader2.Anchor)
                     elbow2  = leader2.Elbow
                     end2    = leader2.End
                     new_elbow2 = place_elbow(
@@ -597,10 +603,11 @@ def compact_leaders(grids, view, threshold, mem_pos):
                 continue
 
             elbow = ldr.Elbow
+            cur_anchor = mem_pos.get((g.Id.IntegerValue, ei), ldr.Anchor)
             new_elbow = place_elbow(
                 elbow.X + ux * PULL_STEP,
                 elbow.Y + uy * PULL_STEP,
-                ldr.Anchor, ldr.End,
+                cur_anchor, ldr.End,
             )
             if (abs(new_elbow.X - elbow.X) < 1e-6 and
                     abs(new_elbow.Y - elbow.Y) < 1e-6):
