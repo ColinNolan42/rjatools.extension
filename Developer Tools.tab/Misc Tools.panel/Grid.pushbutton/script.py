@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on all plan views placed on sheets.
 
-VERSION 21.0.0 — read/write phase separation to eliminate crash.
+VERSION 21.1.0 — fix leaders crossing grid lines.
 
 Crash root cause (journals 0256-0259):
   Background rendering threads (FullUpdateGraphicCacheUpdater,
@@ -27,7 +27,7 @@ Fix — read/write phase separation:
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "21.0.0"
+__version__ = "21.1.0"
 __doc__     = ("Separates colliding grid bubbles on all plan views placed "
                "on sheets.")
 
@@ -394,6 +394,37 @@ def detect_grids_needing_leaders(grids, view, mem_anchor, threshold):
 
 
 # =============================================================================
+# Grid-line crossing guard
+# =============================================================================
+def build_grid_dirs(grids, view):
+    """Return dict gid_int → (tx, ty) unit vector along each grid line.
+    Used to detect when a nudge would push a bubble through its own grid line."""
+    dirs = {}
+    for g in grids:
+        curve = get_grid_curve_in_view(g, view)
+        if curve is None:
+            continue
+        p0 = curve.GetEndPoint(0)
+        p1 = curve.GetEndPoint(1)
+        dx, dy = p1.X - p0.X, p1.Y - p0.Y
+        L = (dx*dx + dy*dy) ** 0.5
+        if L > 1e-9:
+            dirs[g.Id.IntegerValue] = (dx/L, dy/L)
+    return dirs
+
+
+def would_cross_grid_line(old_anchor, new_anchor, end_pt, grid_tx, grid_ty):
+    """True if the anchor would cross the grid line from old to new position.
+    The grid line passes through end_pt in direction (grid_tx, grid_ty).
+    Side is determined by the sign of the cross product (pt - end) × (tx, ty)."""
+    def side(pt):
+        return (pt.X - end_pt.X) * grid_ty - (pt.Y - end_pt.Y) * grid_tx
+    old_s = side(old_anchor)
+    new_s = side(new_anchor)
+    return old_s * new_s < 0.0
+
+
+# =============================================================================
 # Phase B: separation math — pure in-memory, zero Revit API calls
 # =============================================================================
 def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
@@ -402,6 +433,7 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
     Modifies mem_anchor and mem_elbow in place."""
     nudge_step = threshold / 8.0
     name_map   = {g.Id.IntegerValue: g.Name for g in grids}
+    grid_dirs  = build_grid_dirs(grids, view)
 
     for pass_num in range(MAX_PASSES):
         positions = build_bubble_list(grids, view, mem_anchor)
@@ -423,22 +455,38 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
                         pass_num + 1, iteration))
                 break
 
+            # Build per-mover nudge vectors from ACTUAL separation directions,
+            # not the canonical grid-perpendicular. This avoids pushing bubbles
+            # through their own grid lines when the canonical direction is wrong.
             targets = {}
             for pos_a, pos_b in pairs:
-                g_a, end_a, idx_a, _ = pos_a
-                g_b, end_b, idx_b, _ = pos_b
+                g_a, end_a, idx_a, pt_a = pos_a
+                g_b, end_b, idx_b, pt_b = pos_b
                 na = name_map.get(g_a.Id.IntegerValue, "")
                 nb = name_map.get(g_b.Id.IntegerValue, "")
                 if higher_name(na, nb):
                     mg, me, mi, mn = g_a, end_a, idx_a, na
+                    pt_mover, pt_other = pt_a, pt_b
                 else:
                     mg, me, mi, mn = g_b, end_b, idx_b, nb
-                nd  = get_nudge_direction(mg, view)
+                    pt_mover, pt_other = pt_b, pt_a
+
+                # Direction: from the other bubble toward the mover
+                sep_x = pt_mover.X - pt_other.X
+                sep_y = pt_mover.Y - pt_other.Y
+                sep_l = (sep_x*sep_x + sep_y*sep_y) ** 0.5
+                if sep_l > 1e-9:
+                    nd_x, nd_y = sep_x/sep_l, sep_y/sep_l
+                else:
+                    # Bubbles on same point — fall back to canonical perpendicular
+                    nd = get_nudge_direction(mg, view)
+                    nd_x, nd_y = nd.X, nd.Y
+
                 key = (mg.Id.IntegerValue, mi)
                 if key not in targets:
                     targets[key] = [mg, me, 0.0, 0.0, mn]
-                targets[key][2] += nd.X
-                targets[key][3] += nd.Y
+                targets[key][2] += nd_x
+                targets[key][3] += nd_y
 
             sorted_targets = sorted(
                 targets.items(),
@@ -480,9 +528,17 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
 
                 delta_x = new_elbow.X - elbow.X
                 delta_y = new_elbow.Y - elbow.Y
-                mem_elbow[key]  = new_elbow
-                mem_anchor[key] = XYZ(
+                new_anchor = XYZ(
                     anchor.X + delta_x, anchor.Y + delta_y, anchor.Z)
+
+                # Guard: reject if this nudge would push the bubble through
+                # its own grid line.
+                gtx, gty = grid_dirs.get(gid, (1.0, 0.0))
+                if would_cross_grid_line(anchor, new_anchor, end, gtx, gty):
+                    continue
+
+                mem_elbow[key]  = new_elbow
+                mem_anchor[key] = new_anchor
                 any_moved = True
 
             if not any_moved:
@@ -502,6 +558,7 @@ def compact_in_memory(grids, view, mem_anchor, mem_elbow, mem_end, threshold):
     Returns total steps moved."""
     thr2        = threshold * threshold
     total_moves = 0
+    grid_dirs   = build_grid_dirs(grids, view)
 
     grid_eps = {}
     for g in grids:
@@ -587,9 +644,18 @@ def compact_in_memory(grids, view, mem_anchor, mem_elbow, mem_end, threshold):
 
             delta_x = new_elbow.X - elbow.X
             delta_y = new_elbow.Y - elbow.Y
-            mem_elbow[key]  = new_elbow
-            mem_anchor[key] = XYZ(
+            new_anchor = XYZ(
                 anchor.X + delta_x, anchor.Y + delta_y, anchor.Z)
+
+            # Guard: compaction must not push the bubble through its own
+            # grid line (would flip the leader to the wrong side).
+            gid_int = key[0]
+            gtx, gty = grid_dirs.get(gid_int, (1.0, 0.0))
+            if would_cross_grid_line(anchor, new_anchor, end, gtx, gty):
+                continue
+
+            mem_elbow[key]  = new_elbow
+            mem_anchor[key] = new_anchor
             total_moves += 1
             moved_any    = True
 
@@ -611,7 +677,7 @@ def main():
         )
         script.exit()
 
-    output.print_md("## Grid Bubble Separation — v21.0.0")
+    output.print_md("## Grid Bubble Separation — v21.1.0")
 
     ref_grid = pick_reference_grid()
     if ref_grid is None:
