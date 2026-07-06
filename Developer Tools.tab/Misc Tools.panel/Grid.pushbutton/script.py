@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on all plan views placed on sheets.
 
-VERSION 21.3.0 — fix ldr.End at opposite datum end (Revit default placement).
+VERSION 21.4.0 — always reset anchor/elbow/end to grid endpoint (ep).
 
 Crash root cause (journals 0256-0259):
   Background rendering threads (FullUpdateGraphicCacheUpdater,
@@ -27,7 +27,7 @@ Fix — read/write phase separation:
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "21.3.0"
+__version__ = "21.4.0"
 __doc__     = ("Separates colliding grid bubbles on all plan views placed "
                "on sheets.")
 
@@ -260,23 +260,22 @@ def get_nudge_direction(grid, view):
 # In-memory state — read once from Revit, then track in dicts
 # =============================================================================
 def init_mem_state(grids, view):
-    """Read anchor, elbow, end for all visible grid leaders.
-    Call outside any transaction so values are guaranteed fresh.
-    Returns (mem_anchor, mem_elbow, mem_end) dicts keyed by (gid_int, ei).
+    """Seed anchor, elbow, and end from curve.GetEndPoint(ei) for every
+    visible bubble — always, regardless of any stored ldr.Anchor/Elbow/End.
 
-    IMPORTANT — ldr.End and ldr.Elbow are NOT used directly.
-    Revit's default AddLeader geometry places ldr.End at the OPPOSITE datum
-    end of the grid (e.g. End0 when the bubble is at End1).  Storing that
-    far-end point in mem_end causes place_elbow to project nudges onto a
-    200-ft grid-spanning segment instead of the short local leader stub,
-    making the crossing guard reject every nudge and producing the long
-    diagonal arm that visually crosses adjacent grid lines.
+    WHY: early tool runs may have placed the anchor on the wrong side of an
+    adjacent grid line (e.g. Grid 9 anchor at x=-21.25, past Grid 8's line
+    at x=-21.0).  Preserving that wrong anchor causes:
+      1. separation direction computed as "further wrong" (Grid 9 minus Grid 8
+         = LEFT, not RIGHT), and
+      2. the crossing guard blocks that nudge, so the bubble is permanently
+         stuck in the wrong position.
 
-    Fix: always seed mem_elbow and mem_end from curve.GetEndPoint(ei) — the
-    grid's own endpoint at the bubble side.  mem_anchor uses ldr.Anchor only
-    when it is closer to that endpoint than to the opposite one (i.e. it has
-    been genuinely displaced by a prior tool run); otherwise it is also reset
-    to the grid endpoint so the algorithm starts from a clean local state."""
+    By always starting from ep (the natural grid endpoint), the separation
+    direction is always correct: Grid 9 ep at x=-20.25 minus Grid 8 ep at
+    x=-21.0 → +x → RIGHT.  Any previously stored position is discarded.
+    The tool is idempotent: re-running always produces the same correct
+    result from the same starting point."""
     mem_anchor = {}
     mem_elbow  = {}
     mem_end    = {}
@@ -286,40 +285,13 @@ def init_mem_state(grids, view):
             de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
             if not grid_has_bubble_at_end(g, view, ei):
                 continue
-            key      = (g.Id.IntegerValue, ei)
-            ep       = curve.GetEndPoint(ei)     if curve else None
-            ep_other = curve.GetEndPoint(1 - ei) if curve else None
-            try:
-                ldr = g.GetLeader(de, view)
-                if ldr is not None:
-                    anc = ldr.Anchor
-                    # Accept ldr.Anchor only if it is on the correct side
-                    # of the grid (closer to ep than to ep_other).  An anchor
-                    # at the far end is Revit's default placement artifact.
-                    if (anc is not None and
-                            ep is not None and ep_other is not None):
-                        da = ((anc.X - ep.X)**2 +
-                              (anc.Y - ep.Y)**2) ** 0.5
-                        db = ((anc.X - ep_other.X)**2 +
-                              (anc.Y - ep_other.Y)**2) ** 0.5
-                        if db < da:
-                            anc = ep  # anchor at wrong end — reset
-                    if anc is None:
-                        anc = ep
-                    mem_anchor[key] = anc if anc else (ep or XYZ.Zero)
-                    # Always seed from the grid's own endpoint so all
-                    # subsequent calculations stay in the short local arm.
-                    mem_elbow[key] = ep if ep is not None else ldr.Elbow
-                    mem_end[key]   = ep if ep is not None else ldr.End
-                elif ep is not None:
-                    mem_anchor[key] = ep
-                    mem_elbow[key]  = ep
-                    mem_end[key]    = ep
-            except Exception:
-                if ep is not None:
-                    mem_anchor[key] = ep
-                    mem_elbow[key]  = ep
-                    mem_end[key]    = ep
+            key = (g.Id.IntegerValue, ei)
+            ep  = curve.GetEndPoint(ei) if curve else None
+            if ep is None:
+                continue
+            mem_anchor[key] = ep
+            mem_elbow[key]  = ep
+            mem_end[key]    = ep
     return mem_anchor, mem_elbow, mem_end
 
 
@@ -748,7 +720,7 @@ def main():
         )
         script.exit()
 
-    output.print_md("## Grid Bubble Separation — v21.3.0")
+    output.print_md("## Grid Bubble Separation — v21.4.0")
 
     ref_grid = pick_reference_grid()
     if ref_grid is None:
