@@ -22,7 +22,7 @@ Crash-safe structure retained from v21.4.0:
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "22.0.1"
+__version__ = "22.1.0"
 __doc__     = ("Separates colliding grid bubbles on all plan views placed "
                "on sheets.")
 
@@ -59,6 +59,10 @@ MAX_ITERATIONS             = 50
 MAX_PASSES                 = 20
 COMPACT_PULL_STEP          = 0.05
 MAX_COMPACT_ROUNDS         = 400
+# How far inside the grid (along-grid direction from the bubble ep) to place
+# the leader elbow.  Must be > 0 so Elbow.Y != Anchor.Y — otherwise Revit's
+# SetLeader silently rejects the call and leaves the default AddLeader position.
+LEADER_SHOULDER_FT         = 1.0
 
 
 # =============================================================================
@@ -782,15 +786,26 @@ def main():
                     offset = mo.get((gid, ei))
                     if ep is None or pv is None or offset is None:
                         continue
-                    new_elbow = XYZ(ep.X + offset * pv.X,
-                                    ep.Y + offset * pv.Y,
-                                    ep.Z)
+                    # Inner (along-grid) direction from ep into the grid:
+                    #   pv = (-ty, tx)  →  along_grid = (tx, ty) = (pv.Y, -pv.X)
+                    # For ei=1: inner points toward End0  = -(tx,ty) = (-pv.Y, pv.X)
+                    # For ei=0: inner points toward End1  = +(tx,ty) = ( pv.Y,-pv.X)
+                    if ei == 1:
+                        ix, iy = -pv.Y, pv.X
+                    else:
+                        ix, iy =  pv.Y, -pv.X
+                    new_elbow = XYZ(
+                        ep.X + offset * pv.X + LEADER_SHOULDER_FT * ix,
+                        ep.Y + offset * pv.Y + LEADER_SHOULDER_FT * iy,
+                        ep.Z,
+                    )
                     ldr.Elbow = new_elbow
                     g.SetLeader(de, v, ldr)
                     applied += 1
                 except Exception as ex:
-                    logger.debug(
-                        "SetLeader gid={} ei={}: {}".format(gid, ei, ex))
+                    output.print_md(
+                        "**SetLeader failed** gid={} ei={}: {}".format(
+                            gid, ei, ex))
         t2.Commit()
         output.print_md("Applied {} change(s).".format(applied))
     except Exception as ex:
