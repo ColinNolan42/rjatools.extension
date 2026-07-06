@@ -22,7 +22,7 @@ Crash-safe structure retained from v21.4.0:
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "22.0.0"
+__version__ = "22.0.1"
 __doc__     = ("Separates colliding grid bubbles on all plan views placed "
                "on sheets.")
 
@@ -712,6 +712,15 @@ def main():
             v, grids, _, _, _ = view_data[vid]
             mo, mpv, mep = init_offset_state(grids, v)
             view_data[vid] = (v, grids, mo, mpv, mep)
+
+        # Revit places AddLeader's initial Elbow at a small arbitrary offset
+        # from ep.  If that offset is non-zero, the own-grid guard locks the
+        # bubble to the wrong side for ~50% of cases.  Force newly-added
+        # leaders to offset=0 so separation always starts from a clean slate.
+        for vid, nl in needs_by_view.items():
+            mo = view_data[vid][2]
+            for gid_int, ei in nl:
+                mo[(gid_int, ei)] = 0.0
 
     # ── Compute Phase: separation math in-memory (no transactions) ───────────
     output.print_md("### Separation")
