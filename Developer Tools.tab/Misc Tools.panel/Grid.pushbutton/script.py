@@ -1,41 +1,34 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on all plan views placed on sheets.
 
-VERSION 21.4.0 — always reset anchor/elbow/end to grid endpoint (ep).
+VERSION 22.0.0 — perp_offset redesign.
 
-Crash root cause (journals 0256-0259):
-  Background rendering threads (FullUpdateGraphicCacheUpdater,
-  ElementsGraphicCacheUpdater) run continuously and update graphic caches for
-  all views showing grid elements — including linked model views (157+ elements)
-  and the 3D project view (912 elements). Any long transaction holding grid
-  elements in a modified state collides with these background threads and crashes
-  Revit. This is true even with zero explicit doc.Regenerate() calls (v20.3.1).
+Root causes fixed vs v21.4.0:
+  1. init_mem_state reset elbow to ep (degenerate, zero offset) — now reads
+     actual ldr.Elbow so the initial offset reflects Revit's current state.
+  2. get_nudge_direction canonicalized to one side — replaced with sep_dot
+     (dot of mover-ep minus other-ep onto mover perp_vec) which gives the
+     correct side regardless of grid orientation.
+  3. leader_path_crosses_grid used mem_end = ep (wrong) — replaced with an
+     anchor-position crossing guard in perp_offset space.
+  4. place_elbow projected onto anchor-end segment — eliminated; elbow is now
+     always ep + perp_offset * perp_vec (clean single degree of freedom).
 
-Fix — read/write phase separation:
-  1. ALL collision detection and nudge/compaction math runs in-memory,
-     OUTSIDE any transaction. In-memory state: mem_anchor, mem_elbow,
-     mem_end dicts. Zero GetLeader/SetLeader calls during computation.
-  2. Transaction 1 (short): AddLeader only for grids that need one,
-     across ALL views. Flat loop, no computation.
-  3. Re-read fresh state for all views after Transaction 1 commits.
-  4. Compute all separation math for all views in-memory.
-  5. Transaction 2 (short): SetLeader only — flat loop across all views,
-     applying pre-computed final elbow positions. No loops, no collision
-     detection inside the transaction.
-  Transactions are open for milliseconds, not seconds.
+Crash-safe structure retained from v21.4.0:
+  T1 (short): AddLeader only — flat loop, no computation.
+  T2 (short): SetLeader(Elbow) only — flat loop, apply pre-computed offsets.
+  All math runs outside transactions in-memory.
 """
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "21.4.0"
+__version__ = "22.0.0"
 __doc__     = ("Separates colliding grid bubbles on all plan views placed "
                "on sheets.")
 
 import re
-import traceback
 
 from Autodesk.Revit.DB import (
-    ElementId,
     FilteredElementCollector,
     Grid,
     View,
@@ -64,13 +57,12 @@ PLAN_VIEW_TYPES = {
 DEFAULT_BUBBLE_DIAMETER_FT = 2.0
 MAX_ITERATIONS             = 50
 MAX_PASSES                 = 20
-DEGENERATE_THRESHOLD       = 1e-4
 COMPACT_PULL_STEP          = 0.05
 MAX_COMPACT_ROUNDS         = 400
 
 
 # =============================================================================
-# Name sort helpers
+# Name sort helpers (unchanged)
 # =============================================================================
 def name_sort_key(name):
     key = []
@@ -91,7 +83,7 @@ def higher_name(name_a, name_b):
 
 
 # =============================================================================
-# Bubble diameter
+# Bubble diameter (unchanged)
 # =============================================================================
 def pick_reference_grid():
     try:
@@ -168,7 +160,7 @@ def read_bubble_diameter_ft(grid):
 
 
 # =============================================================================
-# View collection
+# View collection (unchanged)
 # =============================================================================
 def get_sheet_view_ids(document):
     ids = set()
@@ -197,7 +189,7 @@ def collect_plan_views_on_sheets(document):
 
 
 # =============================================================================
-# Grid helpers
+# Grid helpers (unchanged)
 # =============================================================================
 def get_grid_curve_in_view(grid, view):
     for et in (DatumExtentType.ViewSpecific, DatumExtentType.Model):
@@ -219,8 +211,6 @@ def grid_has_bubble_at_end(grid, view, end_index):
 
 
 def get_grids_for_view(document, view):
-    """Return grids visible in view. Falls back to all-document collector
-    if scoped collector returns zero (known Revit limitation for new views)."""
     try:
         grids = list(FilteredElementCollector(document, view.Id)
                      .OfClass(Grid).ToElements())
@@ -233,83 +223,102 @@ def get_grids_for_view(document, view):
 
 
 # =============================================================================
-# Nudge direction
+# perp_vec — NEW
 # =============================================================================
-def get_nudge_direction(grid, view):
-    try:
-        curve = get_grid_curve_in_view(grid, view)
-        if curve is None:
-            return XYZ(1.0, 0.0, 0.0)
-        p0 = curve.GetEndPoint(0)
-        p1 = curve.GetEndPoint(1)
-        dx, dy = p1.X - p0.X, p1.Y - p0.Y
-        L = (dx*dx + dy*dy) ** 0.5
-        if L < 1e-9:
-            return XYZ(1.0, 0.0, 0.0)
-        tx, ty = dx/L, dy/L
-        if abs(ty) > abs(tx):
-            if ty < 0.0: tx, ty = -tx, -ty
-        else:
-            if tx < 0.0: tx, ty = -tx, -ty
-        return XYZ(ty, -tx, 0.0)
-    except Exception:
+def compute_perp_vec(grid, view):
+    """Return perpendicular unit vector (XYZ) to this grid in-plane (Z=0).
+    Defined as (-ty, tx, 0) where (tx, ty) is the along-grid unit vector."""
+    curve = get_grid_curve_in_view(grid, view)
+    if curve is None:
         return XYZ(1.0, 0.0, 0.0)
+    p0 = curve.GetEndPoint(0)
+    p1 = curve.GetEndPoint(1)
+    dx, dy = p1.X - p0.X, p1.Y - p0.Y
+    L = (dx*dx + dy*dy) ** 0.5
+    if L < 1e-9:
+        return XYZ(1.0, 0.0, 0.0)
+    tx, ty = dx/L, dy/L
+    return XYZ(-ty, tx, 0.0)
 
 
 # =============================================================================
-# In-memory state — read once from Revit, then track in dicts
+# In-memory state — NEW: perp_offset space
+#
+# mem_offset   : (gid_int, ei) → float   signed offset from ep along perp_vec
+# mem_perp_vec : gid_int       → XYZ     perpendicular unit vector for grid
+# mem_ep       : (gid_int, ei) → XYZ     grid endpoint for this end
 # =============================================================================
-def init_mem_state(grids, view):
-    """Seed anchor, elbow, and end from curve.GetEndPoint(ei) for every
-    visible bubble — always, regardless of any stored ldr.Anchor/Elbow/End.
+def init_offset_state(grids, view):
+    """Seed offset state by reading actual ldr.Elbow from Revit.
 
-    WHY: early tool runs may have placed the anchor on the wrong side of an
-    adjacent grid line (e.g. Grid 9 anchor at x=-21.25, past Grid 8's line
-    at x=-21.0).  Preserving that wrong anchor causes:
-      1. separation direction computed as "further wrong" (Grid 9 minus Grid 8
-         = LEFT, not RIGHT), and
-      2. the crossing guard blocks that nudge, so the bubble is permanently
-         stuck in the wrong position.
+    Called AFTER T1 so leaders exist.  For a bubble with no leader (natural
+    endpoint), perp_offset = 0.0 (bubble sits at ep)."""
+    mem_offset   = {}
+    mem_perp_vec = {}
+    mem_ep       = {}
 
-    By always starting from ep (the natural grid endpoint), the separation
-    direction is always correct: Grid 9 ep at x=-20.25 minus Grid 8 ep at
-    x=-21.0 → +x → RIGHT.  Any previously stored position is discarded.
-    The tool is idempotent: re-running always produces the same correct
-    result from the same starting point."""
-    mem_anchor = {}
-    mem_elbow  = {}
-    mem_end    = {}
     for g in grids:
+        pv    = compute_perp_vec(g, view)
         curve = get_grid_curve_in_view(g, view)
+        gid   = g.Id.IntegerValue
+        mem_perp_vec[gid] = pv
+
         for ei in (0, 1):
             de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
             if not grid_has_bubble_at_end(g, view, ei):
                 continue
-            key = (g.Id.IntegerValue, ei)
-            ep  = curve.GetEndPoint(ei) if curve else None
-            if ep is None:
+            if curve is None:
                 continue
-            mem_anchor[key] = ep
-            mem_elbow[key]  = ep
-            mem_end[key]    = ep
-    return mem_anchor, mem_elbow, mem_end
+            ep  = curve.GetEndPoint(ei)
+            key = (gid, ei)
+            mem_ep[key] = ep
+
+            try:
+                ldr = g.GetLeader(de, view)
+            except Exception:
+                ldr = None
+
+            if ldr is not None:
+                elbow   = ldr.Elbow
+                dot_val = ((elbow.X - ep.X) * pv.X +
+                           (elbow.Y - ep.Y) * pv.Y)
+                mem_offset[key] = dot_val
+            else:
+                mem_offset[key] = 0.0
+
+    return mem_offset, mem_perp_vec, mem_ep
 
 
 # =============================================================================
-# Collision detection
+# Bubble position from offset
 # =============================================================================
-def build_bubble_list(grids, view, mem_anchor):
-    """(grid, datum_end, end_index, bubble_pos) for every visible bubble."""
+def anchor_xy(ep, pv, offset):
+    """Return (ax, ay) for bubble anchor: ep + offset * perp_vec."""
+    return ep.X + offset * pv.X, ep.Y + offset * pv.Y
+
+
+# =============================================================================
+# Collision detection (offset space)
+# =============================================================================
+def build_bubble_list(grids, view, mem_offset, mem_perp_vec, mem_ep):
+    """Return list of (grid, datum_end, end_index, ax, ay)."""
     result = []
     for g in grids:
+        gid = g.Id.IntegerValue
+        pv  = mem_perp_vec.get(gid)
+        if pv is None:
+            continue
         for ei in (0, 1):
-            de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
+            key = (gid, ei)
             if not grid_has_bubble_at_end(g, view, ei):
                 continue
-            pt = mem_anchor.get((g.Id.IntegerValue, ei))
-            if pt is None:
+            ep     = mem_ep.get(key)
+            offset = mem_offset.get(key)
+            if ep is None or offset is None:
                 continue
-            result.append((g, de, ei, pt))
+            de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
+            ax, ay = anchor_xy(ep, pv, offset)
+            result.append((g, de, ei, ax, ay))
     return result
 
 
@@ -321,47 +330,53 @@ def find_colliding_pairs(positions, threshold):
         for j in range(i+1, n):
             if positions[i][0].Id == positions[j][0].Id:
                 continue
-            p1, p2 = positions[i][3], positions[j][3]
-            dx, dy = p1.X - p2.X, p1.Y - p2.Y
+            dx = positions[i][3] - positions[j][3]
+            dy = positions[i][4] - positions[j][4]
             if dx*dx + dy*dy <= thr2:
                 pairs.append((positions[i], positions[j]))
     return pairs
 
 
 # =============================================================================
-# Elbow placement — clamp along-segment component only
+# Crossing guard — anchor-position based, offset space
 # =============================================================================
-def place_elbow(proposed_x, proposed_y, anchor, end):
-    ax, ay = anchor.X, anchor.Y
-    ex, ey = end.X,    end.Y
-    sx, sy = ex - ax,  ey - ay
-    ss     = sx*sx + sy*sy
+def build_grid_lines(grids, view):
+    """Return dict: gid_int → (ref_x, ref_y, tx, ty) along-grid unit vector."""
+    lines = {}
+    for g in grids:
+        curve = get_grid_curve_in_view(g, view)
+        if curve is None:
+            continue
+        p0 = curve.GetEndPoint(0)
+        p1 = curve.GetEndPoint(1)
+        dx, dy = p1.X - p0.X, p1.Y - p0.Y
+        L = (dx*dx + dy*dy) ** 0.5
+        if L > 1e-9:
+            lines[g.Id.IntegerValue] = (p0.X, p0.Y, dx/L, dy/L)
+    return lines
 
-    if ss < 1e-12:
-        return XYZ(proposed_x, proposed_y, anchor.Z)
 
-    t_raw = ((proposed_x - ax) * sx +
-             (proposed_y - ay) * sy) / ss
+def _side(ax, ay, ref_x, ref_y, tx, ty):
+    """Signed side of (ax,ay) relative to line through (ref_x,ref_y) dir (tx,ty)."""
+    return (ax - ref_x) * ty - (ay - ref_y) * tx
 
-    t_clamped = max(0.05, min(0.95, t_raw))
 
-    seg_x = ax + t_clamped * sx
-    seg_y = ay + t_clamped * sy
-
-    proj_x = ax + t_raw * sx
-    proj_y = ay + t_raw * sy
-    perp_x = proposed_x - proj_x
-    perp_y = proposed_y - proj_y
-
-    return XYZ(seg_x + perp_x, seg_y + perp_y, anchor.Z)
+def anchor_crosses_line(cur_ax, cur_ay, prop_ax, prop_ay,
+                        ref_x, ref_y, tx, ty):
+    """True if anchor position moves across the infinite grid line."""
+    s_cur  = _side(cur_ax,  cur_ay,  ref_x, ref_y, tx, ty)
+    s_prop = _side(prop_ax, prop_ay, ref_x, ref_y, tx, ty)
+    return s_cur * s_prop < 0.0
 
 
 # =============================================================================
-# Phase A: detect which grids need AddLeader (pure read, no Revit writes)
+# Phase A: detect which grids need AddLeader
 # =============================================================================
-def detect_grids_needing_leaders(grids, view, mem_anchor, threshold):
-    """Return set of (gid_int, ei) that collide AND have no leader yet."""
-    positions = build_bubble_list(grids, view, mem_anchor)
+def detect_grids_needing_leaders(grids, view, mem_offset, mem_perp_vec,
+                                 mem_ep, threshold):
+    """Return set of (gid_int, ei) that collide and have no leader yet."""
+    positions = build_bubble_list(grids, view, mem_offset, mem_perp_vec,
+                                  mem_ep)
     pairs     = find_colliding_pairs(positions, threshold)
     if not pairs:
         return set()
@@ -371,8 +386,8 @@ def detect_grids_needing_leaders(grids, view, mem_anchor, threshold):
     movers   = set()
 
     for pos_a, pos_b in pairs:
-        g_a, _, idx_a, _ = pos_a
-        g_b, _, idx_b, _ = pos_b
+        g_a, _, idx_a, _, _ = pos_a
+        g_b, _, idx_b, _, _ = pos_b
         na = name_map.get(g_a.Id.IntegerValue, "")
         nb = name_map.get(g_b.Id.IntegerValue, "")
         if higher_name(na, nb):
@@ -384,99 +399,42 @@ def detect_grids_needing_leaders(grids, view, mem_anchor, threshold):
     for gid, ei in movers:
         g  = grid_map.get(gid)
         de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
-        if g and g.GetLeader(de, view) is None:
-            needs_leader.add((gid, ei))
+        if g:
+            try:
+                has_ldr = g.GetLeader(de, view) is not None
+            except Exception:
+                has_ldr = False
+            if not has_ldr:
+                needs_leader.add((gid, ei))
 
     return needs_leader
 
 
 # =============================================================================
-# Grid-line crossing guard
+# Phase B: separation — pure in-memory
 # =============================================================================
-def build_grid_dirs(grids, view):
-    """Return (dirs, ref_pts):
-    - dirs: gid_int → (tx, ty) unit vector along grid line
-    - ref_pts: gid_int → XYZ reference point on that grid line (End0)
-    Used for own-grid-line crossing guard and adjacent-grid leader path checks."""
-    dirs    = {}
-    ref_pts = {}
-    for g in grids:
-        curve = get_grid_curve_in_view(g, view)
-        if curve is None:
-            continue
-        p0 = curve.GetEndPoint(0)
-        p1 = curve.GetEndPoint(1)
-        dx, dy = p1.X - p0.X, p1.Y - p0.Y
-        L = (dx*dx + dy*dy) ** 0.5
-        if L > 1e-9:
-            gid = g.Id.IntegerValue
-            dirs[gid]    = (dx/L, dy/L)
-            ref_pts[gid] = p0
-    return dirs, ref_pts
-
-
-def would_cross_grid_line(old_anchor, new_anchor, end_pt, grid_tx, grid_ty):
-    """True if the anchor would cross the grid line from old to new position.
-    The grid line passes through end_pt in direction (grid_tx, grid_ty).
-    Side is determined by the sign of the cross product (pt - end) × (tx, ty)."""
-    def side(pt):
-        return (pt.X - end_pt.X) * grid_ty - (pt.Y - end_pt.Y) * grid_tx
-    old_s = side(old_anchor)
-    new_s = side(new_anchor)
-    return old_s * new_s < 0.0
-
-
-def _seg_crosses_line(ax, ay, bx, by, rx, ry, tx, ty):
-    """True if segment A→B strictly crosses the infinite line through (rx,ry)
-    with direction (tx,ty).  Touch (one endpoint on line) is NOT a crossing."""
-    sa = (ax - rx) * ty - (ay - ry) * tx
-    sb = (bx - rx) * ty - (by - ry) * tx
-    return sa * sb < -1e-12
-
-
-def leader_path_crosses_grid(anchor, elbow, end, own_gid, grid_dirs, ref_pts):
-    """True if the two-segment leader path end→elbow→anchor crosses the
-    infinite line of any grid OTHER than own_gid."""
-    ex, ey = end.X,   end.Y
-    lx, ly = elbow.X, elbow.Y
-    ax, ay = anchor.X, anchor.Y
-    for gid, (tx, ty) in grid_dirs.items():
-        if gid == own_gid:
-            continue
-        rp = ref_pts.get(gid)
-        if rp is None:
-            continue
-        rx, ry = rp.X, rp.Y
-        if (_seg_crosses_line(ex, ey, lx, ly, rx, ry, tx, ty) or
-                _seg_crosses_line(lx, ly, ax, ay, rx, ry, tx, ty)):
-            return True
-    return False
-
-
-# =============================================================================
-# Phase B: separation math — pure in-memory, zero Revit API calls
-# =============================================================================
-def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
-                                 threshold):
-    """Run separation passes entirely in-memory.
-    Modifies mem_anchor and mem_elbow in place."""
-    nudge_step      = threshold / 8.0
-    name_map        = {g.Id.IntegerValue: g.Name for g in grids}
-    grid_dirs, grid_ref_pts = build_grid_dirs(grids, view)
+def compute_separation_in_memory(grids, view, mem_offset, mem_perp_vec,
+                                 mem_ep, threshold):
+    """Nudge colliding bubbles apart in perp_offset space.
+    Modifies mem_offset in place."""
+    nudge_step = threshold / 8.0
+    name_map   = {g.Id.IntegerValue: g.Name for g in grids}
+    grid_lines = build_grid_lines(grids, view)
 
     for pass_num in range(MAX_PASSES):
-        positions = build_bubble_list(grids, view, mem_anchor)
+        positions = build_bubble_list(grids, view, mem_offset,
+                                      mem_perp_vec, mem_ep)
         pairs     = find_colliding_pairs(positions, threshold)
         if not pairs:
-            output.print_md(
-                "  clean after {} pass(es)".format(pass_num + 1))
+            output.print_md("  clean after {} pass(es)".format(pass_num + 1))
             return
 
         output.print_md("  **Pass {} — {} collision(s)**".format(
             pass_num + 1, len(pairs)))
 
         for iteration in range(MAX_ITERATIONS):
-            positions = build_bubble_list(grids, view, mem_anchor)
+            positions = build_bubble_list(grids, view, mem_offset,
+                                          mem_perp_vec, mem_ep)
             pairs     = find_colliding_pairs(positions, threshold)
             if not pairs:
                 output.print_md(
@@ -484,98 +442,84 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
                         pass_num + 1, iteration))
                 break
 
-            # Build per-mover nudge vectors from ACTUAL separation directions,
-            # not the canonical grid-perpendicular. This avoids pushing bubbles
-            # through their own grid lines when the canonical direction is wrong.
-            targets = {}
+            # Accumulate per-mover direction votes from each collision
+            targets = {}  # key → [grid_obj, ei, direction_sum]
             for pos_a, pos_b in pairs:
-                g_a, end_a, idx_a, pt_a = pos_a
-                g_b, end_b, idx_b, pt_b = pos_b
+                g_a, _, idx_a, _, _ = pos_a
+                g_b, _, idx_b, _, _ = pos_b
                 na = name_map.get(g_a.Id.IntegerValue, "")
                 nb = name_map.get(g_b.Id.IntegerValue, "")
                 if higher_name(na, nb):
-                    mg, me, mi, mn = g_a, end_a, idx_a, na
-                    pt_mover, pt_other = pt_a, pt_b
+                    mg, mi = g_a, idx_a
+                    key_m  = (g_a.Id.IntegerValue, idx_a)
+                    key_o  = (g_b.Id.IntegerValue, idx_b)
                 else:
-                    mg, me, mi, mn = g_b, end_b, idx_b, nb
-                    pt_mover, pt_other = pt_b, pt_a
+                    mg, mi = g_b, idx_b
+                    key_m  = (g_b.Id.IntegerValue, idx_b)
+                    key_o  = (g_a.Id.IntegerValue, idx_a)
 
-                # Direction: from the other bubble toward the mover
-                sep_x = pt_mover.X - pt_other.X
-                sep_y = pt_mover.Y - pt_other.Y
-                sep_l = (sep_x*sep_x + sep_y*sep_y) ** 0.5
-                if sep_l > 1e-9:
-                    nd_x, nd_y = sep_x/sep_l, sep_y/sep_l
-                else:
-                    # Bubbles on same point — fall back to canonical perpendicular
-                    nd = get_nudge_direction(mg, view)
-                    nd_x, nd_y = nd.X, nd.Y
+                ep_m = mem_ep.get(key_m)
+                ep_o = mem_ep.get(key_o)
+                pv   = mem_perp_vec.get(mg.Id.IntegerValue)
+                if ep_m is None or ep_o is None or pv is None:
+                    continue
 
-                key = (mg.Id.IntegerValue, mi)
-                if key not in targets:
-                    targets[key] = [mg, me, 0.0, 0.0, mn]
-                targets[key][2] += nd_x
-                targets[key][3] += nd_y
+                # Which perpendicular side is the mover relative to the other?
+                sep_dot   = ((ep_m.X - ep_o.X) * pv.X +
+                             (ep_m.Y - ep_o.Y) * pv.Y)
+                direction = 1 if sep_dot >= 0 else -1
+
+                if key_m not in targets:
+                    targets[key_m] = [mg, mi, 0]
+                targets[key_m][2] += direction
 
             sorted_targets = sorted(
                 targets.items(),
-                key=lambda item: name_sort_key(item[1][4]),
+                key=lambda item: name_sort_key(
+                    name_map.get(item[1][0].Id.IntegerValue, "")),
                 reverse=True,
             )
 
             any_moved = False
             for key, td in sorted_targets:
-                gid, ei      = key
-                net_x, net_y = td[2], td[3]
-                net_len      = (net_x*net_x + net_y*net_y) ** 0.5
-                if net_len < 1e-9:
-                    continue
-                nx = (net_x / net_len) * nudge_step
-                ny = (net_y / net_len) * nudge_step
+                gid, ei   = key
+                direction = 1 if td[2] >= 0 else -1
 
-                anchor = mem_anchor.get(key)
-                elbow  = mem_elbow.get(key)
-                end    = mem_end.get(key)
-                if anchor is None or elbow is None or end is None:
+                ep  = mem_ep.get(key)
+                pv  = mem_perp_vec.get(gid)
+                cur = mem_offset.get(key)
+                if ep is None or pv is None or cur is None:
                     continue
 
-                ae_dist = ((anchor.X - elbow.X)**2 +
-                           (anchor.Y - elbow.Y)**2) ** 0.5
-                if ae_dist < DEGENERATE_THRESHOLD:
-                    nd_dir = get_nudge_direction(td[0], view)
-                    elbow  = XYZ(anchor.X + nd_dir.X * nudge_step * 4,
-                                 anchor.Y + nd_dir.Y * nudge_step * 4,
-                                 anchor.Z)
-                    mem_elbow[key] = elbow
+                cur_ax, cur_ay = anchor_xy(ep, pv, cur)
 
-                new_elbow = place_elbow(
-                    elbow.X + nx, elbow.Y + ny, anchor, end)
+                # Try preferred direction; if blocked by a crossing, try opposite
+                for attempt_dir in (direction, -direction):
+                    new_off = cur + attempt_dir * nudge_step
 
-                if (abs(new_elbow.X - elbow.X) < 1e-6 and
-                        abs(new_elbow.Y - elbow.Y) < 1e-6):
-                    continue
+                    # Own-grid guard: don't cross the bubble through its own line
+                    if cur > 0 and new_off < 0:
+                        continue
+                    if cur < 0 and new_off > 0:
+                        continue
 
-                delta_x = new_elbow.X - elbow.X
-                delta_y = new_elbow.Y - elbow.Y
-                new_anchor = XYZ(
-                    anchor.X + delta_x, anchor.Y + delta_y, anchor.Z)
+                    prop_ax, prop_ay = anchor_xy(ep, pv, new_off)
 
-                # Guard: reject if this nudge would push the bubble through
-                # its own grid line.
-                gtx, gty = grid_dirs.get(gid, (1.0, 0.0))
-                if would_cross_grid_line(anchor, new_anchor, end, gtx, gty):
-                    continue
+                    # Adjacent-grid crossing guard
+                    crossed = False
+                    for g2id, (rx, ry, tx, ty) in grid_lines.items():
+                        if g2id == gid:
+                            continue
+                        if anchor_crosses_line(cur_ax, cur_ay,
+                                               prop_ax, prop_ay,
+                                               rx, ry, tx, ty):
+                            crossed = True
+                            break
 
-                # Guard: reject if the new leader path (end→elbow→anchor)
-                # would cross any OTHER grid's line.
-                if leader_path_crosses_grid(
-                        new_anchor, new_elbow, end,
-                        gid, grid_dirs, grid_ref_pts):
-                    continue
-
-                mem_elbow[key]  = new_elbow
-                mem_anchor[key] = new_anchor
-                any_moved = True
+                    if not crossed:
+                        mem_offset[key] = new_off
+                        any_moved = True
+                        break
 
             if not any_moved:
                 break
@@ -587,46 +531,39 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
 
 
 # =============================================================================
-# Compaction — pure in-memory
+# Compaction — pull offsets back toward 0 (pure in-memory)
 # =============================================================================
-def compact_in_memory(grids, view, mem_anchor, mem_elbow, mem_end, threshold):
-    """Pull leaders back toward grid line endpoints in-memory.
-    Returns total steps moved."""
-    thr2            = threshold * threshold
-    total_moves     = 0
-    grid_dirs, grid_ref_pts = build_grid_dirs(grids, view)
-
-    grid_eps = {}
-    for g in grids:
-        curve = get_grid_curve_in_view(g, view)
-        if curve is None:
-            continue
-        for ei in (0, 1):
-            if grid_has_bubble_at_end(g, view, ei):
-                grid_eps[(g.Id.IntegerValue, ei)] = curve.GetEndPoint(ei)
+def compact_in_memory(grids, view, mem_offset, mem_perp_vec, mem_ep,
+                      threshold):
+    """Pull leader offsets back toward 0 without reintroducing collisions."""
+    thr2        = threshold * threshold
+    total_moves = 0
+    grid_lines  = build_grid_lines(grids, view)
 
     for _ in range(MAX_COMPACT_ROUNDS):
-        # Current bubble positions for this round
-        all_pts = {}
+        # Snapshot current anchor positions for this round
+        all_anchors = {}
         for g in grids:
+            gid = g.Id.IntegerValue
+            pv  = mem_perp_vec.get(gid)
+            if pv is None:
+                continue
             for ei in (0, 1):
-                key = (g.Id.IntegerValue, ei)
+                key = (gid, ei)
                 if not grid_has_bubble_at_end(g, view, ei):
                     continue
-                pt = mem_anchor.get(key)
-                if pt is not None:
-                    all_pts[key] = pt
+                ep     = mem_ep.get(key)
+                offset = mem_offset.get(key)
+                if ep is None or offset is None:
+                    continue
+                all_anchors[key] = anchor_xy(ep, pv, offset)
 
+        # Candidates: any bubble with non-zero offset
         candidates = []
-        for key, pt in all_pts.items():
-            grid_ep = grid_eps.get(key)
-            if grid_ep is None:
-                continue
-            dx = grid_ep.X - pt.X
-            dy = grid_ep.Y - pt.Y
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist >= COMPACT_PULL_STEP:
-                candidates.append((dist, key, grid_ep))
+        for key in all_anchors:
+            off = mem_offset.get(key)
+            if off is not None and abs(off) >= COMPACT_PULL_STEP:
+                candidates.append((abs(off), key))
 
         if not candidates:
             break
@@ -634,73 +571,54 @@ def compact_in_memory(grids, view, mem_anchor, mem_elbow, mem_end, threshold):
         candidates.sort(key=lambda c: -c[0])
         moved_any = False
 
-        for _, key, grid_ep in candidates:
-            cur_pt = mem_anchor.get(key)
-            if cur_pt is None:
+        for _, key in candidates:
+            gid, ei  = key
+            ep       = mem_ep.get(key)
+            pv       = mem_perp_vec.get(gid)
+            cur      = mem_offset.get(key)
+            if ep is None or pv is None or cur is None:
                 continue
 
-            dx = grid_ep.X - cur_pt.X
-            dy = grid_ep.Y - cur_pt.Y
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist < COMPACT_PULL_STEP:
-                continue
+            step    = -COMPACT_PULL_STEP if cur > 0 else COMPACT_PULL_STEP
+            new_off = cur + step
+            # Clamp: don't overshoot zero
+            if cur > 0 and new_off < 0:
+                new_off = 0.0
+            elif cur < 0 and new_off > 0:
+                new_off = 0.0
 
-            ux, uy = dx / dist, dy / dist
-            cand = XYZ(cur_pt.X + ux * COMPACT_PULL_STEP,
-                       cur_pt.Y + uy * COMPACT_PULL_STEP,
-                       cur_pt.Z)
+            cur_ax,  cur_ay  = anchor_xy(ep, pv, cur)
+            prop_ax, prop_ay = anchor_xy(ep, pv, new_off)
 
+            # Collision check against all other current anchors
             safe = True
-            for key2, pt2 in all_pts.items():
+            for key2, (ax2, ay2) in all_anchors.items():
                 if key2 == key:
                     continue
-                pt2_cur = mem_anchor.get(key2, pt2)
-                cdx = cand.X - pt2_cur.X
-                cdy = cand.Y - pt2_cur.Y
-                if cdx * cdx + cdy * cdy <= thr2:
+                dx = prop_ax - ax2
+                dy = prop_ay - ay2
+                if dx*dx + dy*dy <= thr2:
                     safe = False
                     break
             if not safe:
                 continue
 
-            anchor = mem_anchor.get(key)
-            elbow  = mem_elbow.get(key)
-            end    = mem_end.get(key)
-            if anchor is None or elbow is None or end is None:
+            # Adjacent-grid crossing guard
+            crossed = False
+            for g2id, (rx, ry, tx, ty) in grid_lines.items():
+                if g2id == gid:
+                    continue
+                if anchor_crosses_line(cur_ax, cur_ay,
+                                       prop_ax, prop_ay,
+                                       rx, ry, tx, ty):
+                    crossed = True
+                    break
+            if crossed:
                 continue
 
-            new_elbow = place_elbow(
-                elbow.X + ux * COMPACT_PULL_STEP,
-                elbow.Y + uy * COMPACT_PULL_STEP,
-                anchor, end,
-            )
-            if (abs(new_elbow.X - elbow.X) < 1e-6 and
-                    abs(new_elbow.Y - elbow.Y) < 1e-6):
-                continue
-
-            delta_x = new_elbow.X - elbow.X
-            delta_y = new_elbow.Y - elbow.Y
-            new_anchor = XYZ(
-                anchor.X + delta_x, anchor.Y + delta_y, anchor.Z)
-
-            # Guard: compaction must not push the bubble through its own
-            # grid line (would flip the leader to the wrong side).
-            gid_int = key[0]
-            gtx, gty = grid_dirs.get(gid_int, (1.0, 0.0))
-            if would_cross_grid_line(anchor, new_anchor, end, gtx, gty):
-                continue
-
-            # Guard: compaction must not move the leader path across any
-            # other grid's line.
-            if leader_path_crosses_grid(
-                    new_anchor, new_elbow, end,
-                    gid_int, grid_dirs, grid_ref_pts):
-                continue
-
-            mem_elbow[key]  = new_elbow
-            mem_anchor[key] = new_anchor
-            total_moves += 1
-            moved_any    = True
+            mem_offset[key] = new_off
+            total_moves    += 1
+            moved_any       = True
 
         if not moved_any:
             break
@@ -720,7 +638,7 @@ def main():
         )
         script.exit()
 
-    output.print_md("## Grid Bubble Separation — v21.4.0")
+    output.print_md("## Grid Bubble Separation — v22.0.0")
 
     ref_grid = pick_reference_grid()
     if ref_grid is None:
@@ -739,30 +657,29 @@ def main():
 
     output.print_md("Plan views on sheets: **{}**".format(len(views)))
 
-    # ── Read Phase 1: initial state for all views (outside any transaction) ──
-    view_data = {}  # view_id_int → (view, grids, mem_anchor, mem_elbow, mem_end)
+    # ── Read Phase 1: initial offset state for all views (outside transaction)
+    view_data = {}  # vid_int → (view, grids, mem_offset, mem_perp_vec, mem_ep)
     for v in views:
         grids = get_grids_for_view(doc, v)
         if len(grids) < 2:
             continue
-        ma, me, mn = init_mem_state(grids, v)
-        view_data[v.Id.IntegerValue] = (v, grids, ma, me, mn)
+        mo, mpv, mep = init_offset_state(grids, v)
+        view_data[v.Id.IntegerValue] = (v, grids, mo, mpv, mep)
 
     if not view_data:
         forms.alert("No views with 2+ grids found.", title="Nothing to do")
         script.exit()
 
-    # ── Read Phase 2: detect missing leaders for all views ──────────────────
-    # needs_by_view: view_id_int → set of (gid_int, ei)
+    # ── Read Phase 2: detect missing leaders for all views ───────────────────
     needs_by_view = {}
     total_needs   = 0
-    for vid, (v, grids, ma, me, mn) in view_data.items():
-        nl = detect_grids_needing_leaders(grids, v, ma, threshold)
+    for vid, (v, grids, mo, mpv, mep) in view_data.items():
+        nl = detect_grids_needing_leaders(grids, v, mo, mpv, mep, threshold)
         if nl:
             needs_by_view[vid] = nl
             total_needs += len(nl)
 
-    # ── Write Transaction 1: AddLeader only (short flat loop) ───────────────
+    # ── Write T1: AddLeader only (short flat loop) ───────────────────────────
     if needs_by_view:
         output.print_md(
             "Adding {} leader(s) across {} view(s)...".format(
@@ -790,41 +707,35 @@ def main():
             forms.alert("AddLeader failed:\n{}".format(ex), title="Error")
             script.exit()
 
-        # Re-read fresh state for all views (Revit regenerated on commit)
+        # Re-read fresh offset state after T1 (now leaders exist at ep)
         for vid in list(view_data.keys()):
             v, grids, _, _, _ = view_data[vid]
-            ma, me, mn = init_mem_state(grids, v)
-            view_data[vid] = (v, grids, ma, me, mn)
+            mo, mpv, mep = init_offset_state(grids, v)
+            view_data[vid] = (v, grids, mo, mpv, mep)
 
-    # ── Compute Phase: all separation math in-memory (no transactions) ──────
+    # ── Compute Phase: separation math in-memory (no transactions) ───────────
     output.print_md("### Separation")
 
-    # initial_elbows_by_view: view_id_int → dict of (gid, ei) → elbow XYZ
-    initial_elbows_by_view = {}
-    for vid, (v, grids, ma, me, mn) in view_data.items():
-        initial_elbows_by_view[vid] = dict(me)
+    initial_offsets_by_view = {}
+    for vid, (v, grids, mo, mpv, mep) in view_data.items():
+        initial_offsets_by_view[vid] = dict(mo)
 
-    for vid, (v, grids, ma, me, mn) in view_data.items():
+    for vid, (v, grids, mo, mpv, mep) in view_data.items():
         output.print_md("#### View: `{}`".format(v.Name))
-        compute_separation_in_memory(grids, v, ma, me, mn, threshold)
-        c = compact_in_memory(grids, v, ma, me, mn, threshold)
+        compute_separation_in_memory(grids, v, mo, mpv, mep, threshold)
+        c = compact_in_memory(grids, v, mo, mpv, mep, threshold)
         if c:
             output.print_md("  Compaction: {} step(s)".format(c))
 
-    # ── Collect changes across all views ────────────────────────────────────
-    # changes_by_view: view_id_int → [(gid_int, ei)]
+    # ── Collect changed keys ─────────────────────────────────────────────────
     changes_by_view = {}
     total_changes   = 0
-    for vid, (v, grids, ma, me, mn) in view_data.items():
-        init_el = initial_elbows_by_view[vid]
-        changed = []
-        for key, final_elbow in me.items():
-            init_elbow = init_el.get(key)
-            if init_elbow is None:
-                changed.append(key)
-                continue
-            if (abs(final_elbow.X - init_elbow.X) > 1e-6 or
-                    abs(final_elbow.Y - init_elbow.Y) > 1e-6):
+    for vid, (v, grids, mo, mpv, mep) in view_data.items():
+        init_off = initial_offsets_by_view[vid]
+        changed  = []
+        for key, final_off in mo.items():
+            init_o = init_off.get(key)
+            if init_o is None or abs(final_off - init_o) > 1e-6:
                 changed.append(key)
         if changed:
             changes_by_view[vid] = changed
@@ -840,13 +751,13 @@ def main():
         "Applying **{}** change(s) across **{}** view(s)...".format(
             total_changes, len(changes_by_view)))
 
-    # ── Write Transaction 2: SetLeader only (short flat loop) ───────────────
+    # ── Write T2: SetLeader(Elbow) only (short flat loop) ────────────────────
     t2 = Transaction(doc, "Separate Grid Bubbles")
     applied = 0
     try:
         t2.Start()
         for vid, changed_keys in changes_by_view.items():
-            v, grids, ma, me, mn = view_data[vid]
+            v, grids, mo, mpv, mep = view_data[vid]
             gmap = {g.Id.IntegerValue: g for g in grids}
             for gid, ei in changed_keys:
                 g  = gmap.get(gid)
@@ -857,9 +768,14 @@ def main():
                     ldr = g.GetLeader(de, v)
                     if ldr is None:
                         continue
-                    new_elbow = me.get((gid, ei))
-                    if new_elbow is None:
+                    ep     = mep.get((gid, ei))
+                    pv     = mpv.get(gid)
+                    offset = mo.get((gid, ei))
+                    if ep is None or pv is None or offset is None:
                         continue
+                    new_elbow = XYZ(ep.X + offset * pv.X,
+                                    ep.Y + offset * pv.Y,
+                                    ep.Z)
                     ldr.Elbow = new_elbow
                     g.SetLeader(de, v, ldr)
                     applied += 1
