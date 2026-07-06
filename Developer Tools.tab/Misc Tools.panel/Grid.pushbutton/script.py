@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Separates colliding grid bubbles on all plan views placed on sheets.
 
-VERSION 21.1.0 — fix leaders crossing grid lines.
+VERSION 21.3.0 — fix ldr.End at opposite datum end (Revit default placement).
 
 Crash root cause (journals 0256-0259):
   Background rendering threads (FullUpdateGraphicCacheUpdater,
@@ -27,7 +27,7 @@ Fix — read/write phase separation:
 
 __title__   = "Separate\nGrid Bubbles"
 __author__  = "MEP Tools"
-__version__ = "21.1.0"
+__version__ = "21.3.0"
 __doc__     = ("Separates colliding grid bubbles on all plan views placed "
                "on sheets.")
 
@@ -263,7 +263,20 @@ def init_mem_state(grids, view):
     """Read anchor, elbow, end for all visible grid leaders.
     Call outside any transaction so values are guaranteed fresh.
     Returns (mem_anchor, mem_elbow, mem_end) dicts keyed by (gid_int, ei).
-    Grids without a leader get their natural curve endpoint as estimate."""
+
+    IMPORTANT — ldr.End and ldr.Elbow are NOT used directly.
+    Revit's default AddLeader geometry places ldr.End at the OPPOSITE datum
+    end of the grid (e.g. End0 when the bubble is at End1).  Storing that
+    far-end point in mem_end causes place_elbow to project nudges onto a
+    200-ft grid-spanning segment instead of the short local leader stub,
+    making the crossing guard reject every nudge and producing the long
+    diagonal arm that visually crosses adjacent grid lines.
+
+    Fix: always seed mem_elbow and mem_end from curve.GetEndPoint(ei) — the
+    grid's own endpoint at the bubble side.  mem_anchor uses ldr.Anchor only
+    when it is closer to that endpoint than to the opposite one (i.e. it has
+    been genuinely displaced by a prior tool run); otherwise it is also reset
+    to the grid endpoint so the algorithm starts from a clean local state."""
     mem_anchor = {}
     mem_elbow  = {}
     mem_end    = {}
@@ -273,25 +286,37 @@ def init_mem_state(grids, view):
             de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
             if not grid_has_bubble_at_end(g, view, ei):
                 continue
-            key = (g.Id.IntegerValue, ei)
+            key      = (g.Id.IntegerValue, ei)
+            ep       = curve.GetEndPoint(ei)     if curve else None
+            ep_other = curve.GetEndPoint(1 - ei) if curve else None
             try:
                 ldr = g.GetLeader(de, view)
                 if ldr is not None:
                     anc = ldr.Anchor
-                    ep  = curve.GetEndPoint(ei) if curve else None
-                    if anc is None and ep is not None:
+                    # Accept ldr.Anchor only if it is on the correct side
+                    # of the grid (closer to ep than to ep_other).  An anchor
+                    # at the far end is Revit's default placement artifact.
+                    if (anc is not None and
+                            ep is not None and ep_other is not None):
+                        da = ((anc.X - ep.X)**2 +
+                              (anc.Y - ep.Y)**2) ** 0.5
+                        db = ((anc.X - ep_other.X)**2 +
+                              (anc.Y - ep_other.Y)**2) ** 0.5
+                        if db < da:
+                            anc = ep  # anchor at wrong end — reset
+                    if anc is None:
                         anc = ep
-                    mem_anchor[key] = anc  if anc  else (ep or XYZ.Zero)
-                    mem_elbow[key]  = ldr.Elbow
-                    mem_end[key]    = ldr.End
-                elif curve:
-                    ep = curve.GetEndPoint(ei)
+                    mem_anchor[key] = anc if anc else (ep or XYZ.Zero)
+                    # Always seed from the grid's own endpoint so all
+                    # subsequent calculations stay in the short local arm.
+                    mem_elbow[key] = ep if ep is not None else ldr.Elbow
+                    mem_end[key]   = ep if ep is not None else ldr.End
+                elif ep is not None:
                     mem_anchor[key] = ep
                     mem_elbow[key]  = ep
                     mem_end[key]    = ep
             except Exception:
-                if curve:
-                    ep = curve.GetEndPoint(ei)
+                if ep is not None:
                     mem_anchor[key] = ep
                     mem_elbow[key]  = ep
                     mem_end[key]    = ep
@@ -397,9 +422,12 @@ def detect_grids_needing_leaders(grids, view, mem_anchor, threshold):
 # Grid-line crossing guard
 # =============================================================================
 def build_grid_dirs(grids, view):
-    """Return dict gid_int → (tx, ty) unit vector along each grid line.
-    Used to detect when a nudge would push a bubble through its own grid line."""
-    dirs = {}
+    """Return (dirs, ref_pts):
+    - dirs: gid_int → (tx, ty) unit vector along grid line
+    - ref_pts: gid_int → XYZ reference point on that grid line (End0)
+    Used for own-grid-line crossing guard and adjacent-grid leader path checks."""
+    dirs    = {}
+    ref_pts = {}
     for g in grids:
         curve = get_grid_curve_in_view(g, view)
         if curve is None:
@@ -409,8 +437,10 @@ def build_grid_dirs(grids, view):
         dx, dy = p1.X - p0.X, p1.Y - p0.Y
         L = (dx*dx + dy*dy) ** 0.5
         if L > 1e-9:
-            dirs[g.Id.IntegerValue] = (dx/L, dy/L)
-    return dirs
+            gid = g.Id.IntegerValue
+            dirs[gid]    = (dx/L, dy/L)
+            ref_pts[gid] = p0
+    return dirs, ref_pts
 
 
 def would_cross_grid_line(old_anchor, new_anchor, end_pt, grid_tx, grid_ty):
@@ -424,6 +454,33 @@ def would_cross_grid_line(old_anchor, new_anchor, end_pt, grid_tx, grid_ty):
     return old_s * new_s < 0.0
 
 
+def _seg_crosses_line(ax, ay, bx, by, rx, ry, tx, ty):
+    """True if segment A→B strictly crosses the infinite line through (rx,ry)
+    with direction (tx,ty).  Touch (one endpoint on line) is NOT a crossing."""
+    sa = (ax - rx) * ty - (ay - ry) * tx
+    sb = (bx - rx) * ty - (by - ry) * tx
+    return sa * sb < -1e-12
+
+
+def leader_path_crosses_grid(anchor, elbow, end, own_gid, grid_dirs, ref_pts):
+    """True if the two-segment leader path end→elbow→anchor crosses the
+    infinite line of any grid OTHER than own_gid."""
+    ex, ey = end.X,   end.Y
+    lx, ly = elbow.X, elbow.Y
+    ax, ay = anchor.X, anchor.Y
+    for gid, (tx, ty) in grid_dirs.items():
+        if gid == own_gid:
+            continue
+        rp = ref_pts.get(gid)
+        if rp is None:
+            continue
+        rx, ry = rp.X, rp.Y
+        if (_seg_crosses_line(ex, ey, lx, ly, rx, ry, tx, ty) or
+                _seg_crosses_line(lx, ly, ax, ay, rx, ry, tx, ty)):
+            return True
+    return False
+
+
 # =============================================================================
 # Phase B: separation math — pure in-memory, zero Revit API calls
 # =============================================================================
@@ -431,9 +488,9 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
                                  threshold):
     """Run separation passes entirely in-memory.
     Modifies mem_anchor and mem_elbow in place."""
-    nudge_step = threshold / 8.0
-    name_map   = {g.Id.IntegerValue: g.Name for g in grids}
-    grid_dirs  = build_grid_dirs(grids, view)
+    nudge_step      = threshold / 8.0
+    name_map        = {g.Id.IntegerValue: g.Name for g in grids}
+    grid_dirs, grid_ref_pts = build_grid_dirs(grids, view)
 
     for pass_num in range(MAX_PASSES):
         positions = build_bubble_list(grids, view, mem_anchor)
@@ -537,6 +594,13 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
                 if would_cross_grid_line(anchor, new_anchor, end, gtx, gty):
                     continue
 
+                # Guard: reject if the new leader path (end→elbow→anchor)
+                # would cross any OTHER grid's line.
+                if leader_path_crosses_grid(
+                        new_anchor, new_elbow, end,
+                        gid, grid_dirs, grid_ref_pts):
+                    continue
+
                 mem_elbow[key]  = new_elbow
                 mem_anchor[key] = new_anchor
                 any_moved = True
@@ -556,9 +620,9 @@ def compute_separation_in_memory(grids, view, mem_anchor, mem_elbow, mem_end,
 def compact_in_memory(grids, view, mem_anchor, mem_elbow, mem_end, threshold):
     """Pull leaders back toward grid line endpoints in-memory.
     Returns total steps moved."""
-    thr2        = threshold * threshold
-    total_moves = 0
-    grid_dirs   = build_grid_dirs(grids, view)
+    thr2            = threshold * threshold
+    total_moves     = 0
+    grid_dirs, grid_ref_pts = build_grid_dirs(grids, view)
 
     grid_eps = {}
     for g in grids:
@@ -654,6 +718,13 @@ def compact_in_memory(grids, view, mem_anchor, mem_elbow, mem_end, threshold):
             if would_cross_grid_line(anchor, new_anchor, end, gtx, gty):
                 continue
 
+            # Guard: compaction must not move the leader path across any
+            # other grid's line.
+            if leader_path_crosses_grid(
+                    new_anchor, new_elbow, end,
+                    gid_int, grid_dirs, grid_ref_pts):
+                continue
+
             mem_elbow[key]  = new_elbow
             mem_anchor[key] = new_anchor
             total_moves += 1
@@ -677,7 +748,7 @@ def main():
         )
         script.exit()
 
-    output.print_md("## Grid Bubble Separation — v21.1.0")
+    output.print_md("## Grid Bubble Separation — v21.3.0")
 
     ref_grid = pick_reference_grid()
     if ref_grid is None:
