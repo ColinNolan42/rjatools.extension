@@ -1,11 +1,11 @@
-module_size,neck_dia_in,max_cfm_at_nc25,nc_at_max_cfm,velocity_fpm_at_max_cfm,source_note
-12x12,6,196,18,1000,4"/5" excluded (2" increments only, 6" min) per user 2026-07-16; target changed to NC<25 per user 2026-07-16
-12x12,8,279,22,800,7" excluded (2" increments only) per user 2026-07-16; target changed to NC<25 per user 2026-07-16; ceiling for this module
-18x18,6,196,24,1000,uses TMS 20x20 data (18x18 not published by Titus); target changed to NC<25 per user 2026-07-16
-18x18,8,349,23,1000,uses TMS 20x20 data (18x18 not published by Titus); target changed to NC<25 per user 2026-07-16
-18x18,10,545,24,1000,uses TMS 20x20 data (18x18 not published by Titus); target changed to NC<25 per user 2026-07-16; ceiling for this module
-24x24,6,196,22,1000,target changed to NC<25 per user 2026-07-16
-24x24,8,349,19,1000,target changed to NC<25 per user 2026-07-16
-24x24,10,436,22,800,target changed to NC<25 per user 2026-07-16
-24x24,12,628,24,800,target changed to NC<25 per user 2026-07-16
-24x24,14,748,22,700,ceiling for this module — 15" excluded (2" increments only) per user 2026-07-16; target changed to NC<25 per user 2026-07-16
+module_size,neck_dia_in,max_cfm_at_nc15,nc_at_max_cfm,velocity_fpm_at_max_cfm,source_note
+12x12,6,157,13,800,4"/5" excluded (2" increments only, 6" min) per user 2026-07-16; target changed to NC<15 per user 2026-07-16
+12x12,8,209,12,600,7" excluded (2" increments only) per user 2026-07-16; target changed to NC<15 per user 2026-07-16; ceiling for this module
+18x18,6,137,14,700,uses TMS 20x20 data (18x18 not published by Titus); target changed to NC<15 per user 2026-07-16
+18x18,8,244,13,700,uses TMS 20x20 data (18x18 not published by Titus); target changed to NC<15 per user 2026-07-16
+18x18,10,327,<10,600,uses TMS 20x20 data (18x18 not published by Titus); target changed to NC<15 per user 2026-07-16; ceiling for this module; cutsheet dash convention on this page is NC<10 (confirmed via page 2 notes), not NC<15
+24x24,6,137,12,700,target changed to NC<15 per user 2026-07-16
+24x24,8,244,11,700,target changed to NC<15 per user 2026-07-16
+24x24,10,327,14,600,target changed to NC<15 per user 2026-07-16
+24x24,12,393,11,500,target changed to NC<15 per user 2026-07-16
+24x24,14,535,13,500,ceiling for this module — 15" excluded (2" increments only) per user 2026-07-16; target changed to NC<15 per user 2026-07-16
