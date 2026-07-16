@@ -1,0 +1,15 @@
+module_size,neck_dia_in,max_cfm_at_nc30,nc_at_max_cfm,velocity_fpm_at_max_cfm,source_note
+12x12,4,87,27,1000,
+12x12,5,136,28,1000,
+12x12,6,196,28,1000,
+12x12,7,267,28,1000,
+12x12,8,349,28,1000,
+18x18,6,196,28,1000,uses OMNI 20x20 data (18x18 not published by Titus) per user 2026-07-16
+18x18,8,349,30,1000,uses OMNI 20x20 data (18x18 not published by Titus) per user 2026-07-16 (exact NC30 match)
+18x18,10,491,27,900,uses OMNI 20x20 data (18x18 not published by Titus) per user 2026-07-16
+24x24,6,235,28,1200,
+24x24,8,349,25,1000,
+24x24,10,545,28,1000,
+24x24,12,707,27,900,
+24x24,14,962,29,900,
+24x24,15,1104,30,900,exact NC30 match

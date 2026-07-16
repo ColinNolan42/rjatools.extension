@@ -1,0 +1,15 @@
+module_size,neck_dia_in,max_cfm_at_nc30,governing_product,tms_max_cfm,omni_max_cfm,source_note
+12x12,4,87,OMNI,105,87,
+12x12,5,136,OMNI,164,136,
+12x12,6,196,OMNI,236,196,
+12x12,7,267,OMNI,321,267,
+12x12,8,349,TIE,349,349,
+18x18,6,196,OMNI,236,196,neither product publishes 18x18; both use 20x20 data per user 2026-07-16
+18x18,8,349,OMNI,419,349,neither product publishes 18x18; both use 20x20 data per user 2026-07-16
+18x18,10,491,OMNI,545,491,neither product publishes 18x18; both use 20x20 data per user 2026-07-16
+24x24,6,235,OMNI,236,235,
+24x24,8,349,OMNI,419,349,
+24x24,10,545,OMNI,654,545,
+24x24,12,628,TMS,628,707,
+24x24,14,855,TMS,855,962,
+24x24,15,982,TMS,982,1104,

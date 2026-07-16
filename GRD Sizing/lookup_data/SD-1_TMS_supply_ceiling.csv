@@ -1,0 +1,15 @@
+module_size,neck_dia_in,max_cfm_at_nc30,nc_at_max_cfm,velocity_fpm_at_max_cfm,source_note
+12x12,4,105,26,1200,
+12x12,5,164,29,1200,
+12x12,6,236,25,1200,
+12x12,7,321,28,1200,
+12x12,8,349,29,1000,
+18x18,6,236,30,1200,uses TMS 20x20 data (18x18 not published by Titus) per user 2026-07-16
+18x18,8,419,29,1200,uses TMS 20x20 data (18x18 not published by Titus) per user 2026-07-16
+18x18,10,545,24,1000,uses TMS 20x20 data (18x18 not published by Titus) per user 2026-07-16
+24x24,6,236,28,1200,
+24x24,8,419,26,1200,
+24x24,10,654,29,1200,
+24x24,12,628,24,1000,
+24x24,14,855,26,800,
+24x24,15,982,27,800,
