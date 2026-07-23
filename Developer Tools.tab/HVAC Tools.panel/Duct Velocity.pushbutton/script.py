@@ -29,7 +29,8 @@ from Autodesk.Revit.DB import (
     OverrideGraphicSettings, Color,
     TextNote, TextNoteOptions, TextNoteType,
     Line, ViewDrafting, ViewFamilyType, ViewFamily,
-    FamilySymbol, StorageType
+    FamilySymbol, StorageType,
+    FilledRegion, FilledRegionType, CurveLoop
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 
@@ -439,9 +440,37 @@ def _vline(doc, view, x, y0, y1):
     doc.Create.NewDetailCurve(view, Line.CreateBound(XYZ(x, y0, 0.0), XYZ(x, y1, 0.0)))
 
 
+def _legend_swatch(doc, view, filled_region_type_id, x0, y0, size, color, fill_id):
+    """Draw a small solid-color square at (x0, y0), size x size (ft), colored
+    the same way ducts/fittings are colored in the view (matching fill pattern)."""
+    pts = [XYZ(x0, y0, 0.0), XYZ(x0 + size, y0, 0.0),
+           XYZ(x0 + size, y0 + size, 0.0), XYZ(x0, y0 + size, 0.0)]
+    loop = CurveLoop()
+    for i in range(4):
+        loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+    fr = FilledRegion.Create(doc, filled_region_type_id, view.Id, [loop])
+    ogs = OverrideGraphicSettings()
+    ogs.SetSurfaceForegroundPatternColor(color)
+    if fill_id != ElementId.InvalidElementId:
+        ogs.SetSurfaceForegroundPatternId(fill_id)
+    view.SetElementOverrides(fr.Id, ogs)
+    return fr
+
+
+# Color key + meaning shown in the legend, in display order
+_LEGEND_ROWS = [
+    ('GREEN',  'Within limit'),
+    ('PURPLE', 'Oversized — smaller standard size available'),
+    ('YELLOW', 'Approaching limit'),
+    ('RED',    'Exceeds limit'),
+    ('GRAY',   'No CFM data'),
+]
+
+
 def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pct,
-                        source_sheet_num, tn_type_id, ts):
-    """Create a Drafting View with a System Summary block + flagged-duct table.
+                        source_sheet_num, tn_type_id, ts, fill_id):
+    """Create a Drafting View with a System Summary block + flagged-duct table
+    + color legend.
 
     Returns (ViewDrafting, total_content_height_ft), or (None, 0.0) on failure.
     At scale 1:1, model feet = paper feet, so all dims below are paper inches / 12.
@@ -548,6 +577,29 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                                     XYZ(col_xs[ci] + PAD, row_y, 0.0),
                                     cell_text, opts)
             y_cursor = table_top - total_h
+
+        # ── Color legend ─────────────────────────────────────────────────────
+        LEGEND_HDR_H = 0.026     # header row height (~5/16")
+        LEGEND_ROW_H = 0.020     # legend row height (~1/4")
+        SWATCH       = 0.014     # swatch square size (~1/6")
+
+        frt_id = None
+        for frt in FilteredElementCollector(doc).OfClass(FilledRegionType).ToElements():
+            frt_id = frt.Id
+            break
+
+        TextNote.Create(doc, sched_view.Id, XYZ(ox + PAD, y_cursor - PAD, 0.0), 'COLOR LEGEND', opts)
+        y_cursor -= LEGEND_HDR_H
+
+        if frt_id is not None:
+            for color_key, meaning in _LEGEND_ROWS:
+                color = _COLOR_MAP.get(color_key, GRAY)
+                sw_y0 = y_cursor - SWATCH - (LEGEND_ROW_H - SWATCH) / 2.0
+                _legend_swatch(doc, sched_view, frt_id, ox + PAD, sw_y0, SWATCH, color, fill_id)
+                TextNote.Create(doc, sched_view.Id,
+                                XYZ(ox + PAD + SWATCH + PAD * 2.0, y_cursor - PAD, 0.0),
+                                '{} — {}'.format(color_key.title(), meaning), opts)
+                y_cursor -= LEGEND_ROW_H
 
         return sched_view, (oy - y_cursor)
 
@@ -873,7 +925,7 @@ def main():
         if tn_type_id is not None:
             sched_view, content_h = _build_summary_view(
                 doc, summary_lines, flagged_items, custom_limits, tol_pct,
-                source_sheet_num, tn_type_id, ts)
+                source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
                 # Place below floor plan: centre of block at bottom-left of sheet
                 total_w  = 0.910   # must match COLS sum in _build_summary_view
