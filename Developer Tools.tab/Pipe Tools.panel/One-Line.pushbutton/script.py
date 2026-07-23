@@ -1648,7 +1648,7 @@ def main():
     # STEP 8 - Create DraftingView
     # ------------------------------------------------------------------
     view_name = "Gas Piping One-Line - {}".format(
-        datetime.datetime.now().strftime("%Y%m%d-%H%M"))
+        datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S"))
 
     t_view = Transaction(doc, "RJA Tools - Create One-Line View")
     t_view.Start()

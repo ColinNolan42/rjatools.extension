@@ -14,6 +14,7 @@ IronPython 2.7 / pyRevit  --  no f-strings, no walrus, no nonlocal.
 import os
 import sys
 import math
+import datetime
 
 import clr
 clr.AddReference('PresentationFramework')
@@ -438,38 +439,38 @@ def _vline(doc, view, x, y0, y1):
     doc.Create.NewDetailCurve(view, Line.CreateBound(XYZ(x, y0, 0.0), XYZ(x, y1, 0.0)))
 
 
-def _build_schedule_view(doc, flagged_items, custom_limits, tol_pct,
-                         source_sheet_num, tn_type_id):
-    """Create a Drafting View with a DetailLine grid + TextNote cells.
+def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pct,
+                        source_sheet_num, tn_type_id, ts):
+    """Create a Drafting View with a System Summary block + flagged-duct table.
 
-    Returns the ViewDrafting element, or None on failure.
+    Returns (ViewDrafting, total_content_height_ft), or (None, 0.0) on failure.
     At scale 1:1, model feet = paper feet, so all dims below are paper inches / 12.
     """
-    # Find a Drafting ViewFamilyType
     drafting_type_id = None
     for vft in FilteredElementCollector(doc).OfClass(ViewFamilyType).ToElements():
         if vft.ViewFamily == ViewFamily.Drafting:
             drafting_type_id = vft.Id
             break
     if drafting_type_id is None:
-        return None
+        return None, 0.0
 
     try:
         sched_view = ViewDrafting.Create(doc, drafting_type_id)
         sched_view.Scale = 1
-        base_name = 'Duct Schedule - DV-' + source_sheet_num
+        base_name = 'Duct Schedule - DV-{} - {}'.format(source_sheet_num, ts)
         try:
             sched_view.Name = base_name
         except Exception:
             sched_view.Name = base_name + ' (2)'
 
         # ── Layout (ft at 1:1 = inches on paper / 12) ─────────────────────
-        ox, oy = 0.0, 0.0   # table top-left origin
-        PAD    = 0.004       # text inset from cell edge (~1/24")
-        HEAD_H = 0.030       # header row height  (~3/8")
-        ROW_H  = 0.022       # data row height    (~1/4")
+        ox, oy = 0.0, 0.0   # top-left origin
+        PAD     = 0.004      # text inset from cell edge (~1/24")
+        HEAD_H  = 0.030      # header row height  (~3/8")
+        ROW_H   = 0.022      # data row height    (~1/4")
+        SUM_ROW_H = 0.018    # summary line height (~1/5")
 
-        # (column header, width in ft)
+        # (column header, width in ft) — width also sets the summary block width
         COLS = [
             ('#',                              0.050),
             ('Status',                         0.120),
@@ -481,59 +482,77 @@ def _build_schedule_view(doc, flagged_items, custom_limits, tol_pct,
         col_headers = [h for h, _ in COLS]
         col_widths  = [w for _, w in COLS]
         total_w     = sum(col_widths)
-        total_h     = HEAD_H + ROW_H * len(flagged_items)
 
-        # Cumulative left-edge X per column (plus right border)
-        col_xs = [ox]
-        for w in col_widths:
-            col_xs.append(col_xs[-1] + w)
-
-        # ── Grid lines ─────────────────────────────────────────────────────
-        # Y of each horizontal line: top of table, below header, below each row
-        row_tops = [oy]
-        row_tops.append(oy - HEAD_H)
-        for _ in range(len(flagged_items)):
-            row_tops.append(row_tops[-1] - ROW_H)
-
-        for y in row_tops:
-            _hline(doc, sched_view, ox, ox + total_w, y)
-
-        for x in col_xs:
-            _vline(doc, sched_view, x, oy, oy - total_h)
-
-        # ── Text ───────────────────────────────────────────────────────────
         opts = TextNoteOptions(tn_type_id)
+        y_cursor = oy
 
-        # Header row
-        for ci, header in enumerate(col_headers):
-            TextNote.Create(doc, sched_view.Id,
-                            XYZ(col_xs[ci] + PAD, oy - PAD, 0.0),
-                            header, opts)
+        # ── System Summary block ────────────────────────────────────────────
+        if summary_lines:
+            sum_top = y_cursor
+            for line in summary_lines:
+                y_cursor -= SUM_ROW_H
+            sum_bottom = y_cursor
 
-        # Data rows
-        for ri, (lbl, dr) in enumerate(flagged_items):
-            row_y = row_tops[ri + 1] - PAD
-            defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-            max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-            suggested         = _suggest_size(dr, custom_limits, tol_pct)
-            size              = _duct_size_label(dr.elem)
-            cells = [
-                str(ri + 1),
-                lbl,
-                size,
-                '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm),
-                '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric),
-                suggested,
-            ]
-            for ci, cell_text in enumerate(cells):
+            _hline(doc, sched_view, ox, ox + total_w, sum_top)
+            _hline(doc, sched_view, ox, ox + total_w, sum_bottom)
+            _vline(doc, sched_view, ox, sum_top, sum_bottom)
+            _vline(doc, sched_view, ox + total_w, sum_top, sum_bottom)
+
+            row_y = sum_top
+            for line in summary_lines:
+                row_y -= SUM_ROW_H
                 TextNote.Create(doc, sched_view.Id,
-                                XYZ(col_xs[ci] + PAD, row_y, 0.0),
-                                cell_text, opts)
+                                XYZ(ox + PAD, row_y + SUM_ROW_H - PAD, 0.0),
+                                line, opts)
 
-        return sched_view
+        # ── Flagged ducts table ──────────────────────────────────────────────
+        if flagged_items:
+            table_top = y_cursor
+            total_h   = HEAD_H + ROW_H * len(flagged_items)
+
+            col_xs = [ox]
+            for w in col_widths:
+                col_xs.append(col_xs[-1] + w)
+
+            row_tops = [table_top]
+            row_tops.append(table_top - HEAD_H)
+            for _ in range(len(flagged_items)):
+                row_tops.append(row_tops[-1] - ROW_H)
+
+            for y in row_tops:
+                _hline(doc, sched_view, ox, ox + total_w, y)
+            for x in col_xs:
+                _vline(doc, sched_view, x, table_top, table_top - total_h)
+
+            for ci, header in enumerate(col_headers):
+                TextNote.Create(doc, sched_view.Id,
+                                XYZ(col_xs[ci] + PAD, table_top - PAD, 0.0),
+                                header, opts)
+
+            for ri, (lbl, dr) in enumerate(flagged_items):
+                row_y = row_tops[ri + 1] - PAD
+                defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+                max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+                suggested         = _suggest_size(dr, custom_limits, tol_pct)
+                size              = _duct_size_label(dr.elem)
+                cells = [
+                    str(ri + 1),
+                    lbl,
+                    size,
+                    '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm),
+                    '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric),
+                    suggested,
+                ]
+                for ci, cell_text in enumerate(cells):
+                    TextNote.Create(doc, sched_view.Id,
+                                    XYZ(col_xs[ci] + PAD, row_y, 0.0),
+                                    cell_text, opts)
+            y_cursor = table_top - total_h
+
+        return sched_view, (oy - y_cursor)
 
     except Exception:
-        return None
+        return None, 0.0
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -605,6 +624,10 @@ def main():
     all_nodes        = {}   # merged for fitting adjacency
     all_children     = {}   # merged
     ahu_labels       = []
+    ahu_totals       = []   # (ahu_name, ahu_id, total_cfm, terminal_count)
+    all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
+    all_zero_terms   = set()
+    all_missing_flow = set()
 
     for sel_elem in sel_elems:
         output.print_md('Traversing **{}** (id {})...'.format(
@@ -625,8 +648,26 @@ def main():
         output.print_md('  {} ducts  |  {} terminals'.format(
             len(net.duct_results), len(net.terminal_cfms)))
 
+        root_id = eid_int(net.root.Id)
+        ahu_totals.append((
+            _elem_name(net.root), root_id,
+            net.cfm_map.get(root_id, 0.0), len(net.terminal_cfms)))
+
         all_nodes.update(net.nodes)
         all_children.update(net.children)
+        all_zero_terms.update(net.zero_terminals)
+        all_missing_flow.update(net.missing_flow)
+
+        for nid, cfm in net.terminal_cfms.items():
+            if nid in all_terminals:
+                continue
+            term_elem = net.nodes.get(nid)
+            if term_elem is None:
+                continue
+            all_terminals[nid] = (
+                cfm,
+                hvac_graph.terminal_sys_class(term_elem),
+                hvac_graph.terminal_family_name(term_elem))
 
         for eid, dr in net.duct_results.items():
             if eid not in all_duct_results:
@@ -643,6 +684,43 @@ def main():
 
     output.print_md('**Total: {} systems  |  {} ducts**'.format(
         len(ahu_labels), len(all_duct_results)))
+
+    # 4b. System summary — total flow to each equipment, diffuser counts/types
+    grand_total_cfm = sum(cfm for cfm, _, _ in all_terminals.values())
+    sys_totals = {}    # sys_class -> [total_cfm, count]
+    type_totals = {}   # family_name -> [count, total_cfm]
+    for cfm, sys_class, family in all_terminals.values():
+        s = sys_totals.setdefault(sys_class, [0.0, 0])
+        s[0] += cfm
+        s[1] += 1
+        t = type_totals.setdefault(family, [0, 0.0])
+        t[0] += 1
+        t[1] += cfm
+
+    summary_lines = ['SYSTEM SUMMARY']
+    for name, aid, total_cfm, term_count in ahu_totals:
+        summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM total ({} diffusers)'.format(
+            name, aid, total_cfm, term_count))
+    summary_lines.append('Grand Total Airflow: {:.0f} CFM  |  {} Diffusers  |  {} Ducts'.format(
+        grand_total_cfm, len(all_terminals), len(all_duct_results)))
+    for sys_class in sorted(sys_totals.keys()):
+        s_cfm, s_cnt = sys_totals[sys_class]
+        summary_lines.append('  {}: {:.0f} CFM  ({} diffusers)'.format(sys_class, s_cfm, s_cnt))
+    summary_lines.append('Diffuser Types:')
+    for family in sorted(type_totals.keys()):
+        t_cnt, t_cfm = type_totals[family]
+        summary_lines.append('  {}  x{}  ({:.0f} CFM)'.format(family, t_cnt, t_cfm))
+    if all_zero_terms:
+        summary_lines.append('WARNING: {} diffuser(s) with Flow = 0 (missing CFM data)'.format(
+            len(all_zero_terms)))
+    if all_missing_flow:
+        summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
+            len(all_missing_flow)))
+
+    output.print_md('---')
+    output.print_md('### System Summary')
+    for line in summary_lines[1:]:
+        output.print_md(line.strip())
 
     # 5. Find source sheet number
     source_sheet_num = 'NoSheet'
@@ -669,11 +747,13 @@ def main():
     # 8. Transaction: copy view → color overrides → FPM annotations → sheet
     t = Transaction(doc, 'Duct Velocity Visualizer')
     t.Start()
+    ts = datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')
+
     try:
         # Copy floor plan
         new_vid  = active_view.Duplicate(ViewDuplicateOption.Duplicate)
         new_view = doc.GetElement(new_vid)
-        base_name = 'Ducting Velocities - ' + source_sheet_num
+        base_name = 'Ducting Velocities - {} - {}'.format(source_sheet_num, ts)
         try:
             new_view.Name = base_name
         except Exception:
@@ -783,23 +863,22 @@ def main():
 
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
-        new_sheet.SheetNumber = 'DV-' + source_sheet_num
-        new_sheet.Name        = 'Ducting Velocities - ' + source_sheet_num
+        new_sheet.SheetNumber = 'DV-{}-{}'.format(source_sheet_num, ts)
+        new_sheet.Name        = base_name
 
         # Place viewport
         Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
 
-        # Drafting view schedule table placed as second viewport on sheet
-        if tn_type_id is not None and flagged_items:
-            sched_view = _build_schedule_view(
-                doc, flagged_items, custom_limits, tol_pct,
-                source_sheet_num, tn_type_id)
+        # System Summary + flagged-duct table, placed as second viewport on sheet
+        if tn_type_id is not None:
+            sched_view, content_h = _build_summary_view(
+                doc, summary_lines, flagged_items, custom_limits, tol_pct,
+                source_sheet_num, tn_type_id, ts)
             if sched_view is not None:
-                # Place below floor plan: centre of table at bottom-left of sheet
-                total_w  = 0.910   # must match COLS sum in _build_schedule_view
-                total_h  = 0.030 + 0.022 * len(flagged_items)
+                # Place below floor plan: centre of block at bottom-left of sheet
+                total_w  = 0.910   # must match COLS sum in _build_summary_view
                 sched_x  = 0.10 + total_w / 2.0
-                sched_y  = 0.06 + total_h / 2.0
+                sched_y  = 0.06 + content_h / 2.0
                 Viewport.Create(doc, new_sheet.Id, sched_view.Id,
                                 XYZ(sched_x, sched_y, 0))
 
@@ -812,7 +891,7 @@ def main():
     # 9. Summary
     output.print_md('---')
     output.print_md('## Done')
-    output.print_md('Sheet **DV-{}** created.'.format(source_sheet_num))
+    output.print_md('Sheet **{}** created.'.format(new_sheet.SheetNumber))
     output.print_md('')
     output.print_md('**Design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%,  purple = a smaller standard size still fits):**'.format(
         int(tol_pct), int(tol_pct)))
