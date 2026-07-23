@@ -62,13 +62,14 @@ GREEN  = Color(0,   200,  0)
 YELLOW = Color(255, 215,  0)
 RED    = Color(210,  40, 40)
 GRAY   = Color(160, 160, 160)
+PURPLE = Color(140,  40, 200)
 
-_COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY}
+_COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY, 'PURPLE': PURPLE}
 
 
 # ── velocity settings dialog ───────────────────────────────────────────────────
 def show_velocity_settings_dialog():
-    """WPF dialog — per-system max velocity + friction, with green threshold %.
+    """WPF dialog — per-system max velocity + friction, with a yellow/red tolerance %.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct) or None.
 
@@ -76,6 +77,9 @@ def show_velocity_settings_dialog():
       Green  : value <= max
       Yellow : max < value <= max * (1 + tol_pct/100)
       Red    : value > max * (1 + tol_pct/100)
+      Purple : determined separately — installed duct could be swapped for a
+               smaller standard size and still meet max FPM and max friction
+               with no tolerance band (see _suggest_size_info).
     """
     # Defaults: firm design standard (main and branch share same values)
     ROWS = [
@@ -201,6 +205,7 @@ def show_velocity_settings_dialog():
     _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
     _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
     _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
+    _info_row('Purple (oversized):', 'a smaller standard size exists that stays within max FPM + friction')
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -252,15 +257,19 @@ def show_velocity_settings_dialog():
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-_PRIORITY = {'RED': 3, 'YELLOW': 2, 'GREEN': 1, 'GRAY': 0}
+_PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
+_AREA_EPS_FT2 = 1e-6   # ignore floating-point-scale area differences when flagging oversize
 
 
 def _duct_label(dr, custom_limits, tol_pct):
-    """One-sided tolerance — worst of velocity and friction checks.
+    """Worst of velocity and friction checks (one-sided, unchanged), then
+    downgraded to PURPLE if the duct is GREEN but oversized (a smaller
+    standard size would still satisfy max FPM and max friction).
 
-      Green  : value <= max
-      Yellow : max < value <= max * (1 + tol_pct/100)
-      Red    : value > max * (1 + tol_pct/100)
+      Green  : cfm <= max_cap
+      Yellow : max_cap < cfm <= max_cap * (1 + tol_pct/100)
+      Red    : cfm > max_cap * (1 + tol_pct/100)
+      Purple : GREEN AND a smaller standard size exists (see _suggest_size_info)
 
     Returns (label, max_cap_cfm).
     """
@@ -295,8 +304,18 @@ def _duct_label(dr, custom_limits, tol_pct):
             fric_label = 'RED'
 
     if _PRIORITY.get(fric_label, 0) > _PRIORITY.get(vel_label, 0):
-        return fric_label, max_cap
-    return vel_label, max_cap
+        combined = fric_label
+    else:
+        combined = vel_label
+
+    # GREEN ducts get downgraded to PURPLE if a smaller standard size would
+    # still satisfy both max FPM and max friction — i.e. it's oversized.
+    if combined == 'GREEN':
+        _, sugg_area = _suggest_size_info(dr, custom_limits)
+        if sugg_area is not None and sugg_area < dr.area_ft2 - _AREA_EPS_FT2:
+            combined = 'PURPLE'
+
+    return combined, max_cap
 
 
 def _elem_name(elem):
@@ -334,19 +353,28 @@ def _snap_even(inches):
     return max(n, 2)
 
 
-def _suggest_size(dr, custom_limits, tol_pct):
-    """Return smallest standard duct size satisfying both velocity AND friction limits.
+def _suggest_size_info(dr, custom_limits):
+    """Return (label, area_ft2) for the smallest standard duct size satisfying
+    both velocity AND friction limits — no tolerance band, straight against
+    max FPM / max friction. area_ft2 is None when no standard size could be
+    found (duct needs to grow past the largest round size, or past what
+    width-expansion covers for rectangular).
 
-    Round/spiral: iterates standard diameters smallest-first; returns first that passes both.
-    Rectangular:  keeps width, steps height in 2" increments; expands width if AR > 4:1.
-    All suggested dimensions are snapped to 2" intervals (2, 4, 6, 8...) — odd sizes
-    are not stocked/installed.
+    Round/spiral: iterates standard diameters smallest-first — this alone
+    covers both directions (suggests smaller when oversized, larger when
+    undersized).
+    Rectangular: keeps the installed width fixed, iterates height from the
+    smallest AR-valid value upward — smallest-first, so it also covers both
+    directions at that width. Expands width only if no height at the
+    installed width satisfies both limits within AR 4:1.
+    All suggested dimensions are snapped to 2" intervals (2, 4, 6, 8...) —
+    odd sizes are not stocked/installed.
     Both constraints must be satisfied — takes the binding (larger) of the two requirements.
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
     max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
     if dr.cfm <= 0 or max_fpm <= 0:
-        return '-'
+        return '-', None
 
     try:
         d = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
@@ -357,38 +385,48 @@ def _suggest_size(dr, custom_limits, tol_pct):
                 vel      = dr.cfm / area_ft2
                 fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
                 if vel <= max_fpm and fric <= max_friction:
-                    return '{}"'.format(std_d)
-            return '>{}"'.format(_ROUND_SIZES[-1])
+                    return '{}"'.format(std_d), area_ft2
+            return '>{}"'.format(_ROUND_SIZES[-1]), None
 
-        # Rectangular — keep width, step height up in 2" increments
+        # Rectangular — keep width fixed, find smallest satisfying height
         w_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
         h_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
         if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
             w_in = _snap_even(w_param.AsDouble() * 12.0)
             h_in = _snap_even(h_param.AsDouble() * 12.0)
-            for new_h in range(h_in, h_in + 120, 2):
-                if w_in <= 0 or new_h / float(w_in) > 4.0:
-                    break
+
+            # AR 4:1 both ways bounds the height search at this fixed width:
+            # too-flat (w > 4h) below, too-tall (h > 4w) above.
+            min_h = _snap_even(w_in / 4.0)
+            max_h = w_in * 4
+            for new_h in range(min_h, max_h + 2, 2):
                 area_ft2 = w_in * new_h / 144.0
                 vel      = dr.cfm / area_ft2
                 d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
                 fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
                 if vel <= max_fpm and fric <= max_friction:
-                    return '{}"x{}"'.format(w_in, new_h)
-            # AR exceeded — expand width
+                    return '{}"x{}"'.format(w_in, new_h), area_ft2
+
+            # No height at the installed width works within AR — expand width
             for new_w in range(int(w_in) + 2, int(w_in) + 60, 2):
-                for new_h in range(h_in, h_in + 120, 2):
-                    if new_h / float(new_w) > 4.0:
-                        break
+                min_h2 = _snap_even(new_w / 4.0)
+                max_h2 = new_w * 4
+                for new_h in range(min_h2, max_h2 + 2, 2):
                     area_ft2 = new_w * new_h / 144.0
                     vel      = dr.cfm / area_ft2
                     d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
                     fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
                     if vel <= max_fpm and fric <= max_friction:
-                        return '{}"x{}"'.format(new_w, new_h)
+                        return '{}"x{}"'.format(new_w, new_h), area_ft2
     except Exception:
         pass
-    return '-'
+    return '-', None
+
+
+def _suggest_size(dr, custom_limits, tol_pct):
+    """Formatted-string wrapper around _suggest_size_info for schedule/table display."""
+    label, _ = _suggest_size_info(dr, custom_limits)
+    return label
 
 
 # ── Schedule table in a Drafting View ─────────────────────────────────────────
@@ -642,7 +680,7 @@ def main():
             new_view.Name = base_name + ' (2)'
 
         # Color overrides — worst of velocity check and friction check
-        counts      = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0}
+        counts      = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0, 'PURPLE': 0}
         # eid -> (label, green_cap_cfm) for fittings + annotations
         duct_labels = {}
 
@@ -669,7 +707,7 @@ def main():
                     adj[cid] = []
                 adj[cid].append(pid)
 
-        fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0}
+        fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0}
 
         for nid, elem in all_nodes.items():
             if not hvac_graph.is_fitting_or_accessory(elem):
@@ -701,7 +739,7 @@ def main():
         flagged_items = []
         for eid in sorted(duct_labels.keys(), key=lambda e: eid_int(e)):
             lbl, _ = duct_labels[eid]
-            if lbl not in ('YELLOW', 'RED'):
+            if lbl not in ('YELLOW', 'RED', 'PURPLE'):
                 continue
             dr = all_duct_results.get(eid)
             if dr is None:
@@ -776,7 +814,7 @@ def main():
     output.print_md('## Done')
     output.print_md('Sheet **DV-{}** created.'.format(source_sheet_num))
     output.print_md('')
-    output.print_md('**Design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%):**'.format(
+    output.print_md('**Design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%,  purple = a smaller standard size still fits):**'.format(
         int(tol_pct), int(tol_pct)))
     output.print_md('| System | Max Velocity | Max Friction |')
     output.print_md('| --- | --- | --- |')
@@ -790,6 +828,8 @@ def main():
     output.print_md('| --- | --- | --- | --- |')
     output.print_md('| Green  | {} | {} | Within limit       |'.format(
         counts.get('GREEN',  0), fitting_counts.get('GREEN',  0)))
+    output.print_md('| Purple | {} | {} | Oversized (low velocity, review for cost) |'.format(
+        counts.get('PURPLE', 0), fitting_counts.get('PURPLE', 0)))
     output.print_md('| Yellow | {} | {} | Approaching limit  |'.format(
         counts.get('YELLOW', 0), fitting_counts.get('YELLOW', 0)))
     output.print_md('| Red    | {} | {} | Exceeds limit      |'.format(
@@ -797,19 +837,28 @@ def main():
     output.print_md('| Gray   | {} | — | No CFM data        |'.format(
         counts.get('GRAY',   0)))
 
-    # Flagged duct list — RED first, then YELLOW, sorted by velocity descending
+    # Flagged duct list — RED first, then YELLOW, then PURPLE.
+    # RED/YELLOW sorted by velocity descending (worst overrun first);
+    # PURPLE sorted by velocity ascending (worst oversizing first).
     flagged = []
     for eid, dr in all_duct_results.items():
         label, _ = duct_labels.get(eid, ('GRAY', 0.0))
-        if label not in ('RED', 'YELLOW'):
+        if label not in ('RED', 'YELLOW', 'PURPLE'):
             continue
         fpm = dr.cfm / dr.area_ft2 if dr.area_ft2 > 0 else 0.0
         defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
         max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
         flagged.append((label, fpm, dr, max_fpm, max_fric))
 
+    _FLAG_RANK = {'RED': 0, 'YELLOW': 1, 'PURPLE': 2}
+
+    def _flag_sort_key(item):
+        label, fpm = item[0], item[1]
+        rank = _FLAG_RANK.get(label, 3)
+        return (rank, fpm if label == 'PURPLE' else -fpm)
+
     if flagged:
-        flagged.sort(key=lambda x: (0 if x[0] == 'RED' else 1, -x[1]))
+        flagged.sort(key=_flag_sort_key)
 
         # Fixed-width columns for monospace alignment
         _COLS = [
