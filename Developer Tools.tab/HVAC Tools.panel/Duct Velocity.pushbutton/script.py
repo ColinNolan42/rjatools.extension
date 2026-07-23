@@ -989,11 +989,14 @@ def main():
                 sched_y  = 0.06 + content_h / 2.0
                 sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
                                            XYZ(sched_x, sched_y, 0))
-                # No title/border on this viewport — use the "None" Viewport Type if present
-                for vt in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Viewports) \
-                                                       .WhereElementIsElementType():
-                    if vt.Name.strip().lower() == 'none':
-                        sched_vp.ChangeTypeId(vt.Id)
+                # No title/border on this viewport — use the "None" Viewport Type if
+                # present. FilteredElementCollector on OST_Viewports + WhereElementIsElementType
+                # misses this system-family type entirely (confirmed via MCP inspection),
+                # so find it via an existing viewport instance's type instead.
+                for vp in FilteredElementCollector(doc).OfClass(Viewport):
+                    vp_type = doc.GetElement(vp.GetTypeId())
+                    if vp_type is not None and vp_type.Name.strip().lower() == 'none':
+                        sched_vp.ChangeTypeId(vp_type.Id)
                         break
 
         t.Commit()
