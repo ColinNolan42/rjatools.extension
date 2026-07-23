@@ -972,7 +972,9 @@ def main():
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
         new_sheet.SheetNumber = 'DV-{}-{}'.format(source_sheet_num, ts)
-        new_sheet.Name        = base_name
+        # Sheet/View names share one uniqueness pool in Revit — new_view above
+        # already claimed base_name verbatim, so reusing it here always collides.
+        new_sheet.Name = base_name + ' (Sheet)'
 
         # Place viewport
         Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
@@ -1002,7 +1004,8 @@ def main():
         t.Commit()
     except Exception as ex:
         t.RollBack()
-        output.print_md('**Error — transaction rolled back:** {}'.format(str(ex)))
+        output.print_md('**Error — transaction rolled back:** {}: {}'.format(
+            type(ex).__name__, str(ex)))
         return
 
     # 9. Summary
