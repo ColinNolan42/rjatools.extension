@@ -30,6 +30,19 @@ except ImportError:
 
 import shared_params
 
+from pyrevit import HOST_APP
+
+# Checked once at module load. Drives every version-dependent API choice
+# below instead of relying purely on try/except at each call site, so any
+# new version branch (e.g. a future API break in Revit 2027+) has one place
+# to update. HOST_APP.version is a string like "2026"; if it can't be
+# parsed, REVIT_VERSION stays None and callers fall back to attribute
+# detection instead of guessing a version number.
+try:
+    REVIT_VERSION = int(HOST_APP.version)
+except Exception:
+    REVIT_VERSION = None
+
 
 def eid_int(element_id):
     """Version-safe ElementId -> int/long.
@@ -40,10 +53,50 @@ def eid_int(element_id):
     .Value directly so the same code works across every Revit version this
     firm uses (2022 through 2026+).
     """
+    if REVIT_VERSION is not None:
+        return element_id.Value if REVIT_VERSION >= 2024 else element_id.IntegerValue
     try:
         return element_id.Value
     except AttributeError:
         return element_id.IntegerValue
+
+
+def param_is_yes_no(param):
+    """Version-safe YesNo/Boolean parameter detection.
+
+    Revit 2022+ deprecated Definition.ParameterType in favor of
+    Definition.GetDataType() -> ForgeTypeId, compared against
+    SpecTypeId.Boolean.YesNo. Revit 2025/2026 removed ParameterType
+    entirely (same deprecation timeline as ElementId.IntegerValue, and
+    confirmed the same way: it fails to even compile against the live
+    2026 API). REVIT_VERSION (detected once at module load, see above)
+    picks the branch explicitly instead of guessing from a bare
+    try/except, matching the eid_int() pattern above. The old
+    Revit-2022-era behavior (this firm's oldest supported version) is
+    preserved unchanged in the else branch, not replaced by a shim that
+    could subtly behave differently on the version that already worked.
+    """
+    from Autodesk.Revit.DB import SpecTypeId
+
+    if REVIT_VERSION is not None:
+        if REVIT_VERSION >= 2022:
+            try:
+                return param.Definition.GetDataType() == SpecTypeId.Boolean.YesNo
+            except Exception:
+                return False
+        param_type = str(param.Definition.ParameterType)
+        return "YesNo" in param_type or param_type == "Invalid"
+
+    # REVIT_VERSION undetermined - try modern API first, then the old enum.
+    try:
+        return param.Definition.GetDataType() == SpecTypeId.Boolean.YesNo
+    except Exception:
+        pass
+    try:
+        param_type = str(param.Definition.ParameterType)
+        return "YesNo" in param_type or param_type == "Invalid"
+    except Exception:
+        return False
 
 
 # =============================================================================
@@ -143,17 +196,12 @@ def get_parameter_value(element, param_name):
         elif storage_type == "Integer":
             value = param.AsInteger()
             # Yes/No parameters are stored as Integer (1 = Yes, 0 = No)
-            # Detect by checking if the parameter definition type is YesNo
-            try:
-                param_type = str(param.Definition.ParameterType)
-                if "YesNo" in param_type or param_type == "Invalid":
-                    bool_value = (value == 1)
-                    _log_entry("INFO", fn, eid,
-                               "Parameter '{}' = {} (YesNo -> bool {}).".format(
-                                   param_name, value, bool_value))
-                    return bool_value
-            except Exception:
-                pass
+            if param_is_yes_no(param):
+                bool_value = (value == 1)
+                _log_entry("INFO", fn, eid,
+                           "Parameter '{}' = {} (YesNo -> bool {}).".format(
+                               param_name, value, bool_value))
+                return bool_value
             _log_entry("INFO", fn, eid,
                        "Parameter '{}' = {} (Integer).".format(param_name, value))
             return value

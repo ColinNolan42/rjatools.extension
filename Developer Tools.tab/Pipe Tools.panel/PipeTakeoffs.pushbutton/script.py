@@ -16,6 +16,8 @@ On activation a fixture picker dialog appears. ESC or re-click to deactivate.
 # ============================================================================
 # IMPORTS
 # ============================================================================
+import os
+import sys
 import clr
 import math
 import re
@@ -56,19 +58,14 @@ from System.Windows import FontWeights
 
 from pyrevit import revit, DB, UI, script, forms
 
+# Add lib/ to path (matches the pattern used by every other pushbutton in
+# this extension) so this script uses the one shared version-safe helper
+# instead of its own copy.
+_lib = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'lib'))
+if _lib not in sys.path:
+    sys.path.insert(0, _lib)
 
-def _eid_int(element_id):
-    """Version-safe ElementId -> int/long.
-
-    Revit 2024+ replaced ElementId.IntegerValue (int) with ElementId.Value
-    (long); Revit 2025/2026 removed IntegerValue entirely. Revit 2022/2023
-    only have IntegerValue.
-    """
-    try:
-        return element_id.Value
-    except AttributeError:
-        return element_id.IntegerValue
-
+from revit_helpers import eid_int
 
 # ============================================================================
 # CONSTANTS
@@ -126,7 +123,7 @@ def get_project_levels():
     result = []
     for lvl in levels:
         try:
-            result.append((lvl.Name, lvl.Elevation, _eid_int(lvl.Id)))
+            result.append((lvl.Name, lvl.Elevation, eid_int(lvl.Id)))
         except Exception:
             pass
     result.sort(key=lambda x: x[1])
@@ -694,7 +691,7 @@ class WaterPipeFilter(ISelectionFilter):
         cat = element.Category
         if cat is None:
             return False
-        if _eid_int(cat.Id) != int(BuiltInCategory.OST_PipeCurves):
+        if eid_int(cat.Id) != int(BuiltInCategory.OST_PipeCurves):
             return False
 
         sys_param = element.get_Parameter(
