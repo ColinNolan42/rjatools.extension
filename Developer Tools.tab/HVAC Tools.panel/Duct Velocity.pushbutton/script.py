@@ -260,7 +260,6 @@ def show_velocity_settings_dialog():
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
-_AREA_EPS_FT2 = 1e-6   # ignore floating-point-scale area differences when flagging oversize
 
 
 def _duct_label(dr, custom_limits, tol_pct):
@@ -310,11 +309,12 @@ def _duct_label(dr, custom_limits, tol_pct):
     else:
         combined = vel_label
 
-    # GREEN ducts get downgraded to PURPLE if a smaller standard size would
-    # still satisfy both max FPM and max friction — i.e. it's oversized.
+    # GREEN ducts get downgraded to PURPLE if a smaller standard size — same
+    # width, shorter height only, never a width change — would still satisfy
+    # both max FPM and max friction. i.e. it's oversized.
     if combined == 'GREEN':
-        _, sugg_area = _suggest_size_info(dr, custom_limits)
-        if sugg_area is not None and sugg_area < dr.area_ft2 - _AREA_EPS_FT2:
+        _, sugg_area = _suggest_shrink_info(dr, custom_limits)
+        if sugg_area is not None:
             combined = 'PURPLE'
 
     return combined, max_cap
@@ -355,6 +355,55 @@ def _snap_even(inches):
     return max(n, 2)
 
 
+def _suggest_shrink_info(dr, custom_limits):
+    """Return (label, area_ft2) for a SMALLER standard duct size than what's
+    installed, satisfying both velocity AND friction limits — no tolerance
+    band, straight against max FPM / max friction. Returns ('-', None) if no
+    strictly-smaller standard size works.
+
+    Used for the oversized/PURPLE suggestion only. Never changes duct width —
+    a width change means new transition fittings and isn't a "shrink," it's a
+    different duct. Round/spiral: smaller standard diameter only. Rectangular:
+    keeps the installed width fixed, only searches heights below the
+    installed height. All dimensions snapped to 2" intervals.
+    """
+    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+    max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
+    if dr.cfm <= 0 or max_fpm <= 0:
+        return '-', None
+
+    try:
+        d = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
+        if d is not None and d.AsDouble() > 0:
+            installed_d = _snap_even(d.AsDouble() * 12.0)
+            for std_d in _ROUND_SIZES:
+                if std_d >= installed_d:
+                    break
+                area_ft2 = math.pi * (std_d / 24.0) ** 2
+                vel      = dr.cfm / area_ft2
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
+                if vel <= max_fpm and fric <= max_friction:
+                    return '{}"'.format(std_d), area_ft2
+            return '-', None
+
+        w_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
+        h_param = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
+        if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
+            w_in = _snap_even(w_param.AsDouble() * 12.0)
+            h_in = _snap_even(h_param.AsDouble() * 12.0)
+            min_h = _snap_even(w_in / 4.0)
+            for new_h in range(min_h, h_in, 2):   # strictly less than installed height
+                area_ft2 = w_in * new_h / 144.0
+                vel      = dr.cfm / area_ft2
+                d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                if vel <= max_fpm and fric <= max_friction:
+                    return '{}"x{}"'.format(w_in, new_h), area_ft2
+    except Exception:
+        pass
+    return '-', None
+
+
 def _suggest_size_info(dr, custom_limits):
     """Return (label, area_ft2) for the smallest standard duct size satisfying
     both velocity AND friction limits — no tolerance band, straight against
@@ -362,12 +411,14 @@ def _suggest_size_info(dr, custom_limits):
     found (duct needs to grow past the largest round size, or past what
     width-expansion covers for rectangular).
 
-    Round/spiral: iterates standard diameters smallest-first — this alone
-    covers both directions (suggests smaller when oversized, larger when
-    undersized).
+    Used for the undersized/YELLOW/RED suggestion (grow direction) — a truly
+    undersized duct can never satisfy at a smaller height than installed
+    either (smaller height only makes velocity/friction worse), so searching
+    the full range from the AR floor upward is safe and never suggests a
+    shrink here.
+    Round/spiral: iterates standard diameters smallest-first.
     Rectangular: keeps the installed width fixed, iterates height from the
-    smallest AR-valid value upward — smallest-first, so it also covers both
-    directions at that width. Expands width only if no height at the
+    smallest AR-valid value upward. Expands width only if no height at the
     installed width satisfies both limits within AR 4:1.
     All suggested dimensions are snapped to 2" intervals (2, 4, 6, 8...) —
     odd sizes are not stocked/installed.
@@ -425,10 +476,15 @@ def _suggest_size_info(dr, custom_limits):
     return '-', None
 
 
-def _suggest_size(dr, custom_limits, tol_pct):
-    """Formatted-string wrapper around _suggest_size_info for schedule/table display."""
-    label, _ = _suggest_size_info(dr, custom_limits)
-    return label
+def _suggest_size(dr, custom_limits, tol_pct, duct_label):
+    """Formatted-string wrapper for schedule/table display. PURPLE (oversized)
+    ducts get a shrink-only suggestion (same width); YELLOW/RED (undersized)
+    ducts get the grow-capable suggestion (may need a wider duct)."""
+    if duct_label == 'PURPLE':
+        size, _ = _suggest_shrink_info(dr, custom_limits)
+    else:
+        size, _ = _suggest_size_info(dr, custom_limits)
+    return size
 
 
 # ── Schedule table in a Drafting View ─────────────────────────────────────────
@@ -562,7 +618,7 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                 row_y = row_tops[ri + 1] - PAD
                 defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
                 max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-                suggested         = _suggest_size(dr, custom_limits, tol_pct)
+                suggested         = _suggest_size(dr, custom_limits, tol_pct, lbl)
                 size              = _duct_size_label(dr.elem)
                 cells = [
                     str(ri + 1),
@@ -921,18 +977,12 @@ def main():
         # Place viewport
         Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
 
-        # System Summary + flagged-duct table, placed as second viewport on sheet
+        # System Summary + flagged-duct table + legend — created but left
+        # unplaced (no viewport) so it doesn't land on the sheet automatically
         if tn_type_id is not None:
             sched_view, content_h = _build_summary_view(
                 doc, summary_lines, flagged_items, custom_limits, tol_pct,
                 source_sheet_num, tn_type_id, ts, fill_id)
-            if sched_view is not None:
-                # Place below floor plan: centre of block at bottom-left of sheet
-                total_w  = 0.910   # must match COLS sum in _build_summary_view
-                sched_x  = 0.10 + total_w / 2.0
-                sched_y  = 0.06 + content_h / 2.0
-                Viewport.Create(doc, new_sheet.Id, sched_view.Id,
-                                XYZ(sched_x, sched_y, 0))
 
         t.Commit()
     except Exception as ex:
@@ -1015,7 +1065,7 @@ def main():
 
         for idx, (label, fpm, dr, max_fpm, max_fric) in enumerate(flagged, 1):
             size      = _duct_size_label(dr.elem)
-            suggested = _suggest_size(dr, custom_limits, tol_pct)
+            suggested = _suggest_size(dr, custom_limits, tol_pct, label)
             rows.append(_fmt_row([
                 idx,
                 label,
