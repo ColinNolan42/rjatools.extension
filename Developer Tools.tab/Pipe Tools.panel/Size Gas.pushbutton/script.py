@@ -50,7 +50,7 @@ def _set_pipe_diameter(pipe, nominal_inches):
         (success: bool, approach_name: str)
     """
     nominal_feet = nominal_inches / 12.0
-    pipe_id = pipe.Id.IntegerValue
+    pipe_id = revit_helpers.eid_int(pipe.Id)
 
     # If a working approach was already confirmed this run, use it directly
     if _confirmed_approach[0] is not None:
@@ -322,7 +322,7 @@ def main():
         return
 
     output.print_md("**Selected:** Element ID {}".format(
-        selected_element.Id.IntegerValue))
+        revit_helpers.eid_int(selected_element.Id)))
 
     # ------------------------------------------------------------------
     # STEP 2 - Validate meter

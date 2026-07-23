@@ -30,6 +30,22 @@ except ImportError:
 
 import shared_params
 
+
+def eid_int(element_id):
+    """Version-safe ElementId -> int/long.
+
+    Revit 2024+ replaced ElementId.IntegerValue (int) with ElementId.Value
+    (long); Revit 2025/2026 removed IntegerValue entirely. Revit 2022/2023
+    only have IntegerValue. Always call this instead of .IntegerValue or
+    .Value directly so the same code works across every Revit version this
+    firm uses (2022 through 2026+).
+    """
+    try:
+        return element_id.Value
+    except AttributeError:
+        return element_id.IntegerValue
+
+
 # =============================================================================
 # MODULE-LEVEL LOG
 # All functions append to this list. The diagnostic report reads it.
@@ -94,7 +110,7 @@ def get_parameter_value(element, param_name):
         return None
     
     try:
-        eid = element.Id.IntegerValue
+        eid = eid_int(element.Id)
     except Exception:
         eid = None
 
@@ -149,7 +165,7 @@ def get_parameter_value(element, param_name):
             return value
 
         elif storage_type == "ElementId":
-            value = param.AsElementId().IntegerValue
+            value = eid_int(param.AsElementId())
             _log_entry("INFO", fn, eid,
                        "Parameter '{}' = {} (ElementId).".format(param_name, value))
             return value
@@ -187,7 +203,7 @@ def get_pipe_length_feet(pipe):
         _log_entry("ERROR", fn, None, "Pipe element is None.")
         return None
 
-    eid = pipe.Id.IntegerValue
+    eid = eid_int(pipe.Id)
 
     try:
         length = pipe.Location.Curve.Length
@@ -218,7 +234,7 @@ def get_pipe_diameter_inches(pipe):
         _log_entry("ERROR", fn, None, "Pipe element is None.")
         return None
 
-    eid = pipe.Id.IntegerValue
+    eid = eid_int(pipe.Id)
 
     try:
         param = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)
@@ -256,7 +272,7 @@ def _get_connector_manager(element):
     if element is None:
         return None
 
-    eid = element.Id.IntegerValue
+    eid = eid_int(element.Id)
 
     # Path 1 - direct access (pipes, fittings, most elements)
     try:
@@ -306,7 +322,7 @@ def get_connectors(element):
         _log_entry("ERROR", fn, None, "Element is None.")
         return []
 
-    eid = element.Id.IntegerValue
+    eid = eid_int(element.Id)
 
     connector_manager = _get_connector_manager(element)
 
@@ -361,8 +377,9 @@ def get_connectors(element):
                 for ref in refs:
                     try:
                         owner = ref.Owner
-                        if owner.Id.IntegerValue != eid:
-                            entry["connected_element_id"] = owner.Id.IntegerValue
+                        owner_eid = eid_int(owner.Id)
+                        if owner_eid != eid:
+                            entry["connected_element_id"] = owner_eid
                             entry["connected_element_type"] = owner.GetType().Name
                             break
                     except Exception:
@@ -418,7 +435,7 @@ def get_element_location(element):
         _log_entry("ERROR", fn, None, "Element is None.")
         return None
 
-    eid = element.Id.IntegerValue
+    eid = eid_int(element.Id)
 
     try:
         location = element.Location
@@ -485,7 +502,7 @@ def validate_selected_element(element):
             "connector_summary": []
         }
 
-    eid = element.Id.IntegerValue
+    eid = eid_int(element.Id)
 
     # Check ConnectorManager exists - tries element.ConnectorManager
     # and element.MEPModel.ConnectorManager for equipment families

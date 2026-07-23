@@ -55,6 +55,7 @@ if _lib not in sys.path:
     sys.path.insert(0, _lib)
 
 import hvac_graph
+from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
 GREEN  = Color(0,   200,  0)
@@ -302,7 +303,7 @@ def _elem_name(elem):
     try:
         return elem.Name
     except Exception:
-        return str(elem.Id.IntegerValue)
+        return str(eid_int(elem.Id))
 
 
 def _duct_size_label(elem):
@@ -569,7 +570,7 @@ def main():
 
     for sel_elem in sel_elems:
         output.print_md('Traversing **{}** (id {})...'.format(
-            _elem_name(sel_elem), sel_elem.Id.IntegerValue))
+            _elem_name(sel_elem), eid_int(sel_elem.Id)))
         net = hvac_graph.build_network(sel_elem, doc)
 
         if net.errors:
@@ -577,7 +578,7 @@ def main():
                 output.print_md('- :warning: {}'.format(e))
             continue
 
-        ahu_labels.append('{} (id {})'.format(_elem_name(net.root), net.root.Id.IntegerValue))
+        ahu_labels.append('{} (id {})'.format(_elem_name(net.root), eid_int(net.root.Id)))
 
         if net.warnings:
             for w in net.warnings:
@@ -698,7 +699,7 @@ def main():
 
         # Collect flagged ducts in stable element-id order
         flagged_items = []
-        for eid in sorted(duct_labels.keys(), key=lambda e: e.IntegerValue):
+        for eid in sorted(duct_labels.keys(), key=lambda e: eid_int(e)):
             lbl, _ = duct_labels[eid]
             if lbl not in ('YELLOW', 'RED'):
                 continue

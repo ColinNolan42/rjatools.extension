@@ -54,6 +54,19 @@ PLAN_VIEW_TYPES = {
     ViewType.EngineeringPlan,
 }
 
+def _eid_int(element_id):
+    """Version-safe ElementId -> int/long.
+
+    Revit 2024+ replaced ElementId.IntegerValue (int) with ElementId.Value
+    (long); Revit 2025/2026 removed IntegerValue entirely. Revit 2022/2023
+    only have IntegerValue.
+    """
+    try:
+        return element_id.Value
+    except AttributeError:
+        return element_id.IntegerValue
+
+
 DEFAULT_BUBBLE_DIAMETER_FT = 2.0
 MAX_ITERATIONS             = 50
 MAX_PASSES                 = 20
@@ -172,7 +185,7 @@ def get_sheet_view_ids(document):
                   .OfClass(ViewSheet).ToElements()):
         try:
             for vid in sheet.GetAllPlacedViews():
-                ids.add(vid.IntegerValue)
+                ids.add(_eid_int(vid))
         except Exception:
             pass
     return ids
@@ -186,7 +199,7 @@ def collect_plan_views_on_sheets(document):
             continue
         if v.ViewType not in PLAN_VIEW_TYPES:
             continue
-        if v.Id.IntegerValue not in sheet_ids:
+        if _eid_int(v.Id) not in sheet_ids:
             continue
         result.append(v)
     return result
@@ -264,7 +277,7 @@ def init_offset_state(grids, view):
     for g in grids:
         pv    = compute_perp_vec(g, view)
         curve = get_grid_curve_in_view(g, view)
-        gid   = g.Id.IntegerValue
+        gid   = _eid_int(g.Id)
         mem_perp_vec[gid] = pv
 
         for ei in (0, 1):
@@ -308,7 +321,7 @@ def build_bubble_list(grids, view, mem_offset, mem_perp_vec, mem_ep):
     """Return list of (grid, datum_end, end_index, ax, ay)."""
     result = []
     for g in grids:
-        gid = g.Id.IntegerValue
+        gid = _eid_int(g.Id)
         pv  = mem_perp_vec.get(gid)
         if pv is None:
             continue
@@ -356,7 +369,7 @@ def build_grid_lines(grids, view):
         dx, dy = p1.X - p0.X, p1.Y - p0.Y
         L = (dx*dx + dy*dy) ** 0.5
         if L > 1e-9:
-            lines[g.Id.IntegerValue] = (p0.X, p0.Y, dx/L, dy/L)
+            lines[_eid_int(g.Id)] = (p0.X, p0.Y, dx/L, dy/L)
     return lines
 
 
@@ -385,19 +398,19 @@ def detect_grids_needing_leaders(grids, view, mem_offset, mem_perp_vec,
     if not pairs:
         return set()
 
-    name_map = {g.Id.IntegerValue: g.Name for g in grids}
-    grid_map = {g.Id.IntegerValue: g       for g in grids}
+    name_map = {_eid_int(g.Id): g.Name for g in grids}
+    grid_map = {_eid_int(g.Id): g       for g in grids}
     movers   = set()
 
     for pos_a, pos_b in pairs:
         g_a, _, idx_a, _, _ = pos_a
         g_b, _, idx_b, _, _ = pos_b
-        na = name_map.get(g_a.Id.IntegerValue, "")
-        nb = name_map.get(g_b.Id.IntegerValue, "")
+        na = name_map.get(_eid_int(g_a.Id), "")
+        nb = name_map.get(_eid_int(g_b.Id), "")
         if higher_name(na, nb):
-            movers.add((g_a.Id.IntegerValue, idx_a))
+            movers.add((_eid_int(g_a.Id), idx_a))
         else:
-            movers.add((g_b.Id.IntegerValue, idx_b))
+            movers.add((_eid_int(g_b.Id), idx_b))
 
     needs_leader = set()
     for gid, ei in movers:
@@ -422,7 +435,7 @@ def compute_separation_in_memory(grids, view, mem_offset, mem_perp_vec,
     """Nudge colliding bubbles apart in perp_offset space.
     Modifies mem_offset in place."""
     nudge_step = threshold / 8.0
-    name_map   = {g.Id.IntegerValue: g.Name for g in grids}
+    name_map   = {_eid_int(g.Id): g.Name for g in grids}
     grid_lines = build_grid_lines(grids, view)
 
     for pass_num in range(MAX_PASSES):
@@ -451,20 +464,20 @@ def compute_separation_in_memory(grids, view, mem_offset, mem_perp_vec,
             for pos_a, pos_b in pairs:
                 g_a, _, idx_a, _, _ = pos_a
                 g_b, _, idx_b, _, _ = pos_b
-                na = name_map.get(g_a.Id.IntegerValue, "")
-                nb = name_map.get(g_b.Id.IntegerValue, "")
+                na = name_map.get(_eid_int(g_a.Id), "")
+                nb = name_map.get(_eid_int(g_b.Id), "")
                 if higher_name(na, nb):
                     mg, mi = g_a, idx_a
-                    key_m  = (g_a.Id.IntegerValue, idx_a)
-                    key_o  = (g_b.Id.IntegerValue, idx_b)
+                    key_m  = (_eid_int(g_a.Id), idx_a)
+                    key_o  = (_eid_int(g_b.Id), idx_b)
                 else:
                     mg, mi = g_b, idx_b
-                    key_m  = (g_b.Id.IntegerValue, idx_b)
-                    key_o  = (g_a.Id.IntegerValue, idx_a)
+                    key_m  = (_eid_int(g_b.Id), idx_b)
+                    key_o  = (_eid_int(g_a.Id), idx_a)
 
                 ep_m = mem_ep.get(key_m)
                 ep_o = mem_ep.get(key_o)
-                pv   = mem_perp_vec.get(mg.Id.IntegerValue)
+                pv   = mem_perp_vec.get(_eid_int(mg.Id))
                 if ep_m is None or ep_o is None or pv is None:
                     continue
 
@@ -480,7 +493,7 @@ def compute_separation_in_memory(grids, view, mem_offset, mem_perp_vec,
             sorted_targets = sorted(
                 targets.items(),
                 key=lambda item: name_sort_key(
-                    name_map.get(item[1][0].Id.IntegerValue, "")),
+                    name_map.get(_eid_int(item[1][0].Id), "")),
                 reverse=True,
             )
 
@@ -548,7 +561,7 @@ def compact_in_memory(grids, view, mem_offset, mem_perp_vec, mem_ep,
         # Snapshot current anchor positions for this round
         all_anchors = {}
         for g in grids:
-            gid = g.Id.IntegerValue
+            gid = _eid_int(g.Id)
             pv  = mem_perp_vec.get(gid)
             if pv is None:
                 continue
@@ -649,7 +662,7 @@ def main():
         script.exit()
 
     output.print_md("Reference grid: **{}** (ID {})".format(
-        ref_grid.Name, ref_grid.Id.IntegerValue))
+        ref_grid.Name, _eid_int(ref_grid.Id)))
 
     bubble_diam_ft = read_bubble_diameter_ft(ref_grid)
     threshold      = bubble_diam_ft
@@ -668,7 +681,7 @@ def main():
         if len(grids) < 2:
             continue
         mo, mpv, mep = init_offset_state(grids, v)
-        view_data[v.Id.IntegerValue] = (v, grids, mo, mpv, mep)
+        view_data[_eid_int(v.Id)] = (v, grids, mo, mpv, mep)
 
     if not view_data:
         forms.alert("No views with 2+ grids found.", title="Nothing to do")
@@ -693,7 +706,7 @@ def main():
             t1.Start()
             for vid, nl in needs_by_view.items():
                 v, grids, _, _, _ = view_data[vid]
-                gmap = {g.Id.IntegerValue: g for g in grids}
+                gmap = {_eid_int(g.Id): g for g in grids}
                 for gid, ei in nl:
                     g  = gmap.get(gid)
                     de = DatumEnds.End0 if ei == 0 else DatumEnds.End1
@@ -771,7 +784,7 @@ def main():
         t2.Start()
         for vid, changed_keys in changes_by_view.items():
             v, grids, mo, mpv, mep = view_data[vid]
-            gmap = {g.Id.IntegerValue: g for g in grids}
+            gmap = {_eid_int(g.Id): g for g in grids}
             for gid, ei in changed_keys:
                 g  = gmap.get(gid)
                 de = DatumEnds.End0 if ei == 0 else DatumEnds.End1

@@ -41,7 +41,7 @@ def format_diagnostic_output(graph, origin_element):
     # SYSTEM ORIGIN
     # -------------------------------------------------------------------------
     section("SYSTEM ORIGIN")
-    origin_id = origin_element.Id.IntegerValue
+    origin_id = revit_helpers.eid_int(origin_element.Id)
     origin_connectors = revit_helpers.get_connectors(origin_element)
     location = revit_helpers.get_element_location(origin_element)
 

@@ -121,7 +121,7 @@ def build_network(origin_element, doc):
     graph = NetworkGraph()
 
     # --- Build origin node (meter) ---
-    origin_id = origin_element.Id.IntegerValue
+    origin_id = revit_helpers.eid_int(origin_element.Id)
     graph.origin_id = origin_id
 
     origin_node = NetworkNode(origin_id, origin_element, "meter")
@@ -156,7 +156,7 @@ def build_network(origin_element, doc):
     # Breadth-first traversal
     while queue:
         current_element, parent_node_id = queue.pop(0)
-        current_id = current_element.Id.IntegerValue
+        current_id = revit_helpers.eid_int(current_element.Id)
 
         if current_id in visited:
             graph.log("SKIP: Element {} already visited.".format(current_id))
@@ -198,7 +198,7 @@ def build_network(origin_element, doc):
 
 def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
     """Process a pipe element  -  create an edge and queue the far end."""
-    pipe_id = pipe.Id.IntegerValue
+    pipe_id = revit_helpers.eid_int(pipe.Id)
 
     # Find the two connectors on the pipe
     connectors = revit_helpers.get_connectors(pipe)
@@ -244,7 +244,7 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
 
 def _process_family_instance(graph, doc, element, parent_node_id, visited, queue):
     """Process a family instance  -  fitting, fixture, or equipment."""
-    eid = element.Id.IntegerValue
+    eid = revit_helpers.eid_int(element.Id)
     family_name = _get_family_name(element)
     connectors = revit_helpers.get_connectors(element)
     connector_count = len(connectors)

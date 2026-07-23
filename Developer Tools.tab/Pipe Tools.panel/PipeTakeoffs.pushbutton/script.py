@@ -56,6 +56,20 @@ from System.Windows import FontWeights
 
 from pyrevit import revit, DB, UI, script, forms
 
+
+def _eid_int(element_id):
+    """Version-safe ElementId -> int/long.
+
+    Revit 2024+ replaced ElementId.IntegerValue (int) with ElementId.Value
+    (long); Revit 2025/2026 removed IntegerValue entirely. Revit 2022/2023
+    only have IntegerValue.
+    """
+    try:
+        return element_id.Value
+    except AttributeError:
+        return element_id.IntegerValue
+
+
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -112,7 +126,7 @@ def get_project_levels():
     result = []
     for lvl in levels:
         try:
-            result.append((lvl.Name, lvl.Elevation, lvl.Id.IntegerValue))
+            result.append((lvl.Name, lvl.Elevation, _eid_int(lvl.Id)))
         except Exception:
             pass
     result.sort(key=lambda x: x[1])
@@ -680,7 +694,7 @@ class WaterPipeFilter(ISelectionFilter):
         cat = element.Category
         if cat is None:
             return False
-        if cat.Id.IntegerValue != int(BuiltInCategory.OST_PipeCurves):
+        if _eid_int(cat.Id) != int(BuiltInCategory.OST_PipeCurves):
             return False
 
         sys_param = element.get_Parameter(

@@ -20,6 +20,8 @@ from Autodesk.Revit.DB import (
     FillPatternElement, ElementId, Domain
 )
 
+from revit_helpers import eid_int
+
 log = logging.getLogger(__name__)
 
 # ── Firm design defaults ─────────────────────────────────────────────────────
@@ -114,7 +116,7 @@ def _connector_manager(elem):
 
 def _cat_id(elem):
     try:
-        return elem.Category.Id.IntegerValue
+        return eid_int(elem.Category.Id)
     except Exception:
         return -1
 
@@ -234,7 +236,7 @@ def find_ahu(elem):
         if sys is not None:
             base = sys.BaseEquipment
             if base is not None:
-                log.info('find_ahu: found via MEPSystem.BaseEquipment id=%s', base.Id.IntegerValue)
+                log.info('find_ahu: found via MEPSystem.BaseEquipment id=%s', eid_int(base.Id))
                 return base, 'MEPSystem.BaseEquipment'
     except Exception as ex:
         log.debug('find_ahu MEPSystem attempt failed: %s', ex)
@@ -251,12 +253,12 @@ def find_ahu(elem):
                     continue
                 base = sys.BaseEquipment
                 if base is not None:
-                    log.info('find_ahu: found via connector MEPSystem id=%s', base.Id.IntegerValue)
+                    log.info('find_ahu: found via connector MEPSystem id=%s', eid_int(base.Id))
                     return base, 'connector.MEPSystem.BaseEquipment'
             except Exception:
                 continue
 
-    log.warning('find_ahu: no base equipment found on element id=%s', elem.Id.IntegerValue)
+    log.warning('find_ahu: no base equipment found on element id=%s', eid_int(elem.Id))
     return None, 'no base equipment found'
 
 
@@ -278,7 +280,7 @@ def traverse(root, allowed_ids=None):
     visited  = set()
     log_lines = []
 
-    root_id = root.Id.IntegerValue
+    root_id = eid_int(root.Id)
     visited.add(root_id)
     nodes[root_id]    = root
     children[root_id] = []
@@ -289,7 +291,7 @@ def traverse(root, allowed_ids=None):
 
     while queue:
         elem = queue.pop(0)
-        eid  = elem.Id.IntegerValue
+        eid  = eid_int(elem.Id)
         cm   = _connector_manager(elem)
         if cm is None:
             skipped += 1
@@ -303,7 +305,7 @@ def traverse(root, allowed_ids=None):
             for ref in conn.AllRefs:
                 try:
                     owner    = ref.Owner
-                    owner_id = owner.Id.IntegerValue
+                    owner_id = eid_int(owner.Id)
                     if owner_id in visited:
                         continue
                     # When re-rooting, stay within the already-known node set
@@ -405,7 +407,7 @@ class HvacNetwork(object):
 class DuctResult(object):
     def __init__(self, elem, cfm, area, sys_class):
         self.elem              = elem
-        self.element_id        = elem.Id.IntegerValue
+        self.element_id        = eid_int(elem.Id)
         self.cfm               = cfm
         self.area_ft2          = area
         self.sys_class         = sys_class
@@ -440,7 +442,7 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
             all_nodes, all_children, all_log = traverse(selected_elem)
             all_ids = set(all_nodes.keys())
 
-            sel_id = selected_elem.Id.IntegerValue
+            sel_id = eid_int(selected_elem.Id)
             equip_found = [
                 elem for nid, elem in all_nodes.items()
                 if is_equipment(elem) and nid != sel_id
@@ -450,14 +452,14 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
                 net.root       = equip_found[0]
                 net.ahu_method = (
                     'found in traversal: OST_MechanicalEquipment id={}'
-                    .format(net.root.Id.IntegerValue)
+                    .format(eid_int(net.root.Id))
                 )
                 net.nodes, net.children, net.traverse_log = traverse(
                     net.root, allowed_ids=all_ids
                 )
                 net.traverse_log.insert(0,
                     'NOTE: re-rooted from selection id={} to equipment id={}'
-                    .format(sel_id, net.root.Id.IntegerValue))
+                    .format(sel_id, eid_int(net.root.Id)))
             else:
                 # True fallback — no AHU found anywhere in the network
                 net.warnings.append(
@@ -505,7 +507,7 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
                 net.zero_terminals.append(nid)
 
     # Post-order CFM sum
-    net.cfm_map = compute_cfm(net.root.Id.IntegerValue, net.nodes, net.children, net.terminal_cfms)
+    net.cfm_map = compute_cfm(eid_int(net.root.Id), net.nodes, net.children, net.terminal_cfms)
 
     # Duct results
     for nid, elem in net.nodes.items():

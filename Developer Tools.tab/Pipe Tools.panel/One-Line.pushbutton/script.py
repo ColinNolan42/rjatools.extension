@@ -1405,7 +1405,7 @@ def main():
         return
 
     output.print_md("**Selected:** Element ID {}".format(
-        selected_element.Id.IntegerValue))
+        revit_helpers.eid_int(selected_element.Id)))
 
     # ------------------------------------------------------------------
     # STEP 2 - Validate meter
@@ -1616,7 +1616,7 @@ def main():
         return
 
     tt_id = FilteredElementCollector(doc).OfClass(TextNoteType).FirstElementId()
-    if tt_id is None or tt_id.IntegerValue < 0:
+    if tt_id is None or tt_id == ElementId.InvalidElementId:
         forms.alert("No TextNoteType found in this project.",
                     title="One-Line - Error")
         return

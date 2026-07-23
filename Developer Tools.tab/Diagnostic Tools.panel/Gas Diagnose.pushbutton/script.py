@@ -55,7 +55,7 @@ def main():
         return
 
     output.print_md("**Selected:** Element ID {}".format(
-        selected_element.Id.IntegerValue))
+        revit_helpers.eid_int(selected_element.Id)))
 
     # ------------------------------------------------------------------
     # STEP 2 -Validate selection

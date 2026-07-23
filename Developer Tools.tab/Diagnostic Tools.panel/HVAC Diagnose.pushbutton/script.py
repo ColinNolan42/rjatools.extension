@@ -32,6 +32,7 @@ if _lib not in sys.path:
     sys.path.insert(0, _lib)
 
 import hvac_graph
+from revit_helpers import eid_int
 
 
 def _elem_name(elem):
@@ -70,7 +71,7 @@ def main():
         return
 
     sel_elem = doc.GetElement(ref.ElementId)
-    sel_id   = sel_elem.Id.IntegerValue
+    sel_id   = eid_int(sel_elem.Id)
     sel_cat  = ''
     try:
         sel_cat = sel_elem.Category.Name
@@ -90,7 +91,7 @@ def main():
 
     ahu_label = _ahu_name(net.root) if net.root is not sel_elem else '(selected element used as root)'
     output.print_md('Root (AHU): **{}**  |  id: `{}`  |  method: `{}`'.format(
-        ahu_label, net.root.Id.IntegerValue, net.ahu_method))
+        ahu_label, eid_int(net.root.Id), net.ahu_method))
     output.print_md('Elements traversed: **{}**'.format(len(net.nodes)))
 
     # ── STEP 3: Print full diagnostic (copy/paste block) ─────────────────
@@ -103,7 +104,7 @@ def main():
     lines.append('Timestamp : {}'.format(ts))
     lines.append('Selected  : id={}  cat={}'.format(sel_id, sel_cat))
     lines.append('AHU       : {}  (id={})  via {}'.format(
-        ahu_label, net.root.Id.IntegerValue, net.ahu_method))
+        ahu_label, eid_int(net.root.Id), net.ahu_method))
     lines.append(_divider('='))
 
     # Network summary
