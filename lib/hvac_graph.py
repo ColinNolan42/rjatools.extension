@@ -85,17 +85,19 @@ def to_cfm(raw, cfm_is_direct=False):
 
     Revit stores air-flow params in ft3/s internally; display is ft3/min (CFM).
     Set cfm_is_direct=True if the Flow param is a plain Number (already in CFM).
+
+    UnitTypeId.CubicFeetPerMinute has existed since Revit 2021, so it alone
+    covers this firm's whole 2022-2026 range - no version branch needed.
+    A DisplayUnitType fallback used to sit here for pre-UnitTypeId Revit;
+    removed 2026-07-23 after confirming DisplayUnitType is now
+    inaccessible (protection level restricted) in the live Revit 2026 API,
+    so it was a dead branch that would have failed anyway if ever reached.
     """
     if cfm_is_direct:
         return raw
+    from Autodesk.Revit.DB import UnitTypeId, UnitUtils
     try:
-        from Autodesk.Revit.DB import UnitTypeId, UnitUtils
         return UnitUtils.ConvertFromInternalUnits(raw, UnitTypeId.CubicFeetPerMinute)
-    except Exception:
-        pass
-    try:
-        from Autodesk.Revit.DB import UnitUtils, DisplayUnitType
-        return UnitUtils.ConvertFromInternalUnits(raw, DisplayUnitType.DUT_CUBIC_FEET_PER_MINUTE)
     except Exception:
         pass
     return raw * 60.0
