@@ -977,12 +977,24 @@ def main():
         # Place viewport
         Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
 
-        # System Summary + flagged-duct table + legend — created but left
-        # unplaced (no viewport) so it doesn't land on the sheet automatically
+        # System Summary + flagged-duct table + legend, placed as second viewport on sheet
         if tn_type_id is not None:
             sched_view, content_h = _build_summary_view(
                 doc, summary_lines, flagged_items, custom_limits, tol_pct,
                 source_sheet_num, tn_type_id, ts, fill_id)
+            if sched_view is not None:
+                # Place below floor plan: centre of block at bottom-left of sheet
+                total_w  = 0.910   # must match COLS sum in _build_summary_view
+                sched_x  = 0.10 + total_w / 2.0
+                sched_y  = 0.06 + content_h / 2.0
+                sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
+                                           XYZ(sched_x, sched_y, 0))
+                # No title/border on this viewport — use the "None" Viewport Type if present
+                for vt in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Viewports) \
+                                                       .WhereElementIsElementType():
+                    if vt.Name.strip().lower() == 'none':
+                        sched_vp.ChangeTypeId(vt.Id)
+                        break
 
         t.Commit()
     except Exception as ex:
