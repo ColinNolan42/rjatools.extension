@@ -994,13 +994,21 @@ def main():
                                            XYZ(sched_x, sched_y, 0))
                 # No title/border on this viewport — use the "None" Viewport Type if
                 # present. FilteredElementCollector on OST_Viewports + WhereElementIsElementType
-                # misses this system-family type entirely (confirmed via MCP inspection),
-                # so find it via an existing viewport instance's type instead.
-                for vp in FilteredElementCollector(doc).OfClass(Viewport):
-                    vp_type = doc.GetElement(vp.GetTypeId())
-                    if vp_type is not None and vp_type.Name.strip().lower() == 'none':
-                        sched_vp.ChangeTypeId(vp_type.Id)
-                        break
+                # misses this system-family type entirely (confirmed via MCP inspection).
+                # Best-effort only: cosmetic, must never break the whole tool if this
+                # lookup misbehaves (confirmed AttributeError on vp_type.Name here even
+                # though the identical query works fine outside pyRevit's IronPython).
+                try:
+                    for vp in FilteredElementCollector(doc).OfClass(Viewport):
+                        vp_type = doc.GetElement(vp.GetTypeId())
+                        if vp_type is None:
+                            continue
+                        vp_type_name = vp_type.Name
+                        if vp_type_name is not None and vp_type_name.strip().lower() == 'none':
+                            sched_vp.ChangeTypeId(vp_type.Id)
+                            break
+                except Exception:
+                    pass
 
         t.Commit()
     except Exception as ex:
