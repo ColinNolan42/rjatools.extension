@@ -14,6 +14,7 @@ IronPython 2.7 / pyRevit  --  no f-strings, no walrus, no nonlocal.
 import os
 import sys
 import math
+import traceback
 import datetime
 
 import clr
@@ -1006,6 +1007,7 @@ def main():
         t.RollBack()
         output.print_md('**Error — transaction rolled back:** {}: {}'.format(
             type(ex).__name__, str(ex)))
+        output.print_md('```\n{}\n```'.format(traceback.format_exc()))
         return
 
     # 9. Summary
