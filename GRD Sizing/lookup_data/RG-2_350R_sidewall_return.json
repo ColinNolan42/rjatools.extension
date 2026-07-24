@@ -11,7 +11,9 @@
     "grouping_differs_from_272RL": "This cutsheet's alternate-size groupings are NOT the same as 272RL's -- e.g. the 24x6/12x12 tier here is a 2-way group (no 18x8 member, unlike 272RL's 3-way 24x6/18x8/12x12 group), since 18x8 isn't a published nominal size in this product line at all. Every group in this cutsheet is 2-way.",
     "RESORTING_REQUIRED": "Same lesson as the 272RL bug fix earlier this session: recomputing breakpoints at a new NC target changes which velocity column each row lands on, which can change the relative ORDER of breakpoints between rows. E.g. at NC<15, 30x12's breakpoint (916) sorts BEFORE 24x14's (1070), even though 24x14 appears earlier in the raw cutsheet / NC<20 ordering. The full 32-entry array had to be re-sorted by the new max_cfm values, not just recomputed row-by-row in the original order.",
     "architecture": "Regular/Thin/Custom system unchanged. Only Auto Width/Auto Height formulas were rebuilt for this retarget.",
-    "verified": "36 boundary test cases (regenerate-and-read), expected values computed PROGRAMMATICALLY from the same breakpoint array used to build the formula (adopted this session specifically to eliminate repeated hand-indexing mistakes made earlier when verifying by hand). All 36 pass."
+    "verified": "36 boundary test cases (regenerate-and-read), expected values computed PROGRAMMATICALLY from the same breakpoint array used to build the formula (adopted this session specifically to eliminate repeated hand-indexing mistakes made earlier when verifying by hand). All 36 pass.",
+    "RATIO_CAPS_2026-07-24": "User asked for a max aspect ratio of 4:1 on Thin and 2:1 on Regular (originally requested 1.5:1 for Regular, revised to 2:1 after review). Regular picks were UNCHANGED by this -- every tier's Regular was already the closest-to-square available option, so tightening the cap only changed which tiers are flagged as compliant vs. an unavoidable violation (see below), not which size gets used. Thin picks changed at 3 tiers where the old most-elongated pick exceeded 4:1: 555 (30x6 5:1 -> 18x10 1.8:1), 675 (36x6 6:1 -> 18x12 1.5:1), 795 (42x6 7:1 -> 18x14 1.29:1). All 3 are 2-way-only groups with no middle option between the excluded elongated size and the square-ish one (confirmed against the raw cutsheet text, not assumed) -- Thin collapses to the same value as Regular at these 3 tiers, there is no compliant elongated alternative available in this cutsheet.",
+    "regular_2to1_cap_unavoidable_violations": "8 tiers exceed the 2:1 Regular cap with no better real alternative available (single-published-size tiers, or every group member exceeds 2:1): 14x6 (2.33:1), 18x6 (3:1), 22x6 (3.67:1), 22x10 (2.2:1), 24x10 (2.4:1, other option 30x8 is worse at 3.75:1), 30x12 (2.5:1, single), 36x12 (3:1, single), 36x14 (2.57:1, other option 42x12 is worse at 3.5:1). These are real Titus catalog limits, not something a different size selection could fix."
   },
   "breakpoints_ascending_by_max_cfm": [
     { "max_cfm": 114, "regular": "6x6", "thin": "6x6" },
@@ -26,12 +28,12 @@
     { "max_cfm": 360, "regular": "12x10", "thin": "20x6" },
     { "max_cfm": 385, "regular": "22x6", "thin": "22x6" },
     { "max_cfm": 440, "regular": "12x12", "thin": "24x6" },
-    { "max_cfm": 555, "regular": "18x10", "thin": "30x6" },
+    { "max_cfm": 555, "regular": "18x10", "thin": "18x10", "note": "Thin collapses to Regular under the 4:1 cap - only 2 group members, 30x6 (5:1) excluded, no middle option" },
     { "max_cfm": 610, "regular": "14x14", "thin": "14x14" },
-    { "max_cfm": 675, "regular": "18x12", "thin": "36x6" },
+    { "max_cfm": 675, "regular": "18x12", "thin": "18x12", "note": "Thin collapses to Regular under the 4:1 cap - only 2 group members, 36x6 (6:1) excluded, no middle option" },
     { "max_cfm": 685, "regular": "22x10", "thin": "22x10" },
     { "max_cfm": 745, "regular": "24x10", "thin": "30x8" },
-    { "max_cfm": 795, "regular": "18x14", "thin": "42x6" },
+    { "max_cfm": 795, "regular": "18x14", "thin": "18x14", "note": "Thin collapses to Regular under the 4:1 cap - only 2 group members, 42x6 (7:1) excluded, no middle option" },
     { "max_cfm": 810, "regular": "16x16", "thin": "16x16" },
     { "max_cfm": 910, "regular": "18x16", "thin": "24x12" },
     { "max_cfm": 916, "regular": "30x12", "thin": "30x12" },

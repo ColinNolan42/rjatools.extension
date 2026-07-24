@@ -1,33 +1,33 @@
-max_cfm,regular_size,thin_size,note
-114,6x6,6x6,
-156,8x6,8x6,
-170,10x6,10x6,
-185,8x8,8x8,
-205,12x6,12x6,
-240,14x6,14x6,
-285,12x8,16x6,
-295,10x10,10x10,
-315,18x6,18x6,
-360,12x10,20x6,CORRECTED 2026-07-24 was wrongly 432
-385,22x6,22x6,CORRECTED 2026-07-24 was wrongly 462
-440,12x12,24x6,CORRECTED 2026-07-24 was wrongly 528
-488,14x14,14x14,
-540,18x12,36x6,
-548,22x10,22x10,
-555,18x10,30x6,CORRECTED 2026-07-24 was wrongly 666
-596,24x10,30x8,
-636,18x14,42x6,
-648,16x16,16x16,
-728,18x16,48x6,
-828,18x18,18x18,
-856,24x14,42x8,
-916,30x12,36x10,
-984,24x16,48x8,
-1028,20x20,20x20,
-1100,24x18,36x12,
-1244,24x20,48x10,
-1256,22x22,22x22,
-1288,36x14,42x12,
-1372,24x22,24x22,
-1400,30x18,30x18,
-1500,24x24,48x12,final/ceiling tier - unconditioned else clause in formula
+max_cfm,regular_size,thin_size,raw_nc_at_breakpoint,fpm_at_breakpoint,true_nc_with_deflection_correction,note
+114,6x6,6x6,11,600,18,
+156,8x6,8x6,12,600,19,
+170,10x6,10x6,<10,500,<17,
+185,8x8,8x8,<10,500,<17,
+205,12x6,12x6,<10,500,<17,
+240,14x6,14x6,<10,500,<17,
+285,12x8,16x6,<10,500,<17,
+295,10x10,10x10,<10,500,<17,
+315,18x6,18x6,<10,500,<17,
+360,12x10,20x6,11,500,18,CORRECTED 2026-07-24 was wrongly 432
+385,22x6,22x6,11,500,18,CORRECTED 2026-07-24 was wrongly 462
+440,12x12,24x6,11,500,18,CORRECTED 2026-07-24 was wrongly 528
+488,14x14,14x14,<10,400,<17,
+540,18x12,27x8,<10,400,<17,3-way group (36x6/27x8/18x12) - 27x8 (3.375:1) is the correct Thin pick under the 4:1 cap, not 36x6 (6:1, exceeds cap)
+548,22x10,22x10,<10,400,<17,
+555,18x10,18x10,12,500,19,CORRECTED 2026-07-24 was wrongly 666; Thin collapses to Regular - only 2 group members (30x6 at 5:1 exceeds 4:1 thin cap)
+596,24x10,30x8,<10,400,<17,
+636,18x14,18x14,<10,400,<17,Thin collapses to Regular - only 2 group members (42x6 at 7:1 exceeds 4:1 thin cap)
+648,16x16,16x16,<10,400,<17,
+728,18x16,24x12,<10,400,<17,4-way group (48x6/36x8/24x12/18x16) - 24x12 (2:1) is the correct Thin pick under the 4:1 cap; 48x6 (8:1) and 36x8 (4.5:1) both exceed it
+828,18x18,18x18,<10,400,<17,
+856,24x14,24x14,<10,400,<17,Thin collapses to Regular - only 2 group members (42x8 at 5.25:1 exceeds 4:1 thin cap)
+916,30x12,36x10,<10,400,<17,
+984,24x16,24x16,<10,400,<17,Thin collapses to Regular - only 2 group members (48x8 at 6:1 exceeds 4:1 thin cap)
+1028,20x20,20x20,<10,400,<17,
+1100,24x18,36x12,<10,400,<17,
+1244,24x20,24x20,<10,400,<17,Thin collapses to Regular - only 2 group members (48x10 at 4.8:1 exceeds 4:1 thin cap)
+1256,22x22,22x22,<10,400,<17,
+1288,36x14,42x12,<10,400,<17,
+1372,24x22,24x22,<10,400,<17,
+1400,30x18,30x18,11,400,18,
+1500,24x24,48x12,11,400,18,final/ceiling tier - unconditioned else clause in formula

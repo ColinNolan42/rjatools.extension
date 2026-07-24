@@ -1,0 +1,10 @@
+max_cfm,diameter_in,fpm,nc_at_breakpoint,note
+118,6,600,N/A - velocity based not NC based,
+209,8,600,N/A - velocity based not NC based,
+327,10,600,N/A - velocity based not NC based,12x12 Type ceiling (max diameter that fits a 12x12 face)
+471,12,600,N/A - velocity based not NC based,
+641,14,600,N/A - velocity based not NC based,
+838,16,600,N/A - velocity based not NC based,18x18 Type ceiling (max diameter that fits an 18x18 face)
+1060,18,600,N/A - velocity based not NC based,
+1309,20,600,N/A - velocity based not NC based,
+1584,22,600,N/A - velocity based not NC based,24x24 Type ceiling (max diameter that fits a 24x24 face) - final/ceiling tier
