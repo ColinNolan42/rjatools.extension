@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "tag": ["EG-1"],
+    "description": "Ceiling exhaust, round neck. Identical sizing methodology to RG-1 (ceiling return, RJA - Return Grate - Rectangular - Round Neck) -- same family shape (Types 12x12/18x18/24x24, Flow/Duct Diameter/Duct Radius/Diffuser Width/Height parameter structure), confirmed via live parameter inspection before building.",
+    "why_identical_to_RG-1": "RG-1 abandoned NC-based sizing entirely in favor of pure 600 FPM velocity sizing (area x 600fpm), which is just geometry -- it doesn't depend on face size, application (return vs exhaust), or any cutsheet-specific NC data. See RG-1_perforated_ceiling_return.json for the full derivation/rationale; this file just documents that EG-1 reuses the identical breakpoints and per-Type diameter ceilings.",
+    "breakpoints_shared_across_all_types": [
+      { "max_cfm": 118, "diameter_in": 6 },
+      { "max_cfm": 209, "diameter_in": 8 },
+      { "max_cfm": 327, "diameter_in": 10 },
+      { "max_cfm": 471, "diameter_in": 12 },
+      { "max_cfm": 641, "diameter_in": 14 },
+      { "max_cfm": 838, "diameter_in": 16 },
+      { "max_cfm": 1060, "diameter_in": 18 },
+      { "max_cfm": 1309, "diameter_in": 20 },
+      { "max_cfm": 1584, "diameter_in": 22 }
+    ],
+    "per_type_diameter_ceiling": {
+      "12x12": { "max_diameter_in": 10, "ceiling_cfm": 327 },
+      "18x18": { "max_diameter_in": 16, "ceiling_cfm": 838 },
+      "24x24": { "max_diameter_in": 22, "ceiling_cfm": 1584 }
+    },
+    "sizing_warning_ceilings_cfm": { "12x12": 327, "18x18": 838, "24x24": 1584 },
+    "family_parameters": "Flow (instance), Duct Diameter (instance, formula below), Duct Radius (instance, pre-existing formula Duct Diameter/2, untouched), Diffuser Width/Height (TYPE, discriminator), Sizing Warning (instance, Text, added this build), Line length and Total Pressure (instance, pre-existing, untouched, unrelated to sizing).",
+    "verified": "11 boundary test cases (regenerate-and-read) across all 3 Types and all breakpoints/ceilings, all pass -- 2026-07-24."
+  },
+  "duct_diameter_formula": "IF(Diffuser Width < 15\", IF(Flow < 118, 6\", IF(Flow < 209, 8\", 10\")), IF(Diffuser Width < 21\", IF(Flow < 118, 6\", IF(Flow < 209, 8\", IF(Flow < 327, 10\", IF(Flow < 471, 12\", IF(Flow < 641, 14\", 16\"))))), IF(Flow < 118, 6\", IF(Flow < 209, 8\", IF(Flow < 327, 10\", IF(Flow < 471, 12\", IF(Flow < 641, 14\", IF(Flow < 838, 16\", IF(Flow < 1060, 18\", IF(Flow < 1309, 20\", 22\"))))))))))",
+  "sizing_warning_formula": "IF(Diffuser Width < 15\", IF(Flow > 327, \"OVER CAPACITY - MAX 327 CFM FOR 12X12 (10 IN MAX NECK)\", \"\"), IF(Diffuser Width < 21\", IF(Flow > 838, \"OVER CAPACITY - MAX 838 CFM FOR 18X18 (16 IN MAX NECK)\", \"\"), IF(Flow > 1584, \"OVER CAPACITY - MAX 1584 CFM FOR 24X24 (22 IN MAX NECK)\", \"\")))"
+}
