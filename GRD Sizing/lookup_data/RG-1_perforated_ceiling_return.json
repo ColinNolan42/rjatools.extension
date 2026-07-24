@@ -2,59 +2,31 @@
   "_meta": {
     "tag": ["RG-1"],
     "titus_model": "PAR/PXP/PMR (flush face) / PXP-DR/PDR (drop face) -- Perforated Face return diffuser series",
-    "description": "Ceiling return, round neck. Supersedes the earlier 50F-based plan (2026-07-23) once this genuinely return-specific cutsheet was found.",
-    "source_cutsheet": "perforatedperf_diffusers_2017.pdf, user-supplied from C:\\Users\\Colin Nolan\\Downloads\\, page F87 specifically (\"PAR, PXP, PMR, PXP-DR, PDR PERFORMANCE DATA\", explicitly labeled FLUSH FACE - RETURN / DROP FACE - RETURN)",
-    "why_this_replaced_50F": "50F (Titus specialized grilles cutsheet) only gave ONE CFM/NC row per face size, with no per-neck-diameter breakdown -- nothing to size a variable Duct Diameter against. This Perforated Face return cutsheet has genuine multiple-round-diameter-per-face data for 24x24, making a TMS-style cascade possible there.",
-    "dash_convention": "NC < 10 (page F87 notes)",
-    "no_deflection_correction_needed": "Unlike the 272RL aeroblade sidewall grilles, this is a straight ducted diffuser (not a deflection-blade louvered grille) -- NC values used directly, no +7-style correction, same as the TMS ceiling supply family.",
-    "target_nc": "NC < 15, matching the precedent set by SD-1/SD-2 (ceiling supply, TMS) after several rounds of tightening. Not independently re-confirmed by the user for RG-1 specifically after this new cutsheet was found -- proposed and proceeded on absence of objection, flag if this needs revisiting.",
-    "DATA_COVERAGE_GAP_2026-07-24": "Round-diameter (\"X Dia.\") coverage is very uneven across the family's 3 Types: 24x24 face has 6 real diameter options (6\"-16\"), 12x12 face has only ONE (6\" Dia.), and 18x18 has NONE at all in this cutsheet (only a square \"18x18 neck (20x20 Face)\" substitute in the Other Sizes table, which is a much larger free area than any round option and not really comparable). User's decision: use the real NC-driven cascade where data supports it (24x24 only), and fall back to 600 FPM velocity-sizing (computed from duct area, not tabulated) for 12x12 and 18x18. For 18x18's Sizing Warning ceiling specifically, user explicitly approved an educated-guess use of the 20x20-face substitute row's NC<15 capacity (900 cfm) as the best available reference, despite the neck-geometry mismatch caveat above -- flagged as an approximation, not verified against a true 18x18-round-neck test.",
-    "velocity_sizing_formula": "Duct Diameter (in) computed at 600 FPM from area = CFM/600 (sqft), diameter = sqrt(4*area/pi) -- implemented as a lookup against standard round sizes rather than a live sqrt() formula in Revit (safer, matches this project's established IF-cascade pattern rather than untested arithmetic-unit behavior). Cross-validated: computed values at 600fpm exactly match the cutsheet's own 600fpm column for the sizes where real data exists (e.g. 12\" diameter -> 471 cfm matches the cutsheet's 12 Dia. row at the 600 fpm column exactly), confirming the math is consistent with Titus's own core-velocity convention.",
-    "family_parameters": "Flow (instance), Duct Diameter (instance, formula below), Duct Radius (instance, pre-existing formula Duct Diameter/2, untouched), Diffuser Width/Height (TYPE, discriminator, 12x12/18x18/24x24 -> 1'/1.5'/2'), Sizing Warning (instance, Text, added 2026-07-24), Line length and Total Pressure (instance, pre-existing, untouched, unrelated to sizing).",
-    "verified": "18 boundary test cases (regenerate-and-read, not just formula-compile) across all 3 Types, all pass -- 2026-07-24."
-  },
-  "type_12x12": {
-    "source": "12 x 12 Face, 6 Dia. row only (only published round option for this face)",
-    "nc15_breakpoint_cfm": 118,
-    "sizing_warning_ceiling_cfm": 118,
-    "beyond_118_cfm": "No real data -- Duct Diameter continues via 600fpm velocity-sizing (8\", 10\") but Sizing Warning fires since it exceeds the only verified-quiet data point",
-    "velocity_sized_breakpoints": [
-      { "max_cfm": 118, "diameter_in": 6 },
-      { "max_cfm": 209, "diameter_in": 8 },
-      { "note": "10\" is the else/ceiling clause -- capped here since a 12\" round neck is already the geometric max that fits a 12x12 face" }
-    ]
-  },
-  "type_18x18": {
-    "source": "NO direct 18x18 face row exists. Substitute: \"18x18 neck (20x20 Face)\" from the Other Sizes table -- cfm [675,900,1125,1350,1575,1800,2250,2700,3150], NC [-,11,17,22,26,29,35,40,44]",
-    "nc15_breakpoint_cfm": 900,
-    "sizing_warning_ceiling_cfm": 900,
-    "sizing_warning_note": "OVER CAPACITY message explicitly says ESTIMATED to flag the substitute-data caveat to whoever reads it in Revit",
-    "velocity_sized_breakpoints": [
+    "description": "Ceiling return, round neck.",
+    "source_cutsheet": "perforatedperf_diffusers_2017.pdf, user-supplied from C:\\Users\\Colin Nolan\\Downloads\\, page F87 (\"PAR, PXP, PMR, PXP-DR, PDR PERFORMANCE DATA\", FLUSH FACE - RETURN / DROP FACE - RETURN)",
+    "raw_data_reference": "Full raw cfm/NC table for every published row (both round Dia. and square Neck options, all 3 face sizes plus Other Sizes substitutes) saved separately as RG-1_perforated_ceiling_return_RAW_DATA.csv for manual review.",
+    "SUPERSEDED_2026-07-24": "An earlier version of this family (same day) used an NC<15-driven cascade for 24x24 (which has rich real per-diameter NC data) and a substitute square-neck row for 18x18's Sizing Warning ceiling. User reviewed the raw data directly and found the 18x18 estimate (900 cfm, from an unrelated big square neck) looked too high and unreliable. User's decision: abandon NC-based sizing entirely for this family and use PURE 600 FPM velocity sizing for all three Types instead -- this is the CURRENT, live approach.",
+    "why_pure_velocity_works_here": "Cross-validated earlier that computed velocity-sizing (area x 600fpm) matches the cutsheet's own 600fpm column values exactly for every diameter where real data exists (e.g. 12in dia -> 471 cfm appears in both). Because it's pure geometry (not tied to NC, which varies by face size), the SAME breakpoint set now applies to all three Types -- only the per-Type diameter CEILING differs (limited by how big a round duct can physically fit within each face size).",
+    "breakpoints_shared_across_all_types": [
       { "max_cfm": 118, "diameter_in": 6 },
       { "max_cfm": 209, "diameter_in": 8 },
       { "max_cfm": 327, "diameter_in": 10 },
       { "max_cfm": 471, "diameter_in": 12 },
       { "max_cfm": 641, "diameter_in": 14 },
-      { "note": "16\" is the else/ceiling clause" }
-    ]
-  },
-  "type_24x24": {
-    "source": "24 x 24 Face, all 6 round diameter rows (real NC-driven data)",
-    "raw_rows": [
-      { "diameter_in": 6, "cfm": [59,78,98,118,137,157,196,235,275], "nc": ["-","-","-",13,17,20,26,31,34] },
-      { "diameter_in": 8, "cfm": [105,140,174,209,244,279,349,419,488], "nc": ["-","-",13,17,21,24,30,35,38] },
-      { "diameter_in": 10, "cfm": [164,218,273,327,382,436,545,654,763], "nc": ["-","-",16,20,24,27,33,38,41] },
-      { "diameter_in": 12, "cfm": [235,314,392,471,549,628,785,942,1099], "nc": ["-",12,17,22,26,29,34,39,43] },
-      { "diameter_in": 14, "cfm": [320,427,534,641,748,855,1068,1282,1495], "nc": ["-",15,21,25,29,32,38,43,46] },
-      { "diameter_in": 16, "cfm": [419,558,698,837,977,1116,1395,1674,1953], "nc": [11,18,24,28,32,35,41,46,49] }
+      { "max_cfm": 838, "diameter_in": 16 },
+      { "max_cfm": 1060, "diameter_in": 18 },
+      { "max_cfm": 1309, "diameter_in": 20 },
+      { "max_cfm": 1584, "diameter_in": 22, "note": "only reachable by the 24x24 Type; 12x12 and 18x18 cap out earlier, see per-type ceilings below" }
     ],
-    "nc15_breakpoints_ascending": [
-      { "max_cfm": 118, "diameter_in": 6 },
-      { "max_cfm": 174, "diameter_in": 8 },
-      { "max_cfm": 218, "diameter_in": 10 },
-      { "max_cfm": 314, "diameter_in": 12 },
-      { "max_cfm": 320, "diameter_in": 14 },
-      { "max_cfm": 419, "diameter_in": 16, "note": "final/ceiling tier - also the unconditioned else clause, and the Sizing Warning ceiling for this Type" }
-    ]
-  }
+    "per_type_diameter_ceiling": {
+      "12x12": { "max_diameter_in": 10, "ceiling_cfm": 327, "rationale": "assistant's engineering judgment - roughly 1in clearance each side of the 12in face, not independently confirmed by user" },
+      "18x18": { "max_diameter_in": 16, "ceiling_cfm": 838, "rationale": "same rationale, 1in clearance each side of the 18in face" },
+      "24x24": { "max_diameter_in": 22, "ceiling_cfm": 1584, "rationale": "same rationale, 1in clearance each side of the 24in face" }
+    },
+    "sizing_warning_ceilings_cfm": { "12x12": 327, "18x18": 838, "24x24": 1584 },
+    "family_parameters": "Flow (instance), Duct Diameter (instance, formula below), Duct Radius (instance, pre-existing formula Duct Diameter/2, untouched), Diffuser Width/Height (TYPE, discriminator, 12x12/18x18/24x24 -> 1'/1.5'/2'), Sizing Warning (instance, Text), Line length and Total Pressure (instance, pre-existing, untouched, unrelated to sizing).",
+    "verified": "17 boundary test cases (regenerate-and-read) across all 3 Types and all breakpoints including per-type ceilings, all pass -- 2026-07-24."
+  },
+  "duct_diameter_formula": "IF(Diffuser Width < 15\", IF(Flow < 118, 6\", IF(Flow < 209, 8\", 10\")), IF(Diffuser Width < 21\", IF(Flow < 118, 6\", IF(Flow < 209, 8\", IF(Flow < 327, 10\", IF(Flow < 471, 12\", IF(Flow < 641, 14\", 16\"))))), IF(Flow < 118, 6\", IF(Flow < 209, 8\", IF(Flow < 327, 10\", IF(Flow < 471, 12\", IF(Flow < 641, 14\", IF(Flow < 838, 16\", IF(Flow < 1060, 18\", IF(Flow < 1309, 20\", 22\"))))))))))",
+  "sizing_warning_formula": "IF(Diffuser Width < 15\", IF(Flow > 327, \"OVER CAPACITY - MAX 327 CFM FOR 12X12 (10 IN MAX NECK)\", \"\"), IF(Diffuser Width < 21\", IF(Flow > 838, \"OVER CAPACITY - MAX 838 CFM FOR 18X18 (16 IN MAX NECK)\", \"\"), IF(Flow > 1584, \"OVER CAPACITY - MAX 1584 CFM FOR 24X24 (22 IN MAX NECK)\", \"\")))"
 }
