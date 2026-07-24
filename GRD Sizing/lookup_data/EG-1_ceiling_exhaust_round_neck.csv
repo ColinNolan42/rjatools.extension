@@ -1,10 +1,10 @@
 max_cfm,diameter_in,fpm,nc_at_breakpoint,note
-118,6,600,N/A - velocity based not NC based,
-209,8,600,N/A - velocity based not NC based,
-327,10,600,N/A - velocity based not NC based,12x12 Type ceiling (max diameter that fits a 12x12 face)
-471,12,600,N/A - velocity based not NC based,
-641,14,600,N/A - velocity based not NC based,
-838,16,600,N/A - velocity based not NC based,18x18 Type ceiling (max diameter that fits an 18x18 face)
-1060,18,600,N/A - velocity based not NC based,
-1309,20,600,N/A - velocity based not NC based,
-1584,22,600,N/A - velocity based not NC based,24x24 Type ceiling (max diameter that fits a 24x24 face) - final/ceiling tier
+118,6,600,13,NC from the 24x24 face row (12x12 face row shows NC 14 at this same 6in/600fpm point - slightly louder, smaller face)
+209,8,600,17,NC from the 24x24 face row
+327,10,600,20,NC from the 24x24 face row
+471,12,600,22,NC from the 24x24 face row; 12x12 Type ceiling (max diameter that fits a 12x12 face)
+641,14,600,25,NC from the 24x24 face row
+838,16,600,28,NC from the 24x24 face row; 18x18 Type ceiling (max diameter that fits an 18x18 face)
+1060,18,600,not published,cutsheet has no row for this diameter (24x24 face data stops at 16in) - velocity-computed only
+1309,20,600,not published,cutsheet has no row for this diameter - velocity-computed only
+1584,22,600,not published,cutsheet has no row for this diameter - velocity-computed only; 24x24 Type ceiling - final/ceiling tier
