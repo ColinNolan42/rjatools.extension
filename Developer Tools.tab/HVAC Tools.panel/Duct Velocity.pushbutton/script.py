@@ -349,8 +349,15 @@ _ROUND_SIZES = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
 
 def _snap_even(inches):
     """Round up to the nearest even (2" interval) duct dimension — odd sizes
-    like 17" aren't stocked/installed; the next even size up (18") is used."""
-    n = int(math.ceil(inches))
+    like 17" aren't stocked/installed; the next even size up (18") is used.
+
+    Subtracts a small epsilon before ceiling so floating-point noise from the
+    Revit feet<->inch round-trip (e.g. a true 10" duct stored internally as
+    10.000000000000002") doesn't get bumped up to the next even size (12").
+    Real fractional dimensions (e.g. 8.5") still round up correctly since the
+    epsilon is far smaller than any real duct dimension tolerance.
+    """
+    n = int(math.ceil(inches - 1e-6))
     if n % 2 != 0:
         n += 1
     return max(n, 2)
