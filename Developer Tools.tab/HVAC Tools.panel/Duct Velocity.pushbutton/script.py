@@ -263,17 +263,23 @@ def show_velocity_settings_dialog():
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
-def _duct_label(dr, custom_limits, tol_pct):
+def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     """Worst of velocity and friction checks (one-sided, unchanged), then
     downgraded to PURPLE if the duct is GREEN but oversized (a smaller
-    standard size would still satisfy max FPM and max friction).
+    standard size would still satisfy max FPM and max friction), then
+    overridden to RED regardless of the above if the duct fails the
+    diffuser/duct height clearance rule (its height doesn't clear its real
+    downstream neighbor's height by the required 2" margin, wherever that
+    neighbor is actually smaller — a hard installability problem, checked
+    independent of velocity/friction).
 
       Green  : cfm <= max_cap
       Yellow : max_cap < cfm <= max_cap * (1 + tol_pct/100)
-      Red    : cfm > max_cap * (1 + tol_pct/100)
+      Red    : cfm > max_cap * (1 + tol_pct/100), OR fails height clearance
       Purple : GREEN AND a smaller standard size exists (see _suggest_size_info)
 
-    Returns (label, max_cap_cfm).
+    Returns (label, max_cap_cfm, reason) — reason is 'Velocity', 'Friction',
+    'Oversized', 'Diffuser/Duct Clearance', or '' (GREEN/GRAY, nothing to flag).
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
     max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
@@ -305,20 +311,30 @@ def _duct_label(dr, custom_limits, tol_pct):
         else:
             fric_label = 'RED'
 
-    if _PRIORITY.get(fric_label, 0) > _PRIORITY.get(vel_label, 0):
-        combined = fric_label
-    else:
-        combined = vel_label
+    fric_wins = _PRIORITY.get(fric_label, 0) > _PRIORITY.get(vel_label, 0)
+    combined  = fric_label if fric_wins else vel_label
+    reason    = ('Friction' if fric_wins else 'Velocity') if combined in ('YELLOW', 'RED') else ''
 
     # GREEN ducts get downgraded to PURPLE if a smaller standard size — same
     # width, shorter height only, never a width change — would still satisfy
     # both max FPM and max friction. i.e. it's oversized.
     if combined == 'GREEN':
-        _, sugg_area = _suggest_shrink_info(dr, custom_limits)
+        _, sugg_area = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
         if sugg_area is not None:
             combined = 'PURPLE'
+            reason   = 'Oversized'
 
-    return combined, max_cap
+    # Diffuser/duct height clearance — hard override, independent of
+    # everything above. Only applies where the real downstream neighbor is
+    # actually smaller than this duct (a genuine size reduction); an equal
+    # or larger downstream connection needs no transition margin.
+    my_height = hvac_graph.effective_height_in(dr.elem)
+    if my_height is not None and downstream_height_in is not None:
+        if downstream_height_in < my_height and my_height < downstream_height_in + 2.0:
+            combined = 'RED'
+            reason   = 'Diffuser/Duct Clearance'
+
+    return combined, max_cap, reason
 
 
 def _elem_name(elem):
@@ -344,7 +360,8 @@ def _duct_size_label(elem):
 
 
 # Standard spiral/round sizes in 2" increments (inches)
-_ROUND_SIZES = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
+_ROUND_SIZES = [6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
+_MIN_DUCT_DIM = 6  # firm standard: never suggest below 6" for rect or spiral
 
 
 def _snap_even(inches):
@@ -363,7 +380,7 @@ def _snap_even(inches):
     return max(n, 2)
 
 
-def _suggest_shrink_info(dr, custom_limits):
+def _suggest_shrink_info(dr, custom_limits, downstream_height_in=None):
     """Return (label, area_ft2) for a SMALLER standard duct size than what's
     installed, satisfying both velocity AND friction limits — no tolerance
     band, straight against max FPM / max friction. Returns ('-', None) if no
@@ -374,11 +391,26 @@ def _suggest_shrink_info(dr, custom_limits):
     different duct. Round/spiral: smaller standard diameter only. Rectangular:
     keeps the installed width fixed, only searches heights below the
     installed height. All dimensions snapped to 2" intervals.
+
+    Never suggests below the firm's 6" absolute minimum (_ROUND_SIZES/
+    _MIN_DUCT_DIM). If downstream_height_in is given (the effective height of
+    whatever this duct's real downstream neighbor is, from
+    hvac_graph.max_downstream_height_in), also never suggests a candidate
+    that would leave less than the required 2" clearance margin wherever
+    downstream_height_in is actually smaller than the candidate — a
+    same-size or larger downstream connection needs no transition margin.
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
     max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
     if dr.cfm <= 0 or max_fpm <= 0:
         return '-', None
+
+    def _clears(candidate_in):
+        if downstream_height_in is None:
+            return True
+        if downstream_height_in >= candidate_in:
+            return True  # no reduction at this candidate, no margin needed
+        return candidate_in >= downstream_height_in + 2.0
 
     try:
         d = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
@@ -387,6 +419,8 @@ def _suggest_shrink_info(dr, custom_limits):
             for std_d in _ROUND_SIZES:
                 if std_d >= installed_d:
                     break
+                if not _clears(std_d):
+                    continue
                 area_ft2 = math.pi * (std_d / 24.0) ** 2
                 vel      = dr.cfm / area_ft2
                 fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
@@ -399,8 +433,10 @@ def _suggest_shrink_info(dr, custom_limits):
         if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
             w_in = _snap_even(w_param.AsDouble() * 12.0)
             h_in = _snap_even(h_param.AsDouble() * 12.0)
-            min_h = _snap_even(w_in / 4.0)
+            min_h = max(_snap_even(w_in / 4.0), _MIN_DUCT_DIM)
             for new_h in range(min_h, h_in, 2):   # strictly less than installed height
+                if not _clears(new_h):
+                    continue
                 area_ft2 = w_in * new_h / 144.0
                 vel      = dr.cfm / area_ft2
                 d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
@@ -412,7 +448,7 @@ def _suggest_shrink_info(dr, custom_limits):
     return '-', None
 
 
-def _suggest_size_info(dr, custom_limits):
+def _suggest_size_info(dr, custom_limits, downstream_height_in=None):
     """Return (label, area_ft2) for the smallest standard duct size satisfying
     both velocity AND friction limits — no tolerance band, straight against
     max FPM / max friction. area_ft2 is None when no standard size could be
@@ -431,17 +467,31 @@ def _suggest_size_info(dr, custom_limits):
     All suggested dimensions are snapped to 2" intervals (2, 4, 6, 8...) —
     odd sizes are not stocked/installed.
     Both constraints must be satisfied — takes the binding (larger) of the two requirements.
+
+    Never suggests below the firm's 6" absolute minimum (_ROUND_SIZES/
+    _MIN_DUCT_DIM), and (same as _suggest_shrink_info) never suggests a
+    candidate that would leave less than the required 2" clearance margin
+    wherever downstream_height_in is actually smaller than the candidate.
     """
     defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
     max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
     if dr.cfm <= 0 or max_fpm <= 0:
         return '-', None
 
+    def _clears(candidate_in):
+        if downstream_height_in is None:
+            return True
+        if downstream_height_in >= candidate_in:
+            return True
+        return candidate_in >= downstream_height_in + 2.0
+
     try:
         d = dr.elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
         if d is not None and d.AsDouble() > 0:
             # Round / spiral — first standard diameter satisfying both vel and friction
             for std_d in _ROUND_SIZES:
+                if not _clears(std_d):
+                    continue
                 area_ft2 = math.pi * (std_d / 24.0) ** 2
                 vel      = dr.cfm / area_ft2
                 fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
@@ -458,9 +508,11 @@ def _suggest_size_info(dr, custom_limits):
 
             # AR 4:1 both ways bounds the height search at this fixed width:
             # too-flat (w > 4h) below, too-tall (h > 4w) above.
-            min_h = _snap_even(w_in / 4.0)
+            min_h = max(_snap_even(w_in / 4.0), _MIN_DUCT_DIM)
             max_h = w_in * 4
             for new_h in range(min_h, max_h + 2, 2):
+                if not _clears(new_h):
+                    continue
                 area_ft2 = w_in * new_h / 144.0
                 vel      = dr.cfm / area_ft2
                 d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
@@ -470,9 +522,11 @@ def _suggest_size_info(dr, custom_limits):
 
             # No height at the installed width works within AR — expand width
             for new_w in range(int(w_in) + 2, int(w_in) + 60, 2):
-                min_h2 = _snap_even(new_w / 4.0)
+                min_h2 = max(_snap_even(new_w / 4.0), _MIN_DUCT_DIM)
                 max_h2 = new_w * 4
                 for new_h in range(min_h2, max_h2 + 2, 2):
+                    if not _clears(new_h):
+                        continue
                     area_ft2 = new_w * new_h / 144.0
                     vel      = dr.cfm / area_ft2
                     d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
@@ -484,14 +538,14 @@ def _suggest_size_info(dr, custom_limits):
     return '-', None
 
 
-def _suggest_size(dr, custom_limits, tol_pct, duct_label):
+def _suggest_size(dr, custom_limits, tol_pct, duct_label, downstream_height_in=None):
     """Formatted-string wrapper for schedule/table display. PURPLE (oversized)
     ducts get a shrink-only suggestion (same width); YELLOW/RED (undersized)
     ducts get the grow-capable suggestion (may need a wider duct)."""
     if duct_label == 'PURPLE':
-        size, _ = _suggest_shrink_info(dr, custom_limits)
+        size, _ = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
     else:
-        size, _ = _suggest_size_info(dr, custom_limits)
+        size, _ = _suggest_size_info(dr, custom_limits, downstream_height_in)
     return size
 
 
@@ -526,7 +580,7 @@ _LEGEND_ROWS = [
     ('GREEN',  'Within limit'),
     ('PURPLE', 'Oversized — smaller standard size available'),
     ('YELLOW', 'Approaching limit'),
-    ('RED',    'Exceeds limit'),
+    ('RED',    'Exceeds limit, or fails diffuser/duct height clearance (see Reason column)'),
     ('GRAY',   'No CFM data'),
 ]
 
@@ -567,6 +621,7 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
         COLS = [
             ('#',                              0.050),
             ('Status',                         0.120),
+            ('Reason',                         0.150),
             ('Size',                           0.100),
             ('Actual FPM / Max FPM',           0.220),
             ('Actual Fric / Max Fric (iwc/100)', 0.300),
@@ -622,18 +677,25 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                                 XYZ(col_xs[ci] + PAD, table_top - PAD, 0.0),
                                 header, opts)
 
-            for ri, (lbl, dr) in enumerate(flagged_items):
+            for ri, (lbl, dr, reason, downstream_h) in enumerate(flagged_items):
                 row_y = row_tops[ri + 1] - PAD
                 defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
                 max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-                suggested         = _suggest_size(dr, custom_limits, tol_pct, lbl)
+                suggested         = _suggest_size(dr, custom_limits, tol_pct, lbl, downstream_h)
                 size              = _duct_size_label(dr.elem)
+                if reason == 'Diffuser/Duct Clearance':
+                    fpm_cell  = 'N/A'
+                    fric_cell = 'N/A'
+                else:
+                    fpm_cell  = '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm)
+                    fric_cell = '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric)
                 cells = [
                     str(ri + 1),
                     lbl,
+                    reason,
                     size,
-                    '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm),
-                    '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric),
+                    fpm_cell,
+                    fric_cell,
                     suggested,
                 ]
                 for ci, cell_text in enumerate(cells):
@@ -876,13 +938,21 @@ def main():
             new_view.Name = base_name + ' (2)'
 
         # Color overrides — worst of velocity check and friction check
-        counts      = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0, 'PURPLE': 0}
-        # eid -> (label, green_cap_cfm) for fittings + annotations
-        duct_labels = {}
+        counts         = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0, 'PURPLE': 0}
+        clearance_count = 0
+        # eid -> (label, green_cap_cfm, reason) for fittings + annotations + schedule
+        duct_labels  = {}
+        # eid -> effective height (in) of this duct's real downstream neighbor,
+        # precomputed once here so _duct_label/_suggest_size don't need graph access
+        downstream_heights = {}
 
         for eid, dr in all_duct_results.items():
-            label, green_cap = _duct_label(dr, custom_limits, tol_pct)
-            duct_labels[eid] = (label, green_cap)
+            downstream_h = hvac_graph.max_downstream_height_in(eid_int(eid), all_nodes, all_children)
+            downstream_heights[eid] = downstream_h
+            label, green_cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_h)
+            duct_labels[eid] = (label, green_cap, reason)
+            if reason == 'Diffuser/Duct Clearance':
+                clearance_count += 1
             color = _COLOR_MAP.get(label, GRAY)
             ogs   = OverrideGraphicSettings()
             ogs.SetSurfaceForegroundPatternColor(color)
@@ -913,7 +983,7 @@ def main():
                 nb_elem = all_nodes.get(neighbor_id)
                 if nb_elem is None or not hvac_graph.is_duct(nb_elem):
                     continue
-                nb_label = duct_labels.get(nb_elem.Id, ('GRAY', 0.0))[0]
+                nb_label = duct_labels.get(nb_elem.Id, ('GRAY', 0.0, ''))[0]
                 if _PRIORITY.get(nb_label, 0) > _PRIORITY.get(worst, 0):
                     worst = nb_label
             if worst == 'GRAY':
@@ -934,13 +1004,13 @@ def main():
         # Collect flagged ducts in stable element-id order
         flagged_items = []
         for eid in sorted(duct_labels.keys(), key=lambda e: eid_int(e)):
-            lbl, _ = duct_labels[eid]
+            lbl, _, reason = duct_labels[eid]
             if lbl not in ('YELLOW', 'RED', 'PURPLE'):
                 continue
             dr = all_duct_results.get(eid)
             if dr is None:
                 continue
-            flagged_items.append((lbl, dr))
+            flagged_items.append((lbl, dr, reason, downstream_heights.get(eid)))
 
         # Find keynote circle symbol — search by family name
         keynote_sym = None
@@ -960,7 +1030,7 @@ def main():
             keynote_sym.Activate()
             doc.Regenerate()
 
-        for idx, (lbl, dr) in enumerate(flagged_items, 1):
+        for idx, (lbl, dr, _reason, _downstream_h) in enumerate(flagged_items, 1):
             try:
                 mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
                 if keynote_sym is not None:
@@ -994,7 +1064,7 @@ def main():
                 source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
                 # Place below floor plan: centre of block at bottom-left of sheet
-                total_w  = 0.910   # must match COLS sum in _build_summary_view
+                total_w  = 1.060   # must match COLS sum in _build_summary_view
                 sched_x  = 0.10 + total_w / 2.0
                 sched_y  = 0.06 + content_h / 2.0
                 sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
@@ -1052,19 +1122,22 @@ def main():
         counts.get('RED',    0), fitting_counts.get('RED',    0)))
     output.print_md('| Gray   | {} | — | No CFM data        |'.format(
         counts.get('GRAY',   0)))
+    output.print_md('')
+    output.print_md('**Diffuser/duct height clearance issues (flagged Red): {}**'.format(
+        clearance_count))
 
     # Flagged duct list — RED first, then YELLOW, then PURPLE.
     # RED/YELLOW sorted by velocity descending (worst overrun first);
     # PURPLE sorted by velocity ascending (worst oversizing first).
     flagged = []
     for eid, dr in all_duct_results.items():
-        label, _ = duct_labels.get(eid, ('GRAY', 0.0))
+        label, _, reason = duct_labels.get(eid, ('GRAY', 0.0, ''))
         if label not in ('RED', 'YELLOW', 'PURPLE'):
             continue
         fpm = dr.cfm / dr.area_ft2 if dr.area_ft2 > 0 else 0.0
         defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
         max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-        flagged.append((label, fpm, dr, max_fpm, max_fric))
+        flagged.append((label, fpm, dr, max_fpm, max_fric, reason, downstream_heights.get(eid)))
 
     _FLAG_RANK = {'RED': 0, 'YELLOW': 1, 'PURPLE': 2}
 
@@ -1080,6 +1153,7 @@ def main():
         _COLS = [
             ('#',               3),
             ('Status',          7),
+            ('Reason',          22),
             ('System',         13),
             ('Duct ID',         9),
             ('Size',            8),
@@ -1098,20 +1172,27 @@ def main():
         separator = _fmt_row(['-' * w for _, w in _COLS])
         rows      = [header, separator]
 
-        for idx, (label, fpm, dr, max_fpm, max_fric) in enumerate(flagged, 1):
+        for idx, (label, fpm, dr, max_fpm, max_fric, reason, downstream_h) in enumerate(flagged, 1):
             size      = _duct_size_label(dr.elem)
-            suggested = _suggest_size(dr, custom_limits, tol_pct, label)
+            suggested = _suggest_size(dr, custom_limits, tol_pct, label, downstream_h)
+            if reason == 'Diffuser/Duct Clearance':
+                fpm_str  = 'N/A'
+                fric_str = 'N/A'
+            else:
+                fpm_str  = '{:.0f}'.format(fpm)
+                fric_str = '{:.3f}'.format(dr.friction_per_100ft)
             rows.append(_fmt_row([
                 idx,
                 label,
+                reason,
                 dr.sys_class,
                 dr.element_id,
                 size,
                 suggested,
-                '{:.0f}'.format(fpm),
+                fpm_str,
                 '{:.0f}'.format(max_fpm),
                 '{:.0f}'.format(dr.cfm),
-                '{:.3f}'.format(dr.friction_per_100ft),
+                fric_str,
                 '{:.3f}'.format(max_fric),
             ]))
 

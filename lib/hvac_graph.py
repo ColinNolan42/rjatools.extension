@@ -17,7 +17,7 @@ import logging
 
 from Autodesk.Revit.DB import (
     BuiltInCategory, BuiltInParameter,
-    FillPatternElement, ElementId, Domain
+    FillPatternElement, ElementId, Domain, ConnectorProfileType
 )
 
 from revit_helpers import eid_int
@@ -142,6 +142,75 @@ def is_accessory(elem):
 def is_fitting_or_accessory(elem):
     cid = _cat_id(elem)
     return cid in (_CAT_FITTING, _CAT_ACCESSORY)
+
+
+def effective_height_in(elem):
+    """Height (rectangular) or diameter (round) in inches, used for the
+    diffuser/duct height clearance check. Ducts read RBS_CURVE_* built-in
+    params directly; terminals (which don't have those params) read their
+    neck connector geometry instead. Returns None if not determinable.
+    """
+    if is_duct(elem):
+        d = elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
+        if d is not None and d.AsDouble() > 0:
+            return d.AsDouble() * 12.0
+        h = elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
+        if h is not None and h.AsDouble() > 0:
+            return h.AsDouble() * 12.0
+        return None
+    if is_terminal(elem):
+        cm = _connector_manager(elem)
+        if cm is None:
+            return None
+        try:
+            for c in cm.Connectors:
+                if c.Shape == ConnectorProfileType.Round:
+                    return c.Radius * 2.0 * 12.0
+                elif c.Shape == ConnectorProfileType.Rectangular:
+                    return c.Height * 12.0
+        except Exception:
+            pass
+    return None
+
+
+def next_real_downstream(node_id, nodes, children):
+    """Return the list of real duct/terminal elements immediately downstream
+    of node_id, walking through (skipping over) any fittings/accessories in
+    between. A duct/terminal that branches into multiple fittings each
+    leading somewhere real all get returned — the caller decides how to
+    combine them (e.g. take the max height requirement).
+    """
+    result = []
+    for cid in children.get(node_id, []):
+        celem = nodes.get(cid)
+        if celem is None:
+            continue
+        if is_fitting_or_accessory(celem):
+            result.extend(next_real_downstream(cid, nodes, children))
+        elif is_duct(celem) or is_terminal(celem):
+            result.append(celem)
+        # equipment or anything else: not a duct/terminal, ignore
+    return result
+
+
+def max_downstream_height_in(node_id, nodes, children):
+    """Return the largest effective_height_in() among the real duct/terminal
+    elements immediately downstream of node_id (skipping fittings), or None
+    if no real downstream element with a determinable height is found. Used
+    as the basis for the diffuser/duct height clearance check — the caller
+    only needs to enforce a margin where this value is actually SMALLER than
+    the duct being checked (a genuine size reduction), not wherever it's
+    equal or larger (a continuous run needs no transition clearance).
+    """
+    best = None
+    for elem in next_real_downstream(node_id, nodes, children):
+        h = effective_height_in(elem)
+        if h is None:
+            continue
+        if best is None or h > best:
+            best = h
+    return best
+
 
 def duct_area_ft2(duct):
     """Cross-section area in ft2. Returns 0.0 if dimensions unavailable."""
