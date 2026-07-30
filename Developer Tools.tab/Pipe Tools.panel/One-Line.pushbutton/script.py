@@ -193,75 +193,285 @@ def _find_fixture_z(graph, start_nid, trunk_set, default_z):
     return default_z
 
 
-def _trace_to_fixtures(graph, start_nid, trunk_set, initial_len=0.0):
-    """Trace all pipe edges from start_nid (non-trunk) to find fixtures.
+def _branch_children(graph, nid, trunk_set, seen):
+    """One-hop children of nid: real pipe edges (excluding trunk) plus
+    zero-length node_children fitting-to-fitting connections, excluding
+    anything already visited. Does not mutate seen -- the caller marks a
+    child seen only once it actually commits to recursing into it.
 
-    Collapses every intermediate fitting, elbow, transition, and CSST run
-    into one result entry per fixture.  This implements the firm standard
-    where top-takeoff routing (rise from trunk, horizontal, drop to equip)
-    is shown as a single schematic vertical line on the one-line diagram.
-
-    initial_len: seed length to add to every path (used to include the
-                 caller's branch edge pipe + elbow-at-start-node).
-
-    Returns list of dicts:
-      fixture_nid:     node_id of the fixture
-      total_length_ft: sum of all pipe segment lengths from start to fixture
-      branch_edge_ids: list of pipe edge element IDs in the branch path
-      has_isolation:   True if any isolation-type valve was traversed
-      has_prv:         True if any PRV-type valve was traversed
-      cum_mbh:         cumulative_load_mbh from the starting branch edge
+    Returns a list of (child_nid, edge_len_ft, edge_ids).
     """
-    results = []
-    # stack: (nid, acc_len_ft, acc_edge_ids, acc_prv, acc_iso)
-    stack = [(start_nid, initial_len, [], False, False)]
-    seen  = {start_nid}
+    out = []
+    for edge in graph.edges.values():
+        if (edge.from_node_id == nid
+                and edge.element_id not in trunk_set
+                and edge.to_node_id
+                and edge.to_node_id not in seen):
+            out.append((edge.to_node_id, _edge_developed_length(graph, edge),
+                        [edge.element_id]))
+    for child in graph.node_children.get(nid, []):
+        if child not in seen:
+            child_node = graph.nodes.get(child)
+            extra = ELBOW_EQUIV_FT if (child_node and child_node.is_elbow) else 0.0
+            out.append((child, extra, []))
+    return out
 
-    while stack:
-        nid, acc_len, acc_eids, acc_prv, acc_iso = stack.pop()
-        node = graph.nodes.get(nid)
-        if not node:
+
+def _build_tree(graph, nid, trunk_set, seen, seg_len, seg_eids, prv, iso):
+    """Recursively build a tree rooted at nid.
+
+    seg_len/seg_eids is the developed length/edge-ids of the single hop
+    that led here from whichever node called this (the tee_candidate's
+    branch edge for the very first call, or a real branch point for
+    deeper calls) -- NOT a cumulative total from the very start.
+
+    Passes straight through simple (single-child) fittings, accumulating
+    length as it goes, and only creates a 'branch' tree node at a REAL
+    branch point (2+ surviving non-trunk children). There is no depth
+    limit: a cascade of any length is preserved intact as nested 'branch'
+    nodes, and no fixture is ever dropped, unlike the old approach of
+    flattening everything into one list with _trace_to_fixtures and
+    trying to regroup it afterward.
+
+    Returns one of:
+      {"kind": "fixture", "fixture_nid":.., "seg_len":.., "seg_eids":..,
+       "has_isolation":.., "has_prv":.., "cum_mbh":..}
+      {"kind": "branch", "seg_len":.., "seg_eids":.., "has_isolation":..,
+       "has_prv":.., "children": [tree,...]}
+      None (dead end -- no fixture reachable this way)
+    """
+    node = graph.nodes.get(nid)
+    if node is None:
+        return None
+
+    fname  = (node.family_name or "").lower()
+    is_prv = any(kw in fname for kw in _PRV_KW)
+    is_iso = (not is_prv) and any(kw in fname for kw in _ISOLATION_KW)
+    prv = prv or is_prv
+    iso = iso or is_iso
+
+    if node.is_gas_fixture:
+        return {"kind": "fixture", "fixture_nid": nid,
+                "seg_len": seg_len, "seg_eids": seg_eids,
+                "has_isolation": iso, "has_prv": prv,
+                "cum_mbh": node.cumulative_load_mbh}
+
+    children = _branch_children(graph, nid, trunk_set, seen)
+    if not children:
+        return None
+
+    if len(children) == 1:
+        child_nid, extra_len, extra_eids = children[0]
+        seen.add(child_nid)
+        return _build_tree(graph, child_nid, trunk_set, seen,
+                            seg_len + extra_len, seg_eids + extra_eids,
+                            prv, iso)
+
+    subtrees = []
+    for child_nid, extra_len, extra_eids in children:
+        seen.add(child_nid)
+        sub = _build_tree(graph, child_nid, trunk_set, seen,
+                           extra_len, extra_eids, prv, iso)
+        if sub is not None:
+            subtrees.append(sub)
+
+    if not subtrees:
+        return None
+    if len(subtrees) == 1:
+        # Only one child actually led anywhere (the other(s) were dead
+        # ends) -- not a real split, fold this hop's length into it.
+        only = subtrees[0]
+        only["seg_len"]  = seg_len + only["seg_len"]
+        only["seg_eids"] = seg_eids + only["seg_eids"]
+        return only
+
+    return {"kind": "branch", "seg_len": seg_len, "seg_eids": seg_eids,
+            "has_isolation": iso, "has_prv": prv, "children": subtrees}
+
+
+def _tree_total_len(node):
+    """Longest cumulative seg_len from this node down to any leaf fixture,
+    inclusive of this node's own seg_len. Used only to rank slots by which
+    one is longest (becomes the primary, continues straight) vs. the
+    others (flat siblings, side-by-side)."""
+    if node["kind"] == "fixture":
+        return node["seg_len"]
+    return node["seg_len"] + max(_tree_total_len(c) for c in node["children"])
+
+
+def _tree_first_fixture(node):
+    """Any one fixture_nid reachable under this node -- used only for the
+    'already positioned by a sibling tee_candidate' dedupe check."""
+    if node["kind"] == "fixture":
+        return node["fixture_nid"]
+    for c in node["children"]:
+        f = _tree_first_fixture(c)
+        if f is not None:
+            return f
+    return None
+
+
+def _tree_deepest_leaf(node):
+    """Resolve node into a single representative leaf (fixture_nid/
+    seg_len/seg_eids/has_isolation/has_prv/cum_mbh), always descending
+    into the longest child, accumulating length/edges/flags along the
+    way. Used to pick what fixture/length labels a column when node
+    becomes this level's primary or a stub -- the REST of a nested
+    branch's content is handled separately by recursing into its
+    'children', not lost here.
+    """
+    if node["kind"] == "fixture":
+        return dict(node)
+    best  = max(node["children"], key=_tree_total_len)
+    inner = _tree_deepest_leaf(best)
+    return {
+        "kind":          "fixture",
+        "fixture_nid":   inner["fixture_nid"],
+        "seg_len":       node["seg_len"] + inner["seg_len"],
+        "seg_eids":      node["seg_eids"] + inner["seg_eids"],
+        "has_isolation": node["has_isolation"] or inner["has_isolation"],
+        "has_prv":       node["has_prv"] or inner["has_prv"],
+        "cum_mbh":       inner["cum_mbh"],
+    }
+
+
+def _flatten_group(nodes, depth):
+    """Inline any 'branch' node whose own seg_len (the real developed-
+    length gap from its parent) is short enough to read as the SAME
+    schematic junction (per BRANCH_MERGE_THRESHOLDS_FT[depth]),
+    recursively -- however many real tees are chained that closely
+    together, ALL their children end up as flat siblings at this level,
+    with nothing dropped (inlining only ever expands the list via
+    concatenation, never picks one and discards the rest).
+
+    A 'branch' node whose seg_len exceeds the threshold is left as its
+    own single slot, to become a genuinely nested junction one level
+    deeper (see _emit_tree_branch).
+
+    Returns a flat list of tree nodes (fixtures and/or un-inlined
+    branches), each with seg_len/seg_eids already folded to be relative
+    to the CURRENT level (as if it hung directly off this level's tee).
+    """
+    threshold = BRANCH_MERGE_THRESHOLDS_FT[
+        min(depth, len(BRANCH_MERGE_THRESHOLDS_FT) - 1)]
+    out = []
+    for node in nodes:
+        if node["kind"] == "fixture":
+            out.append(node)
             continue
+        if node["seg_len"] <= threshold:
+            inlined = _flatten_group(node["children"], depth)
+            for gc in inlined:
+                gc2 = dict(gc)
+                gc2["seg_len"]  = node["seg_len"] + gc["seg_len"]
+                gc2["seg_eids"] = node["seg_eids"] + gc["seg_eids"]
+                out.append(gc2)
+        else:
+            out.append(node)
+    return out
 
-        fname  = (node.family_name or "").lower()
-        is_prv = any(kw in fname for kw in _PRV_KW)
-        is_iso = (not is_prv) and any(kw in fname for kw in _ISOLATION_KW)
-        nv_prv = acc_prv or is_prv
-        nv_iso = acc_iso or is_iso
 
-        if node.is_gas_fixture:
-            results.append({
-                "fixture_nid":     nid,
-                "total_length_ft": acc_len,
-                "branch_edge_ids": acc_eids,
-                "has_isolation":   nv_iso,
-                "has_prv":         nv_prv,
-                "cum_mbh":         node.cumulative_load_mbh,
-            })
-            continue
+def _emit_tree_branch(graph, tx, ty, tee_z, direc, depth, children,
+                       base_len, base_eids, positions, branch_info,
+                       layout_log, meter_z=0.0):
+    """Emit branch_info entries for a set of 2+ sibling tree nodes hanging
+    off (tx, ty) at diagram depth `depth`.
 
-        for edge in graph.edges.values():
-            if (edge.from_node_id == nid
-                    and edge.element_id not in trunk_set
-                    and edge.to_node_id
-                    and edge.to_node_id not in seen):
-                seen.add(edge.to_node_id)
-                stack.append((
-                    edge.to_node_id,
-                    acc_len + _edge_developed_length(graph, edge),
-                    acc_eids + [edge.element_id],
-                    nv_prv,
-                    nv_iso,
-                ))
+    children: tree nodes (fixtures and/or un-inlined branches, always 2+
+        by construction -- _build_tree only creates a 'branch' node when
+        2+ children survive) with seg_len/seg_eids relative to (tx, ty).
+    base_len/base_eids: the real developed length/edge-ids already
+        traveled to reach (tx, ty) from the very original branch_edge --
+        folded into every reported fixture's total length/branch_edge_ids
+        so labels show the true cumulative distance no matter how many
+        levels deep this recursion goes.
 
-        for child in graph.node_children.get(nid, []):
-            if child not in seen:
-                seen.add(child)
-                child_node = graph.nodes.get(child)
-                extra = ELBOW_EQUIV_FT if (child_node and child_node.is_elbow) else 0.0
-                stack.append((child, acc_len + extra, acc_eids, nv_prv, nv_iso))
+    Recurses into any genuinely-nested branch (one whose gap exceeded the
+    merge threshold) to give it its own branch_info entry(ies) further up
+    its own column. No depth limit; no fixture is ever dropped.
+    """
+    fix_y = ty + direc * LEVEL_HEIGHT * depth
+    flat  = _flatten_group(children, depth=0)
 
-    return results
+    ranked  = sorted(flat, key=_tree_total_len)
+    primary = ranked[-1]
+    stubs   = ranked[:-1]
+
+    primary_leaf = _tree_deepest_leaf(primary)
+    positions[primary_leaf["fixture_nid"]] = (tx, fix_y)
+
+    sub_info = []
+    col = [0]
+    for slot in stubs:
+        col[0] += 1
+        sx   = tx + col[0] * MIN_SEGMENT_FT
+        leaf = _tree_deepest_leaf(slot)
+        positions[leaf["fixture_nid"]] = (sx, fix_y)
+        sub_info.append({
+            "fixture_nid":      leaf["fixture_nid"],
+            "stub_x":           sx,
+            "junction_y":       ty,
+            "fixture_y":        fix_y,
+            "total_ft":         base_len + leaf["seg_len"],
+            "remaining_ft":     base_len + leaf["seg_len"],
+            "cum_mbh":          leaf["cum_mbh"],
+            "has_isolation":    leaf["has_isolation"],
+            "has_prv":          leaf["has_prv"],
+            "branch_edge_ids":  base_eids + leaf["seg_eids"],
+            "remaining_eids":   base_eids + leaf["seg_eids"],
+            "size":             "",
+            "remaining_size":   "",
+        })
+        if slot["kind"] == "branch":
+            _emit_tree_branch(graph, sx, fix_y, tee_z, direc, depth + 1,
+                               slot["children"],
+                               base_len + slot["seg_len"],
+                               base_eids + slot["seg_eids"],
+                               positions, branch_info, layout_log,
+                               meter_z=meter_z)
+
+    total_branch_mbh = primary_leaf["cum_mbh"] + sum(s["cum_mbh"] for s in sub_info)
+    branch_info.append({
+        "tee_nid":         None,
+        "tee_pos":         (tx, ty),
+        "fixture_nid":     primary_leaf["fixture_nid"],
+        "fixture_pos":     (tx, fix_y),
+        "total_ft":        base_len + primary_leaf["seg_len"],
+        "shared_ft":       0.0,
+        "shared_eids":     [],
+        "remaining_ft":    base_len + primary_leaf["seg_len"],
+        "remaining_eids":  base_eids + primary_leaf["seg_eids"],
+        "branch_edge_ids": base_eids + primary_leaf["seg_eids"],
+        "has_isolation":   primary_leaf["has_isolation"],
+        "has_prv":         primary_leaf["has_prv"],
+        "direc":           direc,
+        "size":            "",
+        "shared_size":     "",
+        "remaining_size":  "",
+        "cum_mbh":         total_branch_mbh,
+        "sub_fixtures":    sub_info,
+    })
+    log_eids = base_eids + primary_leaf["seg_eids"]
+    layout_log.append({
+        "tee_nid":    None,
+        "tee_pos":    (tx, ty),
+        "tee_z":      tee_z,
+        "edge_id":    log_eids[-1] if log_eids else None,
+        "to_nid":     primary_leaf["fixture_nid"],
+        "to_z":       _node_z(graph, primary_leaf["fixture_nid"], meter_z),
+        "fixture_z":  _node_z(graph, primary_leaf["fixture_nid"], meter_z),
+        "direc":      "UP" if direc > 0 else "DOWN",
+        "result_pos": (tx, fix_y),
+        "branch_y":   None,
+    })
+
+    if primary["kind"] == "branch":
+        _emit_tree_branch(graph, tx, fix_y, tee_z, direc, depth + 1,
+                           primary["children"],
+                           base_len + primary["seg_len"],
+                           base_eids + primary["seg_eids"],
+                           positions, branch_info, layout_log,
+                           meter_z=meter_z)
 
 
 def _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates):
@@ -452,43 +662,47 @@ def _compute_layout(graph):
             if branch_edge.to_node_id is None:
                 continue
 
-            # Trace entire branch to find fixture(s) and cumulative length.
-            # Seed with the branch edge's developed length (pipe + elbow equiv
-            # at its to_node) so that elbow at the first branch node is counted.
+            # Build the real tee tree downstream of this branch edge (no
+            # flattening, no depth limit -- see _build_tree). Seed with the
+            # branch edge's own developed length so an elbow right at the
+            # first branch node is counted.
             branch_seed_len = _edge_developed_length(graph, branch_edge)
-            fixtures = _trace_to_fixtures(graph, branch_edge.to_node_id, trunk_set,
-                                          initial_len=branch_seed_len)
-            if not fixtures:
+            seen = {branch_edge.to_node_id}
+            tree = _build_tree(graph, branch_edge.to_node_id, trunk_set, seen,
+                                branch_seed_len, [branch_edge.element_id],
+                                False, False)
+            if tree is None:
                 continue
             # Skip if the primary fixture is already positioned by a sibling
             # tee_candidate (avoids duplicate branches from the same physical tee)
-            if positions.get(fixtures[0]["fixture_nid"]) is not None:
+            first_fixture_nid = _tree_first_fixture(tree)
+            if first_fixture_nid is None or positions.get(first_fixture_nid) is not None:
                 continue
 
             # Direction from downstream fixture z vs this tee z
-            first_fix_z = _node_z(graph, fixtures[0]["fixture_nid"], meter_z)
+            first_fix_z = _node_z(graph, first_fixture_nid, meter_z)
             direc = 1.0 if first_fix_z > tee_z else -1.0
 
             depth = branch_counters.get(tee_nid, 0) + 1
             branch_counters[tee_nid] = depth
-            fix_y = ty + direc * LEVEL_HEIGHT * depth
 
-            if len(fixtures) == 1:
-                fix_info = fixtures[0]
-                fix_nid  = fix_info["fixture_nid"]
-                positions[fix_nid] = (tx, fix_y)
+            if tree["kind"] == "fixture":
+                # Simple single-fixture branch: no siblings anywhere down
+                # this path.
+                fix_y = ty + direc * LEVEL_HEIGHT * depth
+                positions[tree["fixture_nid"]] = (tx, fix_y)
                 branch_info.append({
                     "tee_nid":         tee_nid,
                     "tee_pos":         (tx, ty),
-                    "fixture_nid":     fix_nid,
+                    "fixture_nid":     tree["fixture_nid"],
                     "fixture_pos":     (tx, fix_y),
-                    "total_ft":        fix_info["total_length_ft"],
-                    "branch_edge_ids": [branch_edge.element_id] + fix_info["branch_edge_ids"],
-                    "has_isolation":   fix_info["has_isolation"],
-                    "has_prv":         fix_info["has_prv"],
+                    "total_ft":        tree["seg_len"],
+                    "branch_edge_ids": tree["seg_eids"],
+                    "has_isolation":   tree["has_isolation"],
+                    "has_prv":         tree["has_prv"],
                     "direc":           direc,
                     "size":            "",
-                    "cum_mbh":         fix_info["cum_mbh"],
+                    "cum_mbh":         tree["cum_mbh"],
                     "sub_fixtures":    [],
                 })
                 layout_log.append({
@@ -496,7 +710,7 @@ def _compute_layout(graph):
                     "tee_pos":    (tx, ty),
                     "tee_z":      tee_z,
                     "edge_id":    branch_edge.element_id,
-                    "to_nid":     fix_nid,
+                    "to_nid":     tree["fixture_nid"],
                     "to_z":       first_fix_z,
                     "fixture_z":  first_fix_z,
                     "direc":      "UP" if direc > 0 else "DOWN",
@@ -504,85 +718,15 @@ def _compute_layout(graph):
                     "branch_y":   None,
                 })
             else:
-                # Multiple fixtures: longest path = primary (end of main
-                # vertical), shorter paths = L-shaped stubs at mid-height.
-                fixes_sorted = sorted(fixtures,
-                                      key=lambda f: f["total_length_ft"])
-                primary = fixes_sorted[-1]
-                stubs   = fixes_sorted[:-1]
-                junction_y = ty + direc * LEVEL_HEIGHT * depth * 0.5
-
-                # Find the common edge prefix shared by all fixture paths.
-                # These are the pipes from the branch tee to the sub-tee.
-                all_eids = [f["branch_edge_ids"] for f in fixes_sorted]
-                shared_eids = []
-                for group in zip(*all_eids):
-                    if len(set(group)) == 1:
-                        shared_eids.append(group[0])
-                    else:
-                        break
-                shared_eids_dev = sum(
-                    _edge_developed_length(graph, graph.edges[eid])
-                    for eid in shared_eids if eid in graph.edges)
-                # shared_ft = branch_seed already in total_ft + shared pipe
-                shared_ft = branch_seed_len + shared_eids_dev
-
-                positions[primary["fixture_nid"]] = (tx, fix_y)
-
-                sub_info = []
-                for i, sf in enumerate(stubs):
-                    sx = tx + (i + 1) * MIN_SEGMENT_FT
-                    positions[sf["fixture_nid"]] = (sx, fix_y)
-                    sub_info.append({
-                        "fixture_nid":      sf["fixture_nid"],
-                        "stub_x":           sx,
-                        "junction_y":       junction_y,
-                        "fixture_y":        fix_y,
-                        "total_ft":         sf["total_length_ft"],
-                        "remaining_ft":     sf["total_length_ft"] - shared_ft,
-                        "cum_mbh":          sf["cum_mbh"],
-                        "has_isolation":    sf["has_isolation"],
-                        "has_prv":          sf["has_prv"],
-                        "branch_edge_ids":  sf["branch_edge_ids"],
-                        "remaining_eids":   sf["branch_edge_ids"][len(shared_eids):],
-                        "size":             "",
-                        "remaining_size":   "",
-                    })
-
-                total_branch_mbh = (sum(s["cum_mbh"] for s in sub_info)
-                                    + primary["cum_mbh"])
-                branch_info.append({
-                    "tee_nid":          tee_nid,
-                    "tee_pos":          (tx, ty),
-                    "fixture_nid":      primary["fixture_nid"],
-                    "fixture_pos":      (tx, fix_y),
-                    "total_ft":         primary["total_length_ft"],
-                    "shared_ft":        shared_ft,
-                    "shared_eids":      shared_eids,
-                    "remaining_ft":     primary["total_length_ft"] - shared_ft,
-                    "remaining_eids":   primary["branch_edge_ids"][len(shared_eids):],
-                    "branch_edge_ids":  [branch_edge.element_id] + primary["branch_edge_ids"],
-                    "has_isolation":    primary["has_isolation"],
-                    "has_prv":          primary["has_prv"],
-                    "direc":            direc,
-                    "size":             "",
-                    "shared_size":      "",
-                    "remaining_size":   "",
-                    "cum_mbh":          total_branch_mbh,
-                    "sub_fixtures":     sub_info,
-                })
-                layout_log.append({
-                    "tee_nid":    tee_nid,
-                    "tee_pos":    (tx, ty),
-                    "tee_z":      tee_z,
-                    "edge_id":    branch_edge.element_id,
-                    "to_nid":     primary["fixture_nid"],
-                    "to_z":       first_fix_z,
-                    "fixture_z":  first_fix_z,
-                    "direc":      "UP" if direc > 0 else "DOWN",
-                    "result_pos": (tx, fix_y),
-                    "branch_y":   None,
-                })
+                # tree["children"] is always 2+ (that's what makes it a
+                # 'branch' node) -- resolve however deep the real cascade
+                # goes via _emit_tree_branch, merging or nesting each real
+                # tee-to-tee gap on its own merits, with no depth cap.
+                _emit_tree_branch(graph, tx, ty, tee_z, direc, depth,
+                                   tree["children"],
+                                   tree["seg_len"], tree["seg_eids"],
+                                   positions, branch_info, layout_log,
+                                   meter_z=meter_z)
 
     _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates)
 
