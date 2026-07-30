@@ -104,68 +104,68 @@ TABLE_OPTIONS = [
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "Sched 40 Steel - Natural, <2 psi, 1.0\" w.c.  [402.4(3)]",
+        "label":   "Sched 40 Steel - Natural, <2 psi (supply >= 8.0\" w.c.), 3.0\" w.c. drop  [402.4(3)]",
         "table_id": "402.4(3)",
         "material": "Schedule 40 Steel",
         "gas":      "Natural",
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "Sched 40 Steel - Natural, 2 psi, 1 psi drop  [402.4(4)]",
+        "label":   "Sched 40 Steel - Natural, <2 psi (supply >= 11.0\" w.c.), 6.0\" w.c. drop  [402.4(4)]",
         "table_id": "402.4(4)",
         "material": "Schedule 40 Steel",
         "gas":      "Natural",
-        "inlet_pressure_psi": 2.0,
+        "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "Sched 40 Steel - Natural, 2 psi, 2 psi drop  [402.4(5)]",
+        "label":   "Sched 40 Steel - Natural, 2 psi, 1 psi drop  [402.4(5)]",
         "table_id": "402.4(5)",
         "material": "Schedule 40 Steel",
         "gas":      "Natural",
         "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "Sched 40 Steel - Natural, 5 psi, 3.5 psi drop  [402.4(6)]",
+        "label":   "Sched 40 Steel - Natural, 3 psi, 2 psi drop  [402.4(6)]",
         "table_id": "402.4(6)",
+        "material": "Schedule 40 Steel",
+        "gas":      "Natural",
+        "inlet_pressure_psi": 3.0,
+    },
+    {
+        "label":   "Sched 40 Steel - Natural, 5 psi, 3.5 psi drop  [402.4(7)]",
+        "table_id": "402.4(7)",
         "material": "Schedule 40 Steel",
         "gas":      "Natural",
         "inlet_pressure_psi": 5.0,
     },
-    {
-        "label":   "Sched 40 Steel - Natural, 10 psi, 1 psi drop  [402.4(7)]",
-        "table_id": "402.4(7)",
-        "material": "Schedule 40 Steel",
-        "gas":      "Natural",
-        "inlet_pressure_psi": 10.0,
-    },
     # --- Schedule 40 Steel - Propane ---
     {
-        "label":   "Sched 40 Steel - Propane, <2 psi, 0.3\" w.c.  [402.4(25)]",
+        "label":   "Sched 40 Steel - Propane, 10 psi, 1 psi drop (1st to 2nd stage regulator)  [402.4(25)]",
         "table_id": "402.4(25)",
         "material": "Schedule 40 Steel",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 10.0,
     },
     {
-        "label":   "Sched 40 Steel - Propane, <2 psi, 0.5\" w.c.  [402.4(26)]",
+        "label":   "Sched 40 Steel - Propane, 10 psi, 3 psi drop (1st to 2nd stage regulator)  [402.4(26)]",
         "table_id": "402.4(26)",
         "material": "Schedule 40 Steel",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 10.0,
     },
     {
-        "label":   "Sched 40 Steel - Propane, <2 psi, 1.0\" w.c.  [402.4(27)]",
+        "label":   "Sched 40 Steel - Propane, 2 psi, 1 psi drop (2 psig service to regulator)  [402.4(27)]",
         "table_id": "402.4(27)",
         "material": "Schedule 40 Steel",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "Sched 40 Steel - Propane, 2 psi, 1 psi drop  [402.4(28)]",
+        "label":   "Sched 40 Steel - Propane, 11.0\" w.c., 0.5\" w.c. drop (regulator to appliance)  [402.4(28)]",
         "table_id": "402.4(28)",
         "material": "Schedule 40 Steel",
         "gas":      "Propane",
-        "inlet_pressure_psi": 2.0,
+        "inlet_pressure_psi": 0.7,
     },
     # --- Semirigid Copper Tubing - Natural gas ---
     {
@@ -190,54 +190,54 @@ TABLE_OPTIONS = [
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "Copper Tubing - Natural, 2 psi, 1 psi drop  [402.4(11)]",
+        "label":   "Copper Tubing - Natural, <2 psi (special), 17.0\" w.c. drop  [402.4(11)]",
         "table_id": "402.4(11)",
         "material": "Semirigid Copper Tubing",
         "gas":      "Natural",
-        "inlet_pressure_psi": 2.0,
+        "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "Copper Tubing - Natural, 2 psi, 2 psi drop  [402.4(12)]",
+        "label":   "Copper Tubing - Natural, 2 psi, 1 psi drop  [402.4(12)]",
         "table_id": "402.4(12)",
         "material": "Semirigid Copper Tubing",
         "gas":      "Natural",
         "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "Copper Tubing - Natural, 5 psi, 3.5 psi drop  [402.4(13)]",
+        "label":   "Copper Tubing - Natural, 2 psi, 1.5 psi drop (max 150 CFH, single house regulator)  [402.4(13)]",
         "table_id": "402.4(13)",
+        "material": "Semirigid Copper Tubing",
+        "gas":      "Natural",
+        "inlet_pressure_psi": 2.0,
+    },
+    {
+        "label":   "Copper Tubing - Natural, 5 psi, 3.5 psi drop  [402.4(14)]",
+        "table_id": "402.4(14)",
         "material": "Semirigid Copper Tubing",
         "gas":      "Natural",
         "inlet_pressure_psi": 5.0,
     },
-    {
-        "label":   "Copper Tubing - Natural, 10 psi, 1 psi drop  [402.4(14)]",
-        "table_id": "402.4(14)",
-        "material": "Semirigid Copper Tubing",
-        "gas":      "Natural",
-        "inlet_pressure_psi": 10.0,
-    },
     # --- Semirigid Copper Tubing - Propane ---
     {
-        "label":   "Copper Tubing - Propane, <2 psi, 0.3\" w.c.  [402.4(29)]",
+        "label":   "Copper Tubing - Propane, 10 psi, 1 psi drop (1st to 2nd stage regulator)  [402.4(29)]",
         "table_id": "402.4(29)",
         "material": "Semirigid Copper Tubing",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 10.0,
     },
     {
-        "label":   "Copper Tubing - Propane, <2 psi, 0.5\" w.c.  [402.4(30)]",
+        "label":   "Copper Tubing - Propane, 11.0\" w.c., 0.5\" w.c. drop (regulator to appliance)  [402.4(30)]",
         "table_id": "402.4(30)",
         "material": "Semirigid Copper Tubing",
         "gas":      "Propane",
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "Copper Tubing - Propane, <2 psi, 1.0\" w.c.  [402.4(31)]",
+        "label":   "Copper Tubing - Propane, 2 psi, 1 psi drop (2 psig service to regulator)  [402.4(31)]",
         "table_id": "402.4(31)",
         "material": "Semirigid Copper Tubing",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 2.0,
     },
     # --- CSST - Natural gas ---
     {
@@ -248,14 +248,14 @@ TABLE_OPTIONS = [
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "CSST - Natural, <2 psi, 0.3\" w.c.  [402.4(16)]",
+        "label":   "CSST - Natural, <2 psi (supply >= 8.0\" w.c.), 3.0\" w.c. drop  [402.4(16)]",
         "table_id": "402.4(16)",
         "material": "CSST",
         "gas":      "Natural",
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "CSST - Natural, <2 psi, 1.0\" w.c.  [402.4(17)]",
+        "label":   "CSST - Natural, <2 psi (supply >= 11.0\" w.c.), 6.0\" w.c. drop  [402.4(17)]",
         "table_id": "402.4(17)",
         "material": "CSST",
         "gas":      "Natural",
@@ -277,25 +277,25 @@ TABLE_OPTIONS = [
     },
     # --- CSST - Propane ---
     {
-        "label":   "CSST - Propane, <2 psi, 0.3\" w.c.  [402.4(32)]",
+        "label":   "CSST - Propane, 11.0\" w.c., 0.5\" w.c. drop (regulator to appliance shutoff valve)  [402.4(32)]",
         "table_id": "402.4(32)",
         "material": "CSST",
         "gas":      "Propane",
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "CSST - Propane, <2 psi, 0.5\" w.c.  [402.4(33)]",
+        "label":   "CSST - Propane, 2 psi, 1 psi drop (2 psi service to regulator)  [402.4(33)]",
         "table_id": "402.4(33)",
         "material": "CSST",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "CSST - Propane, 2 psi, 1 psi drop  [402.4(34)]",
+        "label":   "CSST - Propane, 5 psi, 3.5 psi drop  [402.4(34)]",
         "table_id": "402.4(34)",
         "material": "CSST",
         "gas":      "Propane",
-        "inlet_pressure_psi": 2.0,
+        "inlet_pressure_psi": 5.0,
     },
     # --- Polyethylene Plastic Pipe - Natural gas ---
     {
@@ -313,47 +313,47 @@ TABLE_OPTIONS = [
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "PE Plastic Pipe - Natural, <2 psi, 1.0\" w.c.  [402.4(22)]",
+        "label":   "PE Plastic Pipe - Natural, 2 psi, 1 psi drop  [402.4(22)]",
         "table_id": "402.4(22)",
-        "material": "Polyethylene Plastic Pipe",
-        "gas":      "Natural",
-        "inlet_pressure_psi": 0.7,
-    },
-    {
-        "label":   "PE Plastic Pipe - Natural, 2 psi, 1 psi drop  [402.4(23)]",
-        "table_id": "402.4(23)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Natural",
         "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "PE Plastic Pipe - Natural, 5 psi, 3.5 psi drop  [402.4(24)]",
+        "label":   "PE Plastic Pipe - Natural, <2 psi, 0.3\" w.c. (CTS tubing)  [402.4(23)]",
+        "table_id": "402.4(23)",
+        "material": "Polyethylene Plastic Pipe",
+        "gas":      "Natural",
+        "inlet_pressure_psi": 0.7,
+    },
+    {
+        "label":   "PE Plastic Pipe - Natural, <2 psi, 0.5\" w.c. (CTS tubing)  [402.4(24)]",
         "table_id": "402.4(24)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Natural",
-        "inlet_pressure_psi": 5.0,
+        "inlet_pressure_psi": 0.7,
     },
     # --- Polyethylene Plastic Pipe - Propane ---
     {
-        "label":   "PE Plastic Pipe - Propane, <2 psi, 0.3\" w.c.  [402.4(35)]",
+        "label":   "PE Plastic Pipe - Propane, 11.0\" w.c., 0.5\" w.c. drop (regulator to appliance)  [402.4(35)]",
         "table_id": "402.4(35)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Propane",
         "inlet_pressure_psi": 0.7,
     },
     {
-        "label":   "PE Plastic Pipe - Propane, <2 psi, 0.5\" w.c.  [402.4(36)]",
+        "label":   "PE Plastic Pipe - Propane, 2 psi, 1 psi drop (2 psig service to regulator)  [402.4(36)]",
         "table_id": "402.4(36)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Propane",
-        "inlet_pressure_psi": 0.7,
+        "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "PE Plastic Pipe - Propane, 2 psi, 1 psi drop  [402.4(37)]",
+        "label":   "PE Plastic Pipe - Propane, 11.0\" w.c., 0.5\" w.c. drop (CTS tubing, regulator to appliance)  [402.4(37)]",
         "table_id": "402.4(37)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Propane",
-        "inlet_pressure_psi": 2.0,
+        "inlet_pressure_psi": 0.7,
     },
 ]
 
@@ -457,27 +457,35 @@ def select_table(inlet_pressure_psi, pipe_material="Schedule 40 Steel"):
     For precise table selection (specific pressure drop), use TABLE_OPTIONS
     and get_table_option_by_label() instead.
 
-    Schedule 40 Steel:
-        inlet_pressure < 2.0    -> 402.4(2)   0.5 in. w.c. drop (natural gas)
-        inlet_pressure == 2.0   -> 402.4(4)   1.0 PSI drop
-        inlet_pressure == 5.0   -> 402.4(6)   3.5 PSI drop
-        inlet_pressure == 10.0  -> 402.4(7)   1.0 PSI drop
+    Only the plain-vanilla pressure tiers are reachable here. Tables that
+    represent a special/regulator-specific condition (e.g. 402.4(3)/(4)/(11)
+    steel/copper <2 psi specials, 402.4(13) capped-load copper, 402.4(23)/(24)
+    CTS tubing) are intentionally not selectable by this legacy helper --
+    those require an explicit TABLE_OPTIONS pick, not a pressure-only guess.
 
-    Semirigid Copper Tubing:
+    Schedule 40 Steel (natural gas):
+        inlet_pressure < 2.0    -> 402.4(2)   0.5 in. w.c. drop
+        inlet_pressure == 2.0   -> 402.4(5)   1 psi drop
+        inlet_pressure == 3.0   -> 402.4(6)   2 psi drop
+        inlet_pressure == 5.0   -> 402.4(7)   3.5 psi drop
+        No 10 psi Schedule 40 Steel table exists for natural gas (1-7).
+
+    Semirigid Copper Tubing (natural gas):
         inlet_pressure < 2.0    -> 402.4(9)   0.5 in. w.c. drop
-        inlet_pressure == 2.0   -> 402.4(11)  1.0 PSI drop
-        inlet_pressure == 5.0   -> 402.4(13)  3.5 PSI drop
-        inlet_pressure == 10.0  -> 402.4(14)  1.0 PSI drop
+        inlet_pressure == 2.0   -> 402.4(12)  1 psi drop
+        inlet_pressure == 5.0   -> 402.4(14)  3.5 psi drop
+        No 10 psi Copper Tubing table exists for natural gas (8-14).
 
-    CSST:
+    CSST (natural gas):
         inlet_pressure < 2.0    -> 402.4(15)  0.5 in. w.c. drop
-        inlet_pressure == 2.0   -> 402.4(18)  1.0 PSI drop
-        inlet_pressure == 5.0   -> 402.4(19)  3.5 PSI drop
+        inlet_pressure == 2.0   -> 402.4(18)  1 psi drop
+        inlet_pressure == 5.0   -> 402.4(19)  3.5 psi drop
 
-    Polyethylene Plastic Pipe:
+    Polyethylene Plastic Pipe (natural gas):
         inlet_pressure < 2.0    -> 402.4(20)  0.3 in. w.c. drop
-        inlet_pressure == 2.0   -> 402.4(23)  1.0 PSI drop
-        inlet_pressure == 5.0   -> 402.4(24)  3.5 PSI drop
+        inlet_pressure == 2.0   -> 402.4(22)  1 psi drop
+        No 5 psi PE pipe table exists -- 402.4(23)/(24) are CTS tubing
+        tables at <2 psi, not a higher-pressure pipe tier.
 
     Args:
         inlet_pressure_psi: Gas supply pressure at the meter, in PSI.
@@ -514,30 +522,30 @@ def select_table(inlet_pressure_psi, pipe_material="Schedule 40 Steel"):
         if p < 2.0:
             table_id = "402.4(2)"
         elif p <= 2.0:
-            table_id = "402.4(4)"
-        elif p <= 5.0:
+            table_id = "402.4(5)"
+        elif p <= 3.0:
             table_id = "402.4(6)"
-        elif p <= 10.0:
+        elif p <= 5.0:
             table_id = "402.4(7)"
         else:
             raise ValueError(
                 "No IFGC table for Schedule 40 Steel at " + str(p) + " PSI. "
-                "Max supported: 10 PSI."
+                "Max supported: 5 PSI (no 10 PSI natural gas table exists "
+                "for this material)."
             )
 
     elif pipe_material == "Semirigid Copper Tubing":
         if p < 2.0:
             table_id = "402.4(9)"
         elif p <= 2.0:
-            table_id = "402.4(11)"
+            table_id = "402.4(12)"
         elif p <= 5.0:
-            table_id = "402.4(13)"
-        elif p <= 10.0:
             table_id = "402.4(14)"
         else:
             raise ValueError(
                 "No IFGC table for Copper Tubing at " + str(p) + " PSI. "
-                "Max supported: 10 PSI."
+                "Max supported: 5 PSI (no 10 PSI natural gas table exists "
+                "for this material)."
             )
 
     elif pipe_material == "CSST":
@@ -557,13 +565,12 @@ def select_table(inlet_pressure_psi, pipe_material="Schedule 40 Steel"):
         if p < 2.0:
             table_id = "402.4(20)"
         elif p <= 2.0:
-            table_id = "402.4(23)"
-        elif p <= 5.0:
-            table_id = "402.4(24)"
+            table_id = "402.4(22)"
         else:
             raise ValueError(
                 "No IFGC table for PE Pipe at " + str(p) + " PSI. "
-                "Max supported: 5 PSI."
+                "Max supported: 2 PSI (402.4(23)/(24) are CTS tubing "
+                "tables at <2 PSI, not a higher-pressure pipe tier)."
             )
 
     else:
@@ -748,7 +755,7 @@ def _self_test():
 
     table_id_4 = select_table(2.0, "Schedule 40 Steel")
     print("select_table(2.0, 'Schedule 40 Steel') -> " + table_id_4)
-    assert table_id_4 == "402.4(4)", "Expected 402.4(4), got " + table_id_4
+    assert table_id_4 == "402.4(5)", "Expected 402.4(5), got " + table_id_4
 
     sizes = list_pipe_sizes("402.4(2)")
     print("list_pipe_sizes('402.4(2)') first 5 -> " + ", ".join(sizes[:5]))
