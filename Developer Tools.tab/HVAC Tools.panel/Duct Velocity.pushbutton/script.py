@@ -1058,16 +1058,16 @@ def main():
         # Fixed center, positioned by hand in Revit on the Elevation Volleyball
         # DV-M101 sheet, then read back and hardcoded here via Revit MCP.
         #
-        # Viewport.Create's placement point does NOT reliably land at this
-        # diagram view's true box center - confirmed via MCP on two separate
-        # generated sheets, both showed an identical (2.282, 1.55) offset
-        # between the requested point and the resulting box center. Root
-        # cause is the diagram view's crop region not being centered on the
-        # view's own origin (the real building sits far from the Revit
-        # model's global origin). SetBoxCenter operates on the actual
-        # outline and is immune to this - use it instead of trusting the
-        # Create() point.
+        # Both Viewport.Create's placement point AND an immediate SetBoxCenter
+        # right after Create landed (2.282, 1.55) off the intended center,
+        # same exact offset both times, confirmed via MCP across three
+        # separate generated sheets. Root cause: the diagram view's crop
+        # region isn't settled yet at that point in the transaction, so any
+        # box-center call made before a Regenerate() computes against a
+        # stale/uncommitted crop extent. Regenerate() first, then
+        # SetBoxCenter, to get the box center actually applied.
         diagram_vp = Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0, 0, 0))
+        doc.Regenerate()
         diagram_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
 
         # System Summary + flagged-duct table + legend, placed as second viewport on sheet
