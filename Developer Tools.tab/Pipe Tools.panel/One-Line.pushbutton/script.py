@@ -938,19 +938,37 @@ def _activate_sym(doc, sym):
         return None
 
 
-def _place_sym(doc, view, sym, x, y, rotate_90=False):
+def _place_sym(doc, view, sym, x, y, rotate_90=False, rotate_180=False):
     """Place a generic annotation instance at (x, y) in the view.
 
     If rotate_90 is True, rotate the instance 90 degrees around the Z-axis
-    through the placement point.  Returns the placed element or None.
+    through the placement point (used for symbols hanging off a horizontal
+    trunk run, so the 3 lines run vertically).
+
+    If rotate_180 is True, rotate the instance 180 degrees around the
+    placement point instead. The "RJA - P Symbols - Equipment" family's
+    own geometry always hangs BELOW its insertion point (confirmed via
+    BoundingBoxXYZ against the live model: insertion point sits exactly on
+    the box's Max.Y, i.e. the TOP line of the 3-line detail is the one
+    nearest the connection). For a branch that takes off vertically UP
+    from the main, the connection must land on the BOTTOM line instead, so
+    the symbol needs a 180 degree flip to hang ABOVE its insertion point.
+    Confirmed live: after RotateElement by pi about the insertion point,
+    the box's Min.Y (not Max.Y) lands on the insertion point.
+
+    rotate_90 and rotate_180 are mutually exclusive; rotate_90 wins if both
+    are passed. Returns the placed element or None.
     """
     if sym is None:
         return None
     try:
         inst = doc.Create.NewFamilyInstance(XYZ(x, y, 0), sym, view)
-        if rotate_90 and inst is not None:
+        if inst is not None:
             axis = Line.CreateBound(XYZ(x, y, 0), XYZ(x, y, 1))
-            ElementTransformUtils.RotateElement(doc, inst.Id, axis, math.pi / 2.0)
+            if rotate_90:
+                ElementTransformUtils.RotateElement(doc, inst.Id, axis, math.pi / 2.0)
+            elif rotate_180:
+                ElementTransformUtils.RotateElement(doc, inst.Id, axis, math.pi)
         return inst
     except Exception:
         return None
@@ -1072,7 +1090,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     _note(doc, view, lbl_x, mid_y, lbl, tt_id)
 
     # Equipment symbol at the fixture endpoint
-    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y)
+    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y, rotate_180=going_up)
     if e_inst is None:
         # Fallback: drawn 3-line symbol.
         # Line 0 (outer, connects to branch) is at fix_y.
@@ -1169,7 +1187,7 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
                 _make_group(doc, _draw_valve_bowtie(doc, view, sx, sf_prv_y))
 
         # Equipment symbol at fixture level (same Y as primary)
-        e_inst = _place_sym(doc, view, equip_sym, sx, fy)
+        e_inst = _place_sym(doc, view, equip_sym, sx, fy, rotate_180=going_up)
         if e_inst is None:
             sym_elems = []
             for i in range(3):
@@ -1210,7 +1228,7 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
 
     # Primary fixture symbol at end of main vertical
     primary_node = graph.nodes.get(bi["fixture_nid"])
-    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y)
+    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y, rotate_180=going_up)
     if e_inst is None:
         sym_elems = []
         for i in range(3):
@@ -2069,7 +2087,7 @@ def main():
                     p_inst = _place_sym(doc, view, prv_sym, cx, prv_y, rotate_90=True)
                     if p_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, cx, prv_y))
-                e_inst = _place_sym(doc, view, equip_sym, cx, cy)
+                e_inst = _place_sym(doc, view, equip_sym, cx, cy, rotate_180=going_up)
                 if e_inst is None:
                     sym_elems = []
                     for i in range(3):
