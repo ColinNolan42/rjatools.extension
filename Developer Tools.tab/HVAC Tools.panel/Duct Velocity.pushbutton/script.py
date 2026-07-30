@@ -1055,11 +1055,20 @@ def main():
         new_sheet.Name = base_name + ' (Sheet)'
 
         # Place viewport
-        # Fixed center on the RJA 30x42 title block's open field, upper-left,
-        # flush toward the left margin with clearance above the summary block
-        # and below the title block's top edge. Verified against a real sheet
-        # (Elevation Volleyball DV-M101) via Revit MCP before hardcoding.
-        Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0.82, 1.76, 0))
+        # Fixed center, positioned by hand in Revit on the Elevation Volleyball
+        # DV-M101 sheet, then read back and hardcoded here via Revit MCP.
+        #
+        # Viewport.Create's placement point does NOT reliably land at this
+        # diagram view's true box center - confirmed via MCP on two separate
+        # generated sheets, both showed an identical (2.282, 1.55) offset
+        # between the requested point and the resulting box center. Root
+        # cause is the diagram view's crop region not being centered on the
+        # view's own origin (the real building sits far from the Revit
+        # model's global origin). SetBoxCenter operates on the actual
+        # outline and is immune to this - use it instead of trusting the
+        # Create() point.
+        diagram_vp = Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0, 0, 0))
+        diagram_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
 
         # System Summary + flagged-duct table + legend, placed as second viewport on sheet
         if tn_type_id is not None:
@@ -1067,14 +1076,14 @@ def main():
                 doc, summary_lines, flagged_items, custom_limits, tol_pct,
                 source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
-                # Place in the blank field next to the title block strip,
-                # bottom-right of the open area, right edge anchored just
-                # clear of the title block (RJA 30x42, strip starts ~X=2.6).
-                # Grows upward from the bottom margin as content_h increases.
-                total_w   = 1.060   # must match COLS sum in _build_summary_view
-                right_edge_x = 2.55
-                sched_x  = right_edge_x - total_w / 2.0
-                sched_y  = 0.06 + content_h / 2.0
+                # X fixed by hand in Revit (see diagram note above) and read
+                # back via Revit MCP. Y keeps the original bottom-anchored,
+                # grows-upward-with-content_h behavior, just re-anchored to
+                # match the hand-placed bottom edge on that same sheet.
+                total_w         = 1.060   # must match COLS sum in _build_summary_view
+                sched_x         = -1.164
+                bottom_margin_y = 1.546
+                sched_y  = bottom_margin_y + content_h / 2.0
                 sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
                                            XYZ(sched_x, sched_y, 0))
                 # No title/border on this viewport — use the "None" Viewport Type if
