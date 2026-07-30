@@ -33,6 +33,7 @@ from Autodesk.Revit.DB import (
     ViewFamily,
     TextNote,
     TextNoteType,
+    TextRange,
     HorizontalTextAlignment,
     FilteredElementCollector,
     FamilySymbol,
@@ -951,7 +952,8 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
             lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
         else:         # going down: origin just below outer line, text flows further down
             lbl_y = far_y - FIXTURE_LABEL_GAP
-        _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
+        _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True,
+              underline_len=len(name))
 
 
 def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
@@ -1040,7 +1042,8 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
                 lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
             else:
                 lbl_y = far_y - FIXTURE_LABEL_GAP
-            _note(doc, view, sx, lbl_y, label, tt_id, center_align=True)
+            _note(doc, view, sx, lbl_y, label, tt_id, center_align=True,
+                  underline_len=len(name))
 
         # Pipe label above the horizontal leg — uses remaining_ft (sub-tee to
         # stub fixture only, not the full path from trunk tee).
@@ -1080,7 +1083,8 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
             lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
         else:
             lbl_y = far_y - FIXTURE_LABEL_GAP
-        _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True)
+        _note(doc, view, fix_x, lbl_y, label, tt_id, center_align=True,
+              underline_len=len(name))
 
     # Two pipe labels on the main vertical when sub-fixtures are present:
     #   Label 1 (trunk tee → sub-tee junction): shared_ft + combined cum_mbh
@@ -1196,7 +1200,8 @@ def _line(doc, view, x0, y0, x1, y1, line_style=None):
         return None
 
 
-def _note(doc, view, x, y, text, tt_id, width=None, center_align=False):
+def _note(doc, view, x, y, text, tt_id, width=None, center_align=False,
+          underline_len=None):
     """Create a TextNote and return the element (or None on failure).
 
     If width is truthy, the insertion point is shifted left by roughly half
@@ -1206,6 +1211,12 @@ def _note(doc, view, x, y, text, tt_id, width=None, center_align=False):
     If center_align is True, sets HorizontalTextAlignment.Center on the note
     so Revit centers the text on x directly -- more accurate than the width
     shift. Don't combine both; use one or the other.
+
+    If underline_len is a positive int, the first underline_len characters
+    of text are underlined via FormattedText -- the same result as
+    selecting the text in Revit's text editor and clicking Underline.
+    Used for equipment/fixture name labels (name is line 1, MBH is line 2;
+    only the name gets underlined).
     """
     try:
         if width:
@@ -1215,6 +1226,13 @@ def _note(doc, view, x, y, text, tt_id, width=None, center_align=False):
         if center_align and tn is not None:
             try:
                 tn.HorizontalAlignment = HorizontalTextAlignment.Center
+            except Exception:
+                pass
+        if underline_len and tn is not None:
+            try:
+                ft = tn.GetFormattedText()
+                ft.SetUnderlineStatus(TextRange(0, underline_len), True)
+                tn.SetFormattedText(ft)
             except Exception:
                 pass
         return tn
@@ -1887,9 +1905,14 @@ def main():
                     _make_group(doc, sym_elems)
                 x_center = cx + sign * 1.0 * FIXTURE_SPACING
                 lbl_y    = cy - FIXTURE_HW - FIXTURE_LABEL_GAP
-                _note(doc, view, x_center, lbl_y, label, tt_id, center_align=True)
+                _note(doc, view, x_center, lbl_y, label, tt_id, center_align=True,
+                      underline_len=len(name))
             else:
-                going_up = cy > 0.0
+                # going_up must be relative to where the trunk pipe approaches
+                # FROM, not an absolute cy>0 test -- otherwise a trunk that
+                # itself sits above y=0 would flip every branch's connect
+                # point to the wrong end of the 3-line symbol.
+                going_up = cy > from_pos[1]
                 sign     = 1.0 if going_up else -1.0
                 # Isolation VALVE_FIXTURE_GAP from fixture; PRV one VALVE_PITCH further
                 iso_y = cy - sign * VALVE_FIXTURE_GAP
@@ -1915,7 +1938,8 @@ def main():
                     lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
                 else:
                     lbl_y = far_y - FIXTURE_LABEL_GAP
-                _note(doc, view, cx, lbl_y, label, tt_id, center_align=True)
+                _note(doc, view, cx, lbl_y, label, tt_id, center_align=True,
+                      underline_len=len(name))
 
             drawn_fixtures += 1
 
