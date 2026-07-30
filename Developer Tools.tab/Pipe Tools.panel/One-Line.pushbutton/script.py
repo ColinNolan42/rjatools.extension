@@ -86,17 +86,6 @@ NOTES_Y_BASE     = LEVEL_HEIGHT + 4.0
 ELBOW_EQUIV_FT   = 5.0  # ft per elbow, per IFGC A103.1 -- must match
                         # pipe_graph._find_longest_run's ELBOW_EQUIV_FT
 
-# Real-world developed-length gap (pipe + elbow-equiv) between cascading
-# tees, used to decide whether their downstream fixtures get drawn as one
-# collapsed schematic junction (gap <= threshold, e.g. two tees ~1.8 ft
-# apart both peeling off equipment right after a riser) or as a genuinely
-# separate nested branch drawn further up its own column (gap > threshold,
-# e.g. two tees ~11.7 ft apart). One threshold per nesting depth; the last
-# value repeats for any depth beyond the list. Confirmed against the
-# Fraser project via Revit MCP: AHU-1/ERV-1/AHU-2 (1.8 ft gap) collapses
-# flat, B-1/B-2 (11.7 ft gap, one level down from B-3) stays nested.
-BRANCH_MERGE_THRESHOLDS_FT = [2.0, 10.0]
-
 _PRV_KW       = ("prv", "regulator", "regulating")
 _ISOLATION_KW = ("valve", "ball", "gate", "check", "shutoff")
 _VALVE_KW     = _PRV_KW + _ISOLATION_KW  # combined for legacy checks
@@ -272,305 +261,6 @@ def _trace_to_fixtures(graph, start_nid, trunk_set, initial_len=0.0):
                 stack.append((child, acc_len + extra, acc_eids, nv_prv, nv_iso))
 
     return results
-
-
-# ---------------------------------------------------------------------------
-# Cascading-tee grouping: decide which fixtures collapse into one flat
-# schematic junction vs. which stay nested under their own real tee.
-# ---------------------------------------------------------------------------
-
-def _group_fixtures_by_prefix(graph, fixtures, depth=0):
-    """Recursively group a flat fixture-trace list (from _trace_to_fixtures)
-    into a tree based on shared branch_edge_ids prefixes.
-
-    _trace_to_fixtures flattens every tee in a cascade into one list with no
-    record of which fixtures shared a deeper, real tee further downstream.
-    This rebuilds that structure: fixtures whose paths diverge almost
-    immediately (shared prefix <= BRANCH_MERGE_THRESHOLDS_FT[depth]) are
-    left as independent leaves, each gets its own parallel branch in the
-    diagram. Fixtures that share a longer prefix are pulled into their own
-    nested group, to be drawn as one shared riser that splits further up
-    (see _resolve_slot / _layout_fixture_group).
-
-    Returns a list of slots, each ("leaf", fixture_dict) or
-    ("group", shared_ft, shared_eids, [child slots...]).
-    """
-    if len(fixtures) <= 1:
-        return [("leaf", f) for f in fixtures]
-
-    threshold = BRANCH_MERGE_THRESHOLDS_FT[
-        min(depth, len(BRANCH_MERGE_THRESHOLDS_FT) - 1)]
-
-    # Bucket by first remaining edge id -- fixtures that diverge at the very
-    # next fitting land in different buckets; fixtures that pass through the
-    # same next pipe/fitting land together.
-    bucket_keys = []
-    buckets     = []
-    for f in fixtures:
-        key = f["branch_edge_ids"][0] if f["branch_edge_ids"] else None
-        idx = None
-        for i, k in enumerate(bucket_keys):
-            if k == key:
-                idx = i
-                break
-        if idx is None:
-            bucket_keys.append(key)
-            buckets.append([f])
-        else:
-            buckets[idx].append(f)
-
-    slots = []
-    for group in buckets:
-        if len(group) == 1:
-            slots.append(("leaf", group[0]))
-            continue
-
-        all_eids = [f["branch_edge_ids"] for f in group]
-        shared_eids = []
-        for edge_group in zip(*all_eids):
-            if len(set(edge_group)) == 1:
-                shared_eids.append(edge_group[0])
-            else:
-                break
-        shared_ft = sum(
-            _edge_developed_length(graph, graph.edges[eid])
-            for eid in shared_eids if eid in graph.edges)
-
-        if shared_ft <= threshold:
-            # Not enough real separation to read as its own tee -- fold
-            # every fixture in this bucket back in as an independent leaf.
-            for f in group:
-                slots.append(("leaf", f))
-            continue
-
-        # Strip the shared prefix and recurse -- this bucket may itself
-        # split further downstream.
-        trimmed = []
-        for f in group:
-            f2 = dict(f)
-            f2["branch_edge_ids"] = f["branch_edge_ids"][len(shared_eids):]
-            trimmed.append(f2)
-        children = _group_fixtures_by_prefix(graph, trimmed, depth + 1)
-        slots.append(("group", shared_ft, shared_eids, children))
-
-    return slots
-
-
-def _slot_total_length(slot):
-    """Representative total_length_ft for a slot: the fixture's own for a
-    leaf, or the longest descendant's for a group. Used only to decide
-    which top-level slot is longest (becomes the primary, continues
-    straight) vs. the others (flat siblings, side-by-side)."""
-    if slot[0] == "leaf":
-        return slot[1]["total_length_ft"]
-    _kind, _shared_ft, _shared_eids, children = slot
-    return max(_slot_total_length(c) for c in children)
-
-
-def _slot_leaf_fixtures(slot):
-    """Flat list of every leaf fixture-trace dict under this slot."""
-    if slot[0] == "leaf":
-        return [slot[1]]
-    _kind, _shared_ft, _shared_eids, children = slot
-    out = []
-    for c in children:
-        out.extend(_slot_leaf_fixtures(c))
-    return out
-
-
-def _resolve_slot(slot, prefix_edge_ids):
-    """Resolve one top-level slot into its own primary fixture plus, if it
-    was a merged group, that group's own inner L-jog stub(s).
-
-    total_length_ft/edge_ids in the returned dict are absolute (from the
-    original branch tee, prefix_edge_ids already folded in), matching what
-    _layout_fixture_group needs to position things directly.
-    """
-    if slot[0] == "leaf":
-        f = slot[1]
-        return {
-            "fixture_nid":     f["fixture_nid"],
-            "total_length_ft": f["total_length_ft"],
-            "has_isolation":   f["has_isolation"],
-            "has_prv":         f["has_prv"],
-            "cum_mbh":         f["cum_mbh"],
-            "edge_ids":        prefix_edge_ids + f["branch_edge_ids"],
-            "shared_ft":       0.0,
-            "shared_eids":     [],
-            "remaining_eids":  prefix_edge_ids + f["branch_edge_ids"],
-            "inner_stubs":     [],
-        }
-
-    _kind, shared_ft, shared_eids, children = slot
-    inner_sorted = sorted(children, key=_slot_total_length)
-    inner_primary_slot = inner_sorted[-1]
-    inner_stub_slots   = inner_sorted[:-1]
-
-    # inner_primary may itself be a group if there's a third real tee in
-    # the cascade -- flatten to its own longest leaf so the diagram always
-    # draws something reasonable rather than needing a third label tier.
-    if inner_primary_slot[0] == "leaf":
-        pf = inner_primary_slot[1]
-    else:
-        pf = max(_slot_leaf_fixtures(inner_primary_slot),
-                 key=lambda f: f["total_length_ft"])
-
-    inner_stubs = []
-    for ist in inner_stub_slots:
-        for leaf in _slot_leaf_fixtures(ist):
-            inner_stubs.append({
-                "fixture_nid":     leaf["fixture_nid"],
-                "total_length_ft": leaf["total_length_ft"],
-                "has_isolation":   leaf["has_isolation"],
-                "has_prv":         leaf["has_prv"],
-                "cum_mbh":         leaf["cum_mbh"],
-                "edge_ids":        (prefix_edge_ids + list(shared_eids)
-                                     + leaf["branch_edge_ids"]),
-                "remaining_ft":    leaf["total_length_ft"] - shared_ft,
-            })
-
-    return {
-        "fixture_nid":     pf["fixture_nid"],
-        "total_length_ft": pf["total_length_ft"],
-        "has_isolation":   pf["has_isolation"],
-        "has_prv":         pf["has_prv"],
-        "cum_mbh":         pf["cum_mbh"] + sum(s["cum_mbh"] for s in inner_stubs),
-        "edge_ids":        prefix_edge_ids + list(shared_eids) + pf["branch_edge_ids"],
-        "shared_ft":       shared_ft,
-        "shared_eids":     prefix_edge_ids + list(shared_eids),
-        "remaining_eids":  pf["branch_edge_ids"],
-        "inner_stubs":     inner_stubs,
-    }
-
-
-def _layout_fixture_group(graph, tee_nid, tx, ty, tee_z, direc, depth,
-                           fixtures, positions, branch_info, layout_log,
-                           branch_edge_id, meter_z=0.0):
-    """Resolve one tee's downstream fixtures into a branch_info entry.
-
-    Groups fixtures that share a long-enough pipe-path prefix (see
-    _group_fixtures_by_prefix) into their own nested junction instead of
-    flattening every fixture into one L-jog stub row at the same height.
-    Top-level siblings (a single fixture or a merged group) are drawn
-    side-by-side at the SAME fix_y, matching the firm's reference one-line
-    diagrams (parallel branches off one point, not one continuing line with
-    everything else jutting off of it). A merged group additionally draws
-    its own internal primary/stub split partway up its own column.
-
-    Appends exactly one entry to branch_info (plus its log entry to
-    layout_log) and assigns positions[] for every fixture involved.
-    """
-    slots = _group_fixtures_by_prefix(graph, fixtures, depth=0)
-    fix_y = ty + direc * LEVEL_HEIGHT * depth
-
-    resolved        = [_resolve_slot(slot, [branch_edge_id]) for slot in slots]
-    resolved_sorted = sorted(resolved, key=lambda r: r["total_length_ft"])
-    primary         = resolved_sorted[-1]
-    stubs           = resolved_sorted[:-1]
-
-    positions[primary["fixture_nid"]] = (tx, fix_y)
-
-    inner_junction_y = ty + direc * LEVEL_HEIGHT * depth * 0.5
-    sub_info = []
-    col = [0]
-
-    def _append_stub(r, jy):
-        col[0] += 1
-        sx = tx + col[0] * MIN_SEGMENT_FT
-        positions[r["fixture_nid"]] = (sx, fix_y)
-        sub_info.append({
-            "fixture_nid":      r["fixture_nid"],
-            "stub_x":           sx,
-            "junction_y":       jy,
-            "fixture_y":        fix_y,
-            "total_ft":         r["total_length_ft"],
-            "remaining_ft":     r["total_length_ft"],
-            "cum_mbh":          r["cum_mbh"],
-            "has_isolation":    r["has_isolation"],
-            "has_prv":          r["has_prv"],
-            "branch_edge_ids":  r["edge_ids"],
-            "remaining_eids":   r["edge_ids"],
-            "size":             "",
-            "remaining_size":   "",
-        })
-        for ist in r["inner_stubs"]:
-            col[0] += 1
-            isx = tx + col[0] * MIN_SEGMENT_FT
-            positions[ist["fixture_nid"]] = (isx, fix_y)
-            sub_info.append({
-                "fixture_nid":      ist["fixture_nid"],
-                "stub_x":           isx,
-                "junction_y":       inner_junction_y,
-                "fixture_y":        fix_y,
-                "total_ft":         ist["total_length_ft"],
-                "remaining_ft":     ist["remaining_ft"],
-                "cum_mbh":          ist["cum_mbh"],
-                "has_isolation":    ist["has_isolation"],
-                "has_prv":          ist["has_prv"],
-                "branch_edge_ids":  ist["edge_ids"],
-                "remaining_eids":   ist["edge_ids"],
-                "size":             "",
-                "remaining_size":   "",
-            })
-
-    for r in stubs:
-        _append_stub(r, ty)
-
-    # Primary's own inner stubs (if the outer primary was itself a merged
-    # group) tee off partway up the MAIN vertical, same column (tx).
-    for ist in primary["inner_stubs"]:
-        col[0] += 1
-        isx = tx + col[0] * MIN_SEGMENT_FT
-        positions[ist["fixture_nid"]] = (isx, fix_y)
-        sub_info.append({
-            "fixture_nid":      ist["fixture_nid"],
-            "stub_x":           isx,
-            "junction_y":       inner_junction_y,
-            "fixture_y":        fix_y,
-            "total_ft":         ist["total_length_ft"],
-            "remaining_ft":     ist["remaining_ft"],
-            "cum_mbh":          ist["cum_mbh"],
-            "has_isolation":    ist["has_isolation"],
-            "has_prv":          ist["has_prv"],
-            "branch_edge_ids":  ist["edge_ids"],
-            "remaining_eids":   ist["edge_ids"],
-            "size":             "",
-            "remaining_size":   "",
-        })
-
-    total_branch_mbh = primary["cum_mbh"] + sum(s["cum_mbh"] for s in sub_info)
-    branch_info.append({
-        "tee_nid":         tee_nid,
-        "tee_pos":         (tx, ty),
-        "fixture_nid":     primary["fixture_nid"],
-        "fixture_pos":     (tx, fix_y),
-        "total_ft":        primary["total_length_ft"],
-        "shared_ft":       primary["shared_ft"],
-        "shared_eids":     primary["shared_eids"],
-        "remaining_ft":    primary["total_length_ft"] - primary["shared_ft"],
-        "remaining_eids":  primary["remaining_eids"],
-        "branch_edge_ids": primary["edge_ids"],
-        "has_isolation":   primary["has_isolation"],
-        "has_prv":         primary["has_prv"],
-        "direc":           direc,
-        "size":            "",
-        "shared_size":     "",
-        "remaining_size":  "",
-        "cum_mbh":         total_branch_mbh,
-        "sub_fixtures":    sub_info,
-    })
-    layout_log.append({
-        "tee_nid":    tee_nid,
-        "tee_pos":    (tx, ty),
-        "tee_z":      tee_z,
-        "edge_id":    branch_edge_id,
-        "to_nid":     primary["fixture_nid"],
-        "to_z":       _node_z(graph, primary["fixture_nid"], meter_z),
-        "fixture_z":  _node_z(graph, primary["fixture_nid"], meter_z),
-        "direc":      "UP" if direc > 0 else "DOWN",
-        "result_pos": (tx, fix_y),
-        "branch_y":   None,
-    })
 
 
 def _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates):
@@ -780,11 +470,118 @@ def _compute_layout(graph):
 
             depth = branch_counters.get(tee_nid, 0) + 1
             branch_counters[tee_nid] = depth
+            fix_y = ty + direc * LEVEL_HEIGHT * depth
 
-            _layout_fixture_group(graph, tee_nid, tx, ty, tee_z, direc, depth,
-                                   fixtures, positions, branch_info,
-                                   layout_log, branch_edge.element_id,
-                                   meter_z=meter_z)
+            if len(fixtures) == 1:
+                fix_info = fixtures[0]
+                fix_nid  = fix_info["fixture_nid"]
+                positions[fix_nid] = (tx, fix_y)
+                branch_info.append({
+                    "tee_nid":         tee_nid,
+                    "tee_pos":         (tx, ty),
+                    "fixture_nid":     fix_nid,
+                    "fixture_pos":     (tx, fix_y),
+                    "total_ft":        fix_info["total_length_ft"],
+                    "branch_edge_ids": [branch_edge.element_id] + fix_info["branch_edge_ids"],
+                    "has_isolation":   fix_info["has_isolation"],
+                    "has_prv":         fix_info["has_prv"],
+                    "direc":           direc,
+                    "size":            "",
+                    "cum_mbh":         fix_info["cum_mbh"],
+                    "sub_fixtures":    [],
+                })
+                layout_log.append({
+                    "tee_nid":    tee_nid,
+                    "tee_pos":    (tx, ty),
+                    "tee_z":      tee_z,
+                    "edge_id":    branch_edge.element_id,
+                    "to_nid":     fix_nid,
+                    "to_z":       first_fix_z,
+                    "fixture_z":  first_fix_z,
+                    "direc":      "UP" if direc > 0 else "DOWN",
+                    "result_pos": (tx, fix_y),
+                    "branch_y":   None,
+                })
+            else:
+                # Multiple fixtures: longest path = primary (end of main
+                # vertical), shorter paths = L-shaped stubs at mid-height.
+                fixes_sorted = sorted(fixtures,
+                                      key=lambda f: f["total_length_ft"])
+                primary = fixes_sorted[-1]
+                stubs   = fixes_sorted[:-1]
+                junction_y = ty + direc * LEVEL_HEIGHT * depth * 0.5
+
+                # Find the common edge prefix shared by all fixture paths.
+                # These are the pipes from the branch tee to the sub-tee.
+                all_eids = [f["branch_edge_ids"] for f in fixes_sorted]
+                shared_eids = []
+                for group in zip(*all_eids):
+                    if len(set(group)) == 1:
+                        shared_eids.append(group[0])
+                    else:
+                        break
+                shared_eids_dev = sum(
+                    _edge_developed_length(graph, graph.edges[eid])
+                    for eid in shared_eids if eid in graph.edges)
+                # shared_ft = branch_seed already in total_ft + shared pipe
+                shared_ft = branch_seed_len + shared_eids_dev
+
+                positions[primary["fixture_nid"]] = (tx, fix_y)
+
+                sub_info = []
+                for i, sf in enumerate(stubs):
+                    sx = tx + (i + 1) * MIN_SEGMENT_FT
+                    positions[sf["fixture_nid"]] = (sx, fix_y)
+                    sub_info.append({
+                        "fixture_nid":      sf["fixture_nid"],
+                        "stub_x":           sx,
+                        "junction_y":       junction_y,
+                        "fixture_y":        fix_y,
+                        "total_ft":         sf["total_length_ft"],
+                        "remaining_ft":     sf["total_length_ft"] - shared_ft,
+                        "cum_mbh":          sf["cum_mbh"],
+                        "has_isolation":    sf["has_isolation"],
+                        "has_prv":          sf["has_prv"],
+                        "branch_edge_ids":  sf["branch_edge_ids"],
+                        "remaining_eids":   sf["branch_edge_ids"][len(shared_eids):],
+                        "size":             "",
+                        "remaining_size":   "",
+                    })
+
+                total_branch_mbh = (sum(s["cum_mbh"] for s in sub_info)
+                                    + primary["cum_mbh"])
+                branch_info.append({
+                    "tee_nid":          tee_nid,
+                    "tee_pos":          (tx, ty),
+                    "fixture_nid":      primary["fixture_nid"],
+                    "fixture_pos":      (tx, fix_y),
+                    "total_ft":         primary["total_length_ft"],
+                    "shared_ft":        shared_ft,
+                    "shared_eids":      shared_eids,
+                    "remaining_ft":     primary["total_length_ft"] - shared_ft,
+                    "remaining_eids":   primary["branch_edge_ids"][len(shared_eids):],
+                    "branch_edge_ids":  [branch_edge.element_id] + primary["branch_edge_ids"],
+                    "has_isolation":    primary["has_isolation"],
+                    "has_prv":          primary["has_prv"],
+                    "direc":            direc,
+                    "size":             "",
+                    "shared_size":      "",
+                    "remaining_size":   "",
+                    "cum_mbh":          total_branch_mbh,
+                    "sub_fixtures":     sub_info,
+                })
+                layout_log.append({
+                    "tee_nid":    tee_nid,
+                    "tee_pos":    (tx, ty),
+                    "tee_z":      tee_z,
+                    "edge_id":    branch_edge.element_id,
+                    "to_nid":     primary["fixture_nid"],
+                    "to_z":       first_fix_z,
+                    "fixture_z":  first_fix_z,
+                    "direc":      "UP" if direc > 0 else "DOWN",
+                    "result_pos": (tx, fix_y),
+                    "branch_y":   None,
+                })
 
     _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates)
 
