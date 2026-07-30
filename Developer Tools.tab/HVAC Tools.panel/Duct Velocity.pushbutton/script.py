@@ -1055,7 +1055,11 @@ def main():
         new_sheet.Name = base_name + ' (Sheet)'
 
         # Place viewport
-        Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(1.1, 0.8, 0))
+        # Fixed center on the RJA 30x42 title block's open field, upper-left,
+        # flush toward the left margin with clearance above the summary block
+        # and below the title block's top edge. Verified against a real sheet
+        # (Elevation Volleyball DV-M101) via Revit MCP before hardcoding.
+        Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0.82, 1.76, 0))
 
         # System Summary + flagged-duct table + legend, placed as second viewport on sheet
         if tn_type_id is not None:
@@ -1063,9 +1067,13 @@ def main():
                 doc, summary_lines, flagged_items, custom_limits, tol_pct,
                 source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
-                # Place below floor plan: centre of block at bottom-left of sheet
-                total_w  = 1.060   # must match COLS sum in _build_summary_view
-                sched_x  = 0.10 + total_w / 2.0
+                # Place in the blank field next to the title block strip,
+                # bottom-right of the open area, right edge anchored just
+                # clear of the title block (RJA 30x42, strip starts ~X=2.6).
+                # Grows upward from the bottom margin as content_h increases.
+                total_w   = 1.060   # must match COLS sum in _build_summary_view
+                right_edge_x = 2.55
+                sched_x  = right_edge_x - total_w / 2.0
                 sched_y  = 0.06 + content_h / 2.0
                 sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
                                            XYZ(sched_x, sched_y, 0))
