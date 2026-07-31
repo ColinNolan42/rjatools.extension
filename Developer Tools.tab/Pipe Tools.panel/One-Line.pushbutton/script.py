@@ -91,19 +91,12 @@ _PRV_KW       = ("prv", "regulator", "regulating")
 _ISOLATION_KW = ("valve", "ball", "gate", "check", "shutoff")
 _VALVE_KW     = _PRV_KW + _ISOLATION_KW  # combined for legacy checks
 
-# BRANCH_MERGE_THRESHOLDS_FT: real developed-length gap (ft), one value per
-# cascading-tee nesting depth (last value repeats for deeper levels). Used
-# by _flatten_group to decide whether a nested branch child reads as the
-# SAME schematic junction (gap <= threshold, inline it) or its own nested
-# junction one level deeper (gap > threshold).
-BRANCH_MERGE_THRESHOLDS_FT = [2.0, 10.0]
-
-# NEW_MAIN_FIXTURE_THRESHOLD: a branch child reaching MORE than this many
+# NEW_MAIN_FIXTURE_THRESHOLD: a branch child reaching THIS MANY OR MORE
 # fixtures is treated as a sub-main ("new main") continuing the row, drawn
 # like an extension of the trunk (see _emit_new_main). A child reaching
-# this many or fewer fixtures is handled entirely by the existing
-# _emit_tree_branch/_flatten_group (unmodified) -- a simple tap if it's
-# just one fixture, or a small flat/nested group otherwise.
+# fewer fixtures than this is a plain single-fixture tap (or, at a final
+# fork where nothing qualifies, one of a small set of plain taps placed
+# in ascending order of remaining length).
 NEW_MAIN_FIXTURE_THRESHOLD = 2
 
 
@@ -318,10 +311,9 @@ def _tree_fixture_count(node):
     """Count of fixtures reachable under this tree node.
 
     The signal _emit_new_main uses to decide whether a branch child is a
-    sub-main ("new main") continuing the row -- more than
-    NEW_MAIN_FIXTURE_THRESHOLD fixtures -- or small enough to hand off
-    entirely to the existing _emit_tree_branch/_flatten_group unchanged.
-    Purely a property of the tree _build_tree already produces: no pipe
+    sub-main ("new main") continuing the row -- NEW_MAIN_FIXTURE_THRESHOLD
+    fixtures or more -- or a plain single-fixture tap. Purely a property
+    of the tree _build_tree already produces: no pipe
     geometry or Revit API calls needed, so it works identically whether or
     not a given hop has real pipe direction data (a zero-length fitting
     cluster still has a fixture count even with no geometry at all).
@@ -359,194 +351,42 @@ def _tree_first_fixture(node):
     return None
 
 
-def _tree_deepest_leaf(node):
-    """Resolve node into a single representative leaf (fixture_nid/
-    seg_len/seg_eids/has_isolation/has_prv/cum_mbh), always descending
-    into the longest child, accumulating length/edges/flags along the
-    way. Used to pick what fixture/length labels a column when node
-    becomes this level's primary or a stub -- the REST of a nested
-    branch's content is handled separately by recursing into its
-    'children', not lost here.
-    """
-    if node["kind"] == "fixture":
-        return dict(node)
-    best  = max(node["children"], key=_tree_total_len)
-    inner = _tree_deepest_leaf(best)
-    return {
-        "kind":          "fixture",
-        "fixture_nid":   inner["fixture_nid"],
-        "seg_len":       node["seg_len"] + inner["seg_len"],
-        "seg_eids":      node["seg_eids"] + inner["seg_eids"],
-        "has_isolation": node["has_isolation"] or inner["has_isolation"],
-        "has_prv":       node["has_prv"] or inner["has_prv"],
-        "cum_mbh":       inner["cum_mbh"],
-    }
-
-
-def _flatten_group(nodes, depth):
-    """Inline any 'branch' node whose own seg_len (the real developed-
-    length gap from its parent) is short enough to read as the SAME
-    schematic junction (per BRANCH_MERGE_THRESHOLDS_FT[depth]),
-    recursively -- however many real tees are chained that closely
-    together, ALL their children end up as flat siblings at this level,
-    with nothing dropped (inlining only ever expands the list via
-    concatenation, never picks one and discards the rest).
-
-    A 'branch' node whose seg_len exceeds the threshold is left as its
-    own single slot, to become a genuinely nested junction one level
-    deeper (see _emit_tree_branch).
-
-    Returns a flat list of tree nodes (fixtures and/or un-inlined
-    branches), each with seg_len/seg_eids already folded to be relative
-    to the CURRENT level (as if it hung directly off this level's tee).
-    """
-    threshold = BRANCH_MERGE_THRESHOLDS_FT[
-        min(depth, len(BRANCH_MERGE_THRESHOLDS_FT) - 1)]
-    out = []
-    for node in nodes:
-        if node["kind"] == "fixture":
-            out.append(node)
-            continue
-        if node["seg_len"] <= threshold:
-            inlined = _flatten_group(node["children"], depth)
-            for gc in inlined:
-                gc2 = dict(gc)
-                gc2["seg_len"]  = node["seg_len"] + gc["seg_len"]
-                gc2["seg_eids"] = node["seg_eids"] + gc["seg_eids"]
-                out.append(gc2)
-        else:
-            out.append(node)
-    return out
-
-
-def _emit_tree_branch(graph, tx, ty, tee_z, direc, depth, children,
-                       base_len, base_eids, positions, branch_info,
-                       layout_log, meter_z=0.0):
-    """Emit branch_info entries for a set of 2+ sibling tree nodes hanging
-    off (tx, ty) at diagram depth `depth`.
-
-    children: tree nodes (fixtures and/or un-inlined branches, always 2+
-        by construction -- _build_tree only creates a 'branch' node when
-        2+ children survive) with seg_len/seg_eids relative to (tx, ty).
-    base_len/base_eids: the real developed length/edge-ids already
-        traveled to reach (tx, ty) from the very original branch_edge --
-        folded into every reported fixture's total length/branch_edge_ids
-        so labels show the true cumulative distance no matter how many
-        levels deep this recursion goes.
-
-    Recurses into any genuinely-nested branch (one whose gap exceeded the
-    merge threshold) to give it its own branch_info entry(ies) further up
-    its own column. No depth limit; no fixture is ever dropped.
-    """
-    fix_y = ty + direc * LEVEL_HEIGHT * depth
-    flat  = _flatten_group(children, depth=0)
-
-    ranked  = sorted(flat, key=_tree_total_len)
-    primary = ranked[-1]
-    stubs   = ranked[:-1]
-
-    primary_leaf = _tree_deepest_leaf(primary)
-    positions[primary_leaf["fixture_nid"]] = (tx, fix_y)
-
-    sub_info = []
-    col = [0]
-    for slot in stubs:
-        col[0] += 1
-        sx   = tx + col[0] * MIN_SEGMENT_FT
-        leaf = _tree_deepest_leaf(slot)
-        positions[leaf["fixture_nid"]] = (sx, fix_y)
-        sub_info.append({
-            "fixture_nid":      leaf["fixture_nid"],
-            "stub_x":           sx,
-            "junction_y":       ty,
-            "fixture_y":        fix_y,
-            "total_ft":         base_len + leaf["seg_len"],
-            "remaining_ft":     base_len + leaf["seg_len"],
-            "cum_mbh":          leaf["cum_mbh"],
-            "has_isolation":    leaf["has_isolation"],
-            "has_prv":          leaf["has_prv"],
-            "branch_edge_ids":  base_eids + leaf["seg_eids"],
-            "remaining_eids":   base_eids + leaf["seg_eids"],
-            "size":             "",
-            "remaining_size":   "",
-        })
-        if slot["kind"] == "branch":
-            _emit_tree_branch(graph, sx, fix_y, tee_z, direc, depth + 1,
-                               slot["children"],
-                               base_len + slot["seg_len"],
-                               base_eids + slot["seg_eids"],
-                               positions, branch_info, layout_log,
-                               meter_z=meter_z)
-
-    total_branch_mbh = primary_leaf["cum_mbh"] + sum(s["cum_mbh"] for s in sub_info)
-    branch_info.append({
-        "tee_nid":         None,
-        "tee_pos":         (tx, ty),
-        "fixture_nid":     primary_leaf["fixture_nid"],
-        "fixture_pos":     (tx, fix_y),
-        "total_ft":        base_len + primary_leaf["seg_len"],
-        "shared_ft":       0.0,
-        "shared_eids":     [],
-        "remaining_ft":    base_len + primary_leaf["seg_len"],
-        "remaining_eids":  base_eids + primary_leaf["seg_eids"],
-        "branch_edge_ids": base_eids + primary_leaf["seg_eids"],
-        "has_isolation":   primary_leaf["has_isolation"],
-        "has_prv":         primary_leaf["has_prv"],
-        "direc":           direc,
-        "size":            "",
-        "shared_size":     "",
-        "remaining_size":  "",
-        "cum_mbh":         total_branch_mbh,
-        "sub_fixtures":    sub_info,
-    })
-    log_eids = base_eids + primary_leaf["seg_eids"]
-    layout_log.append({
-        "tee_nid":    None,
-        "tee_pos":    (tx, ty),
-        "tee_z":      tee_z,
-        "edge_id":    log_eids[-1] if log_eids else None,
-        "to_nid":     primary_leaf["fixture_nid"],
-        "to_z":       _node_z(graph, primary_leaf["fixture_nid"], meter_z),
-        "fixture_z":  _node_z(graph, primary_leaf["fixture_nid"], meter_z),
-        "direc":      "UP" if direc > 0 else "DOWN",
-        "result_pos": (tx, fix_y),
-        "branch_y":   None,
-    })
-
-    if primary["kind"] == "branch":
-        _emit_tree_branch(graph, tx, fix_y, tee_z, direc, depth + 1,
-                           primary["children"],
-                           base_len + primary["seg_len"],
-                           base_eids + primary["seg_eids"],
-                           positions, branch_info, layout_log,
-                           meter_z=meter_z)
-
-
 def _emit_new_main(graph, tx, ty, tee_z, direc, depth, tree,
                     base_len, base_eids,
                     positions, branch_info, layout_log, spine_segments,
                     meter_z=0.0):
-    """Walk a branch tree, treating any child that reaches MORE than
-    NEW_MAIN_FIXTURE_THRESHOLD fixtures as a sub-main ("new main")
-    continuing this same row -- drawn and labeled like an extension of
-    the trunk (real segment length + decreasing cumulative MBH via
-    _tree_sum_mbh) -- with real physical taps in between. A fork whose
-    children ALL reach the threshold or fewer fixtures hands off entirely
-    to the existing, completely unmodified _emit_tree_branch/
-    _flatten_group -- exactly today's already-correct AHU-1/ERV-1/AHU-2
-    and B-1/B-2/B-3 behavior, reused rather than reinvented (per the
-    user's own framing: "if this is treated as a new main the previous
-    logic should work correctly").
+    """Walk a branch tree, treating any child that reaches
+    NEW_MAIN_FIXTURE_THRESHOLD (2) OR MORE fixtures as a sub-main ("new
+    main") -- drawn and labeled like an extension of the trunk (real
+    segment length + decreasing cumulative MBH via _tree_sum_mbh). Since
+    _build_tree only ever creates a "branch" tree node when 2+ children
+    survive, a "branch"-kind child always has a fixture count >= 2 by
+    construction -- so under this threshold, reaching a fork where NO
+    child qualifies means every remaining child is a genuine plain
+    single-fixture leaf with nothing further downstream.
+
+    Confirmed live (Flat Six + the real Fraser reference diagram) in two
+    situations:
+      - When 2+ children EACH qualify as their own main -- e.g. the tee
+        that splits into {RTU-2,RTU-5} and {RTU-1,RTU-3} -- whichever
+        reaches FARTHEST (longest remaining _tree_total_len, "how the
+        main was already acting before the tee") keeps extending THIS
+        row; every other child (a plain tap, or a shorter qualifying
+        main) is placed/inserted right here, in original child order,
+        before the row continues. A shorter qualifying main is inserted
+        one row deeper via a nested call to this same function, so its
+        own spine can never share x-range with the outer row's spine.
+      - When NO child qualifies (a genuine final fork of plain fixtures,
+        e.g. {RTU-2,RTU-5}'s own two leaves, or {ERV-1,AHU-2}) they are
+        placed in ASCENDING order of remaining length: the shorter one
+        reads as an ordinary tap, the farthest-reaching one as the "last
+        tee"/terminus of this little run.
 
     tree is the WHOLE tree node for this cascade (fixture or branch), not
-    just its children. base_len/base_eids is threaded through and passed
-    to every _emit_tree_branch hand-off UNCHANGED in kind from how
-    _compute_layout has always called it directly (developed length from
-    the true branch takeoff to wherever this hand-off happens) -- this is
-    what keeps AHU-1/ERV-1/AHU-2 and B-1/B-2/B-3's own labels byte-for-
-    byte identical to before, since their fork never has a qualifying
-    "main" child and so hits the base_len passthrough on the very first
-    iteration, exactly like the old direct call did.
+    just its children. base_len/base_eids is threaded through so a
+    nested "new main" call's own labels report developed length from the
+    true original branch takeoff, matching how _compute_layout has
+    always seeded the very first call.
 
     Returns the rightmost x used, so a caller (either a sibling "new
     main" at a fork with 2+ qualifying children, or _resolve_collisions-
@@ -557,33 +397,30 @@ def _emit_new_main(graph, tx, ty, tee_z, direc, depth, tree,
     row_x = tx
 
     while tree["kind"] == "branch":
-        mains  = [c for c in tree["children"]
-                  if _tree_fixture_count(c) > NEW_MAIN_FIXTURE_THRESHOLD]
-        finals = [c for c in tree["children"]
-                  if _tree_fixture_count(c) <= NEW_MAIN_FIXTURE_THRESHOLD]
+        mains = [c for c in tree["children"]
+                 if _tree_fixture_count(c) >= NEW_MAIN_FIXTURE_THRESHOLD]
 
         if not mains:
-            # No child qualifies as a continuing sub-main -- this is a
-            # genuine final fork (every remaining child is small enough
-            # to just be a tap or a tight flat/nested group). Hand off
-            # completely unchanged; per the user's own decision, the
-            # relative order between co-equal final groups here is not
-            # something this function tries to control.
-            _emit_tree_branch(graph, row_x, ty, tee_z, direc, depth,
-                               tree["children"], base_len, base_eids,
-                               positions, branch_info, layout_log,
-                               meter_z=meter_z)
-            return row_x
-
-        cur_x = row_x
-        if finals:
-            # Resolve exactly what "children" list _emit_tree_branch needs:
-            # a single final fixture is a plain simple tap (no need to
-            # invoke _emit_tree_branch at all); a single final that is
-            # itself a "branch" already has its own 2+ children to hand
-            # over directly; 2+ finals are handed over as a group as-is.
-            if len(finals) == 1 and finals[0]["kind"] == "fixture":
-                leaf = finals[0]
+            # Every child is a plain single-fixture tap with no further
+            # branch structure (by construction, _build_tree only ever
+            # creates a "branch" node when 2+ children survive, so a
+            # "branch" child would always qualify as its own "main" under
+            # this >= 2 threshold -- reaching here means every remaining
+            # child really is just a leaf fixture). Place them in
+            # ascending order of remaining length: the shorter one reads
+            # as an ordinary tap, the farthest-reaching one as the "last
+            # tee"/terminus of this little run -- confirmed live on two
+            # real cases (RTU-2 [shorter] then RTU-5 [farther, the true
+            # terminal fixture]; ERV-1 [shorter] then AHU-2 [farther]).
+            # Per the user's own decision, when lengths are genuinely
+            # tied (e.g. B-1/B-2, both real zero-length hops) whichever
+            # order this stable sort happens to produce is not something
+            # this function tries to control further.
+            ranked = sorted(tree["children"], key=_tree_total_len)
+            cur_x = row_x
+            for i, leaf in enumerate(ranked):
+                if i > 0:
+                    cur_x += MIN_SEGMENT_FT
                 positions[leaf["fixture_nid"]] = (cur_x, fix_y)
                 branch_info.append({
                     "tee_nid":         None,
@@ -611,54 +448,69 @@ def _emit_new_main(graph, tx, ty, tee_z, direc, depth, tree,
                     "result_pos": (cur_x, fix_y),
                     "branch_y":   None,
                 })
-                finals_children = [leaf]
-            else:
-                finals_children = (finals[0]["children"]
-                                    if len(finals) == 1 else finals)
-                _emit_tree_branch(graph, cur_x, ty, tee_z, direc, depth,
-                                   finals_children, base_len, base_eids,
-                                   positions, branch_info, layout_log,
-                                   meter_z=meter_z)
-            # _flatten_group can inline a closely-spaced nested branch
-            # into MORE flat siblings than len(finals_children) -- call
-            # it (a pure function, side-effect free) to find out exactly
-            # how much x _emit_tree_branch actually used, so the sub-main
-            # below never overlaps whatever it just drew.
-            n_flat = len(_flatten_group(finals_children, depth=0))
-            cur_x  = cur_x + max(0, n_flat - 1) * MIN_SEGMENT_FT + MIN_SEGMENT_FT
+            return cur_x
 
-        if len(mains) == 1:
-            run_child = mains[0]
-            if run_child["seg_len"] > 0.01:
-                spine_segments.append({
-                    "from_pos":  (row_x, ty),
-                    "to_pos":    (cur_x, ty),
-                    "eids":      run_child["seg_eids"],
-                    "cum_mbh":   _tree_sum_mbh(run_child),
-                    "length_ft": run_child["seg_len"],
-                    "size":      "",
+        primary_main = max(mains, key=_tree_total_len)
+
+        cur_x = row_x
+        for child in tree["children"]:
+            if child is primary_main:
+                continue
+            if child["kind"] == "fixture":
+                positions[child["fixture_nid"]] = (cur_x, fix_y)
+                branch_info.append({
+                    "tee_nid":         None,
+                    "tee_pos":         (cur_x, ty),
+                    "fixture_nid":     child["fixture_nid"],
+                    "fixture_pos":     (cur_x, fix_y),
+                    "total_ft":        child["seg_len"],
+                    "branch_edge_ids": child["seg_eids"],
+                    "has_isolation":   child["has_isolation"],
+                    "has_prv":         child["has_prv"],
+                    "direc":           direc,
+                    "size":            "",
+                    "cum_mbh":         child["cum_mbh"],
+                    "sub_fixtures":    [],
                 })
-            row_x     = cur_x
-            base_len  = base_len + run_child["seg_len"]
-            base_eids = base_eids + run_child["seg_eids"]
-            tree      = run_child
-            continue
+                layout_log.append({
+                    "tee_nid":    None,
+                    "tee_pos":    (cur_x, ty),
+                    "tee_z":      tee_z,
+                    "edge_id":    child["seg_eids"][-1] if child["seg_eids"] else None,
+                    "to_nid":     child["fixture_nid"],
+                    "to_z":       _node_z(graph, child["fixture_nid"], meter_z),
+                    "fixture_z":  _node_z(graph, child["fixture_nid"], meter_z),
+                    "direc":      "UP" if direc > 0 else "DOWN",
+                    "result_pos": (cur_x, fix_y),
+                    "branch_y":   None,
+                })
+                cur_x += MIN_SEGMENT_FT
+            else:
+                # A shorter qualifying main -- inserted here as its own
+                # compact unit, one row deeper.
+                end_x = _emit_new_main(graph, cur_x, fix_y, tee_z, direc,
+                                        depth + 1, child,
+                                        base_len + child["seg_len"],
+                                        base_eids + child["seg_eids"],
+                                        positions, branch_info, layout_log,
+                                        spine_segments, meter_z=meter_z)
+                cur_x = end_x + MIN_SEGMENT_FT
 
-        # 2+ children each qualify as their own sub-main (not observed
-        # live yet, but must not silently drop fixtures): each gets its
-        # own row one level deeper, exactly like _emit_tree_branch already
-        # separates its own nested "branch" children -- this is also what
-        # keeps two simultaneous sub-main spines from ever overlapping in
-        # x on the same row.
-        for run_child in mains:
-            end_x = _emit_new_main(graph, cur_x, fix_y, tee_z, direc,
-                                    depth + 1, run_child,
-                                    base_len + run_child["seg_len"],
-                                    base_eids + run_child["seg_eids"],
-                                    positions, branch_info, layout_log,
-                                    spine_segments, meter_z=meter_z)
-            cur_x = end_x + MIN_SEGMENT_FT
-        return cur_x
+        if primary_main["seg_len"] > 0.01:
+            spine_segments.append({
+                "from_pos":  (row_x, ty),
+                "to_pos":    (cur_x, ty),
+                "eids":      primary_main["seg_eids"],
+                "cum_mbh":   _tree_sum_mbh(primary_main),
+                "length_ft": primary_main["seg_len"],
+                "size":      "",
+            })
+
+        row_x     = cur_x
+        base_len  = base_len + primary_main["seg_len"]
+        base_eids = base_eids + primary_main["seg_eids"]
+        tree      = primary_main
+        continue
 
     # tree is now "fixture": the farthest endpoint of this sub-main.
     positions[tree["fixture_nid"]] = (row_x, fix_y)
@@ -942,11 +794,10 @@ def _compute_layout(graph):
                 # tree["children"] is always 2+ (that's what makes it a
                 # 'branch' node) -- resolve however deep the real cascade
                 # goes via _emit_new_main, which treats any child reaching
-                # MORE than NEW_MAIN_FIXTURE_THRESHOLD fixtures as a
-                # sub-main ("new main") continuing this same row, and
-                # hands off completely unmodified to _emit_tree_branch
-                # the moment every remaining child is small enough to
-                # just be a tap or a tight flat/nested group.
+                # NEW_MAIN_FIXTURE_THRESHOLD fixtures or more as a
+                # sub-main ("new main") continuing this same row, placing
+                # everything else (plain taps, or a shorter competing
+                # main) right at that point in the sequence.
                 _emit_new_main(graph, tx, ty, tee_z, direc, depth,
                                 tree, tree["seg_len"], tree["seg_eids"],
                                 positions, branch_info, layout_log,
