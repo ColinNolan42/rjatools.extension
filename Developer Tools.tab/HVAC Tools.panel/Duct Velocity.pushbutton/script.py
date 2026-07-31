@@ -315,8 +315,8 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     combined  = fric_label if fric_wins else vel_label
     reason    = ('Friction' if fric_wins else 'Velocity') if combined in ('YELLOW', 'RED') else ''
 
-    # GREEN ducts get downgraded to PURPLE if a smaller standard size — same
-    # width, shorter height only, never a width change — would still satisfy
+    # GREEN ducts get downgraded to PURPLE if a smaller standard size — both
+    # width and height at least one nominal size down — would still satisfy
     # both max FPM and max friction. i.e. it's oversized.
     if combined == 'GREEN':
         _, sugg_area = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
@@ -386,11 +386,13 @@ def _suggest_shrink_info(dr, custom_limits, downstream_height_in=None):
     band, straight against max FPM / max friction. Returns ('-', None) if no
     strictly-smaller standard size works.
 
-    Used for the oversized/PURPLE suggestion only. Never changes duct width —
-    a width change means new transition fittings and isn't a "shrink," it's a
-    different duct. Round/spiral: smaller standard diameter only. Rectangular:
-    keeps the installed width fixed, only searches heights below the
-    installed height. All dimensions snapped to 2" intervals.
+    Used for the oversized/PURPLE suggestion only. Round/spiral: smaller
+    standard diameter only. Rectangular: BOTH width and height must drop by
+    at least one nominal (2") step from installed — a candidate that only
+    shrinks one dimension (e.g. 12x12 -> 12x10) is not a valid suggestion,
+    since that's a marginal height-only trim, not a genuine downsize. Only
+    a candidate like 12x12 -> 10x10, where both dimensions are a nominal
+    size smaller, qualifies. All dimensions snapped to 2" intervals.
 
     Never suggests below the firm's 6" absolute minimum (_ROUND_SIZES/
     _MIN_DUCT_DIM). If downstream_height_in is given (the effective height of
@@ -433,16 +435,25 @@ def _suggest_shrink_info(dr, custom_limits, downstream_height_in=None):
         if w_param and h_param and w_param.AsDouble() > 0 and h_param.AsDouble() > 0:
             w_in = _snap_even(w_param.AsDouble() * 12.0)
             h_in = _snap_even(h_param.AsDouble() * 12.0)
-            min_h = max(_snap_even(w_in / 4.0), _MIN_DUCT_DIM)
-            for new_h in range(min_h, h_in, 2):   # strictly less than installed height
-                if not _clears(new_h):
-                    continue
-                area_ft2 = w_in * new_h / 144.0
-                vel      = dr.cfm / area_ft2
-                d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
-                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
-                if vel <= max_fpm and fric <= max_friction:
-                    return '{}"x{}"'.format(w_in, new_h), area_ft2
+            # Both width and height must be at least one nominal (2") step
+            # below what's installed — a candidate that only shrinks one
+            # dimension isn't a genuine downsize suggestion.
+            best = None
+            for new_w in range(_MIN_DUCT_DIM, w_in - 2 + 1, 2):
+                min_h = max(_snap_even(new_w / 4.0), _MIN_DUCT_DIM)
+                max_h = min(h_in - 2, new_w * 4)
+                for new_h in range(min_h, max_h + 1, 2):
+                    if not _clears(new_h):
+                        continue
+                    area_ft2 = new_w * new_h / 144.0
+                    vel      = dr.cfm / area_ft2
+                    d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
+                    fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                    if vel <= max_fpm and fric <= max_friction:
+                        if best is None or area_ft2 < best[1]:
+                            best = ('{}"x{}"'.format(new_w, new_h), area_ft2)
+            if best is not None:
+                return best
     except Exception:
         pass
     return '-', None
@@ -540,8 +551,9 @@ def _suggest_size_info(dr, custom_limits, downstream_height_in=None):
 
 def _suggest_size(dr, custom_limits, tol_pct, duct_label, downstream_height_in=None):
     """Formatted-string wrapper for schedule/table display. PURPLE (oversized)
-    ducts get a shrink-only suggestion (same width); YELLOW/RED (undersized)
-    ducts get the grow-capable suggestion (may need a wider duct)."""
+    ducts get a shrink-only suggestion (both width and height at least one
+    nominal size down); YELLOW/RED (undersized) ducts get the grow-capable
+    suggestion (may need a wider duct)."""
     if duct_label == 'PURPLE':
         size, _ = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
     else:
