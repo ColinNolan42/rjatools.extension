@@ -121,111 +121,6 @@ def _edge_developed_length(graph, edge):
     return length
 
 
-# BRANCH_MERGE_THRESHOLDS_FT: real developed-length gap (ft), one value per
-# cascading-tee nesting depth (last value repeats for deeper levels), used
-# ONLY by _flatten_group's fallback path -- i.e. once a real tee has been
-# found to have NO directionally-continuing "run" leg (see _classify_run),
-# this decides whether its 2+ genuinely-parallel children read as one flat
-# schematic point (gap <= threshold) or their own nested junction one level
-# deeper. Direction, not distance, decides run-vs-tap; distance only decides
-# how tightly a confirmed no-run fork visually clusters. See CLAUDE.md /
-# project memory "Cascading-tee branch layout" for the history here.
-BRANCH_MERGE_THRESHOLDS_FT = [2.0, 10.0]
-
-
-def _edge_direction_vec(graph, edge):
-    """Unit direction vector (dx, dy, dz) of edge's real pipe curve,
-    oriented from_node -> to_node. Returns None if the pipe geometry or
-    either endpoint node's location is unavailable (e.g. a zero-length
-    node_children fitting-to-fitting hookup with no pipe.gt all).
-
-    This is the real-world signal _classify_run uses to tell a sub-main
-    CONTINUING through a tee (co-linear with the incoming pipe, dot ~1)
-    apart from a genuine branch TAP peeling off (perpendicular, dot ~0) --
-    confirmed live against Flat Six's actual connector geometry (e.g. Tee
-    3674798: incoming -X leg continues -X into RTU-1 at dot=1, while the
-    RTU-3 leg turns to +Y at dot=0).
-    """
-    if edge.pipe is None:
-        return None
-    from_node = graph.nodes.get(edge.from_node_id)
-    if from_node is None or from_node.location_xyz is None:
-        return None
-    try:
-        curve = edge.pipe.Location.Curve
-        p0 = curve.GetEndPoint(0)
-        p1 = curve.GetEndPoint(1)
-    except Exception:
-        return None
-    fx, fy, fz = from_node.location_xyz
-    d0 = (p0.X - fx) ** 2 + (p0.Y - fy) ** 2 + (p0.Z - fz) ** 2
-    d1 = (p1.X - fx) ** 2 + (p1.Y - fy) ** 2 + (p1.Z - fz) ** 2
-    if d0 <= d1:
-        vx, vy, vz = p1.X - p0.X, p1.Y - p0.Y, p1.Z - p0.Z
-    else:
-        vx, vy, vz = p0.X - p1.X, p0.Y - p1.Y, p0.Z - p1.Z
-    mag = (vx * vx + vy * vy + vz * vz) ** 0.5
-    if mag < 1e-6:
-        return None
-    return (vx / mag, vy / mag, vz / mag)
-
-
-def _dot3(a, b):
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-
-
-_RUN_DOT_THRESHOLD = 0.5  # ~60 deg -- real continuations measured at dot~1.0,
-                          # real perpendicular taps at dot~0.0, wide margin.
-
-
-def _classify_run(graph, children, incoming_dir):
-    """Split a real branch point's children into (run_child, tap_children).
-
-    children: list of tree-node dicts, each carrying its own "hop_dir" --
-        the RAW direction of the single hop from THIS fork to that child,
-        or None for a zero-length node_children hookup with no pipe. This
-        is deliberately NOT the same as a child's "in_dir" (which may have
-        inherited a direction from further up through its OWN zero-length
-        descent) -- comparing against hop_dir ensures a child gets credit
-        for a continuation only when THIS SPECIFIC hop was a real pipe.
-    incoming_dir: direction of the pipe that led INTO this fork, or None.
-
-    run_child is the leg most co-linear with incoming_dir (continues the
-    sub-main); everything else is a tap. Returns (None, children) --
-    "no run identified, all parallel" -- when no candidate is a confident
-    continuation. Two tiers:
-
-      1. If ANY child has real pipe direction data for its own hop,
-         classify purely by dot product against incoming_dir (highest dot
-         wins, must clear _RUN_DOT_THRESHOLD). This is the normal,
-         confident case.
-      2. Only if NO child's hop has any direction data at all (an all
-         zero-length fitting cluster, e.g. a tight manifold) fall back to:
-         a child that dead-ends immediately at a fixture can never be the
-         run (a sub-main by definition has to keep going to feed more
-         downstream stuff) -- if exactly one non-immediately-terminal
-         child remains after excluding those, it wins by elimination.
-
-    Confirmed live against Flat Six: tier 1 cleanly separates every real
-    tee in the RTU-1..6 cascade (dot~1 vs dot~0, no ambiguous case seen);
-    tier 2 is what correctly resolves the RTU-4 fork (a zero-length
-    3-fitting cluster) without needing any real geometry there at all.
-    """
-    dotted = [(c, _dot3(incoming_dir, c["hop_dir"])) for c in children
-              if incoming_dir is not None and c.get("hop_dir") is not None]
-    if dotted:
-        best_child, best_dot = max(dotted, key=lambda cd: cd[1])
-        if best_dot > _RUN_DOT_THRESHOLD:
-            return best_child, [c for c in children if c is not best_child]
-        return None, list(children)
-
-    non_terminal = [c for c in children if c["kind"] != "fixture"]
-    if len(non_terminal) == 1:
-        run_child = non_terminal[0]
-        return run_child, [c for c in children if c is not run_child]
-    return None, list(children)
-
-
 def _trunk_edge_developed_lengths(graph, trunk_all_ids):
     """Map trunk edge_id -> developed length (pipe + elbow-equivalent).
 
@@ -304,11 +199,7 @@ def _branch_children(graph, nid, trunk_set, seen):
     anything already visited. Does not mutate seen -- the caller marks a
     child seen only once it actually commits to recursing into it.
 
-    Returns a list of (child_nid, edge_len_ft, edge_ids, direction_or_None).
-    direction is this hop's own real pipe direction (see
-    _edge_direction_vec), or None for a zero-length node_children hookup --
-    the run-vs-tap signal _classify_run compares against the direction we
-    arrived with.
+    Returns a list of (child_nid, edge_len_ft, edge_ids).
     """
     out = []
     for edge in graph.edges.values():
@@ -317,32 +208,22 @@ def _branch_children(graph, nid, trunk_set, seen):
                 and edge.to_node_id
                 and edge.to_node_id not in seen):
             out.append((edge.to_node_id, _edge_developed_length(graph, edge),
-                        [edge.element_id], _edge_direction_vec(graph, edge)))
+                        [edge.element_id]))
     for child in graph.node_children.get(nid, []):
         if child not in seen:
             child_node = graph.nodes.get(child)
             extra = ELBOW_EQUIV_FT if (child_node and child_node.is_elbow) else 0.0
-            out.append((child, extra, [], None))
+            out.append((child, extra, []))
     return out
 
 
-def _build_tree(graph, nid, trunk_set, seen, seg_len, seg_eids, prv, iso,
-                 in_dir=None):
+def _build_tree(graph, nid, trunk_set, seen, seg_len, seg_eids, prv, iso):
     """Recursively build a tree rooted at nid.
 
     seg_len/seg_eids is the developed length/edge-ids of the single hop
     that led here from whichever node called this (the tee_candidate's
     branch edge for the very first call, or a real branch point for
     deeper calls) -- NOT a cumulative total from the very start.
-
-    in_dir is the direction of the most recent REAL pipe edge traversed to
-    reach nid (carried forward unchanged through zero-length node_children
-    hookups), or None if no real pipe has been seen yet on this path. It
-    is recorded on the returned dict as "in_dir" so a PARENT branch point
-    can read it back to classify this child as a run-continuation or a
-    tap (see _classify_run) -- and, for a "branch" result, it doubles as
-    the incoming direction for classifying ITS OWN children once the
-    caller descends into it.
 
     Passes straight through simple (single-child) fittings, accumulating
     length as it goes, and only creates a 'branch' tree node at a REAL
@@ -354,9 +235,9 @@ def _build_tree(graph, nid, trunk_set, seen, seg_len, seg_eids, prv, iso,
 
     Returns one of:
       {"kind": "fixture", "fixture_nid":.., "seg_len":.., "seg_eids":..,
-       "has_isolation":.., "has_prv":.., "cum_mbh":.., "in_dir":..}
+       "has_isolation":.., "has_prv":.., "cum_mbh":..}
       {"kind": "branch", "seg_len":.., "seg_eids":.., "has_isolation":..,
-       "has_prv":.., "children": [tree,...], "in_dir":..}
+       "has_prv":.., "children": [tree,...]}
       None (dead end -- no fixture reachable this way)
     """
     node = graph.nodes.get(nid)
@@ -373,37 +254,25 @@ def _build_tree(graph, nid, trunk_set, seen, seg_len, seg_eids, prv, iso,
         return {"kind": "fixture", "fixture_nid": nid,
                 "seg_len": seg_len, "seg_eids": seg_eids,
                 "has_isolation": iso, "has_prv": prv,
-                "cum_mbh": node.cumulative_load_mbh, "in_dir": in_dir}
+                "cum_mbh": node.cumulative_load_mbh}
 
     children = _branch_children(graph, nid, trunk_set, seen)
     if not children:
         return None
 
     if len(children) == 1:
-        child_nid, extra_len, extra_eids, extra_dir = children[0]
+        child_nid, extra_len, extra_eids = children[0]
         seen.add(child_nid)
-        next_dir = extra_dir if extra_dir is not None else in_dir
         return _build_tree(graph, child_nid, trunk_set, seen,
                             seg_len + extra_len, seg_eids + extra_eids,
-                            prv, iso, next_dir)
+                            prv, iso)
 
     subtrees = []
-    for child_nid, extra_len, extra_eids, extra_dir in children:
+    for child_nid, extra_len, extra_eids in children:
         seen.add(child_nid)
-        next_dir = extra_dir if extra_dir is not None else in_dir
         sub = _build_tree(graph, child_nid, trunk_set, seen,
-                           extra_len, extra_eids, prv, iso, next_dir)
+                           extra_len, extra_eids, prv, iso)
         if sub is not None:
-            # hop_dir is the RAW direction of just this one hop (None if
-            # this specific hookup is zero-length) -- deliberately NOT the
-            # same value as sub["in_dir"], which may have inherited the
-            # grandparent's direction through further zero-length hops
-            # beneath it. _classify_run must compare against hop_dir, not
-            # in_dir: crediting an inherited fallback as if it were real
-            # per-child evidence would let a zero-length dead-end tap
-            # (e.g. RTU-4) tie/beat a genuinely continuing leg on a coin
-            # flip of dict ordering instead of losing on "no evidence".
-            sub["hop_dir"] = extra_dir
             subtrees.append(sub)
 
     if not subtrees:
@@ -417,8 +286,7 @@ def _build_tree(graph, nid, trunk_set, seen, seg_len, seg_eids, prv, iso,
         return only
 
     return {"kind": "branch", "seg_len": seg_len, "seg_eids": seg_eids,
-            "has_isolation": iso, "has_prv": prv, "children": subtrees,
-            "in_dir": in_dir}
+            "has_isolation": iso, "has_prv": prv, "children": subtrees}
 
 
 def _tree_total_len(node):
@@ -429,24 +297,6 @@ def _tree_total_len(node):
     if node["kind"] == "fixture":
         return node["seg_len"]
     return node["seg_len"] + max(_tree_total_len(c) for c in node["children"])
-
-
-def _tree_sum_mbh(node):
-    """Sum of cum_mbh across every fixture reachable under this tree node.
-
-    Used to label a directionally-confirmed run segment with the TOTAL
-    load still flowing through it, before any of ITS OWN downstream taps
-    are subtracted -- the same "cumulative MBH decreasing away from
-    meter" convention the real trunk already uses for its own segments
-    (see graph.edges[...].cumulative_load_mbh / pipe_graph._sum_load),
-    just computed straight from the already-built tree so it works
-    uniformly whether or not this specific hop has real pipe geometry
-    (a zero-length fitting cluster has no edge to read cumulative_load_mbh
-    off of at all).
-    """
-    if node["kind"] == "fixture":
-        return node["cum_mbh"]
-    return sum(_tree_sum_mbh(c) for c in node["children"])
 
 
 def _tree_first_fixture(node):
@@ -624,182 +474,6 @@ def _emit_tree_branch(graph, tx, ty, tee_z, direc, depth, children,
                            meter_z=meter_z)
 
 
-def _emit_branch_cascade(graph, tx, ty, tee_z, direc, depth, tree,
-                          base_len, base_eids, positions, branch_info,
-                          layout_log, spine_segments, meter_z=0.0):
-    """Walk a branch tree, drawing any directionally-confirmed 'run' of
-    real tees as an extending sub-main (one MIN_SEGMENT_FT hop per tee,
-    same schematic row throughout) with each tap peeled off in real
-    physical order -- the same visual pattern the main trunk already uses
-    for simple sequential taps like GUH-1..8. Falls back to the existing
-    _emit_tree_branch (distance-based flatten, nested one level deeper)
-    completely unchanged the moment a fork has no directionally-confirmed
-    run -- that fallback is what already renders AHU-1/ERV-1/AHU-2 and
-    B-1/B-2/B-3 correctly, and this function never second-guesses it.
-
-    Each tap's OWN label (total_ft / branch_edge_ids) reports ONLY that
-    tap's own hop (tap["seg_len"]/tap["seg_eids"]) -- never anything
-    accumulated from earlier hops along the run. Unlike a simple single-
-    destination branch (where "distance from the takeoff" and "length of
-    the one segment feeding it" are the same number), a run has REAL
-    intervening taps consuming load along the way, so conflating the two
-    is exactly what made the live output untraceable: every RTU showed
-    its own MBH only, with no drawn line or label for the sub-main pipe
-    actually carrying the combined load between taps. base_len/base_eids
-    are threaded through only so the _emit_tree_branch FALLBACK (a
-    genuine final fork, unrelated to this bug) keeps its own original,
-    already-correct "distance from the true branch takeoff" behavior.
-
-    Each confirmed run hop also appends one entry to spine_segments --
-    the sub-main pipe segment itself, the piece that was missing
-    entirely before this fix (taps floated with no connecting main line
-    or label at all). Labeled with _tree_sum_mbh(run_child): the TOTAL
-    load still flowing through that stretch, matching the real trunk's
-    own "cumulative MBH decreasing away from meter" convention exactly
-    (see graph.edges[...].cumulative_load_mbh) -- computed from the tree
-    itself so it works even for a zero-length-fitting hop with no real
-    pipe of its own to read a cumulative load off of.
-
-    tree is the WHOLE tree node for this cascade (fixture or branch), not
-    just its children -- this function needs tree["in_dir"] to classify
-    tree's own children on the very first iteration.
-
-    Returns the rightmost x used, so a caller peeling this cascade off as
-    one of ITS OWN taps knows where to resume (a tap that recurses here
-    can consume an arbitrary amount of x internally -- e.g. the RTU-1/
-    RTU-3 pair off tee 3674798 -- so the caller must never assume a flat
-    MIN_SEGMENT_FT was all that got used).
-    """
-    fix_y     = ty + direc * LEVEL_HEIGHT * depth
-    row_x     = tx
-    hops_taken = 0
-
-    while tree["kind"] == "branch":
-        run_child, taps = _classify_run(graph, tree["children"], tree.get("in_dir"))
-
-        if run_child is None:
-            # Genuine multi-way fork, no continuation identified -- hand
-            # off to the existing, unchanged nested-fork renderer. Bump
-            # depth by however many confirmed run-hops got us here, so a
-            # fork reached partway down a real run still nests below the
-            # simple taps already drawn along that run's own row (matches
-            # B-1/B-2 nesting one level deeper than B-3's own row, while
-            # a fork with zero run-hops behind it -- AHU-1/ERV-1/AHU-2 --
-            # keeps today's already-correct depth exactly as before).
-            _emit_tree_branch(graph, row_x, ty, tee_z, direc, depth + hops_taken,
-                               tree["children"], base_len, base_eids,
-                               positions, branch_info, layout_log,
-                               meter_z=meter_z)
-            return row_x
-
-        tap_x = row_x
-        for tap in taps:
-            if tap["kind"] == "fixture":
-                positions[tap["fixture_nid"]] = (tap_x, fix_y)
-                tap_eids = tap["seg_eids"]
-                branch_info.append({
-                    "tee_nid":         None,
-                    "tee_pos":         (tap_x, ty),
-                    "fixture_nid":     tap["fixture_nid"],
-                    "fixture_pos":     (tap_x, fix_y),
-                    "total_ft":        tap["seg_len"],
-                    "branch_edge_ids": tap_eids,
-                    "has_isolation":   tap["has_isolation"],
-                    "has_prv":         tap["has_prv"],
-                    "direc":           direc,
-                    "size":            "",
-                    "cum_mbh":         tap["cum_mbh"],
-                    "sub_fixtures":    [],
-                })
-                layout_log.append({
-                    "tee_nid":    None,
-                    "tee_pos":    (tap_x, ty),
-                    "tee_z":      tee_z,
-                    "edge_id":    tap_eids[-1] if tap_eids else None,
-                    "to_nid":     tap["fixture_nid"],
-                    "to_z":       _node_z(graph, tap["fixture_nid"], meter_z),
-                    "fixture_z":  _node_z(graph, tap["fixture_nid"], meter_z),
-                    "direc":      "UP" if direc > 0 else "DOWN",
-                    "result_pos": (tap_x, fix_y),
-                    "branch_y":   None,
-                })
-                tap_x += MIN_SEGMENT_FT
-            else:
-                # This tap itself has further structure (confirmed live:
-                # the RTU-1/RTU-3 pair hangs off exactly this kind of tap,
-                # off tee 3674798, itself a real run(RTU-1)/tap(RTU-3)
-                # split at dot=1/dot=0). Recurse one row DEEPER (fix_y
-                # becomes its own tee row, depth+1) -- same convention
-                # every other nested branch in this file already uses.
-                # This is not just cosmetic: this tap's own recursion can
-                # draw its OWN spine segment(s), and if that spine sat on
-                # the SAME row as this outer cascade's spine, the two
-                # would overlap in x wherever their ranges intersect
-                # (verified by tracing the RTU case by hand -- the tee6->
-                # tee7 spine and the tee10->RTU-1 spine both wanted the
-                # x=[20,30] stretch on one row). A different row makes
-                # that collision structurally impossible.
-                # Pick up from wherever it actually ended, not a flat hop.
-                tap_end = _emit_branch_cascade(graph, tap_x, fix_y, tee_z, direc,
-                                                depth + 1, tap, base_len, base_eids,
-                                                positions, branch_info,
-                                                layout_log, spine_segments,
-                                                meter_z=meter_z)
-                tap_x = tap_end + MIN_SEGMENT_FT
-
-        # The sub-main segment carrying the confirmed run itself -- the
-        # piece that was missing before this fix. Skip only when the hop
-        # has no real length/geometry at all (an immediate zero-length
-        # fitting hookup, e.g. tee4->tee6 in the RTU-4 case): nothing
-        # real to draw a labeled pipe segment for there.
-        if run_child["seg_len"] > 0.01:
-            spine_segments.append({
-                "from_pos":  (row_x, ty),
-                "to_pos":    (tap_x, ty),
-                "eids":      run_child["seg_eids"],
-                "cum_mbh":   _tree_sum_mbh(run_child),
-                "length_ft": run_child["seg_len"],
-                "size":      "",
-            })
-
-        row_x       = tap_x
-        base_len    = base_len + run_child["seg_len"]
-        base_eids   = base_eids + run_child["seg_eids"]
-        hops_taken += 1
-        tree        = run_child
-
-    # tree is now "fixture": the farthest endpoint of the whole cascade.
-    positions[tree["fixture_nid"]] = (row_x, fix_y)
-    end_eids = tree["seg_eids"]
-    branch_info.append({
-        "tee_nid":         None,
-        "tee_pos":         (row_x, ty),
-        "fixture_nid":     tree["fixture_nid"],
-        "fixture_pos":     (row_x, fix_y),
-        "total_ft":        tree["seg_len"],
-        "branch_edge_ids": end_eids,
-        "has_isolation":   tree["has_isolation"],
-        "has_prv":         tree["has_prv"],
-        "direc":           direc,
-        "size":            "",
-        "cum_mbh":         tree["cum_mbh"],
-        "sub_fixtures":    [],
-    })
-    layout_log.append({
-        "tee_nid":    None,
-        "tee_pos":    (row_x, ty),
-        "tee_z":      tee_z,
-        "edge_id":    end_eids[-1] if end_eids else None,
-        "to_nid":     tree["fixture_nid"],
-        "to_z":       _node_z(graph, tree["fixture_nid"], meter_z),
-        "fixture_z":  _node_z(graph, tree["fixture_nid"], meter_z),
-        "direc":      "UP" if direc > 0 else "DOWN",
-        "result_pos": (row_x, fix_y),
-        "branch_y":   None,
-    })
-    return row_x
-
-
 def _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates):
     """Expand the trunk diagram when an L-branch stub would overlap an adjacent branch.
 
@@ -884,9 +558,6 @@ def _compute_layout(graph):
         meter_nid       node_id of the gas meter
         meter_z         z-elevation of the meter in Revit feet
         layout_log      list of dicts recording every BFS branch decision
-        spine_segments  list of dicts, one per confirmed-run pipe segment
-                         drawn by _emit_branch_cascade (the sub-main line
-                         itself, distinct from any individual fixture tap)
     """
     # path_element_ids interleaves node and edge IDs:
     # [meter_nid, pipe1_id, node1_id, pipe2_id, node2_id, ..., fixture_nid]
@@ -949,7 +620,6 @@ def _compute_layout(graph):
     # ------------------------------------------------------------------
     layout_log         = []
     branch_info        = []
-    spine_segments     = []
     branch_counters    = {}
     trunk_fixture_nids = set()
 
@@ -997,11 +667,10 @@ def _compute_layout(graph):
             # branch edge's own developed length so an elbow right at the
             # first branch node is counted.
             branch_seed_len = _edge_developed_length(graph, branch_edge)
-            branch_seed_dir = _edge_direction_vec(graph, branch_edge)
             seen = {branch_edge.to_node_id}
             tree = _build_tree(graph, branch_edge.to_node_id, trunk_set, seen,
                                 branch_seed_len, [branch_edge.element_id],
-                                False, False, branch_seed_dir)
+                                False, False)
             if tree is None:
                 continue
             # Skip if the primary fixture is already positioned by a sibling
@@ -1051,20 +720,18 @@ def _compute_layout(graph):
             else:
                 # tree["children"] is always 2+ (that's what makes it a
                 # 'branch' node) -- resolve however deep the real cascade
-                # goes via _emit_branch_cascade, which draws any real,
-                # directionally-confirmed sub-main as an extending run
-                # (peeling taps in physical order) and falls back to the
-                # existing _emit_tree_branch (unchanged) the moment a fork
-                # has no confirmed run.
-                _emit_branch_cascade(graph, tx, ty, tee_z, direc, depth,
-                                      tree, tree["seg_len"], tree["seg_eids"],
-                                      positions, branch_info, layout_log,
-                                      spine_segments, meter_z=meter_z)
+                # goes via _emit_tree_branch, merging or nesting each real
+                # tee-to-tee gap on its own merits, with no depth cap.
+                _emit_tree_branch(graph, tx, ty, tee_z, direc, depth,
+                                   tree["children"],
+                                   tree["seg_len"], tree["seg_eids"],
+                                   positions, branch_info, layout_log,
+                                   meter_z=meter_z)
 
     _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates)
 
     return (positions, trunk_set, meter_nid, meter_z,
-            layout_log, branch_info, trunk_fixture_nids, spine_segments)
+            layout_log, branch_info, trunk_fixture_nids)
 
 
 # ---------------------------------------------------------------------------
@@ -1985,8 +1652,7 @@ def main():
     # ------------------------------------------------------------------
     output.print_md("**Computing layout...**")
     (positions, trunk_set, meter_nid, meter_z,
-     layout_log, branch_info, trunk_fixture_nids,
-     spine_segments) = _compute_layout(graph)
+     layout_log, branch_info, trunk_fixture_nids) = _compute_layout(graph)
     n_positioned = len(positions)
     n_total      = len(graph.nodes)
     output.print_md(":white_check_mark: {}/{} nodes positioned.".format(
@@ -2042,15 +1708,6 @@ def main():
                     sf["remaining_size"] = s
                     break
 
-    # Same dominant-size fill for the sub-main spine segments themselves
-    # (the confirmed-run pipe between taps -- see _emit_branch_cascade).
-    for seg in spine_segments:
-        for eid in seg.get("eids", []):
-            s = pipe_sizes.get(eid, "")
-            if s:
-                seg["size"] = s
-                break
-
     # Fallback for stub / side-takeoff branches whose pipe element wasn't written
     # by the sizing engine (e.g. short tee stubs, bottom take-offs).  Look up the
     # minimum IFGC size that handles the branch MBH demand at the system length.
@@ -2095,14 +1752,6 @@ def main():
                     if cap is not None and cap >= demand:
                         sf["remaining_size"] = nom
                         break
-
-    for seg in spine_segments:
-        if not seg["size"] and _fb_pairs:
-            demand = seg["cum_mbh"]
-            for nom, cap in _fb_pairs:
-                if cap is not None and cap >= demand:
-                    seg["size"] = nom
-                    break
 
     # ------------------------------------------------------------------
     # STEP 5c - Phase-based line style
@@ -2317,33 +1966,6 @@ def main():
                 lx = max(lbl_from_x, lbl_to_x) + LABEL_RIGHT
                 ly = (lbl_from_y + lbl_to_y) / 2.0
                 _note(doc, view, lx, ly, label, tt_id)
-
-        # c2. Sub-main spine segments (see _emit_branch_cascade) -- the
-        #     confirmed-run pipe between taps on a branch that itself
-        #     carries multiple fixtures (e.g. RTU-1..6). Drawn and labeled
-        #     exactly like a trunk run above: real segment length, size,
-        #     and cumulative MBH still flowing through that stretch --
-        #     without this, taps along a run had no connecting main line
-        #     or label at all, making it impossible to see why any given
-        #     segment was sized the way it was.
-        for seg in spine_segments:
-            fx, fy = seg["from_pos"]
-            tx2, ty2 = seg["to_pos"]
-            seg_ls = wide_line_style if any(
-                e in new_construction_eids for e in seg.get("eids", [])) else None
-            _line(doc, view, fx, fy, tx2, ty2, line_style=seg_ls)
-
-            lft = int(round(seg["length_ft"]))
-            mbh = int(round(seg["cum_mbh"]))
-            nom = seg.get("size", "")
-            if nom:
-                line1 = '{}"G, {} FT'.format(nom, lft)
-            else:
-                line1 = "{} FT".format(lft)
-            label = line1 + "\n" + "{} MBH".format(mbh)
-            lx = (fx + tx2) / 2.0
-            ly = max(fy, ty2) + LABEL_ABOVE
-            _note(doc, view, lx, ly, label, tt_id, width=True)
 
         # d. Schematic branches: one clean line per fixture from its trunk tee
         drawn_fixtures = 0
