@@ -422,18 +422,38 @@ def _emit_new_main(graph, tx, ty, tee_z, direc, depth, tree,
     prev_x = tx
 
     for i, leaf in enumerate(flat):
-        if i > 0:
-            cur_x += MIN_SEGMENT_FT
-            if leaf["seg_len"] > 0.01:
-                remaining_mbh = sum(f["cum_mbh"] for f in flat[i:])
-                spine_segments.append({
-                    "from_pos":  (prev_x, main_row_y),
-                    "to_pos":    (cur_x, main_row_y),
-                    "eids":      leaf["seg_eids"],
-                    "cum_mbh":   remaining_mbh,
-                    "length_ft": leaf["seg_len"],
-                    "size":      "",
-                })
+        # Always advance, including the very first tap -- otherwise it
+        # lands on the exact same x as the riser above, and the riser's
+        # own label collides with this hop's label (both centered within
+        # a few feet of tx). Still draw a plain connector for every hop so
+        # the row reads as one continuous line even when there's nothing
+        # new to label.
+        cur_x += MIN_SEGMENT_FT
+        # i==0's leaf["seg_len"] is that fixture's OWN perpendicular tap
+        # stub (already reported on its own branch_info entry) -- the
+        # riser already covers the real distance up to this first tee, so
+        # there is never a real horizontal hop to label here, regardless
+        # of leaf["seg_len"]. Only i>0 hops represent real pipe travel
+        # between consecutive tees along this row.
+        if i > 0 and leaf["seg_len"] > 0.01:
+            remaining_mbh = sum(f["cum_mbh"] for f in flat[i:])
+            spine_segments.append({
+                "from_pos":  (prev_x, main_row_y),
+                "to_pos":    (cur_x, main_row_y),
+                "eids":      leaf["seg_eids"],
+                "cum_mbh":   remaining_mbh,
+                "length_ft": leaf["seg_len"],
+                "size":      "",
+            })
+        else:
+            spine_segments.append({
+                "from_pos":  (prev_x, main_row_y),
+                "to_pos":    (cur_x, main_row_y),
+                "eids":      [],
+                "cum_mbh":   None,   # sentinel: draw the line, skip the label
+                "length_ft": 0.0,
+                "size":      "",
+            })
 
         positions[leaf["fixture_nid"]] = (cur_x, tap_y)
         branch_info.append({
@@ -1797,7 +1817,7 @@ def main():
                         break
 
     for seg in spine_segments:
-        if not seg["size"] and _fb_pairs:
+        if not seg["size"] and _fb_pairs and seg["cum_mbh"] is not None:
             demand = seg["cum_mbh"]
             for nom, cap in _fb_pairs:
                 if cap is not None and cap >= demand:
@@ -2033,6 +2053,9 @@ def main():
             seg_ls = wide_line_style if any(
                 e in new_construction_eids for e in seg.get("eids", [])) else None
             _line(doc, view, fx, fy, tx2, ty2, line_style=seg_ls)
+
+            if seg["cum_mbh"] is None:
+                continue  # plain connector -- nothing new to report here
 
             lft = int(round(seg["length_ft"]))
             mbh = int(round(seg["cum_mbh"]))
