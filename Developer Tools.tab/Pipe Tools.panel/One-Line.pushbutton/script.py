@@ -91,14 +91,6 @@ _PRV_KW       = ("prv", "regulator", "regulating")
 _ISOLATION_KW = ("valve", "ball", "gate", "check", "shutoff")
 _VALVE_KW     = _PRV_KW + _ISOLATION_KW  # combined for legacy checks
 
-# NEW_MAIN_FIXTURE_THRESHOLD: a branch child reaching THIS MANY OR MORE
-# fixtures is treated as a sub-main ("new main") continuing the row, drawn
-# like an extension of the trunk (see _emit_new_main). A child reaching
-# fewer fixtures than this is a plain single-fixture tap (or, at a final
-# fork where nothing qualifies, one of a small set of plain taps placed
-# in ascending order of remaining length).
-NEW_MAIN_FIXTURE_THRESHOLD = 2
-
 
 # ---------------------------------------------------------------------------
 # Layout helpers
@@ -307,22 +299,6 @@ def _tree_total_len(node):
     return node["seg_len"] + max(_tree_total_len(c) for c in node["children"])
 
 
-def _tree_fixture_count(node):
-    """Count of fixtures reachable under this tree node.
-
-    The signal _emit_new_main uses to decide whether a branch child is a
-    sub-main ("new main") continuing the row -- NEW_MAIN_FIXTURE_THRESHOLD
-    fixtures or more -- or a plain single-fixture tap. Purely a property
-    of the tree _build_tree already produces: no pipe
-    geometry or Revit API calls needed, so it works identically whether or
-    not a given hop has real pipe direction data (a zero-length fitting
-    cluster still has a fixture count even with no geometry at all).
-    """
-    if node["kind"] == "fixture":
-        return 1
-    return sum(_tree_fixture_count(c) for c in node["children"])
-
-
 def _tree_sum_mbh(node):
     """Sum of cum_mbh across every fixture reachable under this tree node.
 
@@ -351,196 +327,144 @@ def _tree_first_fixture(node):
     return None
 
 
+def _flatten_main(children, acc_len, acc_eids):
+    """Flatten a list of sibling tree nodes (all hanging off the SAME
+    real fork) into an ordered list of leaf (fixture-kind) tree dicts,
+    each a shallow copy with "seg_len"/"seg_eids" REPLACED to mean "pipe
+    since the PREVIOUS fixture in this flattened sequence" (not "since
+    its own immediate parent fork").
+
+    acc_len/acc_eids is whatever real pipe led INTO this fork from
+    wherever the flattening started (0/[] for the very top-level call,
+    since that hop is the riser, drawn separately by the caller).
+
+    Order, confirmed against the real Fraser reference diagram for
+    RTU-1..6 (drawn as ONE continuous flat main -- RTU-6, RTU-4, RTU-3,
+    RTU-1, RTU-2, RTU-5, no nested "side main" row at all): any plain
+    single-fixture sibling first, ascending by remaining length (reads
+    as an ordinary tap -- shorter first, farther/"last tee" last);
+    THEN any sibling that is itself a further branch (>= 2 fixtures,
+    which by construction of _build_tree is any "branch"-kind child),
+    in DESCENDING order of remaining length, each fully flattened in
+    turn onto this SAME continuous sequence -- confirmed live: the
+    longer {RTU-1,RTU-3} branch unrolls completely (itself ascending,
+    RTU-3 then RTU-1) before the shorter {RTU-2,RTU-5} branch does the
+    same, all six ending up as one flat sequence.
+
+    Two or more children hanging off the exact same real fork all
+    receive acc_len/acc_eids on the FIRST one only -- subsequent
+    siblings reset to 0/[] since their own hop is measured from the
+    shared fork itself, not from whichever sibling happened to be
+    placed immediately before them in the flattened sequence. A
+    "branch" sibling's OWN seg_len/seg_eids (the hop from this fork to
+    IT) is folded into the accumulator handed to its children before
+    recursing -- dropping this was a real bug: it silently zeroed out
+    the developed length of everything past the first nested fork.
+    """
+    leaves = [c for c in children if c["kind"] == "fixture"]
+    mains  = [c for c in children if c["kind"] == "branch"]
+    out = []
+
+    if not mains:
+        ranked = sorted(children, key=_tree_total_len)
+        for i, c in enumerate(ranked):
+            a_len, a_eids = (acc_len, acc_eids) if i == 0 else (0.0, [])
+            leaf = dict(c)
+            leaf["seg_len"]  = a_len + c["seg_len"]
+            leaf["seg_eids"] = a_eids + c["seg_eids"]
+            out.append(leaf)
+        return out
+
+    ranked_leaves = sorted(leaves, key=_tree_total_len)
+    for i, c in enumerate(ranked_leaves):
+        a_len, a_eids = (acc_len, acc_eids) if i == 0 else (0.0, [])
+        leaf = dict(c)
+        leaf["seg_len"]  = a_len + c["seg_len"]
+        leaf["seg_eids"] = a_eids + c["seg_eids"]
+        out.append(leaf)
+
+    ranked_mains = sorted(mains, key=_tree_total_len, reverse=True)
+    for i, m in enumerate(ranked_mains):
+        a_len, a_eids = (acc_len, acc_eids) if (i == 0 and not ranked_leaves) else (0.0, [])
+        out.extend(_flatten_main(m["children"], a_len + m["seg_len"], a_eids + m["seg_eids"]))
+    return out
+
+
 def _emit_new_main(graph, tx, ty, tee_z, direc, depth, tree,
-                    base_len, base_eids,
                     positions, branch_info, layout_log, spine_segments,
                     meter_z=0.0):
-    """Walk a branch tree, treating any child that reaches
-    NEW_MAIN_FIXTURE_THRESHOLD (2) OR MORE fixtures as a sub-main ("new
-    main") -- drawn and labeled like an extension of the trunk (real
-    segment length + decreasing cumulative MBH via _tree_sum_mbh). Since
-    _build_tree only ever creates a "branch" tree node when 2+ children
-    survive, a "branch"-kind child always has a fixture count >= 2 by
-    construction -- so under this threshold, reaching a fork where NO
-    child qualifies means every remaining child is a genuine plain
-    single-fixture leaf with nothing further downstream.
+    """Draw an entire branch tree as ONE continuous sub-main ("new
+    main"): a single riser up/down from the parent row to this main's
+    own row, then a flat horizontal sequence of every fixture in it (see
+    _flatten_main for the exact order), each with its own short stub to
+    the equipment symbol -- real segment length + correctly decreasing
+    cumulative MBH the whole way, exactly matching how the real Fraser
+    reference diagram draws RTU-1..6.
 
-    Confirmed live (Flat Six + the real Fraser reference diagram) in two
-    situations:
-      - When 2+ children EACH qualify as their own main -- e.g. the tee
-        that splits into {RTU-2,RTU-5} and {RTU-1,RTU-3} -- whichever
-        reaches FARTHEST (longest remaining _tree_total_len, "how the
-        main was already acting before the tee") keeps extending THIS
-        row; every other child (a plain tap, or a shorter qualifying
-        main) is placed/inserted right here, in original child order,
-        before the row continues. A shorter qualifying main is inserted
-        one row deeper via a nested call to this same function, so its
-        own spine can never share x-range with the outer row's spine.
-      - When NO child qualifies (a genuine final fork of plain fixtures,
-        e.g. {RTU-2,RTU-5}'s own two leaves, or {ERV-1,AHU-2}) they are
-        placed in ASCENDING order of remaining length: the shorter one
-        reads as an ordinary tap, the farthest-reaching one as the "last
-        tee"/terminus of this little run.
-
-    tree is the WHOLE tree node for this cascade (fixture or branch), not
-    just its children. base_len/base_eids is threaded through so a
-    nested "new main" call's own labels report developed length from the
-    true original branch takeoff, matching how _compute_layout has
-    always seeded the very first call.
-
-    Returns the rightmost x used, so a caller (either a sibling "new
-    main" at a fork with 2+ qualifying children, or _resolve_collisions-
-    adjacent bookkeeping) knows where to resume rather than assuming a
-    flat MIN_SEGMENT_FT hop was all that got used.
+    tree is the WHOLE tree node for this cascade (must be "branch" kind
+    -- callers already handle the plain "fixture" case separately).
     """
-    fix_y = ty + direc * LEVEL_HEIGHT * depth
-    row_x = tx
+    main_row_y = ty + direc * LEVEL_HEIGHT * depth
 
-    while tree["kind"] == "branch":
-        mains = [c for c in tree["children"]
-                 if _tree_fixture_count(c) >= NEW_MAIN_FIXTURE_THRESHOLD]
+    if tree["seg_len"] > 0.01:
+        spine_segments.append({
+            "from_pos":  (tx, ty),
+            "to_pos":    (tx, main_row_y),
+            "eids":      tree["seg_eids"],
+            "cum_mbh":   _tree_sum_mbh(tree),
+            "length_ft": tree["seg_len"],
+            "size":      "",
+        })
 
-        if not mains:
-            # Every child is a plain single-fixture tap with no further
-            # branch structure (by construction, _build_tree only ever
-            # creates a "branch" node when 2+ children survive, so a
-            # "branch" child would always qualify as its own "main" under
-            # this >= 2 threshold -- reaching here means every remaining
-            # child really is just a leaf fixture). Place them in
-            # ascending order of remaining length: the shorter one reads
-            # as an ordinary tap, the farthest-reaching one as the "last
-            # tee"/terminus of this little run -- confirmed live on two
-            # real cases (RTU-2 [shorter] then RTU-5 [farther, the true
-            # terminal fixture]; ERV-1 [shorter] then AHU-2 [farther]).
-            # Per the user's own decision, when lengths are genuinely
-            # tied (e.g. B-1/B-2, both real zero-length hops) whichever
-            # order this stable sort happens to produce is not something
-            # this function tries to control further.
-            ranked = sorted(tree["children"], key=_tree_total_len)
-            cur_x = row_x
-            for i, leaf in enumerate(ranked):
-                if i > 0:
-                    cur_x += MIN_SEGMENT_FT
-                positions[leaf["fixture_nid"]] = (cur_x, fix_y)
-                branch_info.append({
-                    "tee_nid":         None,
-                    "tee_pos":         (cur_x, ty),
-                    "fixture_nid":     leaf["fixture_nid"],
-                    "fixture_pos":     (cur_x, fix_y),
-                    "total_ft":        leaf["seg_len"],
-                    "branch_edge_ids": leaf["seg_eids"],
-                    "has_isolation":   leaf["has_isolation"],
-                    "has_prv":         leaf["has_prv"],
-                    "direc":           direc,
-                    "size":            "",
-                    "cum_mbh":         leaf["cum_mbh"],
-                    "sub_fixtures":    [],
+    flat = _flatten_main(tree["children"], 0.0, [])
+    tap_y = main_row_y + direc * LEVEL_HEIGHT
+    cur_x = tx
+    prev_x = tx
+
+    for i, leaf in enumerate(flat):
+        if i > 0:
+            cur_x += MIN_SEGMENT_FT
+            if leaf["seg_len"] > 0.01:
+                remaining_mbh = sum(f["cum_mbh"] for f in flat[i:])
+                spine_segments.append({
+                    "from_pos":  (prev_x, main_row_y),
+                    "to_pos":    (cur_x, main_row_y),
+                    "eids":      leaf["seg_eids"],
+                    "cum_mbh":   remaining_mbh,
+                    "length_ft": leaf["seg_len"],
+                    "size":      "",
                 })
-                layout_log.append({
-                    "tee_nid":    None,
-                    "tee_pos":    (cur_x, ty),
-                    "tee_z":      tee_z,
-                    "edge_id":    leaf["seg_eids"][-1] if leaf["seg_eids"] else None,
-                    "to_nid":     leaf["fixture_nid"],
-                    "to_z":       _node_z(graph, leaf["fixture_nid"], meter_z),
-                    "fixture_z":  _node_z(graph, leaf["fixture_nid"], meter_z),
-                    "direc":      "UP" if direc > 0 else "DOWN",
-                    "result_pos": (cur_x, fix_y),
-                    "branch_y":   None,
-                })
-            return cur_x
 
-        primary_main = max(mains, key=_tree_total_len)
+        positions[leaf["fixture_nid"]] = (cur_x, tap_y)
+        branch_info.append({
+            "tee_nid":         None,
+            "tee_pos":         (cur_x, main_row_y),
+            "fixture_nid":     leaf["fixture_nid"],
+            "fixture_pos":     (cur_x, tap_y),
+            "total_ft":        leaf["seg_len"],
+            "branch_edge_ids": leaf["seg_eids"],
+            "has_isolation":   leaf["has_isolation"],
+            "has_prv":         leaf["has_prv"],
+            "direc":           direc,
+            "size":            "",
+            "cum_mbh":         leaf["cum_mbh"],
+            "sub_fixtures":    [],
+        })
+        layout_log.append({
+            "tee_nid":    None,
+            "tee_pos":    (cur_x, main_row_y),
+            "tee_z":      tee_z,
+            "edge_id":    leaf["seg_eids"][-1] if leaf["seg_eids"] else None,
+            "to_nid":     leaf["fixture_nid"],
+            "to_z":       _node_z(graph, leaf["fixture_nid"], meter_z),
+            "fixture_z":  _node_z(graph, leaf["fixture_nid"], meter_z),
+            "direc":      "UP" if direc > 0 else "DOWN",
+            "result_pos": (cur_x, tap_y),
+            "branch_y":   None,
+        })
+        prev_x = cur_x
 
-        cur_x = row_x
-        for child in tree["children"]:
-            if child is primary_main:
-                continue
-            if child["kind"] == "fixture":
-                positions[child["fixture_nid"]] = (cur_x, fix_y)
-                branch_info.append({
-                    "tee_nid":         None,
-                    "tee_pos":         (cur_x, ty),
-                    "fixture_nid":     child["fixture_nid"],
-                    "fixture_pos":     (cur_x, fix_y),
-                    "total_ft":        child["seg_len"],
-                    "branch_edge_ids": child["seg_eids"],
-                    "has_isolation":   child["has_isolation"],
-                    "has_prv":         child["has_prv"],
-                    "direc":           direc,
-                    "size":            "",
-                    "cum_mbh":         child["cum_mbh"],
-                    "sub_fixtures":    [],
-                })
-                layout_log.append({
-                    "tee_nid":    None,
-                    "tee_pos":    (cur_x, ty),
-                    "tee_z":      tee_z,
-                    "edge_id":    child["seg_eids"][-1] if child["seg_eids"] else None,
-                    "to_nid":     child["fixture_nid"],
-                    "to_z":       _node_z(graph, child["fixture_nid"], meter_z),
-                    "fixture_z":  _node_z(graph, child["fixture_nid"], meter_z),
-                    "direc":      "UP" if direc > 0 else "DOWN",
-                    "result_pos": (cur_x, fix_y),
-                    "branch_y":   None,
-                })
-                cur_x += MIN_SEGMENT_FT
-            else:
-                # A shorter qualifying main -- inserted here as its own
-                # compact unit, one row deeper.
-                end_x = _emit_new_main(graph, cur_x, fix_y, tee_z, direc,
-                                        depth + 1, child,
-                                        base_len + child["seg_len"],
-                                        base_eids + child["seg_eids"],
-                                        positions, branch_info, layout_log,
-                                        spine_segments, meter_z=meter_z)
-                cur_x = end_x + MIN_SEGMENT_FT
-
-        if primary_main["seg_len"] > 0.01:
-            spine_segments.append({
-                "from_pos":  (row_x, ty),
-                "to_pos":    (cur_x, ty),
-                "eids":      primary_main["seg_eids"],
-                "cum_mbh":   _tree_sum_mbh(primary_main),
-                "length_ft": primary_main["seg_len"],
-                "size":      "",
-            })
-
-        row_x     = cur_x
-        base_len  = base_len + primary_main["seg_len"]
-        base_eids = base_eids + primary_main["seg_eids"]
-        tree      = primary_main
-        continue
-
-    # tree is now "fixture": the farthest endpoint of this sub-main.
-    positions[tree["fixture_nid"]] = (row_x, fix_y)
-    branch_info.append({
-        "tee_nid":         None,
-        "tee_pos":         (row_x, ty),
-        "fixture_nid":     tree["fixture_nid"],
-        "fixture_pos":     (row_x, fix_y),
-        "total_ft":        tree["seg_len"],
-        "branch_edge_ids": tree["seg_eids"],
-        "has_isolation":   tree["has_isolation"],
-        "has_prv":         tree["has_prv"],
-        "direc":           direc,
-        "size":            "",
-        "cum_mbh":         tree["cum_mbh"],
-        "sub_fixtures":    [],
-    })
-    layout_log.append({
-        "tee_nid":    None,
-        "tee_pos":    (row_x, ty),
-        "tee_z":      tee_z,
-        "edge_id":    tree["seg_eids"][-1] if tree["seg_eids"] else None,
-        "to_nid":     tree["fixture_nid"],
-        "to_z":       _node_z(graph, tree["fixture_nid"], meter_z),
-        "fixture_z":  _node_z(graph, tree["fixture_nid"], meter_z),
-        "direc":      "UP" if direc > 0 else "DOWN",
-        "result_pos": (row_x, fix_y),
-        "branch_y":   None,
-    })
-    return row_x
+    return cur_x
 
 
 def _resolve_collisions(positions, branch_info, trunk_nodes, tee_candidates):
@@ -792,14 +716,11 @@ def _compute_layout(graph):
                 })
             else:
                 # tree["children"] is always 2+ (that's what makes it a
-                # 'branch' node) -- resolve however deep the real cascade
-                # goes via _emit_new_main, which treats any child reaching
-                # NEW_MAIN_FIXTURE_THRESHOLD fixtures or more as a
-                # sub-main ("new main") continuing this same row, placing
-                # everything else (plain taps, or a shorter competing
-                # main) right at that point in the sequence.
-                _emit_new_main(graph, tx, ty, tee_z, direc, depth,
-                                tree, tree["seg_len"], tree["seg_eids"],
+                # 'branch' node) -- draw the whole cascade as ONE
+                # continuous sub-main via _emit_new_main (a single riser
+                # then a flat sequence of every fixture in it, no matter
+                # how many real tees the cascade actually has).
+                _emit_new_main(graph, tx, ty, tee_z, direc, depth, tree,
                                 positions, branch_info, layout_log,
                                 spine_segments, meter_z=meter_z)
 
@@ -1110,7 +1031,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
                             direc, total_ft, size, has_isolation, has_prv,
                             fixture_node, tt_id,
                             valve_sym=None, prv_sym=None, equip_sym=None,
-                            line_style=None):
+                            cap_sym=None, line_style=None):
     """Draw one simplified schematic branch from trunk tee to fixture.
 
     Diagram order from branch tee toward fixture:
@@ -1123,6 +1044,8 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
       valve_sym  -- RJA - P Symbols - Gate Valve  (rotated 90 degrees)
       prv_sym    -- RJA - P Symbols - Pressure Regulating Valve  (rotated 90 degrees)
       equip_sym  -- RJA - P Symbols - Equipment
+      cap_sym    -- RJA - Equipment Cap, used instead of equip_sym when the
+                    fixture is named "FUTURE" (see _is_future_fixture)
     """
     # Vertical segment from tee to fixture level
     _line(doc, view, tee_x, tee_y, tee_x, fix_y, line_style=line_style)
@@ -1164,18 +1087,10 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
     lbl_x = tee_x + (VALVE_HW + LABEL_RIGHT if (has_isolation or has_prv) else LABEL_RIGHT)
     _note(doc, view, lbl_x, mid_y, lbl, tt_id)
 
-    # Equipment symbol at the fixture endpoint
-    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y, rotate_180=going_up)
-    if e_inst is None:
-        # Fallback: drawn 3-line symbol.
-        # Line 0 (outer, connects to branch) is at fix_y.
-        # Lines 1 and 2 extend AWAY from trunk.
-        sym_elems = []
-        for i in range(3):
-            yy = fix_y + sign * i * FIXTURE_SPACING
-            sym_elems.append(_line(doc, view, fix_x - FIXTURE_HW, yy,
-                                   fix_x + FIXTURE_HW, yy))
-        _make_group(doc, sym_elems)
+    # Equipment symbol at the fixture endpoint (cap symbol if FUTURE fixture)
+    _place_equipment_symbol(doc, view, equip_sym, cap_sym, fix_x, fix_y, sign,
+                             fixture_node.fixture_name if fixture_node else None,
+                             rotate_180=going_up)
 
     # Fixture name + MBH as a SEPARATE TextNote (not grouped with symbol).
     # TextNote origin = top of text box; text flows DOWN in model space.
@@ -1195,7 +1110,7 @@ def _draw_schematic_branch(doc, view, tee_x, tee_y, fix_x, fix_y,
 
 def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
                                        valve_sym=None, prv_sym=None, equip_sym=None,
-                                       line_style=None):
+                                       cap_sym=None, line_style=None):
     """Draw a branch where multiple fixtures share one branch off the trunk.
 
     The primary fixture (longest pipe path) hangs at the end of the main
@@ -1261,15 +1176,10 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
             if sp_ins is None:
                 _make_group(doc, _draw_valve_bowtie(doc, view, sx, sf_prv_y))
 
-        # Equipment symbol at fixture level (same Y as primary)
-        e_inst = _place_sym(doc, view, equip_sym, sx, fy, rotate_180=going_up)
-        if e_inst is None:
-            sym_elems = []
-            for i in range(3):
-                yy = fy + sign * i * FIXTURE_SPACING
-                sym_elems.append(
-                    _line(doc, view, sx - FIXTURE_HW, yy, sx + FIXTURE_HW, yy))
-            _make_group(doc, sym_elems)
+        # Equipment symbol at fixture level (same Y as primary; cap if FUTURE)
+        _place_equipment_symbol(doc, view, equip_sym, cap_sym, sx, fy, sign,
+                                 sfnd.fixture_name if sfnd else None,
+                                 rotate_180=going_up)
 
         if sfnd:
             name  = sfnd.fixture_name or "UNNAMED"
@@ -1301,16 +1211,11 @@ def _draw_schematic_branch_with_stubs(doc, view, bi, graph, tt_id,
             _note(doc, view, mid_x, stub_lbl_y,
                   sub_l1 + "\n{} MBH".format(sf_mbh), tt_id, width=True)
 
-    # Primary fixture symbol at end of main vertical
+    # Primary fixture symbol at end of main vertical (cap if FUTURE)
     primary_node = graph.nodes.get(bi["fixture_nid"])
-    e_inst = _place_sym(doc, view, equip_sym, fix_x, fix_y, rotate_180=going_up)
-    if e_inst is None:
-        sym_elems = []
-        for i in range(3):
-            yy = fix_y + sign * i * FIXTURE_SPACING
-            sym_elems.append(
-                _line(doc, view, fix_x - FIXTURE_HW, yy, fix_x + FIXTURE_HW, yy))
-        _make_group(doc, sym_elems)
+    _place_equipment_symbol(doc, view, equip_sym, cap_sym, fix_x, fix_y, sign,
+                             primary_node.fixture_name if primary_node else None,
+                             rotate_180=going_up)
 
     if primary_node:
         name  = primary_node.fixture_name or "UNNAMED"
@@ -1554,6 +1459,59 @@ def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
         lx = max(x0, x1) + LABEL_RIGHT
         ly = (y0 + y1) / 2.0
         _note(doc, view, lx, ly, label, tt_id)
+
+
+def _is_future_fixture(fixture_name):
+    """True if a fixture is a placeholder stub for future equipment (capped,
+    no equipment connected yet) rather than a real, currently-served fixture."""
+    return (fixture_name or "").strip().upper() == "FUTURE"
+
+
+def _place_equipment_symbol(doc, view, equip_sym, cap_sym, cx, cy, sign,
+                             fixture_name, rotate_90=False, rotate_180=False):
+    """Place the equipment symbol at a fixture endpoint -- or, for a fixture
+    named "FUTURE", the cap symbol instead (a capped stub reserved for
+    reconnection in a future work phase, no equipment installed yet).
+
+    Falls back to a drawn primitive when the corresponding project family
+    isn't loaded: the normal 3-line equipment detail, or a squared-off "U"
+    bracket for a FUTURE stub (open end centered on the pipe termination
+    point, closed end pointing away from the trunk) -- rotate_90 orients
+    the fallback lines vertically (trunk approaches horizontally);
+    otherwise they're horizontal.
+    """
+    is_future = _is_future_fixture(fixture_name)
+    sym  = cap_sym if is_future else equip_sym
+    inst = _place_sym(doc, view, sym, cx, cy, rotate_90=rotate_90, rotate_180=rotate_180)
+    if inst is not None:
+        return
+
+    if is_future:
+        depth = 2 * FIXTURE_SPACING
+        if rotate_90:
+            far_x = cx + sign * depth
+            elems = [
+                _line(doc, view, cx, cy - FIXTURE_HW, far_x, cy - FIXTURE_HW),
+                _line(doc, view, cx, cy + FIXTURE_HW, far_x, cy + FIXTURE_HW),
+                _line(doc, view, far_x, cy - FIXTURE_HW, far_x, cy + FIXTURE_HW),
+            ]
+        else:
+            far_y = cy + sign * depth
+            elems = [
+                _line(doc, view, cx - FIXTURE_HW, cy, cx - FIXTURE_HW, far_y),
+                _line(doc, view, cx + FIXTURE_HW, cy, cx + FIXTURE_HW, far_y),
+                _line(doc, view, cx - FIXTURE_HW, far_y, cx + FIXTURE_HW, far_y),
+            ]
+    else:
+        elems = []
+        for i in range(3):
+            if rotate_90:
+                xx = cx + sign * i * FIXTURE_SPACING
+                elems.append(_line(doc, view, xx, cy - FIXTURE_HW, xx, cy + FIXTURE_HW))
+            else:
+                yy = cy + sign * i * FIXTURE_SPACING
+                elems.append(_line(doc, view, cx - FIXTURE_HW, yy, cx + FIXTURE_HW, yy))
+    _make_group(doc, elems)
 
 
 def _draw_fixture_symbol(doc, view, cx, cy, going_up, node, tt_id):
@@ -1904,12 +1862,16 @@ def main():
     if prv_sym is None:
         prv_sym  = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - P Symbols - Pressure Reducing Valve"))
     equip_sym    = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - P Symbols - Equipment"))
+    cap_sym      = _activate_sym(doc, _get_annotation_symbol(doc, "RJA- Equipment Cap"))
+    if cap_sym is None:
+        cap_sym  = _activate_sym(doc, _get_annotation_symbol(doc, "RJA - Equipment Cap"))
 
     found_syms = [("Squiggle",      squiggle_sym),
                   ("Meter",         meter_sym),
                   ("Gate Valve",    valve_sym),
                   ("PRV",           prv_sym),
-                  ("Equipment",     equip_sym)]
+                  ("Equipment",     equip_sym),
+                  ("Equipment Cap", cap_sym)]
     for sym_label, sym in found_syms:
         if sym is None:
             output.print_md(":warning: {} symbol not found - using fallback.".format(
@@ -2060,12 +2022,11 @@ def main():
                 ly = (lbl_from_y + lbl_to_y) / 2.0
                 _note(doc, view, lx, ly, label, tt_id)
 
-        # c2. "New main" spine segments (see _emit_new_main) -- the
-        #     sub-main pipe between taps on a branch that itself carries
-        #     more than NEW_MAIN_FIXTURE_THRESHOLD fixtures (e.g.
-        #     RTU-1..6). Drawn and labeled exactly like a trunk run above:
-        #     real segment length, size, and cumulative MBH still flowing
-        #     through that stretch.
+        # c2. "New main" spine segments (see _emit_new_main) -- the riser
+        #     and the flat horizontal run of a branch that itself carries
+        #     2+ fixtures (e.g. RTU-1..6). Drawn and labeled exactly like
+        #     a trunk run above: real segment length, size, and
+        #     cumulative MBH still flowing through that stretch.
         for seg in spine_segments:
             fx, fy = seg["from_pos"]
             tx2, ty2 = seg["to_pos"]
@@ -2109,7 +2070,7 @@ def main():
                 _draw_schematic_branch_with_stubs(
                     doc, view, bi, graph, tt_id,
                     valve_sym=valve_sym, prv_sym=prv_sym, equip_sym=equip_sym,
-                    line_style=bi_ls)
+                    cap_sym=cap_sym, line_style=bi_ls)
                 drawn_fixtures += 1 + len(bi["sub_fixtures"])
             else:
                 _draw_schematic_branch(
@@ -2125,6 +2086,7 @@ def main():
                     valve_sym=valve_sym,
                     prv_sym=prv_sym,
                     equip_sym=equip_sym,
+                    cap_sym=cap_sym,
                     line_style=bi_ls)
                 drawn_fixtures += 1
             if bi.get("has_isolation") or bi.get("has_prv"):
@@ -2175,14 +2137,8 @@ def main():
                     p_inst = _place_sym(doc, view, prv_sym, prv_x, cy)
                     if p_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, prv_x, cy))
-                e_inst = _place_sym(doc, view, equip_sym, cx, cy, rotate_90=True)
-                if e_inst is None:
-                    sym_elems = []
-                    for i in range(3):
-                        xx = cx + sign * i * FIXTURE_SPACING
-                        sym_elems.append(_line(doc, view, xx, cy - FIXTURE_HW,
-                                               xx, cy + FIXTURE_HW))
-                    _make_group(doc, sym_elems)
+                _place_equipment_symbol(doc, view, equip_sym, cap_sym, cx, cy, sign,
+                                         name, rotate_90=True)
                 x_center = cx + sign * 1.0 * FIXTURE_SPACING
                 lbl_y    = cy - FIXTURE_HW - FIXTURE_LABEL_GAP
                 _note(doc, view, x_center, lbl_y, label, tt_id, center_align=True,
@@ -2205,14 +2161,8 @@ def main():
                     p_inst = _place_sym(doc, view, prv_sym, cx, prv_y, rotate_90=True)
                     if p_inst is None:
                         _make_group(doc, _draw_valve_bowtie(doc, view, cx, prv_y))
-                e_inst = _place_sym(doc, view, equip_sym, cx, cy, rotate_180=going_up)
-                if e_inst is None:
-                    sym_elems = []
-                    for i in range(3):
-                        yy = cy + sign * i * FIXTURE_SPACING
-                        sym_elems.append(_line(doc, view, cx - FIXTURE_HW, yy,
-                                               cx + FIXTURE_HW, yy))
-                    _make_group(doc, sym_elems)
+                _place_equipment_symbol(doc, view, equip_sym, cap_sym, cx, cy, sign,
+                                         name, rotate_180=going_up)
                 far_y = cy + sign * 2 * FIXTURE_SPACING
                 if sign > 0:
                     lbl_y = far_y + FIXTURE_LABEL_GAP + 2 * TEXT_HEIGHT_FT
