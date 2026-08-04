@@ -62,17 +62,45 @@ NOMINAL_TO_INCHES = {
 
 
 # ---------------------------------------------------------------------------
+# Altitude derate (RJA standard)
+# ---------------------------------------------------------------------------
+
+def altitude_derate_factor(elevation_ft):
+    """Return the RJA-standard MBH-per-actual-CFH factor for a project elevation.
+
+    IFGC Table 402.4 capacities are expressed in CFH assuming 1000 BTU per
+    actual cubic foot (sea-level gas density). At elevation, an actual cubic
+    foot of gas carries less heating value, so each actual CFH delivers less
+    than 1 MBH. RJA standard: derate 3% per 1,000 ft of elevation above sea
+    level, no threshold.
+
+    Args:
+        elevation_ft: float  project elevation above sea level, in feet.
+
+    Returns:
+        float  MBH actually delivered per actual CFH (1.0 at sea level).
+    """
+    factor = 1.0 - (shared_params.ALTITUDE_DERATE_PERCENT_PER_1000FT *
+                     (elevation_ft / 1000.0))
+    return max(factor, 0.0)
+
+
+# ---------------------------------------------------------------------------
 # Main sizing function
 # ---------------------------------------------------------------------------
 
-def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
+def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
+                 elevation_ft=0.0):
     """Size every pipe segment using the IFGC Longest Run Method.
 
     Per IFGC A103.1:
       - One longest run length is used for ALL segments.
       - Each segment is sized for its cumulative downstream demand (CFH).
       - Smallest nominal size whose table capacity >= demand is selected.
-      - 1 MBH = 1 CFH for natural gas at 1000 BTU/cf.
+      - At sea level, 1 MBH = 1 CFH for natural gas at 1000 BTU/cf. At
+        elevation, demand is converted to an altitude-derated effective CFH
+        via altitude_derate_factor() (RJA standard) before comparison against
+        table capacity - see that function for the rationale.
 
     Args:
         graph:               NetworkGraph from pipe_graph.build_network()
@@ -82,15 +110,19 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
         table_id:            str  optional - IFGC table ID to use directly,
                              e.g. "402.4(2)". When supplied, inlet_pressure_psi
                              is stored in the result but not used for lookup.
+        elevation_ft:        float  project elevation above sea level, in
+                             feet. Defaults to 0.0 (no altitude derate).
 
     Returns:
         dict with keys:
-            sizes            {pipe_element_id (int): nominal_size (str)}
-            table_id         str  e.g. "402.4(2)"
-            longest_run_ft   float
-            pipe_material    str
-            inlet_pressure_psi  float
-            segment_detail   list of dicts - one per sized segment
+            sizes                 {pipe_element_id (int): nominal_size (str)}
+            table_id              str  e.g. "402.4(2)"
+            longest_run_ft        float
+            pipe_material         str
+            inlet_pressure_psi    float
+            elevation_ft          float
+            altitude_derate_factor  float  MBH delivered per actual CFH
+            segment_detail        list of dicts - one per sized segment
 
     Raises:
         ValueError: If longest run is missing, table not available, or any
@@ -113,6 +145,8 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
     pipe_sizes = gas_tables.list_pipe_sizes(table_id)
     table_length_used, _ = gas_tables.get_length_row(table_id, longest_run_ft)
 
+    altitude_factor = altitude_derate_factor(elevation_ft)
+
     sizes = {}
     segment_detail = []
     sizing_errors = []
@@ -132,7 +166,14 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
         if edge.to_node_id is None:
             continue
 
-        demand_mbh = edge.cumulative_load_mbh  # 1 MBH = 1 CFH
+        demand_mbh = edge.cumulative_load_mbh
+
+        # Altitude-derated effective CFH the pipe must actually carry to
+        # deliver demand_mbh of real heat input - see altitude_derate_factor().
+        if altitude_factor > 0:
+            demand_cfh_effective = demand_mbh / altitude_factor
+        else:
+            demand_cfh_effective = float("inf")
 
         # Zero demand: assign minimum available pipe size
         if demand_mbh <= 0:
@@ -144,23 +185,24 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
             if upsized:
                 note += " (upsized to 3/4\" firm minimum)"
             segment_detail.append({
-                "pipe_id":       edge.element_id,
-                "demand_mbh":    0.0,
-                "selected_size": selected,
-                "capacity_mbh":  capacity_at_size,
-                "note":          note
+                "pipe_id":             edge.element_id,
+                "demand_mbh":          0.0,
+                "demand_cfh_adjusted": 0.0,
+                "selected_size":       selected,
+                "capacity_mbh":        capacity_at_size,
+                "note":                note
             })
             sizes[edge.element_id] = selected
             continue
 
-        # Find smallest size whose capacity >= demand
+        # Find smallest size whose capacity >= altitude-derated demand
         selected = None
         selected_capacity = None
         for size in pipe_sizes:
             try:
                 capacity = gas_tables.get_capacity(
                     table_id, longest_run_ft, size)
-                if capacity >= demand_mbh:
+                if capacity >= demand_cfh_effective:
                     selected = size
                     selected_capacity = capacity
                     break
@@ -170,9 +212,11 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
 
         if selected is None:
             sizing_errors.append(
-                "Pipe {}: demand {:.1f} MBH exceeds max table capacity "
-                "at {:.0f} ft in Table {}.".format(
-                    edge.element_id, demand_mbh, table_length_used, table_id))
+                "Pipe {}: demand {:.1f} MBH ({:.1f} CFH effective at "
+                "{:.0f} ft elevation) exceeds max table capacity at {:.0f} "
+                "ft in Table {}.".format(
+                    edge.element_id, demand_mbh, demand_cfh_effective,
+                    elevation_ft, table_length_used, table_id))
             continue
 
         selected, upsized = _apply_minimum(selected, pipe_sizes)
@@ -182,11 +226,12 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
 
         sizes[edge.element_id] = selected
         segment_detail.append({
-            "pipe_id":       edge.element_id,
-            "demand_mbh":    round(demand_mbh, 1),
-            "selected_size": selected,
-            "capacity_mbh":  selected_capacity,
-            "note":          "upsized to 3/4\" firm minimum" if upsized else ""
+            "pipe_id":             edge.element_id,
+            "demand_mbh":          round(demand_mbh, 1),
+            "demand_cfh_adjusted": round(demand_cfh_effective, 1),
+            "selected_size":       selected,
+            "capacity_mbh":        selected_capacity,
+            "note":                "upsized to 3/4\" firm minimum" if upsized else ""
         })
 
     if sizing_errors:
@@ -195,13 +240,15 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None):
                 len(sizing_errors), "\n".join(sizing_errors)))
 
     return {
-        "sizes":               sizes,
-        "table_id":            table_id,
-        "table_length_used_ft": table_length_used,
-        "longest_run_ft":      longest_run_ft,
-        "pipe_material":       pipe_material,
-        "inlet_pressure_psi":  inlet_pressure_psi,
-        "segment_detail":      segment_detail,
+        "sizes":                  sizes,
+        "table_id":               table_id,
+        "table_length_used_ft":   table_length_used,
+        "longest_run_ft":         longest_run_ft,
+        "pipe_material":          pipe_material,
+        "inlet_pressure_psi":     inlet_pressure_psi,
+        "elevation_ft":           elevation_ft,
+        "altitude_derate_factor": altitude_factor,
+        "segment_detail":         segment_detail,
     }
 
 
@@ -266,6 +313,10 @@ def format_sizing_output(sizing_result, graph):
         sizing_result["longest_run_ft"]))
     lines.append("Pipe material: {}".format(sizing_result["pipe_material"]))
     lines.append("Inlet PSI:     {}".format(sizing_result["inlet_pressure_psi"]))
+    lines.append("Elevation:     {:.0f} ft  (altitude derate factor {:.3f} "
+                 "MBH/CFH, RJA standard)".format(
+        sizing_result.get("elevation_ft", 0.0),
+        sizing_result.get("altitude_derate_factor", 1.0)))
     lines.append("Total load:    {:.1f} MBH  |  {} fixtures".format(
         total_mbh, len(fixture_nodes)))
     lines.append("")
@@ -289,11 +340,16 @@ def format_sizing_output(sizing_result, graph):
                     (" ..." if len(fixtures) > 3 else ""))
 
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
+        altitude_note = ""
+        if abs(sizing_result.get("altitude_derate_factor", 1.0) - 1.0) > 1e-9:
+            altitude_note = "  [eff {:.1f} CFH]".format(
+                detail.get("demand_cfh_adjusted", detail["demand_mbh"]))
         lines.append(
-            "  [{}]  {:.1f} MBH  ->  {}\"  "
+            "  [{}]  {:.1f} MBH{}  ->  {}\"  "
             "(cap {} MBH)  {}{}{}".format(
                 detail["pipe_id"],
                 detail["demand_mbh"],
+                altitude_note,
                 detail["selected_size"],
                 int(detail["capacity_mbh"]),
                 length_str,

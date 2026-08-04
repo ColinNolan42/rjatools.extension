@@ -42,6 +42,14 @@ MBH_PER_BTU             = 0.001     # Convenience multiplier: BTU/hr * MBH_PER_B
 
 INCHES_PER_FOOT         = 12.0      # Used when converting pipe diameter from feet to inches.
 
+# RJA standard: at elevation, an actual cubic foot of gas carries less heating
+# value than the sea-level-referenced 1000 BTU/cf that IFGC Table 402.4
+# capacities assume. Derate 3% per 1,000 ft of elevation above sea level
+# (no threshold) to get actual MBH delivered per actual CFH.
+ALTITUDE_DERATE_PERCENT_PER_1000FT = 0.03
+
+DEFAULT_PROJECT_ELEVATION_FT       = 5280.0   # Denver, CO - startup dialog default.
+
 # =============================================================================
 # CONNECTOR FLOW DIRECTION
 # Used by pipe_graph.py to identify the building-side connector on the meter.

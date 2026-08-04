@@ -245,10 +245,20 @@ element.LookupParameter("param_name")
 
 # Unit conversions
 BTU ÷ 1000 = MBH
-BTU ÷ 1000 = CFH  (natural gas, 1000 BTU/cf)
+BTU ÷ 1000 = CFH  (natural gas, 1000 BTU/cf, at SEA LEVEL)
 
 # Specific gravity
 SPECIFIC_GRAVITY = 0.60  (hardcoded, matches all IFGC tables)
+
+# Altitude derate (RJA standard, added 2026-08-04)
+# IFGC Table 402.4 capacities assume 1000 BTU per actual cubic foot at sea
+# level. At elevation, an actual cubic foot of gas carries less heating
+# value, so each actual CFH delivers less than 1 MBH. RJA standard: derate
+# 3% per 1,000 ft of elevation above sea level, no threshold.
+# See sizing_engine.altitude_derate_factor(elevation_ft).
+# Project elevation is user-entered in the Size Gas / One-Line startup
+# dialog (ui_helpers.show_table_picker), default 5,280 ft (Denver).
+# Denver (~5,280 ft) -> factor ≈ 0.84 MBH per actual CFH.
 
 # Longest Run Method (2024 IFGC Appendix A)
 #
@@ -266,8 +276,10 @@ SPECIFIC_GRAVITY = 0.60  (hardcoded, matches all IFGC tables)
 #    use the NEXT LONGER row (conservative - lower capacity for same pipe size).
 #
 # 4. For each segment, select the SMALLEST nominal pipe size whose table
-#    capacity (CFH) >= that segment's MBH demand.
-#    1 MBH = 1 CFH for natural gas at 1000 BTU/cf.
+#    capacity (CFH) >= that segment's altitude-derated effective CFH demand.
+#    At sea level, 1 MBH = 1 CFH for natural gas at 1000 BTU/cf. At
+#    elevation, effective CFH = MBH demand / altitude_derate_factor
+#    (RJA standard - see "Altitude derate" note above).
 #
 # Key rule: Individual run lengths to each outlet are NOT used for sizing.
 # The single longest developed length drives ALL table lookups.

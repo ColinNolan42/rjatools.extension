@@ -341,9 +341,9 @@ def main():
     # ------------------------------------------------------------------
     # STEP 3 - Startup dialog: select pipe material and IFGC table
     # ------------------------------------------------------------------
-    pipe_material, selected_table_label = ui_helpers.show_table_picker(
+    pipe_material, selected_table_label, elevation_ft = ui_helpers.show_table_picker(
         "Size Gas - Select IFGC Table")
-    if not pipe_material or not selected_table_label:
+    if not pipe_material or not selected_table_label or elevation_ft is None:
         output.print_md(
             "Cancelled at table selection. No changes were made to the model.")
         return
@@ -353,10 +353,11 @@ def main():
     table_id           = selected_opt["table_id"]
     inlet_pressure_psi = selected_opt["inlet_pressure_psi"]
 
-    output.print_md("**Table:**    {} ({})".format(
+    output.print_md("**Table:**     {} ({})".format(
         table_id, selected_opt["label"].split("  [")[0]))
-    output.print_md("**Material:** {}".format(pipe_material))
-    output.print_md("**Gas:**      {}".format(selected_opt["gas"]))
+    output.print_md("**Material:**  {}".format(pipe_material))
+    output.print_md("**Gas:**       {}".format(selected_opt["gas"]))
+    output.print_md("**Elevation:** {:.0f} ft".format(elevation_ft))
 
     # ------------------------------------------------------------------
     # STEP 4 - Traverse piping network
@@ -404,7 +405,8 @@ def main():
     output.print_md("**Running IFGC sizing...**")
     try:
         result = sizing_engine.size_system(
-            graph, pipe_material, inlet_pressure_psi, table_id)
+            graph, pipe_material, inlet_pressure_psi, table_id,
+            elevation_ft=elevation_ft)
     except ValueError as e:
         forms.alert(
             "Sizing failed:\n\n{}".format(str(e)),
@@ -680,6 +682,9 @@ def main():
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
     output.print_md("| IFGC table | {} |".format(result["table_id"]))
+    output.print_md("| Elevation | {:.0f} ft |".format(result["elevation_ft"]))
+    output.print_md("| Altitude derate factor | {:.3f} MBH/CFH |".format(
+        result["altitude_derate_factor"]))
     output.print_md("| Longest run | {:.1f} ft |".format(
         result["longest_run_ft"]))
     output.print_md("| Table row used | {} ft |".format(

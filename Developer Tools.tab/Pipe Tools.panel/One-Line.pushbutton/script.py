@@ -1657,9 +1657,9 @@ def main():
     # ------------------------------------------------------------------
     # STEP 3 - Select pipe material and IFGC table (populates notes block)
     # ------------------------------------------------------------------
-    pipe_material, selected_table_label = ui_helpers.show_table_picker(
+    pipe_material, selected_table_label, elevation_ft = ui_helpers.show_table_picker(
         "One-Line - Select IFGC Table")
-    if not pipe_material or not selected_table_label:
+    if not pipe_material or not selected_table_label or elevation_ft is None:
         output.print_md("Cancelled at table selection. No changes made.")
         return
 
@@ -1667,8 +1667,9 @@ def main():
         pipe_material, selected_table_label)
     table_id           = selected_opt["table_id"]
     inlet_pressure_psi = selected_opt["inlet_pressure_psi"]
-    output.print_md("**Material:** {}  |  **Table:** {}".format(
-        pipe_material, table_id))
+    altitude_factor    = sizing_engine.altitude_derate_factor(elevation_ft)
+    output.print_md("**Material:** {}  |  **Table:** {}  |  **Elevation:** {:.0f} ft".format(
+        pipe_material, table_id, elevation_ft))
 
     # ------------------------------------------------------------------
     # STEP 4 - Traverse network
@@ -1774,6 +1775,20 @@ def main():
     # Fallback for stub / side-takeoff branches whose pipe element wasn't written
     # by the sizing engine (e.g. short tee stubs, bottom take-offs).  Look up the
     # minimum IFGC size that handles the branch MBH demand at the system length.
+    def _pick_fallback_size(demand_mbh, pairs):
+        """Smallest nominal size in pairs whose capacity covers demand_mbh,
+        altitude-derated per sizing_engine.altitude_derate_factor() so this
+        fallback matches the same comparison Size Gas uses. Returns "" if
+        no size in pairs is sufficient."""
+        if altitude_factor > 0:
+            demand_cfh_effective = demand_mbh / altitude_factor
+        else:
+            demand_cfh_effective = float("inf")
+        for nom, cap in pairs:
+            if cap is not None and cap >= demand_cfh_effective:
+                return nom
+        return ""
+
     try:
         _fb_sizes = gas_tables.list_pipe_sizes(table_id)
         _, _fb_caps = gas_tables.get_length_row(table_id, total_developed_ft)
@@ -1783,46 +1798,35 @@ def main():
 
     for bi in branch_info:
         if not bi["size"] and _fb_pairs:
-            demand = bi["cum_mbh"]
-            for nom, cap in _fb_pairs:
-                if cap is not None and cap >= demand:
-                    bi["size"] = nom
-                    break
+            nom = _pick_fallback_size(bi["cum_mbh"], _fb_pairs)
+            if nom:
+                bi["size"] = nom
         if bi.get("sub_fixtures"):
             if not bi.get("shared_size") and _fb_pairs:
-                demand = bi["cum_mbh"]
-                for nom, cap in _fb_pairs:
-                    if cap is not None and cap >= demand:
-                        bi["shared_size"] = nom
-                        break
+                nom = _pick_fallback_size(bi["cum_mbh"], _fb_pairs)
+                if nom:
+                    bi["shared_size"] = nom
             if not bi.get("remaining_size") and _fb_pairs:
                 demand = bi.get("cum_mbh", 0) - sum(
                     s["cum_mbh"] for s in bi["sub_fixtures"])
-                for nom, cap in _fb_pairs:
-                    if cap is not None and cap >= demand:
-                        bi["remaining_size"] = nom
-                        break
+                nom = _pick_fallback_size(demand, _fb_pairs)
+                if nom:
+                    bi["remaining_size"] = nom
         for sf in bi.get("sub_fixtures", []):
             if not sf.get("size") and _fb_pairs:
-                demand = sf["cum_mbh"]
-                for nom, cap in _fb_pairs:
-                    if cap is not None and cap >= demand:
-                        sf["size"] = nom
-                        break
+                nom = _pick_fallback_size(sf["cum_mbh"], _fb_pairs)
+                if nom:
+                    sf["size"] = nom
             if not sf.get("remaining_size") and _fb_pairs:
-                demand = sf["cum_mbh"]
-                for nom, cap in _fb_pairs:
-                    if cap is not None and cap >= demand:
-                        sf["remaining_size"] = nom
-                        break
+                nom = _pick_fallback_size(sf["cum_mbh"], _fb_pairs)
+                if nom:
+                    sf["remaining_size"] = nom
 
     for seg in spine_segments:
         if not seg["size"] and _fb_pairs and seg["cum_mbh"] is not None:
-            demand = seg["cum_mbh"]
-            for nom, cap in _fb_pairs:
-                if cap is not None and cap >= demand:
-                    seg["size"] = nom
-                    break
+            nom = _pick_fallback_size(seg["cum_mbh"], _fb_pairs)
+            if nom:
+                seg["size"] = nom
 
     # ------------------------------------------------------------------
     # STEP 5c - Phase-based line style
@@ -2022,10 +2026,7 @@ def main():
                 if nom:
                     break
             if not nom and _fb_pairs:
-                for fb_nom, fb_cap in _fb_pairs:
-                    if fb_cap is not None and fb_cap >= mbh:
-                        nom = fb_nom
-                        break
+                nom = _pick_fallback_size(mbh, _fb_pairs)
 
             if nom:
                 line1 = '{}"G, {} FT'.format(nom, lft)
