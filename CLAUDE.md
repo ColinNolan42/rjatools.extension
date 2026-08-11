@@ -220,6 +220,9 @@ Modules: `shared_params.py`, `revit_helpers.py`, `pipe_graph.py`, `report_genera
 **8. MINIMIZE USER INPUT.**
 Phase 1: zero input. Phase 2: one startup dialog only, then automatic. No runtime prompts after startup.
 
+**9. DO DOCUMENT WORK LOCALLY IN DOWNLOADS, NOT ON THE SHARED DRIVE.**
+All edits to documents and creation of new revision files happen under `C:\Users\Colin Nolan\Downloads`. If a project needs its own working folder for this, create one under Downloads (e.g. `Downloads\<Project Name>\`) — never create working/staging folders on the shared drive (`G:\Shared drives\...`). Only move the completed file from Downloads onto the shared drive once the work is finished AND the user explicitly says to move it to a specific path there — confirm the exact destination before doing so, even when the instruction seems direct. Renaming files mid-process is fine when the user gives explicit naming instructions. Never move, relocate, or delete an existing file already on the shared drive (e.g. a client-received file in a Client folder) — only copy FROM the shared drive TO Downloads is allowed without special confirmation.
+
 ---
 
 ## Technical Reference
