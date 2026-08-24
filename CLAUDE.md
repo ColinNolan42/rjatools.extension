@@ -419,6 +419,46 @@ Basis: standard air (0.075 lb/ft³, 70°F, sea level), ε = 0.0003 ft (galvanize
 
 ---
 
+## AI QC Project
+
+**Status: v1 agent scaffold built 2026-08-17 — PDF QC mode fleshed out, MCP QC mode scaffolded, not yet tested against a real set.**
+
+Two separate QC tracks, kept distinct — do not merge:
+
+1. **PDF QC** — reads finished/issued permit set PDFs (Revit sheets printed
+   to Bluebeam, true vector PDFs) and reviews them for administrative
+   issues (keynote wording vs. the bank, titleblock consistency,
+   cross-discipline numbering coordination, floor plan rotation/scale
+   consistency, spelling, etc.), technical/code-compliance shortfalls
+   (code citations verified against the real code PDFs, sizing sanity
+   checks against the real IFGC/IPC tables), and separately-flagged
+   design-improvement suggestions.
+
+2. **MCP QC** — a Revit-MCP-driven pass run against a live model (via
+   `send_code_to_revit`) that catches the same class of administrative/
+   visual issues with ground-truth data, plus checks only possible with a
+   live model (jurisdiction/code-year alignment against a county-adopted-
+   code table, direct parameter cross-checks, stale one-line detection).
+   This is the "Pre-Flight Post Check" concept. The jurisdiction check is
+   blocked until the county-adopted-code reference table is built (handed
+   off separately, see memory).
+
+Both modes are implemented in one subagent: `mep-qc-reviewer`
+(`C:\Users\Colin Nolan\.claude\agents\mep-qc-reviewer.md`). Output is a
+single consolidated findings file per QC run (Sheet / Description / Fix /
+Location / Notes), not split per category or per finding.
+
+Full concept notes and open questions for each track live in Claude Code
+memory: "AI QC Project — PDF QC track" and "AI QC Project — MCP QC track
+(Pre-Flight)."
+
+Do not expand implementation beyond the current scaffold until Colin has
+tried it against a real set and asks for the next round of checks. Any
+code-based finding must reference the project's actual code PDFs, never
+cite from memory, per the Absolute Rules above.
+
+---
+
 ## Verification
 
 Run this to confirm context loaded correctly:
