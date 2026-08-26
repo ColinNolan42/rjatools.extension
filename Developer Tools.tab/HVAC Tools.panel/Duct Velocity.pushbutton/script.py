@@ -784,10 +784,9 @@ def main():
         output.print_md('**Cancelled.**')
         return
     custom_limits, tol_pct, include_oa = dialog_result
-    prune_oa = not include_oa
     output.print_md('Scope: **{}**'.format(
-        'System-level (Supply, Return, Outside Air)' if include_oa
-        else 'Equipment-level (Supply + Return Air only — Outside Air not traversed)'))
+        'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
+        else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
 
     # 3. Find AHUs in active view and let user pick systems
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
@@ -845,7 +844,7 @@ def main():
     for sel_elem in sel_elems:
         output.print_md('Traversing **{}** (id {})...'.format(
             _elem_name(sel_elem), eid_int(sel_elem.Id)))
-        net = hvac_graph.build_network(sel_elem, doc, prune_oa_at_equipment=prune_oa)
+        net = hvac_graph.build_network(sel_elem, doc, equipment_level=(not include_oa))
 
         if net.errors:
             for e in net.errors:
