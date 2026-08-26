@@ -145,29 +145,45 @@ def is_fitting_or_accessory(elem):
     return cid in (_CAT_FITTING, _CAT_ACCESSORY)
 
 
+def _nominal_even_in(inches):
+    """Snap a raw dimension (already converted to inches) to the nearest 2"
+    nominal duct/neck increment (6, 8, 10, 12, 14, ...) — RJA standard duct
+    sizing grid, matching _ROUND_SIZES / _snap_even() in Duct Velocity's
+    script.py. Rounds to NEAREST, not up — this is meant to recover the
+    intended nominal value (any non-nominal reading is either Revit's own
+    floating-point unit-conversion noise or a modeling slip, not a real
+    odd size; lined duct's actual clear opening is detailed/keynoted
+    separately rather than modeled as a different dimension) — not to
+    conservatively pad a candidate suggestion the way _snap_even()'s
+    ceiling behavior does for "find the smallest size that still works"
+    searches.
+
+    Confirmed live 2026-08-26: a true 10" duct can be stored internally as
+    10.000000000000002" — enough to flip a strict `<` comparison at an
+    exact 2" boundary (e.g. 12" vs 10"+2"=12.000000000000002") and produce
+    a false diffuser/duct clearance flag on a step-down that's actually
+    exactly at the safe margin. Snapping to the nominal grid kills that
+    class of noise categorically, not just the one boundary it was found on.
+    """
+    return round(inches / 2.0) * 2.0
+
+
 def effective_height_in(elem):
     """Height (rectangular) or diameter (round) in inches, used for the
     diffuser/duct height clearance check. Ducts read RBS_CURVE_* built-in
     params directly; terminals (which don't have those params) read their
     neck connector geometry instead. Returns None if not determinable.
 
-    Rounded to 6 decimal places — confirmed live (2026-08-26) that Revit's
-    internal feet<->inch round-trip can store a true 10" duct as
-    10.000000000000002". Left unrounded, that ~2e-15" noise is enough to
-    flip the diffuser/duct clearance check's strict `<` at an exact 2"
-    boundary (e.g. 12" vs 10"+2"=12.000000000000002"), producing a false
-    RED flag on a step-down that's actually exactly at the safe margin.
-    6 decimals keeps real-world precision (millionths of an inch) while
-    killing this class of noise — same class of bug _snap_even() already
-    guards against elsewhere in this file.
+    Snapped to the nearest 2" nominal increment via _nominal_even_in() —
+    see that function's docstring for why.
     """
     if is_duct(elem):
         d = elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
         if d is not None and d.AsDouble() > 0:
-            return round(d.AsDouble() * 12.0, 6)
+            return _nominal_even_in(d.AsDouble() * 12.0)
         h = elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
         if h is not None and h.AsDouble() > 0:
-            return round(h.AsDouble() * 12.0, 6)
+            return _nominal_even_in(h.AsDouble() * 12.0)
         return None
     if is_terminal(elem):
         cm = _connector_manager(elem)
@@ -176,9 +192,9 @@ def effective_height_in(elem):
         try:
             for c in cm.Connectors:
                 if c.Shape == ConnectorProfileType.Round:
-                    return round(c.Radius * 2.0 * 12.0, 6)
+                    return _nominal_even_in(c.Radius * 2.0 * 12.0)
                 elif c.Shape == ConnectorProfileType.Rectangular:
-                    return round(c.Height * 12.0, 6)
+                    return _nominal_even_in(c.Height * 12.0)
         except Exception:
             pass
     return None
