@@ -814,7 +814,7 @@ def main():
     all_nodes        = {}   # merged for fitting adjacency
     all_children     = {}   # merged
     ahu_labels       = []
-    ahu_totals       = []   # (ahu_name, ahu_id, total_cfm, terminal_count)
+    ahu_totals       = []   # (ahu_name, ahu_id, discharge_cfm, terminal_count, other_class_cfm)
     all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
     all_zero_terms   = set()
     all_missing_flow = set()
@@ -841,7 +841,8 @@ def main():
         root_id = eid_int(net.root.Id)
         ahu_totals.append((
             _elem_name(net.root), root_id,
-            net.cfm_map.get(root_id, 0.0), len(net.terminal_cfms)))
+            net.equipment_discharge_cfm(root_id), len(net.terminal_cfms),
+            net.equipment_other_class_cfm(root_id)))
 
         all_nodes.update(net.nodes)
         all_children.update(net.children)
@@ -888,9 +889,12 @@ def main():
         t[1] += cfm
 
     summary_lines = ['SYSTEM SUMMARY']
-    for name, aid, total_cfm, term_count in ahu_totals:
-        summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM total ({} diffusers)'.format(
-            name, aid, total_cfm, term_count))
+    for name, aid, discharge_cfm, term_count, other_class_cfm in ahu_totals:
+        summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM supply air discharge ({} diffusers)'.format(
+            name, aid, discharge_cfm, term_count))
+        for cls in sorted(other_class_cfm.keys()):
+            summary_lines.append('    + {:.0f} CFM {} feeding this equipment (not counted in discharge total)'.format(
+                other_class_cfm[cls], cls))
     summary_lines.append('Grand Total Airflow: {:.0f} CFM  |  {} Diffusers  |  {} Ducts'.format(
         grand_total_cfm, len(all_terminals), len(all_duct_results)))
     for sys_class in sorted(sys_totals.keys()):

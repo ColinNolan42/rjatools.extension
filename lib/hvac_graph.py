@@ -258,6 +258,37 @@ def terminal_sys_class(elem):
             return v
     return 'Unknown'
 
+def elem_sys_class(elem):
+    """System classification for a duct or terminal, or None if undetermined.
+    Unlike duct_sys_class()/terminal_sys_class(), returns None (not 'Unknown')
+    when unresolved, so callers can tell 'no data' apart from a real class."""
+    if is_duct(elem):
+        v = duct_sys_class(elem)
+        return v if v and v != 'Unknown' else None
+    if is_terminal(elem):
+        v = terminal_sys_class(elem)
+        return v if v and v != 'Unknown' else None
+    return None
+
+
+def _branch_sys_class(node_id, nodes, children):
+    """Resolve the system classification of a branch hanging off an equipment
+    node, walking through fittings/accessories (which have no class of their
+    own) to the nearest classified duct or terminal. Returns None if nothing
+    classified is found along that branch."""
+    elem = nodes.get(node_id)
+    if elem is None:
+        return None
+    cls = elem_sys_class(elem)
+    if cls is not None:
+        return cls
+    if is_fitting_or_accessory(elem):
+        for cid in children.get(node_id, []):
+            cls = _branch_sys_class(cid, nodes, children)
+            if cls is not None:
+                return cls
+    return None
+
 def smacna_label(fpm, sys_class):
     limits = SMACNA.get(sys_class, None)
     if fpm <= 0 or limits is None:
@@ -401,14 +432,39 @@ def traverse(root, allowed_ids=None):
 
 # ── post-order CFM accumulation (iterative) ──────────────────────────────────
 def compute_cfm(root_id, nodes, children, terminal_cfms):
-    """Iterative post-order DFS. Returns dict int_id -> cfm."""
+    """Iterative post-order DFS. Returns (cfm_map, equip_class_cfm).
+
+    cfm_map: dict int_id -> cfm (every node, same as before).
+
+    equip_class_cfm: dict int_id -> {sys_class: cfm}, populated only for
+    OST_MechanicalEquipment nodes (VAV boxes, FCUs, AHUs). At a normal node
+    cfm_map[nid] is still the flat sum of all children (unchanged behavior —
+    this is what upstream/trunk ductwork continues to use). But AT an
+    equipment node, children are also grouped by branch system
+    classification (Outside Air vs Supply Air vs Return/Exhaust, via
+    _branch_sys_class) so callers can tell "outside air feeding into this
+    box" apart from "supply air leaving this box" instead of only ever
+    seeing them pre-summed into one number. cfm_map[nid] for an equipment
+    node stays the same combined total either way — equip_class_cfm is the
+    breakdown layered on top, not a replacement.
+    """
     cfm_map = {}
+    equip_class_cfm = {}
     stack   = [(root_id, False)]
     while stack:
         nid, done = stack.pop()
         if done:
+            elem = nodes.get(nid)
             if nid in terminal_cfms:
                 cfm_map[nid] = float(terminal_cfms[nid])
+            elif elem is not None and is_equipment(elem):
+                by_class = {}
+                for cid in children.get(nid, []):
+                    cls = _branch_sys_class(cid, nodes, children) or 'Unknown'
+                    by_class[cls] = by_class.get(cls, 0.0) + cfm_map.get(cid, 0.0)
+                equip_class_cfm[nid] = by_class
+                # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
+                cfm_map[nid] = sum(by_class.values(), 0.0)
             else:
                 # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
                 cfm_map[nid] = sum((cfm_map.get(c, 0.0) for c in children.get(nid, [])), 0.0)
@@ -416,7 +472,7 @@ def compute_cfm(root_id, nodes, children, terminal_cfms):
             stack.append((nid, True))
             for cid in children.get(nid, []):
                 stack.append((cid, False))
-    return cfm_map
+    return cfm_map, equip_class_cfm
 
 
 # ── solid fill pattern ───────────────────────────────────────────────────────
@@ -445,6 +501,7 @@ class HvacNetwork(object):
         self.zero_terminals  = []        # int_ids with Flow = 0
         self.missing_flow    = []        # int_ids where Flow param not found
         self.cfm_map         = {}        # int_id -> cfm (all nodes)
+        self.equip_class_cfm = {}        # int_id -> {sys_class: cfm} (equipment nodes only)
         self.duct_results    = {}        # ElementId -> DuctResult
         self.no_area_ducts   = []        # int_ids
         self.errors          = []
@@ -473,6 +530,30 @@ class HvacNetwork(object):
     @property
     def duct_count(self):
         return len(self.duct_results)
+
+    def equipment_discharge_cfm(self, equip_id):
+        """Supply Air CFM leaving this equipment node (its real discharge
+        total) — excludes Outside/Return/Exhaust Air branches feeding into
+        it. Falls back to the old combined total (cfm_map) if no branch on
+        this equipment resolved to a known classification at all (e.g. no
+        System Classification data in the model), so unclassified projects
+        keep working exactly as before."""
+        by_class = self.equip_class_cfm.get(equip_id)
+        if not by_class:
+            return self.cfm_map.get(equip_id, 0.0)
+        if 'Supply Air' in by_class:
+            return by_class['Supply Air']
+        # No Supply Air branch resolved (e.g. this equipment IS the terminal
+        # end, or classification data is missing) — fall back to the combined
+        # total rather than silently reporting 0.
+        return self.cfm_map.get(equip_id, 0.0)
+
+    def equipment_other_class_cfm(self, equip_id):
+        """dict {sys_class: cfm} for every branch on this equipment node
+        EXCEPT Supply Air (e.g. {'Outside Air': 100.0}) — the CFM that
+        equipment_discharge_cfm() deliberately excludes from its total."""
+        by_class = self.equip_class_cfm.get(equip_id, {})
+        return dict((k, v) for k, v in by_class.items() if k != 'Supply Air')
 
 
 class DuctResult(object):
@@ -578,7 +659,8 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
                 net.zero_terminals.append(nid)
 
     # Post-order CFM sum
-    net.cfm_map = compute_cfm(eid_int(net.root.Id), net.nodes, net.children, net.terminal_cfms)
+    net.cfm_map, net.equip_class_cfm = compute_cfm(
+        eid_int(net.root.Id), net.nodes, net.children, net.terminal_cfms)
 
     # Duct results
     for nid, elem in net.nodes.items():
