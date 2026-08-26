@@ -42,7 +42,7 @@ from System.Windows import (
 from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
     ColumnDefinition, RowDefinition, Orientation,
-    Separator, TextBlock
+    Separator, TextBlock, RadioButton, CheckBox
 )
 from System.Windows.Media import SolidColorBrush, Colors
 from System.Windows import FontWeights
@@ -72,9 +72,17 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY, 'PURPL
 
 # ── velocity settings dialog ───────────────────────────────────────────────────
 def show_velocity_settings_dialog():
-    """WPF dialog — per-system max velocity + friction, with a yellow/red tolerance %.
+    """WPF dialog — system type, per-system max velocity + friction, and a
+    yellow/red tolerance %.
 
-    Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct) or None.
+    Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, system_type,
+    prune_oa) or None. system_type is 'RTU' or 'VAV_FCU'. prune_oa is True
+    only for VAV_FCU with "Full System" left unchecked — any mechanical
+    equipment node's Outside Air branch is then skipped entirely by
+    hvac_graph.traverse() rather than sized/colored, for projects where the
+    OA network isn't modeled to completion. RTU always traverses everything
+    (prune_oa is always False), since a packaged unit has no separate OA
+    distribution to omit.
 
     Color bands:
       Green  : value <= max
@@ -106,6 +114,46 @@ def show_velocity_settings_dialog():
 
     outer = StackPanel()
     outer.Margin = Thickness(14)
+
+    # ── System Type: RTU/All-in-One vs VAV/FCU (+ Full System sub-option) ──
+    systype_hdr = Label()
+    systype_hdr.Content = 'System Type:'
+    systype_hdr.FontWeight = FontWeights.Bold
+    systype_hdr.Margin = Thickness(0, 0, 0, 2)
+    outer.Children.Add(systype_hdr)
+
+    rb_rtu = RadioButton()
+    rb_rtu.Content = 'RTU / All-in-One System  (packaged unit, traverse everything)'
+    rb_rtu.GroupName = 'SystemType'
+    rb_rtu.IsChecked = True
+    rb_rtu.Margin = Thickness(2, 2, 0, 2)
+    outer.Children.Add(rb_rtu)
+
+    rb_vav = RadioButton()
+    rb_vav.Content = 'VAV / FCU System  (distributed boxes downstream of an AHU)'
+    rb_vav.GroupName = 'SystemType'
+    rb_vav.Margin = Thickness(2, 2, 0, 2)
+    outer.Children.Add(rb_vav)
+
+    cb_full = CheckBox()
+    cb_full.Content = 'Full System — also traverse/size Outside Air intake ductwork'
+    cb_full.Margin = Thickness(22, 2, 0, 6)
+    cb_full.IsEnabled = False
+    outer.Children.Add(cb_full)
+
+    def _on_rtu_checked(s, e):
+        cb_full.IsEnabled = False
+        cb_full.IsChecked = False
+
+    def _on_vav_checked(s, e):
+        cb_full.IsEnabled = True
+
+    rb_rtu.Checked += _on_rtu_checked
+    rb_vav.Checked += _on_vav_checked
+
+    systype_sep = Separator()
+    systype_sep.Margin = Thickness(0, 4, 0, 10)
+    outer.Children.Add(systype_sep)
 
     intro = Label()
     intro.Content = 'Max velocity (FPM) and pressure drop (in. wc/100 ft) per system:'
@@ -239,7 +287,10 @@ def show_velocity_settings_dialog():
                     forms.alert('All values must be greater than 0.', title='Invalid Input')
                     return
                 out[sys_class] = (max_fpm, max_fric)
-            result[0] = (out, gpct)   # gpct = tolerance %
+            system_type = 'VAV_FCU' if rb_vav.IsChecked else 'RTU'
+            full_system = bool(cb_full.IsChecked) if system_type == 'VAV_FCU' else True
+            prune_oa    = (system_type == 'VAV_FCU') and not full_system
+            result[0] = (out, gpct, system_type, prune_oa)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -764,7 +815,12 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    custom_limits, tol_pct = dialog_result
+    custom_limits, tol_pct, system_type, prune_oa = dialog_result
+    if system_type == 'VAV_FCU':
+        output.print_md('System Type: **VAV / FCU**{}'.format(
+            '  (equipment-level — Outside Air intake not traversed)' if prune_oa else '  (full system)'))
+    else:
+        output.print_md('System Type: **RTU / All-in-One**')
 
     # 3. Find AHUs in active view and let user pick systems
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
@@ -822,7 +878,7 @@ def main():
     for sel_elem in sel_elems:
         output.print_md('Traversing **{}** (id {})...'.format(
             _elem_name(sel_elem), eid_int(sel_elem.Id)))
-        net = hvac_graph.build_network(sel_elem, doc)
+        net = hvac_graph.build_network(sel_elem, doc, prune_oa_at_equipment=prune_oa)
 
         if net.errors:
             for e in net.errors:

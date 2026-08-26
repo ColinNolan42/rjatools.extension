@@ -364,13 +364,64 @@ def find_ahu(elem):
     return None, 'no base equipment found'
 
 
+def _peek_branch_class(start_elem, exclude_id, max_hops=2):
+    """Classify a branch WITHOUT adding anything to the traversal graph —
+    used to decide whether to prune it before ever visiting it. Walks up to
+    max_hops connector-hops from start_elem (skipping exclude_id, the node
+    we're branching away from) looking for the first duct/terminal with a
+    resolvable system classification. Returns None if nothing classified is
+    found within the hop limit."""
+    seen = set([exclude_id])
+    frontier = [start_elem]
+    hops = 0
+    while frontier and hops <= max_hops:
+        nxt = []
+        for e in frontier:
+            eid = eid_int(e.Id)
+            if eid in seen:
+                continue
+            seen.add(eid)
+            cls = elem_sys_class(e)
+            if cls is not None:
+                return cls
+            cm = _connector_manager(e)
+            if cm is None:
+                continue
+            for conn in cm.Connectors:
+                try:
+                    if conn.Domain != Domain.DomainHvac:
+                        continue
+                except Exception:
+                    continue
+                for ref in conn.AllRefs:
+                    try:
+                        owner = ref.Owner
+                        oid   = eid_int(owner.Id)
+                        if oid in seen:
+                            continue
+                        nxt.append(owner)
+                    except Exception:
+                        continue
+        frontier = nxt
+        hops += 1
+    return None
+
+
 # ── BFS traversal ────────────────────────────────────────────────────────────
-def traverse(root, allowed_ids=None):
+def traverse(root, allowed_ids=None, prune_oa_at_equipment=False):
     """BFS outward through all HVAC connectors from root.
 
     allowed_ids: optional set of int element IDs.  When provided the BFS will
     only visit nodes whose ID is in this set.  Use this to re-root the tree
     after a first undirected pass without re-traversing the full model.
+
+    prune_oa_at_equipment: when True, any branch found while expanding a
+    mechanical equipment node (VAV, FCU, AHU, ...) that classifies as
+    'Outside Air' (via a short connector-hop peek, before it's ever added to
+    the graph) is skipped entirely — not visited, not sized, not reported.
+    Used for VAV/FCU "equipment-level" mode on projects where the OA network
+    isn't modeled to completion, so the tool doesn't attempt to size/color
+    an incomplete/stub OA run. Supply/Return/Exhaust branches are unaffected.
 
     Returns:
         nodes    dict  int_id -> element
@@ -390,6 +441,7 @@ def traverse(root, allowed_ids=None):
 
     queue = [root]
     skipped = 0
+    pruned_oa = 0
 
     while queue:
         elem = queue.pop(0)
@@ -398,6 +450,7 @@ def traverse(root, allowed_ids=None):
         if cm is None:
             skipped += 1
             continue
+        elem_is_equip = is_equipment(elem)
         for conn in cm.Connectors:
             try:
                 if conn.Domain != Domain.DomainHvac:
@@ -413,6 +466,14 @@ def traverse(root, allowed_ids=None):
                     # When re-rooting, stay within the already-known node set
                     if allowed_ids is not None and owner_id not in allowed_ids:
                         continue
+                    if prune_oa_at_equipment and elem_is_equip:
+                        branch_cls = _peek_branch_class(owner, eid)
+                        if branch_cls == 'Outside Air':
+                            pruned_oa += 1
+                            log_lines.append(
+                                '  PRUNED OA branch id={} parent={} '
+                                '(VAV/FCU equipment-level mode)'.format(owner_id, eid))
+                            continue
                     visited.add(owner_id)
                     nodes[owner_id]    = owner
                     children[owner_id] = []
@@ -426,6 +487,10 @@ def traverse(root, allowed_ids=None):
 
     if skipped:
         log_lines.append('Skipped {} elements with no ConnectorManager.'.format(skipped))
+    if pruned_oa:
+        log_lines.append(
+            'Pruned {} Outside Air branch(es) at equipment (VAV/FCU equipment-level mode).'
+            .format(pruned_oa))
 
     return nodes, children, log_lines
 
@@ -570,8 +635,14 @@ class DuctResult(object):
         self.friction_per_100ft = duct_friction_loss_per_100ft(self.fpm, self.d_h_in)
 
 
-def build_network(selected_elem, doc, cfm_is_direct=False):
+def build_network(selected_elem, doc, cfm_is_direct=False, prune_oa_at_equipment=False):
     """Full traversal from selection → AHU → network.
+
+    prune_oa_at_equipment: VAV/FCU "equipment-level" mode — see traverse().
+    Only applied to the final, rooted-at-equipment traversal; the PASS-2
+    undirected discovery pass (used only to locate the equipment itself)
+    always runs unpruned so equipment-finding isn't affected by it.
+
     Returns HvacNetwork populated with all traversal data.
     """
     net = HvacNetwork()
@@ -581,16 +652,20 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
     if is_equipment(selected_elem):
         net.root       = selected_elem
         net.ahu_method = 'selected element is mechanical equipment'
-        net.nodes, net.children, net.traverse_log = traverse(net.root)
+        net.nodes, net.children, net.traverse_log = traverse(
+            net.root, prune_oa_at_equipment=prune_oa_at_equipment)
     else:
         # PASS 1: try fast MEPSystem.BaseEquipment lookup
         ahu, method = find_ahu(selected_elem)
         if ahu is not None:
             net.root       = ahu
             net.ahu_method = method
-            net.nodes, net.children, net.traverse_log = traverse(net.root)
+            net.nodes, net.children, net.traverse_log = traverse(
+                net.root, prune_oa_at_equipment=prune_oa_at_equipment)
         else:
-            # PASS 2: undirected BFS then re-root at any equipment found
+            # PASS 2: undirected BFS then re-root at any equipment found.
+            # Always unpruned — pruning here could hide the very equipment
+            # this pass exists to locate.
             all_nodes, all_children, all_log = traverse(selected_elem)
             all_ids = set(all_nodes.keys())
 
@@ -607,7 +682,8 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
                     .format(eid_int(net.root.Id))
                 )
                 net.nodes, net.children, net.traverse_log = traverse(
-                    net.root, allowed_ids=all_ids
+                    net.root, allowed_ids=all_ids,
+                    prune_oa_at_equipment=prune_oa_at_equipment
                 )
                 net.traverse_log.insert(0,
                     'NOTE: re-rooted from selection id={} to equipment id={}'
@@ -623,6 +699,13 @@ def build_network(selected_elem, doc, cfm_is_direct=False):
                 net.nodes      = all_nodes
             net.children   = all_children
             net.traverse_log = all_log
+
+    if prune_oa_at_equipment:
+        pruned_count = sum(1 for ln in net.traverse_log if 'PRUNED OA branch' in ln)
+        if pruned_count:
+            net.warnings.append(
+                '{} Outside Air branch(es) not traversed — VAV/FCU equipment-level '
+                'mode is on. OA ductwork is not sized or colored.'.format(pruned_count))
 
     if len(net.nodes) == 0:
         net.errors.append('No elements found in traversal. Check that the selected element is connected to a duct system.')
