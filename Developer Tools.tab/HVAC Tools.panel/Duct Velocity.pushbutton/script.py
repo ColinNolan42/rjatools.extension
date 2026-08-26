@@ -37,7 +37,7 @@ from Autodesk.Revit.UI.Selection import ObjectType
 
 from System.Windows import (
     Window, WindowStartupLocation, Thickness,
-    HorizontalAlignment, VerticalAlignment, SizeToContent
+    HorizontalAlignment, VerticalAlignment, SizeToContent, TextWrapping
 )
 from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
@@ -105,9 +105,12 @@ def show_velocity_settings_dialog():
     fric_boxes = {}   # row_idx -> TextBox (friction)
     gpct_box   = [None]
 
+    WIN_WIDTH   = 520
+    CONTENT_W   = WIN_WIDTH - 28 - 20   # win width minus outer margin minus a little slack
+
     win = Window()
     win.Title  = 'Duct Velocity Settings'
-    win.Width  = 460
+    win.Width  = WIN_WIDTH
     win.SizeToContent = SizeToContent.Height
     win.WindowStartupLocation = WindowStartupLocation.CenterScreen
 
@@ -117,7 +120,12 @@ def show_velocity_settings_dialog():
     # ── Outside Air checkbox: equipment-level (SA+RA only, default) vs ──────
     # ── system-level (traces OA too) ─────────────────────────────────────
     cb_oa = CheckBox()
-    cb_oa.Content = 'Outside Air — also traverse/size OA intake ductwork at equipment (system-level; leave unchecked for equipment-level: Supply + Return Air only)'
+    cb_oa_text = TextBlock()
+    cb_oa_text.Text = ('Outside Air — trace OA intake ductwork too (system-level). '
+                        'Unchecked = equipment-level: Supply + Return Air only, never goes upstream.')
+    cb_oa_text.TextWrapping = TextWrapping.Wrap
+    cb_oa_text.Width = CONTENT_W - 20
+    cb_oa.Content = cb_oa_text
     cb_oa.Margin  = Thickness(2, 0, 0, 2)
     outer.Children.Add(cb_oa)
 
@@ -188,16 +196,26 @@ def show_velocity_settings_dialog():
     gpct_panel.Children.Add(tb_gpct)
     gpct_box[0] = tb_gpct
 
-    gpct_suffix = Label()
-    gpct_suffix.Content = '% above max before red  (at or under max = green,  within % = yellow)'
-    gpct_suffix.VerticalAlignment = VerticalAlignment.Center
-    gpct_panel.Children.Add(gpct_suffix)
+    gpct_suffix_inline = Label()
+    gpct_suffix_inline.Content = '% above max before red'
+    gpct_suffix_inline.VerticalAlignment = VerticalAlignment.Center
+    gpct_panel.Children.Add(gpct_suffix_inline)
     outer.Children.Add(gpct_panel)
+
+    gpct_suffix = TextBlock()
+    gpct_suffix.Text = 'At or under max = green, within tolerance = yellow, past it = red.'
+    gpct_suffix.TextWrapping = TextWrapping.Wrap
+    gpct_suffix.Width = CONTENT_W
+    gpct_suffix.Foreground = SolidColorBrush(Colors.DimGray)
+    gpct_suffix.Margin = Thickness(0, 2, 0, 0)
+    outer.Children.Add(gpct_suffix)
 
     # Assumptions / formula reference block
     sep = Separator()
     sep.Margin = Thickness(0, 12, 0, 8)
     outer.Children.Add(sep)
+
+    _INFO_LBL_W = 150
 
     def _info_row(label_text, value_text):
         row = StackPanel()
@@ -205,11 +223,13 @@ def show_velocity_settings_dialog():
         row.Margin = Thickness(0, 1, 0, 1)
         lbl = TextBlock()
         lbl.Text = label_text
-        lbl.Width = 160
+        lbl.Width = _INFO_LBL_W
         lbl.FontWeight = FontWeights.Bold
         lbl.Foreground = SolidColorBrush(Colors.DimGray)
         val = TextBlock()
         val.Text = value_text
+        val.TextWrapping = TextWrapping.Wrap
+        val.Width = CONTENT_W - _INFO_LBL_W
         val.Foreground = SolidColorBrush(Colors.DimGray)
         row.Children.Add(lbl)
         row.Children.Add(val)
