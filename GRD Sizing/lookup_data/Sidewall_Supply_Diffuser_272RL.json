@@ -1,6 +1,7 @@
 {
   "_meta": {
-    "tag": ["SD-4", "SD-5"],
+    "family_description": "Sidewall Supply Diffuser",
+    "schedule_tags": ["SD-4", "SD-5"],
     "titus_model": "272RL",
     "description": "Steel AeroBlade Double Deflection Supply Grille, long front blades, 3/4in blade spacing, with opposed blade damper (per GRD schedule note 1)",
     "source_cutsheet": "aero_supplyperf_aeroblade_2017.pdf (covers 271/272/111/112/121/122/131/132 models together)",

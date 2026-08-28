@@ -1,6 +1,7 @@
 {
   "_meta": {
-    "tag": ["RG-1"],
+    "family_description": "Ceiling Return Grate (Round Neck)",
+    "schedule_tags": ["RG-1"],
     "titus_model": "PAR/PXP/PMR (flush face) / PXP-DR/PDR (drop face) -- Perforated Face return diffuser series",
     "description": "Ceiling return, round neck.",
     "source_cutsheet": "perforatedperf_diffusers_2017.pdf, user-supplied from C:\\Users\\Colin Nolan\\Downloads\\, page F87 (\"PAR, PXP, PMR, PXP-DR, PDR PERFORMANCE DATA\", FLUSH FACE - RETURN / DROP FACE - RETURN)",

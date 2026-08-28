@@ -1,6 +1,7 @@
 {
   "_meta": {
-    "tag": ["EG-2"],
+    "family_description": "Sidewall Exhaust Grate",
+    "schedule_tags": ["EG-2"],
     "titus_model": "350R / 350F / 350R-SS (fixed-bar grille, no adjustable deflection blades) - IDENTICAL data source to RG-2, not the tag's originally-assigned 23R model",
     "23R_rejected_2026-07-24": "EG-2 was originally scoped to Titus 23R (aeroblade grille family, per the GRD schedule tag table). Pulled and precisely extracted the full 32-tier 23R breakpoint table (word-position PDF extraction, cross-checked, monotonic after sort) before building anything. Found 23R is from the same aeroblade/adjustable-double-deflection product family as 272RL (the cutsheet RG-2 moved AWAY from for the same reason) - at the same nominal size and NC<15 target, 23R produces roughly HALF the CFM capacity of 350R (e.g. 24x24/48x12 tier: 23R=750cfm vs 350R=1500cfm). Confirmed via raw NC comparison: 23R's NC at 400fpm on the 24x24 tier is 32, vs 350R's NC of 11 at the same velocity - 23R is inherently much louder despite having no explicit deflection-correction table of its own (its table header already states \"45 DEFLECTION\" as the tested condition, so no correction was applied on top of these raw values). User's decision: switch EG-2 to 350R/355R, the SAME data source as RG-2, since exhaust and return grilles are the same physical product type. The 23R extraction work is not reused - if 23R needs revisiting later (e.g. a different NC target), the raw group data is preserved in this session's transcript, not duplicated here.",
     "no_deflection_correction_needed": "Same as RG-2: 350R is a fixed-blade grille, no deflection-correction table or note, NC values used directly.",
