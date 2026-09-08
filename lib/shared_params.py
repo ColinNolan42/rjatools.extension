@@ -44,9 +44,11 @@ INCHES_PER_FOOT         = 12.0      # Used when converting pipe diameter from fe
 
 # RJA standard: at elevation, an actual cubic foot of gas carries less heating
 # value than the sea-level-referenced 1000 BTU/cf that IFGC Table 402.4
-# capacities assume. Derate 3% per 1,000 ft of elevation above sea level
-# (no threshold) to get actual MBH delivered per actual CFH.
-ALTITUDE_DERATE_PERCENT_PER_1000FT = 0.03
+# capacities assume. Derate 4% per 1,000 ft of elevation above sea level
+# (no threshold) to get actual MBH delivered per actual CFH. Matches RJA's
+# own "GAS SIZING WHITEPAPER.docx" and "BTU TO CFH WORKSHEET.xlsx" (FOR
+# CLAUDE\Design Resources\PLUMBING) - corrected from 3% 2026-09-08.
+ALTITUDE_DERATE_PERCENT_PER_1000FT = 0.04
 
 DEFAULT_PROJECT_ELEVATION_FT       = 5280.0   # Denver, CO - startup dialog default.
 

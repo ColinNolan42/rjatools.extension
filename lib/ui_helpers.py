@@ -27,7 +27,7 @@ _PICKER_XAML = (
     '<ComboBox Name="cbTable" Margin="0,0,0,12"/>'
     '<TextBlock Text="Project Elevation (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<TextBox Name="tbElevation" Margin="0,0,0,4"/>'
-    '<TextBlock Text="RJA standard: 3% MBH/CFH derate per 1,000 ft above sea level."'
+    '<TextBlock Text="RJA standard: 4% MBH/CFH derate per 1,000 ft above sea level."'
     ' FontStyle="Italic" FontSize="10" Foreground="Gray" Margin="0,0,0,16"/>'
     '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right">'
     '<Button Name="btnCancel" Content="Cancel" Width="70" Margin="0,0,8,0"/>'

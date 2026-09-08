@@ -71,7 +71,7 @@ def altitude_derate_factor(elevation_ft):
     IFGC Table 402.4 capacities are expressed in CFH assuming 1000 BTU per
     actual cubic foot (sea-level gas density). At elevation, an actual cubic
     foot of gas carries less heating value, so each actual CFH delivers less
-    than 1 MBH. RJA standard: derate 3% per 1,000 ft of elevation above sea
+    than 1 MBH. RJA standard: derate 4% per 1,000 ft of elevation above sea
     level, no threshold.
 
     Args:
