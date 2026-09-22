@@ -677,6 +677,8 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
             ('Actual FPM / Max FPM',           0.220),
             ('Actual Fric / Max Fric (iwc/100)', 0.300),
             ('Suggested',                      0.120),
+            ('Length (ft)',                    0.090),
+            ('Friction Loss (iwc)',            0.130),
         ]
         col_headers = [h for h, _ in COLS]
         col_widths  = [w for _, w in COLS]
@@ -748,6 +750,8 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                     fpm_cell,
                     fric_cell,
                     suggested,
+                    '{:.1f}'.format(dr.length_ft),
+                    '{:.3f}'.format(dr.friction_loss_inwc),
                 ]
                 for ci, cell_text in enumerate(cells):
                     TextNote.Create(doc, sched_view.Id,
@@ -1138,8 +1142,13 @@ def main():
                 # back via Revit MCP. Y keeps the original bottom-anchored,
                 # grows-upward-with-content_h behavior, just re-anchored to
                 # match the hand-placed bottom edge on that same sheet.
-                total_w         = 1.060   # must match COLS sum in _build_summary_view
-                sched_x         = -1.164
+                total_w         = 1.280   # must match COLS sum in _build_summary_view
+                # sched_x shifted +0.110 (half the +0.220 width added by the
+                # Length/Friction Loss columns) to keep the table's left edge
+                # anchored at the same hand-placed position on the sheet —
+                # Viewport.Create positions by center, so a wider table
+                # centered at the old point would drift right off that anchor.
+                sched_x         = -1.054
                 bottom_margin_y = 1.546
                 sched_y  = bottom_margin_y + content_h / 2.0
                 sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
@@ -1233,11 +1242,13 @@ def main():
             ('Duct ID',         9),
             ('Size',            8),
             ('Suggested',      11),
+            ('Length (ft)',    11),
             ('Vel (FPM)',       10),
             ('Max FPM',         8),
             ('CFM',             6),
             ('Fric (iwc/100)',  15),
             ('Max Fric',        9),
+            ('Fric Loss (iwc)', 15),
         ]
 
         def _fmt_row(cells):
@@ -1264,11 +1275,13 @@ def main():
                 dr.element_id,
                 size,
                 suggested,
+                '{:.1f}'.format(dr.length_ft),
                 fpm_str,
                 '{:.0f}'.format(max_fpm),
                 '{:.0f}'.format(dr.cfm),
                 fric_str,
                 '{:.3f}'.format(max_fric),
+                '{:.3f}'.format(dr.friction_loss_inwc),
             ]))
 
         output.print_md('')

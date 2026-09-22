@@ -342,6 +342,17 @@ def duct_friction_loss_per_100ft(v_fpm, d_h_in):
     return 6.82e-6 * (v_fpm ** 1.82) / (d_h_in ** 1.22)
 
 
+def _duct_length_ft(duct):
+    """Duct centerline length in feet (Revit internal units). 0.0 if unavailable."""
+    try:
+        curve = duct.Location.Curve
+        if curve is not None:
+            return curve.Length
+    except Exception:
+        pass
+    return 0.0
+
+
 def _duct_d_h_in(duct):
     """Hydraulic diameter in inches from duct element parameters. 0 if unavailable."""
     d = duct.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
@@ -692,6 +703,8 @@ class DuctResult(object):
         self.size              = duct_size_label(elem)
         self.d_h_in            = _duct_d_h_in(elem)
         self.friction_per_100ft = duct_friction_loss_per_100ft(self.fpm, self.d_h_in)
+        self.length_ft          = _duct_length_ft(elem)
+        self.friction_loss_inwc = self.length_ft / 100.0 * self.friction_per_100ft
 
 
 def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False):
