@@ -104,26 +104,25 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY, 'PURPL
 #   default_on starting checkbox state in the settings dialog
 #
 # Defaults are the firm's chosen starting state, not a stored preference:
-# everything is on except the row index, the installed size, and the two
-# velocity/pressure number columns. Note that '#' is also the number printed
-# in the keynote circles placed in the view - turning that column off hides
-# the correlation in the table but does NOT stop the circles being placed.
+# '#', Status, Size, CFM, Actual FPM/Max FPM, Actual Fric/Max Fric, and
+# Required Size start checked; everything else starts unchecked. Note that
+# '#' is also the number printed in the keynote circles placed in the view -
+# turning that column off hides the correlation in the table but does NOT
+# stop the circles being placed.
 _COLUMN_DEFS = [
     # key          header                              view_w  console_w  default_on
-    ('num',       '#',                                  0.050,    3,  False),
+    ('num',       '#',                                  0.050,    3,  True),
     ('status',    'Status',                             0.120,    7,  True),
-    ('reason',    'Reason',                             0.230,   32,  True),
-    ('role',      'Duct Role',                          0.150,   18,  True),
-    ('system',    'System',                             0.110,   13,  True),
-    ('duct_id',   'Duct ID',                            0.090,    9,  True),
-    ('size',      'Size',                               0.100,    9,  False),
+    ('reason',    'Reason',                             0.230,   32,  False),
+    ('role',      'Duct Role',                          0.150,   18,  False),
+    ('size',      'Size',                               0.100,    9,  True),
     ('required',  'Required Size',                      0.140,   14,  True),
-    ('oversized', 'Oversized (Branch)',                 0.180,   20,  True),
+    ('oversized', 'OVERSIZED DUCTS',                    0.180,   20,  False),
     ('cfm',       'CFM',                                0.080,    7,  True),
-    ('fpm',       'Actual FPM / Max FPM',               0.220,   21,  False),
-    ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  False),
-    ('length',    'Length (ft)',                        0.090,   11,  True),
-    ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  True),
+    ('fpm',       'Actual FPM / Max FPM',               0.220,   21,  True),
+    ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  True),
+    ('length',    'Length (ft)',                        0.090,   11,  False),
+    ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  False),
 ]
 
 
@@ -895,8 +894,6 @@ def _row_cells(label, dr, reason, role, branch_res,
         'status':    label,
         'reason':    reason,
         'role':      role,
-        'system':    dr.sys_class,
-        'duct_id':   str(dr.element_id),
         'size':      _duct_size_label(dr.elem),
         'required':  required,
         'oversized': oversized,
@@ -1239,6 +1236,13 @@ def main():
     # reachable from two systems genuinely feeds every terminal both systems
     # reach, so taking one root's answer and discarding the other's could turn
     # a real main into an apparent branch.
+    #
+    # KNOWN LIMITATION, left as-is deliberately (Colin, 2026-09-23): a piece of
+    # equipment feeding only ONE terminal — no AHU/DOAS trunk splitting to
+    # multiple VAV/VRF/FCU taps — has its entire run, trunk included,
+    # classified as a single branch and gets no velocity/friction check at
+    # all. The normal case (an AHU/DOAS main with multiple taps downstream)
+    # is unaffected. Not special-cased for now — under development.
     term_ids = set(all_terminals.keys())
     downstream_terms = {}
     for rid in all_root_ids:
@@ -1585,7 +1589,7 @@ def main():
                     'diffuser\'s own neck/face is big enough for its own CFM, and whether the '
                     'branch duct is at least as big as the diffuser connects with. Either one '
                     'failing is red; there is no yellow band on a size match. Oversize is '
-                    'reported in the optional "Oversized (Branch)" column only and never '
+                    'reported in the optional "OVERSIZED DUCTS" column only and never '
                     'changes the status.')
     output.print_md('')
     output.print_md('Branches feeding a **slot diffuser** fall back to the main '
