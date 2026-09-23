@@ -270,6 +270,9 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result, overloaded_list
     if current_nom is None:
         return  # can't read current size -> skip check
 
+    demand_cfh = sizing_engine.mbh_to_cfh(
+        demand, result.get("heat_content_btu_per_cf",
+                            shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
     try:
         current_cap = gas_tables.get_capacity(
             result["table_id"], result["longest_run_ft"], current_nom)
@@ -277,7 +280,7 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result, overloaded_list
         # Nominal not in this table (e.g. copper table selected for steel pipe)
         current_cap = 0.0
 
-    if current_cap < demand:
+    if current_cap < demand_cfh:
         overloaded_list.append({
             "pipe_id":        pipe_id,
             "current_nom":    current_nom,
@@ -341,9 +344,9 @@ def main():
     # ------------------------------------------------------------------
     # STEP 3 - Startup dialog: select pipe material and IFGC table
     # ------------------------------------------------------------------
-    pipe_material, selected_table_label, elevation_ft = ui_helpers.show_table_picker(
+    pipe_material, selected_table_label, heat_content_btu_per_cf = ui_helpers.show_table_picker(
         "Size Gas - Select IFGC Table")
-    if not pipe_material or not selected_table_label or elevation_ft is None:
+    if not pipe_material or not selected_table_label or heat_content_btu_per_cf is None:
         output.print_md(
             "Cancelled at table selection. No changes were made to the model.")
         return
@@ -357,7 +360,7 @@ def main():
         table_id, selected_opt["label"].split("  [")[0]))
     output.print_md("**Material:**  {}".format(pipe_material))
     output.print_md("**Gas:**       {}".format(selected_opt["gas"]))
-    output.print_md("**Elevation:** {:.0f} ft".format(elevation_ft))
+    output.print_md("**Heat Content of Gas:** {:.0f} BTU/CF".format(heat_content_btu_per_cf))
 
     # ------------------------------------------------------------------
     # STEP 4 - Traverse piping network
@@ -406,7 +409,7 @@ def main():
     try:
         result = sizing_engine.size_system(
             graph, pipe_material, inlet_pressure_psi, table_id,
-            elevation_ft=elevation_ft)
+            heat_content_btu_per_cf=heat_content_btu_per_cf)
     except ValueError as e:
         forms.alert(
             "Sizing failed:\n\n{}".format(str(e)),
@@ -585,11 +588,11 @@ def main():
             output.print_md("")
             output.print_md(
                 "| Pipe ID | Current Size | New Load | Current Capacity"
-                " | Recommended |")
+                " (CFH) | Recommended |")
             output.print_md("| --- | --- | --- | --- | --- |")
             for e in existing_overloaded:
                 output.print_md(
-                    "| {} | {}\" | {:.1f} MBH | {:.1f} MBH | {}\" |".format(
+                    "| {} | {}\" | {:.1f} MBH | {:.1f} | {}\" |".format(
                         e["pipe_id"],
                         e["current_nom"],
                         e["demand_mbh"],
@@ -682,9 +685,8 @@ def main():
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
     output.print_md("| IFGC table | {} |".format(result["table_id"]))
-    output.print_md("| Elevation | {:.0f} ft |".format(result["elevation_ft"]))
-    output.print_md("| Altitude derate factor | {:.3f} MBH/CFH |".format(
-        result["altitude_derate_factor"]))
+    output.print_md("| Heat Content of Gas | {:.0f} BTU/CF |".format(
+        result["heat_content_btu_per_cf"]))
     output.print_md("| Longest run | {:.1f} ft |".format(
         result["longest_run_ft"]))
     output.print_md("| Table row used | {} ft |".format(

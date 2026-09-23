@@ -62,27 +62,170 @@ NOMINAL_TO_INCHES = {
 
 
 # ---------------------------------------------------------------------------
-# Altitude derate (RJA standard)
+# Heat Content of Gas -> CFH conversion (RJA standard)
 # ---------------------------------------------------------------------------
 
-def altitude_derate_factor(elevation_ft):
-    """Return the RJA-standard MBH-per-actual-CFH factor for a project elevation.
+def mbh_to_cfh(demand_mbh, heat_content_btu_per_cf):
+    """Convert an MBH gas load to the CFH figure compared against IFGC
+    Table 402.4 capacities.
 
-    IFGC Table 402.4 capacities are expressed in CFH assuming 1000 BTU per
-    actual cubic foot (sea-level gas density). At elevation, an actual cubic
-    foot of gas carries less heating value, so each actual CFH delivers less
-    than 1 MBH. RJA standard: derate 4% per 1,000 ft of elevation above sea
-    level, no threshold.
+    RJA standard (2026-09-23): CFH = BTUH / Heat Content of Gas. Heat
+    Content of Gas is project/location-specific (get it from the utility),
+    not a fixed altitude derate - this is the ONLY adjustment applied to
+    gas pipe sizing. Matches RJA's real "Low Pressure Gas Size.xls" calc
+    template. At sea level (1000 BTU/CF), CFH = MBH exactly.
 
     Args:
-        elevation_ft: float  project elevation above sea level, in feet.
+        demand_mbh:               float  cumulative downstream load, MBH.
+        heat_content_btu_per_cf:  float  project/location Heat Content of
+                                  Gas, BTU per actual cubic foot.
 
     Returns:
-        float  MBH actually delivered per actual CFH (1.0 at sea level).
+        float  CFH.
     """
-    factor = 1.0 - (shared_params.ALTITUDE_DERATE_PERCENT_PER_1000FT *
-                     (elevation_ft / 1000.0))
-    return max(factor, 0.0)
+    if heat_content_btu_per_cf <= 0:
+        return float("inf")
+    return (demand_mbh * 1000.0) / heat_content_btu_per_cf
+
+
+# ---------------------------------------------------------------------------
+# Low/High Pressure pipe capacity formulas (RJA standard, 2026-09-23)
+#
+# Ported directly from RJA's real calc templates ("Template Low Pressure Gas
+# Size.xls" and "Template - High Pressure Gas Size.xlsx",
+# FOR CLAUDE\Calc Tools\Plumbing\Gas Piping) via their live Excel formulas
+# (read through COM, not the flattened values), then numerically verified
+# to reproduce those workbooks' exact computed capacities. This is a
+# DIFFERENT methodology from the discrete IFGC Appendix A capacity tables
+# in ifgc_gas_sizing_tables.json (which are fixed at 0.60 specific gravity
+# with no adjustment mechanism) - these formulas are genuinely Specific
+# Gravity - sensitive and are RJA's own standard for both low and high
+# pressure sizing, superseding the discrete table lookup.
+# ---------------------------------------------------------------------------
+
+LOW_PRESSURE_K_BINS = [
+    # (K constant, max diameter this bin covers, in.) - from the Low
+    # Pressure workbook's "Table" sheet Q1:T6 (its own named categories:
+    # "3/4"-1"", "1-1/2"", "2"", "3"", "4""). No category exists above 4" -
+    # per Colin, a low-pressure system needing more than 4" should be
+    # stepped up to a higher design pressure (High Pressure/Weymouth-Cox
+    # method) instead, not extrapolated.
+    (1000.0, 1.0),
+    (1100.0, 1.5),
+    (1200.0, 2.0),
+    (1300.0, 3.0),
+    (1400.0, 4.0),
+]
+
+LOW_PRESSURE_MAX_DIAMETER_IN = 4.0
+
+
+def _low_pressure_required_diameter(demand_cfh, k, specific_gravity,
+                                     length_ft, pressure_loss_inwc):
+    """Inverse of the Low Pressure workbook's capacity formula - the
+    diameter (in.) that would exactly carry demand_cfh at the given K."""
+    length_factor = length_ft / 3.59
+    return ((demand_cfh / k) ** 2 * specific_gravity * length_factor
+             / pressure_loss_inwc) ** 0.2
+
+
+def low_pressure_required_diameter(demand_cfh, specific_gravity, length_ft,
+                                    pressure_loss_inwc):
+    """Required pipe diameter (in.) for demand_cfh under RJA's Low Pressure
+    formula, resolving the workbook's manual "guess a size category, check
+    for self-consistency" step automatically instead of requiring a human
+    guess.
+
+    The workbook's capacity formula (Capacity = K * sqrt(D^5 * PressureLoss
+    / (SpecificGravity * (Length_ft/3.59)))) uses one K constant, chosen by
+    which of 5 named pipe-size categories the answer is expected to fall
+    in (LOW_PRESSURE_K_BINS) - the same K then applies to every diameter
+    checked against it. Rather than guess, this tries each category's own
+    K, computes what diameter would be required at that K, and returns the
+    one that is self-consistent (falls within that same category's own
+    diameter range) - the same condition a person manually iterating the
+    spreadsheet would be checking for by eye.
+
+    Raises:
+        ValueError: if no category is self-consistent within 4" - per
+                    Colin (2026-09-23), a real design would step up to a
+                    higher pressure class rather than use a pipe this
+                    large at low pressure; this is not extrapolated.
+    """
+    prev_max = 0.0
+    for k, max_diameter in LOW_PRESSURE_K_BINS:
+        d = _low_pressure_required_diameter(
+            demand_cfh, k, specific_gravity, length_ft, pressure_loss_inwc)
+        if prev_max < d <= max_diameter or (prev_max == 0.0 and d <= max_diameter):
+            return d
+        prev_max = max_diameter
+    raise ValueError(
+        "Demand {:.1f} CFH requires more than {:.0f}\" pipe under the Low "
+        "Pressure method - step up to a higher design pressure (High "
+        "Pressure / Weymouth-Cox sizing) instead.".format(
+            demand_cfh, LOW_PRESSURE_MAX_DIAMETER_IN))
+
+
+def low_pressure_capacity_cfh(diameter_in, specific_gravity, length_ft,
+                               pressure_loss_inwc):
+    """Capacity (CFH) of a given pipe diameter under RJA's Low Pressure
+    formula, using the K constant for whichever named category
+    diameter_in itself falls into (LOW_PRESSURE_K_BINS)."""
+    k = None
+    for bin_k, max_diameter in LOW_PRESSURE_K_BINS:
+        if diameter_in <= max_diameter + 1e-9:
+            k = bin_k
+            break
+    if k is None:
+        raise ValueError(
+            "{:.3f}\" exceeds the Low Pressure method's {:.0f}\" scope."
+            .format(diameter_in, LOW_PRESSURE_MAX_DIAMETER_IN))
+    length_factor = length_ft / 3.59
+    return k * ((diameter_in ** 5) * pressure_loss_inwc
+                / (specific_gravity * length_factor)) ** 0.5
+
+
+def weymouth_capacity_cfh(diameter_in, inlet_absolute_psi, outlet_absolute_psi,
+                           specific_gravity, length_ft, atm_pressure_psi):
+    """High Pressure capacity (CFH) via the Weymouth Formula, for pipe 3"
+    and larger. Ported verbatim from the High Pressure workbook:
+    Q = 18.062 x (T/P) x sqrt((P1^2 - P2^2) x D^(16/3) / (G x T1 x L))
+    where T = 520 (absolute temp, deg R, fixed), T1 = T+60 = 580 (flowing
+    temp), P = atm_pressure_psi (base pressure), P1/P2 = inlet/outlet
+    ABSOLUTE pressure (gauge + atm_pressure_psi), L = length in miles.
+    """
+    T = 520.0
+    T1 = T + 60.0
+    length_miles = length_ft / 5280.0
+    return (18.062 * (T / atm_pressure_psi)
+            * ((inlet_absolute_psi ** 2 - outlet_absolute_psi ** 2)
+               * diameter_in ** (16.0 / 3.0)
+               / (specific_gravity * T1 * length_miles)) ** 0.5)
+
+
+def cox_capacity_cfh(diameter_in, inlet_absolute_psi, outlet_absolute_psi,
+                      specific_gravity, length_ft):
+    """High Pressure capacity (CFH) via the Cox Formula, for pipe under 3".
+    Ported verbatim from the High Pressure workbook:
+    Q = 33.3 x sqrt((P1^2 - P2^2) x D^5 / (G x L)), L = length in miles.
+    """
+    length_miles = length_ft / 5280.0
+    return 33.3 * ((inlet_absolute_psi ** 2 - outlet_absolute_psi ** 2)
+                    * (diameter_in ** 5) / (specific_gravity * length_miles)) ** 0.5
+
+
+def high_pressure_capacity_cfh(diameter_in, inlet_absolute_psi,
+                                outlet_absolute_psi, specific_gravity,
+                                length_ft, atm_pressure_psi):
+    """Dispatches to the Weymouth Formula (>=3") or Cox Formula (<3"),
+    matching the High Pressure workbook's own two-section split."""
+    if diameter_in >= 3.0:
+        return weymouth_capacity_cfh(
+            diameter_in, inlet_absolute_psi, outlet_absolute_psi,
+            specific_gravity, length_ft, atm_pressure_psi)
+    return cox_capacity_cfh(
+        diameter_in, inlet_absolute_psi, outlet_absolute_psi,
+        specific_gravity, length_ft)
 
 
 # ---------------------------------------------------------------------------
@@ -90,17 +233,23 @@ def altitude_derate_factor(elevation_ft):
 # ---------------------------------------------------------------------------
 
 def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
-                 elevation_ft=0.0):
+                 heat_content_btu_per_cf=None):
     """Size every pipe segment using the IFGC Longest Run Method.
 
     Per IFGC A103.1:
       - One longest run length is used for ALL segments.
       - Each segment is sized for its cumulative downstream demand (CFH).
       - Smallest nominal size whose table capacity >= demand is selected.
-      - At sea level, 1 MBH = 1 CFH for natural gas at 1000 BTU/cf. At
-        elevation, demand is converted to an altitude-derated effective CFH
-        via altitude_derate_factor() (RJA standard) before comparison against
-        table capacity - see that function for the rationale.
+      - CFH = BTUH / Heat Content of Gas (see mbh_to_cfh()) - the sole
+        adjustment applied when converting MBH demand to CFH for table
+        lookup. Per Colin (2026-09-23): this Heat Content conversion is
+        the only piece of the real Low/High Pressure Excel calc templates
+        that belongs in this tool - pipe capacity/sizing itself stays on
+        the discrete IFGC Table 402.4 lookup (gas_tables.get_capacity()),
+        not the templates' own K-constant/Weymouth/Cox capacity formulas
+        (see low_pressure_capacity_cfh()/high_pressure_capacity_cfh()
+        above - verified working, kept for possible future use, but not
+        called from here).
 
     Args:
         graph:               NetworkGraph from pipe_graph.build_network()
@@ -110,24 +259,29 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         table_id:            str  optional - IFGC table ID to use directly,
                              e.g. "402.4(2)". When supplied, inlet_pressure_psi
                              is stored in the result but not used for lookup.
-        elevation_ft:        float  project elevation above sea level, in
-                             feet. Defaults to 0.0 (no altitude derate).
+        heat_content_btu_per_cf: float  project/location Heat Content of
+                             Gas, BTU per actual cubic foot. Defaults to
+                             shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF
+                             (Denver) if not supplied.
 
     Returns:
         dict with keys:
             sizes                 {pipe_element_id (int): nominal_size (str)}
             table_id              str  e.g. "402.4(2)"
+            table_length_used_ft  float
             longest_run_ft        float
             pipe_material         str
             inlet_pressure_psi    float
-            elevation_ft          float
-            altitude_derate_factor  float  MBH delivered per actual CFH
+            heat_content_btu_per_cf  float
             segment_detail        list of dicts - one per sized segment
 
     Raises:
         ValueError: If longest run is missing, table not available, or any
                     pipe demand exceeds the maximum table capacity.
     """
+    if heat_content_btu_per_cf is None:
+        heat_content_btu_per_cf = shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF
+
     if graph.longest_run is None:
         raise ValueError(
             "Longest run not found. Run Diagnose and verify the system "
@@ -144,8 +298,6 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         gas_tables.get_table(table_id)  # validate table exists
     pipe_sizes = gas_tables.list_pipe_sizes(table_id)
     table_length_used, _ = gas_tables.get_length_row(table_id, longest_run_ft)
-
-    altitude_factor = altitude_derate_factor(elevation_ft)
 
     sizes = {}
     segment_detail = []
@@ -168,12 +320,8 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
 
         demand_mbh = edge.cumulative_load_mbh
 
-        # Altitude-derated effective CFH the pipe must actually carry to
-        # deliver demand_mbh of real heat input - see altitude_derate_factor().
-        if altitude_factor > 0:
-            demand_cfh_effective = demand_mbh / altitude_factor
-        else:
-            demand_cfh_effective = float("inf")
+        # CFH = BTUH / Heat Content of Gas (see mbh_to_cfh() docstring).
+        demand_cfh_effective = mbh_to_cfh(demand_mbh, heat_content_btu_per_cf)
 
         # Zero demand: assign minimum available pipe size
         if demand_mbh <= 0:
@@ -187,7 +335,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
             segment_detail.append({
                 "pipe_id":             edge.element_id,
                 "demand_mbh":          0.0,
-                "demand_cfh_adjusted": 0.0,
+                "demand_cfh":          0.0,
                 "selected_size":       selected,
                 "capacity_mbh":        capacity_at_size,
                 "note":                note
@@ -195,7 +343,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
             sizes[edge.element_id] = selected
             continue
 
-        # Find smallest size whose capacity >= altitude-derated demand
+        # Find smallest size whose capacity >= demand
         selected = None
         selected_capacity = None
         for size in pipe_sizes:
@@ -212,11 +360,10 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
 
         if selected is None:
             sizing_errors.append(
-                "Pipe {}: demand {:.1f} MBH ({:.1f} CFH effective at "
-                "{:.0f} ft elevation) exceeds max table capacity at {:.0f} "
-                "ft in Table {}.".format(
+                "Pipe {}: demand {:.1f} MBH ({:.1f} CFH) exceeds max table "
+                "capacity at {:.0f} ft in Table {}.".format(
                     edge.element_id, demand_mbh, demand_cfh_effective,
-                    elevation_ft, table_length_used, table_id))
+                    table_length_used, table_id))
             continue
 
         selected, upsized = _apply_minimum(selected, pipe_sizes)
@@ -228,7 +375,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         segment_detail.append({
             "pipe_id":             edge.element_id,
             "demand_mbh":          round(demand_mbh, 1),
-            "demand_cfh_adjusted": round(demand_cfh_effective, 1),
+            "demand_cfh":          round(demand_cfh_effective, 1),
             "selected_size":       selected,
             "capacity_mbh":        selected_capacity,
             "note":                "upsized to 3/4\" firm minimum" if upsized else ""
@@ -246,8 +393,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         "longest_run_ft":         longest_run_ft,
         "pipe_material":          pipe_material,
         "inlet_pressure_psi":     inlet_pressure_psi,
-        "elevation_ft":           elevation_ft,
-        "altitude_derate_factor": altitude_factor,
+        "heat_content_btu_per_cf": heat_content_btu_per_cf,
         "segment_detail":         segment_detail,
     }
 
@@ -313,10 +459,9 @@ def format_sizing_output(sizing_result, graph):
         sizing_result["longest_run_ft"]))
     lines.append("Pipe material: {}".format(sizing_result["pipe_material"]))
     lines.append("Inlet PSI:     {}".format(sizing_result["inlet_pressure_psi"]))
-    lines.append("Elevation:     {:.0f} ft  (altitude derate factor {:.3f} "
-                 "MBH/CFH, RJA standard)".format(
-        sizing_result.get("elevation_ft", 0.0),
-        sizing_result.get("altitude_derate_factor", 1.0)))
+    lines.append("Heat Content:  {:.0f} BTU/CF".format(
+        sizing_result.get("heat_content_btu_per_cf",
+                           shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)))
     lines.append("Total load:    {:.1f} MBH  |  {} fixtures".format(
         total_mbh, len(fixture_nodes)))
     lines.append("")
@@ -340,16 +485,15 @@ def format_sizing_output(sizing_result, graph):
                     (" ..." if len(fixtures) > 3 else ""))
 
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
-        altitude_note = ""
-        if abs(sizing_result.get("altitude_derate_factor", 1.0) - 1.0) > 1e-9:
-            altitude_note = "  [eff {:.1f} CFH]".format(
-                detail.get("demand_cfh_adjusted", detail["demand_mbh"]))
+        cfh_note = ""
+        if abs(detail.get("demand_cfh", detail["demand_mbh"]) - detail["demand_mbh"]) > 0.05:
+            cfh_note = "  [{:.1f} CFH]".format(detail.get("demand_cfh", 0.0))
         lines.append(
             "  [{}]  {:.1f} MBH{}  ->  {}\"  "
             "(cap {} MBH)  {}{}{}".format(
                 detail["pipe_id"],
                 detail["demand_mbh"],
-                altitude_note,
+                cfh_note,
                 detail["selected_size"],
                 int(detail["capacity_mbh"]),
                 length_str,

@@ -2,9 +2,30 @@
 """
 Duct Velocity.pushbutton/script.py  --  HVAC Phase 1
 
-Colors ductwork in a copied floor plan view by velocity (green/yellow/red)
-per SMACNA commercial low-velocity defaults (editable via dialog).
-Also places FPM text annotations on each colored duct.
+Colors ductwork in a copied floor plan view and flags what needs attention.
+Mains and branches are judged by two different methods:
+
+  MAIN    (2+ terminals downstream)  velocity + friction against the firm
+          design limits, editable in the dialog. Unchanged behaviour,
+          including the purple oversized suggestion.
+
+  BRANCH  (exactly 1 terminal downstream)  size match against the published
+          diffuser tables in lib/diffuser_tables.py instead. A correctly-
+          selected auto-sizing diffuser is picked on static pressure and NC,
+          not on duct velocity, so velocity-checking a run that only ever
+          feeds that one diffuser is redundant and produces false flags. What
+          actually matters on a branch is whether the diffuser is big enough
+          for its own CFM and whether the duct is big enough for the diffuser.
+          Slot diffusers are the exception: the design standard publishes no
+          duct/neck size breakpoints for them, so a slot branch falls back to
+          the same velocity/friction check a main gets.
+
+The diffuser/duct height clearance check still applies to both, and still
+overrides either verdict - it is an installability problem, not a sizing one.
+
+Which columns appear in the output tables is chosen in the settings dialog;
+the same selection drives both the drafting-view schedule placed on the sheet
+and the console table.
 
 Run HVAC Diagnose first to verify the network and CFM values, then run this.
 
@@ -70,13 +91,72 @@ PURPLE = Color(140,  40, 200)
 _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY, 'PURPLE': PURPLE}
 
 
+# ── output table columns ───────────────────────────────────────────────────────
+# ONE definition list drives BOTH output tables: the drafting-view schedule
+# placed on the sheet and the console print_code table. They are rendered by
+# different code (detail lines + TextNotes vs. padded monospace text) and have
+# drifted apart before, so the column set, the headers and the cell values all
+# come from here and from _row_cells() rather than being written out twice.
+#
+#   view_w     column width in feet at the schedule view's 1:1 scale
+#              (= printed inches / 12)
+#   console_w  column width in monospace characters
+#   default_on starting checkbox state in the settings dialog
+#
+# Defaults are the firm's chosen starting state, not a stored preference:
+# everything is on except the row index, the installed size, and the two
+# velocity/pressure number columns. Note that '#' is also the number printed
+# in the keynote circles placed in the view - turning that column off hides
+# the correlation in the table but does NOT stop the circles being placed.
+_COLUMN_DEFS = [
+    # key          header                              view_w  console_w  default_on
+    ('num',       '#',                                  0.050,    3,  False),
+    ('status',    'Status',                             0.120,    7,  True),
+    ('reason',    'Reason',                             0.230,   32,  True),
+    ('role',      'Duct Role',                          0.150,   18,  True),
+    ('system',    'System',                             0.110,   13,  True),
+    ('duct_id',   'Duct ID',                            0.090,    9,  True),
+    ('size',      'Size',                               0.100,    9,  False),
+    ('required',  'Required Size',                      0.140,   14,  True),
+    ('oversized', 'Oversized (Branch)',                 0.180,   20,  True),
+    ('cfm',       'CFM',                                0.080,    7,  True),
+    ('fpm',       'Actual FPM / Max FPM',               0.220,   21,  False),
+    ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  False),
+    ('length',    'Length (ft)',                        0.090,   11,  True),
+    ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  True),
+]
+
+
+def _default_column_keys():
+    """Keys of the columns that start checked in the settings dialog."""
+    return set(key for key, _h, _vw, _cw, on in _COLUMN_DEFS if on)
+
+
+def _selected_columns(selected_keys):
+    """The _COLUMN_DEFS entries the user kept, in definition order.
+
+    Both renderers call this so column ORDER is defined once too, not just
+    the set - a dialog that returned an unordered set would otherwise let the
+    two tables order themselves differently.
+    """
+    return [c for c in _COLUMN_DEFS if c[0] in selected_keys]
+
+
 # ── velocity settings dialog ───────────────────────────────────────────────────
 def show_velocity_settings_dialog():
     """WPF dialog — Outside Air scope, per-system max velocity + friction,
-    and a yellow/red tolerance %.
+    a yellow/red tolerance %, and which columns the output tables show.
 
-    Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa)
-    or None. include_oa is False by default (equipment-level: Supply Air +
+    Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
+    selected_column_keys) or None.
+
+    The velocity and friction limits here apply to MAIN ducts only. Branch
+    ducts (a run feeding exactly one terminal) are sized against the published
+    diffuser tables instead and ignore every number on this dialog — see the
+    module docstring. Slot-diffuser branches are the one exception and do use
+    these limits.
+
+    include_oa is False by default (equipment-level: Supply Air +
     Return Air only — any mechanical equipment node's Outside Air branch is
     skipped entirely by hvac_graph.traverse(), not sized/colored, for
     projects where the OA network isn't modeled to completion). Checking
@@ -91,12 +171,14 @@ def show_velocity_settings_dialog():
                smaller standard size and still meet max FPM and max friction
                with no tolerance band (see _suggest_size_info).
     """
-    # Defaults: firm design standard (main and branch share same values)
+    # Defaults: firm design standard. Main ducts only — branches no longer
+    # share these values (see the docstring above).
     ROWS = [
-        ('Supply Air',  800,  0.08),
-        ('Return Air',  600,  0.05),
-        ('Exhaust Air', 600,  0.05),
-        ('Outside Air', 600,  0.05),
+        ('Supply Air',   800,  0.08),
+        ('Return Air',   600,  0.05),
+        ('Exhaust Air',  600,  0.05),
+        ('Outside Air',  600,  0.05),
+        ('Transfer Air', 400,  0.05),
     ]
     DEFAULT_TOL_PCT = 10     # yellow band: ±this % around max
 
@@ -242,11 +324,67 @@ def show_velocity_settings_dialog():
     hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(hdr)
 
+    _info_row('Applies to:',      'main ducts only — branches are sized against the diffuser tables')
     _info_row('Pressure drop:',   'Darcy-Weisbach')
     _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
     _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
     _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
     _info_row('Purple (oversized):', 'a smaller standard size exists that stays within max FPM + friction')
+
+    # ── Column picker ──────────────────────────────────────────────────────
+    # Drives BOTH output tables identically (see _COLUMN_DEFS). Laid out two
+    # across so fourteen checkboxes stay inside the existing dialog width
+    # instead of forcing a scrollbar.
+    col_sep = Separator()
+    col_sep.Margin = Thickness(0, 12, 0, 8)
+    outer.Children.Add(col_sep)
+
+    col_hdr = TextBlock()
+    col_hdr.Text = 'Output table columns'
+    col_hdr.FontWeight = FontWeights.Bold
+    col_hdr.Foreground = SolidColorBrush(Colors.DimGray)
+    col_hdr.Margin = Thickness(0, 0, 0, 4)
+    outer.Children.Add(col_hdr)
+
+    col_grid = Grid()
+    _COL_PICKER_COLS = 2
+    for _ in range(_COL_PICKER_COLS):
+        cd = ColumnDefinition()
+        cd.Width = GridLength(CONTENT_W / float(_COL_PICKER_COLS))
+        col_grid.ColumnDefinitions.Add(cd)
+    # Ceiling division, written the Python 2 way (// on ints floors).
+    _col_rows = (len(_COLUMN_DEFS) + _COL_PICKER_COLS - 1) // _COL_PICKER_COLS
+    for _ in range(_col_rows):
+        rd = RowDefinition()
+        rd.Height = GridLength(22)
+        col_grid.RowDefinitions.Add(rd)
+
+    col_boxes = {}   # column key -> CheckBox
+    for i, (key, header, _vw, _cw, default_on) in enumerate(_COLUMN_DEFS):
+        cb = CheckBox()
+        cb_txt = TextBlock()
+        cb_txt.Text = header
+        cb_txt.TextWrapping = TextWrapping.NoWrap
+        cb.Content   = cb_txt
+        cb.IsChecked = default_on
+        cb.Margin    = Thickness(2, 2, 2, 2)
+        cb.VerticalAlignment = VerticalAlignment.Center
+        Grid.SetColumn(cb, i // _col_rows)
+        Grid.SetRow(cb, i % _col_rows)
+        col_grid.Children.Add(cb)
+        col_boxes[key] = cb
+
+    outer.Children.Add(col_grid)
+
+    col_note = TextBlock()
+    col_note.Text = ('"#" is also the number shown in the keynote circles placed in the view. '
+                     'Unchecking it only removes the column from the tables — the circles are '
+                     'still placed and still numbered the same way.')
+    col_note.TextWrapping = TextWrapping.Wrap
+    col_note.Width = CONTENT_W
+    col_note.Foreground = SolidColorBrush(Colors.DimGray)
+    col_note.Margin = Thickness(0, 4, 0, 0)
+    outer.Children.Add(col_note)
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -278,7 +416,12 @@ def show_velocity_settings_dialog():
                     return
                 out[sys_class] = (max_fpm, max_fric)
             include_oa = bool(cb_oa.IsChecked)
-            result[0] = (out, gpct, include_oa)
+            selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
+            if not selected_cols:
+                forms.alert('Select at least one output table column.',
+                            title='Invalid Input')
+                return
+            result[0] = (out, gpct, include_oa, selected_cols)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -301,6 +444,30 @@ def show_velocity_settings_dialog():
 # ── helpers ────────────────────────────────────────────────────────────────────
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
+# Minimum transition clearance between a duct and a genuinely smaller real
+# downstream neighbour, inches.
+_CLEARANCE_MARGIN_IN = 2.0
+
+
+def _fails_height_clearance(dr, downstream_height_in):
+    """True if this duct fails the diffuser/duct height clearance rule.
+
+    Only fires where the real downstream neighbour is actually SMALLER than
+    this duct (a genuine size reduction) and the step down is too shallow to
+    build a transition into — an equal or larger downstream connection is a
+    continuous run and needs no margin at all.
+
+    Shared by the main and the branch labelling paths deliberately: this is a
+    hard installability problem, orthogonal to whichever sizing method judged
+    the duct, and it overrides both of them. Keeping it in one function is
+    what stops the two paths' clearance behaviour drifting apart.
+    """
+    my_height = hvac_graph.effective_height_in(dr.elem)
+    if my_height is None or downstream_height_in is None:
+        return False
+    return (downstream_height_in < my_height
+            and my_height < downstream_height_in + _CLEARANCE_MARGIN_IN)
+
 
 def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     """Worst of velocity and friction checks (one-sided, unchanged), then
@@ -311,6 +478,13 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     downstream neighbor's height by the required 2" margin, wherever that
     neighbor is actually smaller — a hard installability problem, checked
     independent of velocity/friction).
+
+    MAIN DUCTS ONLY as of the branch/diffuser split, with one exception: a
+    branch feeding a slot diffuser also comes through here, because the design
+    standard publishes no duct/neck size table to check a slot branch against.
+    Behaviour is unchanged from before the split — see _branch_duct_label()
+    for what every other branch gets instead, and _label_duct() for the
+    dispatch between them.
 
       Green  : cfm <= max_cap
       Yellow : max_cap < cfm <= max_cap * (1 + tol_pct/100)
@@ -364,16 +538,97 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
             reason   = 'Oversized'
 
     # Diffuser/duct height clearance — hard override, independent of
-    # everything above. Only applies where the real downstream neighbor is
-    # actually smaller than this duct (a genuine size reduction); an equal
-    # or larger downstream connection needs no transition margin.
-    my_height = hvac_graph.effective_height_in(dr.elem)
-    if my_height is not None and downstream_height_in is not None:
-        if downstream_height_in < my_height and my_height < downstream_height_in + 2.0:
-            combined = 'RED'
-            reason   = 'Diffuser/Duct Clearance'
+    # everything above.
+    if _fails_height_clearance(dr, downstream_height_in):
+        combined = 'RED'
+        reason   = 'Diffuser/Duct Clearance'
 
     return combined, max_cap, reason
+
+
+# ── branch labelling (diffuser-table method) ──────────────────────────────────
+
+_ROLE_LABELS = {
+    'ceiling':  'Branch (Ceiling)',
+    'sidewall': 'Branch (Sidewall)',
+    'slot':     'Branch (Slot)',
+}
+
+
+def _duct_role_label(is_branch, branch_kind):
+    """Display string for the Duct Role column.
+
+    The diffuser category is carried into the label rather than just
+    'Main'/'Branch' because it is the single most useful thing to see when a
+    branch verdict looks wrong: it says which table the row was judged
+    against, or that no table could be chosen at all.
+    """
+    if not is_branch:
+        return 'Main'
+    return _ROLE_LABELS.get(branch_kind, 'Branch (Unknown)')
+
+
+def _branch_duct_label(dr, terminal_elem, terminal_cfm, downstream_height_in=None):
+    """Label a branch duct by diffuser-table size match instead of velocity.
+
+    All of the actual sizing logic lives in hvac_graph.branch_diffuser_check();
+    this only adds the height-clearance override that applies to every duct
+    regardless of how it was judged.
+
+    Returns (label, max_cap_cfm, reason, BranchDiffuserResult). max_cap_cfm is
+    always 0.0 — a branch has no velocity capacity figure, and the callers
+    that carry that slot only ever read the label out of it. Status can be
+    GREEN, RED or GRAY but never YELLOW or PURPLE: there is no tolerance band
+    on a size match, and a branch is never reported oversized as a status (the
+    auto-sizing diffuser family sets the branch size, so oversize is surfaced
+    as an informational column only).
+    """
+    res = hvac_graph.branch_diffuser_check(
+        terminal_elem, terminal_cfm, hvac_graph.duct_installed_size_in(dr.elem))
+    label  = res.status
+    reason = res.reason
+    if _fails_height_clearance(dr, downstream_height_in):
+        label  = 'RED'
+        reason = 'Diffuser/Duct Clearance'
+    return label, 0.0, reason, res
+
+
+def _label_duct(dr, custom_limits, tol_pct, downstream_height_in, branch_ctx):
+    """Send one duct to whichever check applies to it.
+
+    branch_ctx is None for a main, or (diffuser_category, terminal_elem,
+    terminal_cfm) for a branch — built once per duct in main() from the
+    downstream-terminal map, so the graph is only walked once.
+
+    Returns (label, max_cap_cfm, reason, branch_result_or_None). The fourth
+    element is None for anything judged the ductulator way, which is also how
+    the output tables know to print real FPM/friction numbers rather than N/A.
+    """
+    if branch_ctx is None:
+        label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
+        return label, cap, reason, None
+
+    kind, terminal_elem, terminal_cfm = branch_ctx
+
+    if kind == 'slot':
+        # No published duct/neck size breakpoints exist for slot diffusers
+        # (the standard gives capacity per slot length and open-slot count
+        # instead), so there is nothing to size-match against. Fall back to
+        # the main check rather than report the branch as unverifiable.
+        label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
+        return label, cap, reason, None
+
+    if kind is None:
+        # Connector geometry unreadable — no table can be chosen. Gray, not a
+        # pass: an unverifiable branch must never look like a clean one.
+        label  = 'GRAY'
+        reason = 'Cannot classify diffuser'
+        if _fails_height_clearance(dr, downstream_height_in):
+            label  = 'RED'
+            reason = 'Diffuser/Duct Clearance'
+        return label, 0.0, reason, None
+
+    return _branch_duct_label(dr, terminal_elem, terminal_cfm, downstream_height_in)
 
 
 def _elem_name(elem):
@@ -600,6 +855,59 @@ def _suggest_size(dr, custom_limits, tol_pct, duct_label, downstream_height_in=N
     return size
 
 
+def _row_cells(label, dr, reason, role, branch_res,
+               custom_limits, tol_pct, downstream_height_in):
+    """Every cell value for one flagged duct, keyed by _COLUMN_DEFS key.
+
+    Built once per duct and handed to both renderers, so the drafting-view
+    schedule and the console table cannot report different numbers for the
+    same duct no matter which columns each is showing.
+
+    '#' is deliberately NOT produced here. The two tables number their rows
+    differently on purpose — the schedule's numbers match the keynote circles
+    placed in the view (element-id order), while the console list is re-sorted
+    worst-first — so each renderer supplies its own row index.
+
+    A branch judged against the diffuser tables reports N/A for velocity and
+    friction rather than the real numbers: those numbers played no part in its
+    verdict, and printing them beside it invites the reader to conclude they
+    were what failed.
+    """
+    defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
+    max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+
+    if branch_res is not None:
+        fpm_cell  = 'N/A'
+        fric_cell = 'N/A'
+        required  = branch_res.required_size
+        oversized = branch_res.oversized_note if branch_res.oversized else ''
+    else:
+        required  = _suggest_size(dr, custom_limits, tol_pct, label, downstream_height_in)
+        oversized = ''    # informational branch-only column, blank for mains
+        if reason == 'Diffuser/Duct Clearance':
+            fpm_cell  = 'N/A'
+            fric_cell = 'N/A'
+        else:
+            fpm_cell  = '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm)
+            fric_cell = '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric)
+
+    return {
+        'status':    label,
+        'reason':    reason,
+        'role':      role,
+        'system':    dr.sys_class,
+        'duct_id':   str(dr.element_id),
+        'size':      _duct_size_label(dr.elem),
+        'required':  required,
+        'oversized': oversized,
+        'cfm':       '{:.0f}'.format(dr.cfm),
+        'fpm':       fpm_cell,
+        'fric':      fric_cell,
+        'length':    '{:.1f}'.format(dr.length_ft),
+        'fricloss':  '{:.3f}'.format(dr.friction_loss_inwc),
+    }
+
+
 # ── Schedule table in a Drafting View ─────────────────────────────────────────
 
 def _hline(doc, view, x0, x1, y):
@@ -626,22 +934,34 @@ def _legend_swatch(doc, view, filled_region_type_id, x0, y0, size, color, fill_i
     return fr
 
 
-# Color key + meaning shown in the legend, in display order
+# Color key + meaning shown in the legend, in display order.
+# Wording covers both check methods, since one view mixes mains and branches.
 _LEGEND_ROWS = [
-    ('GREEN',  'Within limit'),
-    ('PURPLE', 'Oversized — smaller standard size available'),
-    ('YELLOW', 'Approaching limit'),
-    ('RED',    'Exceeds limit, or fails diffuser/duct height clearance (see Reason column)'),
-    ('GRAY',   'No CFM data'),
+    ('GREEN',  'Main: within limit.  Branch: diffuser and duct both correctly sized'),
+    ('PURPLE', 'Main only: oversized — smaller standard size available'),
+    ('YELLOW', 'Main only: approaching limit'),
+    ('RED',    'Main: exceeds limit.  Branch: diffuser or duct undersized.  '
+               'Either: fails diffuser/duct height clearance (see Reason column)'),
+    ('GRAY',   'Not checked — no CFM data, or branch could not be matched to a diffuser table'),
 ]
 
 
-def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pct,
+def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id):
     """Create a Drafting View with a System Summary block + flagged-duct table
     + color legend.
 
-    Returns (ViewDrafting, total_content_height_ft), or (None, 0.0) on failure.
+    flagged_rows: list of per-duct cell dicts from _row_cells(), already in
+    the order they should appear — the same order the numbered keynote circles
+    were placed in the plan view, so row 3 here is circle 3 there.
+    selected_cols: set of _COLUMN_DEFS keys the user kept in the dialog.
+
+    Returns (ViewDrafting, total_content_height_ft, table_width_ft), or
+    (None, 0.0, 0.0) on failure. The width is returned rather than hardcoded
+    at the call site because the column selection now changes it on every run,
+    and the viewport is positioned by its centre — the caller needs the width
+    to keep the table's left edge on its hand-placed anchor.
+
     At scale 1:1, model feet = paper feet, so all dims below are paper inches / 12.
     """
     drafting_type_id = None
@@ -650,7 +970,7 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
             drafting_type_id = vft.Id
             break
     if drafting_type_id is None:
-        return None, 0.0
+        return None, 0.0, 0.0
 
     try:
         sched_view = ViewDrafting.Create(doc, drafting_type_id)
@@ -668,21 +988,15 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
         ROW_H   = 0.022      # data row height    (~1/4")
         SUM_ROW_H = 0.018    # summary line height (~1/5")
 
-        # (column header, width in ft) — width also sets the summary block width
-        COLS = [
-            ('#',                              0.050),
-            ('Status',                         0.120),
-            ('Reason',                         0.150),
-            ('Size',                           0.100),
-            ('Actual FPM / Max FPM',           0.220),
-            ('Actual Fric / Max Fric (iwc/100)', 0.300),
-            ('Suggested',                      0.120),
-            ('Length (ft)',                    0.090),
-            ('Friction Loss (iwc)',            0.130),
-        ]
-        col_headers = [h for h, _ in COLS]
-        col_widths  = [w for _, w in COLS]
-        total_w     = sum(col_widths)
+        # Columns come from the shared _COLUMN_DEFS, filtered to the user's
+        # selection — same list, same order, same headers as the console
+        # table. The total width also sets the summary block width, and is
+        # returned to the caller so the viewport can stay left-anchored.
+        cols        = _selected_columns(selected_cols)
+        col_headers = [c[1] for c in cols]
+        col_widths  = [c[2] for c in cols]
+        # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
+        total_w     = sum(col_widths, 0.0)
 
         opts = TextNoteOptions(tn_type_id)
         y_cursor = oy
@@ -707,9 +1021,9 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                                 line, opts)
 
         # ── Flagged ducts table ──────────────────────────────────────────────
-        if flagged_items:
+        if flagged_rows:
             table_top = y_cursor
-            total_h   = HEAD_H + ROW_H * len(flagged_items)
+            total_h   = HEAD_H + ROW_H * len(flagged_rows)
 
             col_xs = [ox]
             for w in col_widths:
@@ -717,7 +1031,7 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
 
             row_tops = [table_top]
             row_tops.append(table_top - HEAD_H)
-            for _ in range(len(flagged_items)):
+            for _ in range(len(flagged_rows)):
                 row_tops.append(row_tops[-1] - ROW_H)
 
             for y in row_tops:
@@ -730,30 +1044,20 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                                 XYZ(col_xs[ci] + PAD, table_top - PAD, 0.0),
                                 header, opts)
 
-            for ri, (lbl, dr, reason, downstream_h) in enumerate(flagged_items):
+            for ri, cells in enumerate(flagged_rows):
                 row_y = row_tops[ri + 1] - PAD
-                defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-                max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-                suggested         = _suggest_size(dr, custom_limits, tol_pct, lbl, downstream_h)
-                size              = _duct_size_label(dr.elem)
-                if reason == 'Diffuser/Duct Clearance':
-                    fpm_cell  = 'N/A'
-                    fric_cell = 'N/A'
-                else:
-                    fpm_cell  = '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm)
-                    fric_cell = '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric)
-                cells = [
-                    str(ri + 1),
-                    lbl,
-                    reason,
-                    size,
-                    fpm_cell,
-                    fric_cell,
-                    suggested,
-                    '{:.1f}'.format(dr.length_ft),
-                    '{:.3f}'.format(dr.friction_loss_inwc),
-                ]
-                for ci, cell_text in enumerate(cells):
+                for ci, col in enumerate(cols):
+                    # '#' is this table's own row index — it matches the
+                    # numbered keynote circle placed on the same duct in the
+                    # plan view, which is why it is not baked into the cell
+                    # dict (the console table numbers the same ducts
+                    # differently).
+                    cell_text = str(ri + 1) if col[0] == 'num' else cells.get(col[0], '')
+                    # Blank cells are real now (Oversized is branch-only), and
+                    # TextNote.Create rejects an empty string — leave the cell
+                    # empty rather than write a placeholder into the drawing.
+                    if not cell_text:
+                        continue
                     TextNote.Create(doc, sched_view.Id,
                                     XYZ(col_xs[ci] + PAD, row_y, 0.0),
                                     cell_text, opts)
@@ -782,10 +1086,10 @@ def _build_summary_view(doc, summary_lines, flagged_items, custom_limits, tol_pc
                                 '{} — {}'.format(color_key.title(), meaning), opts)
                 y_cursor -= LEGEND_ROW_H
 
-        return sched_view, (oy - y_cursor)
+        return sched_view, (oy - y_cursor), total_w
 
     except Exception:
-        return None, 0.0
+        return None, 0.0, 0.0
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -807,7 +1111,7 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    custom_limits, tol_pct, include_oa = dialog_result
+    custom_limits, tol_pct, include_oa, selected_cols = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -859,6 +1163,7 @@ def main():
     all_duct_results = {}   # ElementId -> DuctResult  (worst-wins on overlap)
     all_nodes        = {}   # merged for fitting adjacency
     all_children     = {}   # merged
+    all_root_ids     = []   # one per successfully traversed system
     ahu_labels       = []
     ahu_totals       = []   # (ahu_name, ahu_id, discharge_cfm, terminal_count, other_class_cfm)
     all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
@@ -885,6 +1190,7 @@ def main():
             len(net.duct_results), len(net.terminal_cfms)))
 
         root_id = eid_int(net.root.Id)
+        all_root_ids.append(root_id)
         ahu_totals.append((
             _elem_name(net.root), root_id,
             net.equipment_discharge_cfm(root_id), len(net.terminal_cfms),
@@ -921,6 +1227,61 @@ def main():
 
     output.print_md('**Total: {} systems  |  {} ducts**'.format(
         len(ahu_labels), len(all_duct_results)))
+
+    # 4a. Branch vs main, against the merged graph.
+    #
+    # A duct is a BRANCH when exactly one terminal is reachable downstream of
+    # it, however many segments and fittings that tap-off is made of; a MAIN
+    # when two or more are. Branches are sized against the diffuser tables,
+    # mains keep the velocity/friction check.
+    #
+    # Computed per root and unioned rather than merged by overwrite: a duct
+    # reachable from two systems genuinely feeds every terminal both systems
+    # reach, so taking one root's answer and discarding the other's could turn
+    # a real main into an apparent branch.
+    term_ids = set(all_terminals.keys())
+    downstream_terms = {}
+    for rid in all_root_ids:
+        partial = hvac_graph.compute_downstream_terminal_ids(
+            rid, all_nodes, all_children, term_ids)
+        for nid, tset in partial.items():
+            if nid in downstream_terms:
+                downstream_terms[nid] = downstream_terms[nid] | tset
+            else:
+                downstream_terms[nid] = tset
+
+    branch_ctx    = {}   # ElementId -> (category, terminal_elem, terminal_cfm) or None
+    duct_roles    = {}   # ElementId -> Duct Role display string
+    kind_cache    = {}   # terminal int_id -> category  (many ducts share one terminal)
+    role_counts   = {'Main': 0, 'Branch': 0}
+    unclassified  = []   # (duct_id, terminal_id) for branches with no readable geometry
+
+    for eid in all_duct_results.keys():
+        tset = downstream_terms.get(eid_int(eid), set())
+        term_elem = None
+        if len(tset) == 1:
+            term_elem = all_nodes.get(list(tset)[0])
+        if term_elem is None:
+            # 0 terminals downstream (a dead-end run), 2+ (a real main), or a
+            # terminal that somehow isn't in the merged node map — all keep
+            # the pre-existing velocity/friction treatment.
+            branch_ctx[eid] = None
+            duct_roles[eid] = _duct_role_label(False, None)
+            role_counts['Main'] += 1
+            continue
+        term_id = eid_int(term_elem.Id)
+        if term_id not in kind_cache:
+            kind_cache[term_id] = hvac_graph.classify_diffuser_branch(term_elem)
+        kind = kind_cache[term_id]
+        branch_ctx[eid] = (kind, term_elem, all_terminals.get(term_id, (0.0, '', ''))[0])
+        duct_roles[eid] = _duct_role_label(True, kind)
+        role_counts['Branch'] += 1
+        if kind is None:
+            unclassified.append((eid_int(eid), term_id))
+
+    output.print_md('Duct roles: **{} main**, **{} branch** '
+                    '(branch = exactly one terminal downstream).'.format(
+                        role_counts['Main'], role_counts['Branch']))
 
     # 4b. System summary — total flow to each equipment, diffuser counts/types
     grand_total_cfm = sum(cfm for cfm, _, _ in all_terminals.values())
@@ -1004,6 +1365,10 @@ def main():
         clearance_count = 0
         # eid -> (label, green_cap_cfm, reason) for fittings + annotations + schedule
         duct_labels  = {}
+        # eid -> BranchDiffuserResult, or None for anything judged the
+        # ductulator way. Also what tells the output tables whether to print
+        # real FPM/friction numbers or N/A.
+        branch_results = {}
         # eid -> effective height (in) of this duct's real downstream neighbor,
         # precomputed once here so _duct_label/_suggest_size don't need graph access
         downstream_heights = {}
@@ -1011,8 +1376,10 @@ def main():
         for eid, dr in all_duct_results.items():
             downstream_h = hvac_graph.max_downstream_height_in(eid_int(eid), all_nodes, all_children)
             downstream_heights[eid] = downstream_h
-            label, green_cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_h)
-            duct_labels[eid] = (label, green_cap, reason)
+            label, green_cap, reason, branch_res = _label_duct(
+                dr, custom_limits, tol_pct, downstream_h, branch_ctx.get(eid))
+            duct_labels[eid]    = (label, green_cap, reason)
+            branch_results[eid] = branch_res
             if reason == 'Diffuser/Duct Clearance':
                 clearance_count += 1
             color = _COLOR_MAP.get(label, GRAY)
@@ -1063,8 +1430,12 @@ def main():
         tn_types = list(FilteredElementCollector(doc).OfClass(TextNoteType).ToElements())
         tn_type_id = tn_types[0].Id if tn_types else None
 
-        # Collect flagged ducts in stable element-id order
-        flagged_items = []
+        # Collect flagged ducts in stable element-id order. Cell values are
+        # built once here and keyed by element id so the schedule view and the
+        # console table render the exact same content in a different order,
+        # rather than each computing its own.
+        flagged_items    = []
+        row_cells_by_eid = {}
         for eid in sorted(duct_labels.keys(), key=lambda e: eid_int(e)):
             lbl, _, reason = duct_labels[eid]
             if lbl not in ('YELLOW', 'RED', 'PURPLE'):
@@ -1072,7 +1443,11 @@ def main():
             dr = all_duct_results.get(eid)
             if dr is None:
                 continue
-            flagged_items.append((lbl, dr, reason, downstream_heights.get(eid)))
+            cells = _row_cells(lbl, dr, reason, duct_roles.get(eid, 'Main'),
+                               branch_results.get(eid), custom_limits, tol_pct,
+                               downstream_heights.get(eid))
+            row_cells_by_eid[eid] = cells
+            flagged_items.append((lbl, dr, cells))
 
         # Find keynote circle symbol — search by family name
         keynote_sym = None
@@ -1092,7 +1467,7 @@ def main():
             keynote_sym.Activate()
             doc.Regenerate()
 
-        for idx, (lbl, dr, _reason, _downstream_h) in enumerate(flagged_items, 1):
+        for idx, (lbl, dr, _cells) in enumerate(flagged_items, 1):
             try:
                 mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
                 if keynote_sym is not None:
@@ -1134,21 +1509,25 @@ def main():
 
         # System Summary + flagged-duct table + legend, placed as second viewport on sheet
         if tn_type_id is not None:
-            sched_view, content_h = _build_summary_view(
-                doc, summary_lines, flagged_items, custom_limits, tol_pct,
-                source_sheet_num, tn_type_id, ts, fill_id)
+            sched_view, content_h, total_w = _build_summary_view(
+                doc, summary_lines, [item[2] for item in flagged_items],
+                selected_cols, source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
                 # X fixed by hand in Revit (see diagram note above) and read
                 # back via Revit MCP. Y keeps the original bottom-anchored,
                 # grows-upward-with-content_h behavior, just re-anchored to
                 # match the hand-placed bottom edge on that same sheet.
-                total_w         = 1.280   # must match COLS sum in _build_summary_view
-                # sched_x shifted +0.110 (half the +0.220 width added by the
-                # Length/Friction Loss columns) to keep the table's left edge
-                # anchored at the same hand-placed position on the sheet —
-                # Viewport.Create positions by center, so a wider table
-                # centered at the old point would drift right off that anchor.
-                sched_x         = -1.054
+                #
+                # Viewport.Create positions by CENTER, so the table's left edge
+                # is what has to be pinned — a table of a different width
+                # centered on the old point would drift sideways off the
+                # anchor. The table width is no longer fixed (the column picker
+                # changes it every run), so the left edge is stored instead and
+                # the center derived from it. The literal below is the original
+                # hand-placed center of -1.014 minus half the then-fixed table
+                # width of 1.360, i.e. the same left edge as before.
+                _SCHED_LEFT_EDGE_X = -1.014 - 1.360 / 2.0
+                sched_x         = _SCHED_LEFT_EDGE_X + total_w / 2.0
                 bottom_margin_y = 1.546
                 sched_y  = bottom_margin_y + content_h / 2.0
                 sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
@@ -1184,44 +1563,81 @@ def main():
     output.print_md('## Done')
     output.print_md('Sheet **{}** created.'.format(new_sheet.SheetNumber))
     output.print_md('')
-    output.print_md('**Design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%,  purple = a smaller standard size still fits):**'.format(
+    output.print_md('**Mains and branches were checked by different methods.** '
+                    'A duct is a branch when exactly one terminal is reachable '
+                    'downstream of it, a main when two or more are.')
+    output.print_md('')
+    output.print_md('**Main ducts — design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%,  purple = a smaller standard size still fits):**'.format(
         int(tol_pct), int(tol_pct)))
     output.print_md('| System | Max Velocity | Max Friction |')
     output.print_md('| --- | --- | --- |')
-    for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air'):
+    for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air', 'Transfer Air'):
         defaults = hvac_graph.FIRM_DEFAULTS.get(sys_class, (600, 0.05))
         mx_fpm, mx_fric = custom_limits.get(sys_class, defaults)
         output.print_md('| {} | {:.0f} FPM | {:.3f} iwc/100 |'.format(
             sys_class, mx_fpm, mx_fric))
     output.print_md('')
+    output.print_md('**Branch ducts — checked against the diffuser sizing tables '
+                    '(MEP Design Standards, section 1), not against velocity or friction.** '
+                    'An auto-sizing diffuser is selected on static pressure and NC rather '
+                    'than duct velocity, so velocity-checking a run that feeds only that one '
+                    'diffuser is redundant. Two things are checked instead: whether the '
+                    'diffuser\'s own neck/face is big enough for its own CFM, and whether the '
+                    'branch duct is at least as big as the diffuser connects with. Either one '
+                    'failing is red; there is no yellow band on a size match. Oversize is '
+                    'reported in the optional "Oversized (Branch)" column only and never '
+                    'changes the status.')
+    output.print_md('')
+    output.print_md('Branches feeding a **slot diffuser** fall back to the main '
+                    'velocity/friction check above — the design standard publishes no '
+                    'duct or neck size breakpoints for slot diffusers to check against.')
+    output.print_md('')
     output.print_md('| Color | Ducts | Fittings & Accessories | Meaning |')
     output.print_md('| --- | --- | --- | --- |')
-    output.print_md('| Green  | {} | {} | Within limit       |'.format(
+    output.print_md('| Green  | {} | {} | Main: within limit. Branch: diffuser and duct both correctly sized |'.format(
         counts.get('GREEN',  0), fitting_counts.get('GREEN',  0)))
-    output.print_md('| Purple | {} | {} | Oversized (low velocity, review for cost) |'.format(
+    output.print_md('| Purple | {} | {} | Main only: oversized (low velocity, review for cost) |'.format(
         counts.get('PURPLE', 0), fitting_counts.get('PURPLE', 0)))
-    output.print_md('| Yellow | {} | {} | Approaching limit  |'.format(
+    output.print_md('| Yellow | {} | {} | Main only: approaching limit |'.format(
         counts.get('YELLOW', 0), fitting_counts.get('YELLOW', 0)))
-    output.print_md('| Red    | {} | {} | Exceeds limit      |'.format(
+    output.print_md('| Red    | {} | {} | Main: exceeds limit. Branch: diffuser or duct undersized |'.format(
         counts.get('RED',    0), fitting_counts.get('RED',    0)))
-    output.print_md('| Gray   | {} | — | No CFM data        |'.format(
+    output.print_md('| Gray   | {} | — | Not checked: no CFM data, or no diffuser table match |'.format(
         counts.get('GRAY',   0)))
     output.print_md('')
     output.print_md('**Diffuser/duct height clearance issues (flagged Red): {}**'.format(
         clearance_count))
 
+    # Branches that could not be matched to a diffuser table are gray, and gray
+    # ducts are not in the flagged table below — so they would otherwise vanish
+    # silently. Report them explicitly with their terminal, so the model can be
+    # checked rather than the branch quietly assumed fine.
+    if unclassified:
+        output.print_md('')
+        output.print_md('**{} branch duct(s) could not be classified — the air terminal '
+                        'has no readable connector geometry, so no diffuser table could be '
+                        'chosen. Shown gray, NOT passed:**'.format(len(unclassified)))
+        for duct_id, term_id in unclassified:
+            output.print_md('- duct id {} → terminal id {}'.format(duct_id, term_id))
+
     # Flagged duct list — RED first, then YELLOW, then PURPLE.
     # RED/YELLOW sorted by velocity descending (worst overrun first);
     # PURPLE sorted by velocity ascending (worst oversizing first).
+    #
+    # Deliberately a different order from the schedule view's table, which
+    # stays in element-id order so its row numbers line up with the numbered
+    # keynote circles in the plan. The cell CONTENT is the same objects built
+    # once above, so only the ordering and the row index differ.
     flagged = []
     for eid, dr in all_duct_results.items():
         label, _, reason = duct_labels.get(eid, ('GRAY', 0.0, ''))
         if label not in ('RED', 'YELLOW', 'PURPLE'):
             continue
+        cells = row_cells_by_eid.get(eid)
+        if cells is None:
+            continue
         fpm = dr.cfm / dr.area_ft2 if dr.area_ft2 > 0 else 0.0
-        defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-        max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
-        flagged.append((label, fpm, dr, max_fpm, max_fric, reason, downstream_heights.get(eid)))
+        flagged.append((label, fpm, cells))
 
     _FLAG_RANK = {'RED': 0, 'YELLOW': 1, 'PURPLE': 2}
 
@@ -1233,55 +1649,22 @@ def main():
     if flagged:
         flagged.sort(key=_flag_sort_key)
 
-        # Fixed-width columns for monospace alignment
-        _COLS = [
-            ('#',               3),
-            ('Status',          7),
-            ('Reason',          22),
-            ('System',         13),
-            ('Duct ID',         9),
-            ('Size',            8),
-            ('Suggested',      11),
-            ('Length (ft)',    11),
-            ('Vel (FPM)',       10),
-            ('Max FPM',         8),
-            ('CFM',             6),
-            ('Fric (iwc/100)',  15),
-            ('Max Fric',        9),
-            ('Fric Loss (iwc)', 15),
-        ]
+        # Same shared column definitions and same user selection as the
+        # schedule view — only the fixed monospace widths differ, since this
+        # table is padded text rather than ruled cells.
+        cols = _selected_columns(selected_cols)
 
         def _fmt_row(cells):
-            return '  '.join(str(c).ljust(w) for c, (_, w) in zip(cells, _COLS))
+            return '  '.join(str(c).ljust(col[3]) for c, col in zip(cells, cols))
 
-        header    = _fmt_row([h for h, _ in _COLS])
-        separator = _fmt_row(['-' * w for _, w in _COLS])
+        header    = _fmt_row([col[1] for col in cols])
+        separator = _fmt_row(['-' * col[3] for col in cols])
         rows      = [header, separator]
 
-        for idx, (label, fpm, dr, max_fpm, max_fric, reason, downstream_h) in enumerate(flagged, 1):
-            size      = _duct_size_label(dr.elem)
-            suggested = _suggest_size(dr, custom_limits, tol_pct, label, downstream_h)
-            if reason == 'Diffuser/Duct Clearance':
-                fpm_str  = 'N/A'
-                fric_str = 'N/A'
-            else:
-                fpm_str  = '{:.0f}'.format(fpm)
-                fric_str = '{:.3f}'.format(dr.friction_per_100ft)
+        for idx, (label, fpm, cells) in enumerate(flagged, 1):
             rows.append(_fmt_row([
-                idx,
-                label,
-                reason,
-                dr.sys_class,
-                dr.element_id,
-                size,
-                suggested,
-                '{:.1f}'.format(dr.length_ft),
-                fpm_str,
-                '{:.0f}'.format(max_fpm),
-                '{:.0f}'.format(dr.cfm),
-                fric_str,
-                '{:.3f}'.format(max_fric),
-                '{:.3f}'.format(dr.friction_loss_inwc),
+                str(idx) if col[0] == 'num' else cells.get(col[0], '')
+                for col in cols
             ]))
 
         output.print_md('')

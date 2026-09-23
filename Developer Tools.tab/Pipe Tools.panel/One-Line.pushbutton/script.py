@@ -1657,9 +1657,9 @@ def main():
     # ------------------------------------------------------------------
     # STEP 3 - Select pipe material and IFGC table (populates notes block)
     # ------------------------------------------------------------------
-    pipe_material, selected_table_label, elevation_ft = ui_helpers.show_table_picker(
+    pipe_material, selected_table_label, heat_content_btu_per_cf = ui_helpers.show_table_picker(
         "One-Line - Select IFGC Table")
-    if not pipe_material or not selected_table_label or elevation_ft is None:
+    if not pipe_material or not selected_table_label or heat_content_btu_per_cf is None:
         output.print_md("Cancelled at table selection. No changes made.")
         return
 
@@ -1667,9 +1667,8 @@ def main():
         pipe_material, selected_table_label)
     table_id           = selected_opt["table_id"]
     inlet_pressure_psi = selected_opt["inlet_pressure_psi"]
-    altitude_factor    = sizing_engine.altitude_derate_factor(elevation_ft)
-    output.print_md("**Material:** {}  |  **Table:** {}  |  **Elevation:** {:.0f} ft".format(
-        pipe_material, table_id, elevation_ft))
+    output.print_md("**Material:** {}  |  **Table:** {}  |  **Heat Content:** {:.0f} BTU/CF".format(
+        pipe_material, table_id, heat_content_btu_per_cf))
 
     # ------------------------------------------------------------------
     # STEP 4 - Traverse network
@@ -1777,15 +1776,12 @@ def main():
     # minimum IFGC size that handles the branch MBH demand at the system length.
     def _pick_fallback_size(demand_mbh, pairs):
         """Smallest nominal size in pairs whose capacity covers demand_mbh,
-        altitude-derated per sizing_engine.altitude_derate_factor() so this
-        fallback matches the same comparison Size Gas uses. Returns "" if
-        no size in pairs is sufficient."""
-        if altitude_factor > 0:
-            demand_cfh_effective = demand_mbh / altitude_factor
-        else:
-            demand_cfh_effective = float("inf")
+        converted to CFH via the same Heat Content of Gas used by Size Gas
+        (see sizing_engine.mbh_to_cfh()), so this fallback matches the same
+        comparison. Returns "" if no size in pairs is sufficient."""
+        demand_cfh = sizing_engine.mbh_to_cfh(demand_mbh, heat_content_btu_per_cf)
         for nom, cap in pairs:
-            if cap is not None and cap >= demand_cfh_effective:
+            if cap is not None and cap >= demand_cfh:
                 return nom
         return ""
 

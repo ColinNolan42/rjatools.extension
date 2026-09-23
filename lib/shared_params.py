@@ -35,22 +35,33 @@ BUILTIN_PIPE_LENGTH     = "CURVE_ELEM_LENGTH"
 SPECIFIC_GRAVITY        = 0.60      # Natural gas specific gravity. Matches all IFGC tables.
                                     # Do not expose as user input  -  hardcoded per project spec.
 
-BTU_PER_CFH             = 1000      # Natural gas: 1 cubic foot = 1000 BTU (approx).
-                                    # CFH = BTU_hr / BTU_PER_CFH
-
-MBH_PER_BTU             = 0.001     # Convenience multiplier: BTU/hr * MBH_PER_BTU = MBH
-
 INCHES_PER_FOOT         = 12.0      # Used when converting pipe diameter from feet to inches.
 
-# RJA standard: at elevation, an actual cubic foot of gas carries less heating
-# value than the sea-level-referenced 1000 BTU/cf that IFGC Table 402.4
-# capacities assume. Derate 4% per 1,000 ft of elevation above sea level
-# (no threshold) to get actual MBH delivered per actual CFH. Matches RJA's
-# own "GAS SIZING WHITEPAPER.docx" and "BTU TO CFH WORKSHEET.xlsx" (FOR
-# CLAUDE\Design Resources\PLUMBING) - corrected from 3% 2026-09-08.
-ALTITUDE_DERATE_PERCENT_PER_1000FT = 0.04
+# Real Low Pressure (K-constant) / High Pressure (Weymouth/Cox) capacity
+# formulas were ported from RJA's actual calc templates ("Template Low
+# Pressure Gas Size.xls" / "Template - High Pressure Gas Size.xlsx") and
+# verified working (see sizing_engine.low_pressure_capacity_cfh() /
+# weymouth_capacity_cfh() / cox_capacity_cfh()), but per Colin (2026-09-23)
+# those formulas are NOT used for actual pipe capacity/sizing in this tool
+# - only the templates' MBH->CFH Heat Content conversion is (see
+# mbh_to_cfh() below). Pipe capacity/sizing stays on the discrete IFGC
+# Table 402.4 lookup (SPECIFIC_GRAVITY above, fixed at 0.60). The formula
+# functions are kept in sizing_engine.py, unused, in case this is
+# revisited later - do not wire them back into size_system() without
+# Colin explicitly asking again.
 
-DEFAULT_PROJECT_ELEVATION_FT       = 5280.0   # Denver, CO - startup dialog default.
+# RJA standard (2026-09-23): CFH = BTUH / Heat Content of Gas. Heat Content
+# of Gas is project/location-specific (utility-provided), not a fixed
+# altitude derate - this is the ONLY adjustment applied when converting a
+# fixture's MBH load to the CFH figure compared against IFGC Table 402.4
+# capacities. Matches RJA's real "Low Pressure Gas Size.xls" calc template
+# (Table sheet: "CF/BTUH (Sea Level)" = 1000, "CF/BTUH (Denver)" = 840).
+# Supersedes the old fixed 4%/1,000ft derate, and supersedes "GAS SIZING
+# WHITEPAPER.docx"'s "1 CFH = 1 MBH, no adjustment" position - both are now
+# outdated per Colin, do not re-cite either as authoritative for this.
+SEA_LEVEL_HEAT_CONTENT_BTU_PER_CF = 1000.0
+
+DEFAULT_HEAT_CONTENT_BTU_PER_CF   = 840.0   # Denver, CO - startup dialog default.
 
 # =============================================================================
 # CONNECTOR FLOW DIRECTION

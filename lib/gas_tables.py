@@ -614,6 +614,46 @@ def get_table(table_id):
     return tables[table_id]
 
 
+# Any table with a real numeric inlet pressure at or above this threshold
+# routes to the High Pressure (Weymouth/Cox) method; everything else
+# (the "<2 psi" placeholder 0.7 value, or a true in.w.c. category) routes
+# to the Low Pressure method. Matches RJA's own stated boundary (2026-09-23):
+# "for anything over 1.5 psi... use the High Pressure calc."
+HIGH_PRESSURE_THRESHOLD_PSI = 1.5
+
+
+def is_high_pressure(inlet_pressure_psi):
+    """True if inlet_pressure_psi routes to the High Pressure (Weymouth/Cox)
+    method rather than the Low Pressure (K-constant) method."""
+    return inlet_pressure_psi > HIGH_PRESSURE_THRESHOLD_PSI
+
+
+def get_pressure_drop_value(table_id):
+    """Parse a table's "pressure_drop" field (e.g. "0.5 in. w.c.", "3.5 psi")
+    into a (numeric_value, unit) pair.
+
+    Args:
+        table_id: Table identifier string.
+
+    Returns:
+        (value, unit) where unit is "psi" or "in_wc".
+
+    Raises:
+        ValueError: If table_id is not present, or the field doesn't match
+                    either recognized unit suffix.
+    """
+    raw = get_table(table_id)["pressure_drop"]
+    text = str(raw).strip()
+    if text.endswith("in. w.c."):
+        return float(text[:-len("in. w.c.")].strip()), "in_wc"
+    if text.endswith("psi"):
+        return float(text[:-len("psi")].strip()), "psi"
+    raise ValueError(
+        "Table '{}' has an unrecognized pressure_drop format: '{}'. "
+        "Expected a value ending in 'in. w.c.' or 'psi'.".format(
+            table_id, raw))
+
+
 def list_pipe_sizes(table_id):
     """Return the list of nominal pipe size strings for a table.
 

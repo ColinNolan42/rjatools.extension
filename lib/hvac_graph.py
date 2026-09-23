@@ -23,25 +23,38 @@ from Autodesk.Revit.DB import (
 
 from revit_helpers import eid_int
 
+import diffuser_tables
+
 log = logging.getLogger(__name__)
 
 # ── Firm design defaults ─────────────────────────────────────────────────────
 # {sys_class: (max_fpm, max_friction_inwc_per_100ft)}
-# Main and branch ducts share the same values — no split.
+#
+# These are the MAIN-duct limits only. Branch ducts (a run feeding exactly one
+# terminal) are no longer checked against them at all — see
+# branch_diffuser_check() below. A correctly-selected auto-sizing diffuser is
+# picked on static pressure and NC rather than on duct velocity, so velocity-
+# checking a run that only ever feeds that one diffuser is redundant and
+# produces false flags; branches are instead checked for size match against
+# the published diffuser tables in diffuser_tables.py. The one exception is a
+# slot-diffuser branch: the design standard publishes no duct/neck size
+# breakpoints for slot diffusers, so those fall back to these same values.
 FIRM_DEFAULTS = {
-    'Supply Air':  (800,  0.08),
-    'Return Air':  (600,  0.05),
-    'Exhaust Air': (600,  0.05),
-    'Outside Air': (600,  0.05),
+    'Supply Air':    (800,  0.08),
+    'Return Air':    (600,  0.05),
+    'Exhaust Air':   (600,  0.05),
+    'Outside Air':   (600,  0.05),
+    'Transfer Air':  (400,  0.05),
 }
 
 # SMACNA labels for Diagnose report — derived from FIRM_DEFAULTS with 85% green band
 # (green_fpm = max*0.85, yellow_fpm = max)
 SMACNA = {
-    'Supply Air':  (680, 800),    # 800 * 0.85 = 680
-    'Return Air':  (510, 600),    # 600 * 0.85 = 510
-    'Exhaust Air': (510, 600),
-    'Outside Air': (510, 600),
+    'Supply Air':    (680, 800),    # 800 * 0.85 = 680
+    'Return Air':    (510, 600),    # 600 * 0.85 = 510
+    'Exhaust Air':   (510, 600),
+    'Outside Air':   (510, 600),
+    'Transfer Air':  (340, 400),    # 400 * 0.85 = 340
 }
 
 # ── Flex duct sizing (SA and RA only — for future duct sizer tool) ────────────
@@ -200,6 +213,107 @@ def effective_height_in(elem):
     return None
 
 
+# One nominal duct/neck step, inches. Same 2" grid _nominal_even_in() snaps to.
+# Used as the "clearly a size up" threshold for the informational branch
+# oversize flag, so that flag can never fire on float noise alone.
+NOMINAL_STEP_IN = 2.0
+
+
+def terminal_connector_geometry(elem):
+    """Shape and size of an air terminal's own connection, read straight off
+    its connector rather than off any family/type name.
+
+    Returns one of:
+        ('round', diameter_in)
+        ('oval',  None)              -- see below on why size is not read
+        ('rect',  width_in, height_in)
+        (None,    None)              -- no connector, or no readable shape
+
+    Note the varying tuple length: callers should branch on element [0] and
+    only unpack the rest once they know the shape. Sizes are snapped to the
+    nominal 2" grid by _nominal_even_in() for the same float-noise reason
+    documented on that function.
+
+    Shape comes from Connector.Shape (ConnectorProfileType). This is the only
+    classification signal used for diffusers anywhere in this tool — family
+    and type names are deliberately never matched, because they have been
+    renamed repeatedly across this project's history and string-matching them
+    would be fragile by design.
+
+    ConnectorProfileType members confirmed by reflection against RevitAPI.dll
+    for both Revit 2022 and 2026 (2026-09-23): Round, Rectangular, Oval,
+    Invalid. Oval is real and distinct from Round — RJA's slot diffuser neck
+    connector is physically Oval even though the duct feeding it is round,
+    which is what makes slot diffusers identifiable without a name match.
+
+    No size is read for Oval: the design standard publishes no neck-size
+    breakpoints for slot diffusers at all (capacity is given per slot length
+    and open-slot count instead), so there is nothing to compare a size
+    against and reading one would only invite a check that cannot be made.
+
+    Reading Radius on a rectangular connector (or Width/Height on a round one)
+    throws, so each shape is handled inside its own branch — never read one
+    set of properties and hope.
+    """
+    eid = eid_int(elem.Id)
+    cm = _connector_manager(elem)
+    if cm is None:
+        log.info('terminal_connector_geometry: id=%s NOT FOUND (no ConnectorManager)', eid)
+        return None, None
+    try:
+        for c in cm.Connectors:
+            try:
+                shape = c.Shape
+            except Exception as ex:
+                log.debug('terminal_connector_geometry: id=%s connector Shape unreadable: %s',
+                          eid, ex)
+                continue
+            if shape == ConnectorProfileType.Round:
+                dia = _nominal_even_in(c.Radius * 2.0 * 12.0)
+                log.info('terminal_connector_geometry: id=%s Round dia=%s in', eid, dia)
+                return 'round', dia
+            if shape == ConnectorProfileType.Oval:
+                log.info('terminal_connector_geometry: id=%s Oval (slot diffuser, no size read)', eid)
+                return 'oval', None
+            if shape == ConnectorProfileType.Rectangular:
+                w = _nominal_even_in(c.Width * 12.0)
+                h = _nominal_even_in(c.Height * 12.0)
+                log.info('terminal_connector_geometry: id=%s Rectangular %sx%s in', eid, w, h)
+                return 'rect', w, h
+    except Exception as ex:
+        log.warning('terminal_connector_geometry: id=%s connector iteration failed: %s', eid, ex)
+    log.info('terminal_connector_geometry: id=%s NOT FOUND (no connector with a readable shape)', eid)
+    return None, None
+
+
+_SHAPE_TO_CATEGORY = {
+    'round': 'ceiling',
+    'oval':  'slot',
+    'rect':  'sidewall',
+}
+
+
+def classify_diffuser_branch(elem):
+    """Which diffuser sizing table applies to this terminal: 'ceiling',
+    'sidewall', 'slot', or None.
+
+    A thin mapping over terminal_connector_geometry()'s shape — round neck is
+    a ceiling diffuser/grate, oval neck is a slot diffuser, rectangular face
+    is a sidewall grille. No name matching and no aspect-ratio heuristic: a
+    rectangular face is a sidewall grille whatever its proportions, and the
+    oval/round distinction is what separates slot from ceiling.
+
+    None means the terminal has no readable connection geometry, so no table
+    can be chosen. Callers must treat that as "cannot check", not as a pass.
+    """
+    kind = terminal_connector_geometry(elem)[0]
+    cat  = _SHAPE_TO_CATEGORY.get(kind)
+    if cat is None:
+        log.info('classify_diffuser_branch: id=%s NOT CLASSIFIED (no connector geometry)',
+                 eid_int(elem.Id))
+    return cat
+
+
 def next_real_downstream(node_id, nodes, children):
     """Return the list of real duct/terminal elements immediately downstream
     of node_id, walking through (skipping over) any fittings/accessories in
@@ -261,6 +375,33 @@ def duct_size_label(duct):
     if w is not None and h is not None:
         return '{:.0f}x{:.0f}"'.format(w.AsDouble() * 12.0, h.AsDouble() * 12.0)
     return '?'
+
+def duct_installed_size_in(duct):
+    """Numeric installed size of a duct, for dimensional comparison against a
+    diffuser's own connection size.
+
+    Returns diameter_in (a number) for round/spiral, (width_in, height_in) for
+    rectangular, or None if neither is readable. Snapped to the nominal 2"
+    grid by _nominal_even_in() so it compares like-for-like against
+    terminal_connector_geometry(), which snaps the same way.
+
+    duct_size_label() already covers the display side but returns a formatted
+    string; this is the numeric counterpart the branch check needs. Kept here
+    rather than in the pushbutton so the nominal-grid read happens in exactly
+    one place.
+    """
+    d = duct.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
+    if d is not None and d.AsDouble() > 0:
+        return _nominal_even_in(d.AsDouble() * 12.0)
+    w = duct.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM)
+    h = duct.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
+    if w is not None and h is not None and w.AsDouble() > 0 and h.AsDouble() > 0:
+        return (_nominal_even_in(w.AsDouble() * 12.0),
+                _nominal_even_in(h.AsDouble() * 12.0))
+    log.info('duct_installed_size_in: id=%s NOT FOUND (no diameter and no width/height)',
+             eid_int(duct.Id))
+    return None
+
 
 def duct_sys_class(duct):
     """Returns system classification string e.g. 'Supply Air'."""
@@ -365,6 +506,262 @@ def _duct_d_h_in(duct):
         h_in = h.AsDouble() * 12.0
         return 4.0 * w_in * h_in / (2.0 * (w_in + h_in))
     return 0.0
+
+
+# ── branch diffuser check ────────────────────────────────────────────────────
+#
+# Everything a branch duct (a run feeding exactly one terminal) is judged on
+# lives below, so the pushbutton only has to call branch_diffuser_check() and
+# render the answer. Mains are untouched by any of this — they keep the
+# FIRM_DEFAULTS velocity/friction check.
+
+# Which published table applies, by (diffuser category, terminal system
+# classification). Return and Exhaust share one published dataset.
+#
+# Outside Air and Transfer Air are deliberately absent: the design standard
+# publishes no diffuser capacity table for either, so a terminal classified
+# that way comes back "cannot check" rather than being quietly judged against
+# a table that was never meant for it.
+_BRANCH_TABLES = {
+    ('ceiling',  'Supply Air'):   diffuser_tables.CEILING_SUPPLY_NECK_TABLE,
+    ('ceiling',  'Return Air'):   diffuser_tables.CEILING_RETURN_EXHAUST_NECK_TABLE,
+    ('ceiling',  'Exhaust Air'):  diffuser_tables.CEILING_RETURN_EXHAUST_NECK_TABLE,
+    ('sidewall', 'Supply Air'):   diffuser_tables.SIDEWALL_SUPPLY_TABLE,
+    ('sidewall', 'Return Air'):   diffuser_tables.SIDEWALL_RETURN_EXHAUST_TABLE,
+    ('sidewall', 'Exhaust Air'):  diffuser_tables.SIDEWALL_RETURN_EXHAUST_TABLE,
+}
+
+
+class BranchDiffuserResult(object):
+    """One branch duct's verdict from branch_diffuser_check().
+
+    status is 'GREEN', 'RED' or 'GRAY' — never YELLOW. There is no tolerance
+    band on a size match: a branch duct either is at least the size the
+    diffuser connects with or it is not. GRAY means the published data does
+    not cover this selection, which is a real third answer and must not be
+    rendered as a pass.
+
+    Field roles, since several of them look interchangeable and are not:
+      diffuser_size  what the diffuser itself connects with (its own neck/face)
+      installed_size what the branch duct actually is
+      required_size  what the branch duct should be — the larger of the size
+                     the CFM demands and the size the diffuser connects with
+      oversized      informational only, never affects status (see the
+                     oversize note in branch_diffuser_check)
+    """
+
+    def __init__(self):
+        self.status           = 'GRAY'
+        self.reason           = ''
+        self.category         = None    # 'ceiling' / 'sidewall' / 'slot' / None
+        self.sys_class        = 'Unknown'
+        self.cfm              = 0.0
+        self.diffuser_size    = '-'
+        self.installed_size   = '-'
+        self.required_size    = '-'
+        self.diffuser_max_cfm = None    # published capacity of the installed diffuser
+        self.oversized        = False
+        self.oversized_note   = ''
+
+
+def _ge_in(a, b):
+    """a >= b for inch dimensions, tolerant of Revit float noise. Both sides
+    are nominal-snapped before they get here, so the tolerance only has to
+    absorb representation error, never a real half-size difference."""
+    return float(a) >= float(b) - diffuser_tables.SIZE_TOL_IN
+
+
+def _clearly_bigger_in(a, b):
+    """True if a is at least one full nominal size (2") above b. The threshold
+    is a whole step precisely so the informational oversize flag can never
+    fire on rounding."""
+    return float(a) >= float(b) + NOMINAL_STEP_IN - diffuser_tables.SIZE_TOL_IN
+
+
+def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
+    """Judge one branch duct against the published diffuser tables.
+
+    Two independent parts, both of which must pass for GREEN:
+
+      (a) Diffuser adequacy — is the diffuser's own installed neck/face big
+          enough for its own Flow, per the design standard? This is checked
+          against diffuser_tables rather than against the family's own sizing
+          formula on purpose; see that module's docstring.
+
+      (b) Branch duct match — is the installed duct at least as big as the
+          connection the diffuser presents? Sidewall grilles are matched
+          dimension-to-dimension because RJA matches the grille's rectangular
+          size to the connecting ductwork directly, not through an
+          area-equivalent adapter calculation.
+
+    Either part failing is RED, with a reason naming which. Either part being
+    unverifiable (a size the standard does not publish, an unreadable duct
+    size) is GRAY with a reason naming what could not be read — except where
+    the other part outright fails, in which case the real failure wins.
+
+    Oversize is never a failure. A branch fed by the auto-sizing diffuser
+    family is routed back to whatever size the diffuser computed, so a
+    genuinely oversized branch should not occur; the flag exists to surface it
+    for review if it does, through an optional column, and deliberately does
+    not touch status.
+
+    Args:
+        terminal_elem:  the OST_DuctTerminal element at the end of the branch.
+        terminal_cfm:   that terminal's Flow in CFM (already unit-converted).
+        installed_branch_size: the branch duct's size as returned by
+            duct_installed_size_in() — a number for round, a (w_in, h_in)
+            sequence for rectangular, or None if unreadable.
+
+    Returns:
+        BranchDiffuserResult. Never raises for bad model data; unreadable
+        inputs come back GRAY with a reason.
+    """
+    res = BranchDiffuserResult()
+    tid = eid_int(terminal_elem.Id)
+    try:
+        res.cfm = float(terminal_cfm)
+    except (TypeError, ValueError):
+        res.cfm = 0.0
+
+    geom         = terminal_connector_geometry(terminal_elem)
+    kind         = geom[0]
+    res.category = _SHAPE_TO_CATEGORY.get(kind)
+
+    if res.category not in ('ceiling', 'sidewall'):
+        res.status = 'GRAY'
+        res.reason = 'Cannot classify diffuser'
+        log.warning('branch_diffuser_check: terminal id=%s NOT CHECKED — '
+                    'connector shape %s maps to category %s', tid, kind, res.category)
+        return res
+
+    res.sys_class = terminal_sys_class(terminal_elem)
+    table = _BRANCH_TABLES.get((res.category, res.sys_class))
+    if table is None:
+        res.status = 'GRAY'
+        res.reason = 'No table for {}'.format(res.sys_class)
+        log.warning('branch_diffuser_check: terminal id=%s NOT CHECKED — no published '
+                    '%s table for system class "%s"', tid, res.category, res.sys_class)
+        return res
+
+    # Tri-state on purpose: True = passed, False = failed, None = could not be
+    # determined. Collapsing None into either of the other two is exactly the
+    # silent-failure this codebase forbids.
+    diffuser_ok = None
+    branch_ok   = None
+    unverified  = []
+
+    if res.category == 'ceiling':
+        neck_dia          = geom[1]
+        res.diffuser_size = diffuser_tables.round_size_label(neck_dia)
+
+        # (a) is the neck big enough for its own CFM
+        res.diffuser_max_cfm = diffuser_tables.max_cfm_for_diameter(table, neck_dia)
+        if res.diffuser_max_cfm is None:
+            unverified.append('{} neck not in table'.format(res.diffuser_size))
+        else:
+            diffuser_ok = res.cfm <= res.diffuser_max_cfm
+
+        # Required size — the larger of what the CFM demands and what the
+        # diffuser physically connects with. Both constraints bind the branch
+        # duct at once, so showing only one of them would understate it.
+        min_dia = diffuser_tables.min_diameter_for_cfm(table, res.cfm)
+        if min_dia is None:
+            res.required_size = '>{}'.format(diffuser_tables.round_size_label(
+                diffuser_tables.largest_diameter(table)))
+        else:
+            res.required_size = diffuser_tables.round_size_label(
+                max(min_dia, neck_dia))
+
+        # (b) is the branch duct at least the neck size
+        if installed_branch_size is None:
+            unverified.append('branch duct size unreadable')
+        elif isinstance(installed_branch_size, (tuple, list)):
+            res.installed_size = diffuser_tables.rect_size_label(
+                installed_branch_size[0], installed_branch_size[1])
+            unverified.append('rect duct on round neck')
+        else:
+            duct_dia          = float(installed_branch_size)
+            res.installed_size = diffuser_tables.round_size_label(duct_dia)
+            branch_ok          = _ge_in(duct_dia, neck_dia)
+            if branch_ok and _clearly_bigger_in(duct_dia, neck_dia):
+                res.oversized      = True
+                res.oversized_note = '{} on {}'.format(
+                    res.installed_size, res.diffuser_size)
+
+    else:   # sidewall
+        face_w, face_h = geom[1], geom[2]
+        res.diffuser_size = diffuser_tables.rect_size_label(face_w, face_h)
+
+        # (a) is the face big enough for its own CFM
+        face_row = diffuser_tables.sidewall_row(table, face_w, face_h)
+        if face_row is None:
+            near, _exact = diffuser_tables.nearest_sidewall_row(table, face_w, face_h)
+            unverified.append('{} face not in table (nearest {})'.format(
+                res.diffuser_size, diffuser_tables.row_size_label(near)))
+        else:
+            res.diffuser_max_cfm = face_row[2]
+            diffuser_ok = res.cfm <= res.diffuser_max_cfm
+
+        # Required size — same "larger of the two binding constraints" rule as
+        # the round case, compared by face area since the published rows span
+        # three aspect ratios and are not comparable dimension-by-dimension.
+        min_row = diffuser_tables.min_row_for_cfm(table, res.cfm)
+        if min_row is None:
+            res.required_size = '>{}'.format(diffuser_tables.row_size_label(
+                diffuser_tables.largest_sidewall_row(table)))
+        elif face_row is not None and (face_row[0] * face_row[1]) > (min_row[0] * min_row[1]):
+            res.required_size = diffuser_tables.row_size_label(face_row)
+        else:
+            res.required_size = diffuser_tables.row_size_label(min_row)
+
+        # (b) is the branch duct at least the face size
+        if installed_branch_size is None:
+            unverified.append('branch duct size unreadable')
+        elif not isinstance(installed_branch_size, (tuple, list)):
+            res.installed_size = diffuser_tables.round_size_label(
+                float(installed_branch_size))
+            unverified.append('round duct on rect face')
+        else:
+            duct_w, duct_h     = installed_branch_size[0], installed_branch_size[1]
+            res.installed_size = diffuser_tables.rect_size_label(duct_w, duct_h)
+            # Either orientation counts. A grille and its duct can legitimately
+            # be modelled with width and height swapped relative to each other,
+            # and this check is about whether the duct is big enough, not about
+            # which way round it was drawn — a genuine orientation problem shows
+            # up in the separate diffuser/duct height clearance check instead.
+            direct  = _ge_in(duct_w, face_w) and _ge_in(duct_h, face_h)
+            flipped = _ge_in(duct_w, face_h) and _ge_in(duct_h, face_w)
+            branch_ok = direct or flipped
+            if branch_ok:
+                ref_w, ref_h = (face_w, face_h) if direct else (face_h, face_w)
+                if _clearly_bigger_in(duct_w, ref_w) or _clearly_bigger_in(duct_h, ref_h):
+                    res.oversized      = True
+                    res.oversized_note = '{} on {}'.format(
+                        res.installed_size, res.diffuser_size)
+
+    # Compose the verdict. A real failure always beats an unverifiable half:
+    # not being able to check the diffuser does not excuse an undersized duct.
+    if diffuser_ok is False and branch_ok is False:
+        res.status = 'RED'
+        res.reason = 'Diffuser + branch undersized'
+    elif diffuser_ok is False:
+        res.status = 'RED'
+        res.reason = 'Diffuser undersized for CFM'
+    elif branch_ok is False:
+        res.status = 'RED'
+        res.reason = 'Branch smaller than diffuser'
+    elif diffuser_ok is None or branch_ok is None:
+        res.status = 'GRAY'
+        res.reason = 'Cannot check: ' + '; '.join(unverified)
+    else:
+        res.status = 'GREEN'
+        res.reason = ''
+
+    log.info('branch_diffuser_check: terminal id=%s cat=%s class=%s cfm=%.0f '
+             'diffuser=%s installed=%s required=%s -> %s %s',
+             tid, res.category, res.sys_class, res.cfm, res.diffuser_size,
+             res.installed_size, res.required_size, res.status, res.reason)
+    return res
 
 
 # ── find AHU from any connected element ─────────────────────────────────────
@@ -608,6 +1005,48 @@ def compute_cfm(root_id, nodes, children, terminal_cfms):
             for cid in children.get(nid, []):
                 stack.append((cid, False))
     return cfm_map, equip_class_cfm
+
+
+def compute_downstream_terminal_ids(root_id, nodes, children, terminal_ids):
+    """Iterative post-order DFS. Returns {node_id: set of terminal int-ids
+    reachable at or below that node}.
+
+    This is what separates a branch from a main: a duct is a BRANCH when
+    exactly one terminal is reachable downstream of it (however many segments
+    and fittings that tap-off is made of), and a MAIN when two or more are.
+    Counting terminals rather than looking at duct size or position is what
+    makes the split hold on real geometry — a long multi-segment tap with
+    three elbows in it is still one branch, and a short stub that happens to
+    split two ways is still a main.
+
+    Iterative rather than recursive for the same reason compute_cfm() is:
+    real networks are deep enough to be worth not trusting to Python's
+    recursion limit.
+
+    A node's own id is included in its set when it is itself a terminal, so
+    the terminal at the end of a branch reports itself and the check stays
+    consistent all the way down the run.
+
+    terminal_ids: any container supporting `in`; a set is expected. Nodes not
+    reachable from root_id simply do not appear in the result — callers should
+    use .get(nid, ...) rather than indexing.
+    """
+    result = {}
+    stack  = [(root_id, False)]
+    while stack:
+        nid, done = stack.pop()
+        if done:
+            acc = set()
+            if nid in terminal_ids:
+                acc.add(nid)
+            for cid in children.get(nid, []):
+                acc.update(result.get(cid, ()))
+            result[nid] = acc
+        else:
+            stack.append((nid, True))
+            for cid in children.get(nid, []):
+                stack.append((cid, False))
+    return result
 
 
 # ── solid fill pattern ───────────────────────────────────────────────────────
