@@ -1400,7 +1400,7 @@ def main():
             ogs.SetProjectionLineColor(color)
             new_view.SetElementOverrides(eid, ogs)
 
-        # Color fittings and accessories by worst adjacent duct color
+        # Color fittings, accessories and diffusers by worst nearby duct color
         adj = {}
         for pid, cids in all_children.items():
             if pid not in adj:
@@ -1414,11 +1414,13 @@ def main():
         fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0}
 
         for nid, elem in all_nodes.items():
-            if not hvac_graph.is_fitting_or_accessory(elem):
+            if not (hvac_graph.is_fitting_or_accessory(elem)
+                    or hvac_graph.is_terminal(elem)):
                 continue
             # Worst color among the nearest ducts, walking through any
             # fittings/accessories in between (a takeoff next to an elbow has
-            # no duct as a direct neighbour). Every fitting gets one of the
+            # no duct as a direct neighbour). A diffuser therefore takes the
+            # color of the branch duct feeding it. Every one gets one of the
             # four colors; one with no duct reachable at all is a piece of
             # system that isn't properly connected, so it is RED.
             worst   = None
@@ -1619,7 +1621,7 @@ def main():
                     'velocity/friction check above — the design standard publishes no '
                     'duct or neck size breakpoints for slot diffusers to check against.')
     output.print_md('')
-    output.print_md('| Color | Ducts | Fittings & Accessories | Meaning |')
+    output.print_md('| Color | Ducts | Fittings, Accessories & Diffusers | Meaning |')
     output.print_md('| --- | --- | --- | --- |')
     output.print_md('| Green  | {} | {} | Main: within limit. Branch: diffuser and duct both correctly sized |'.format(
         counts.get('GREEN',  0), fitting_counts.get('GREEN',  0)))
