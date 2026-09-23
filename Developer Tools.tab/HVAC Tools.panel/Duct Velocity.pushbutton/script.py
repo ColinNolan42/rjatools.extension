@@ -85,10 +85,9 @@ from revit_helpers import eid_int
 GREEN  = Color(0,   200,  0)
 YELLOW = Color(255, 215,  0)
 RED    = Color(210,  40, 40)
-GRAY   = Color(160, 160, 160)
 PURPLE = Color(140,  40, 200)
 
-_COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY, 'PURPLE': PURPLE}
+_COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'PURPLE': PURPLE}
 
 
 # ── output table columns ───────────────────────────────────────────────────────
@@ -101,44 +100,49 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'GRAY': GRAY, 'PURPL
 #   view_w     column width in feet at the schedule view's 1:1 scale
 #              (= printed inches / 12)
 #   console_w  column width in monospace characters
-#   default_on starting checkbox state in the settings dialog
+#   default_on starting checkbox state in the settings dialog (selectable
+#              columns only - see _FIXED_COLUMN_KEYS)
 #
-# Defaults are the firm's chosen starting state, not a stored preference:
-# '#', Status, Size, CFM, Actual FPM/Max FPM, Actual Fric/Max Fric, and
-# Required Size start checked; everything else starts unchecked. Note that
-# '#' is also the number printed in the keynote circles placed in the view -
-# turning that column off hides the correlation in the table but does NOT
-# stop the circles being placed.
+# Some columns are always in the tables and have no checkbox; the rest are
+# optional. Defaults for the optional ones are the firm's chosen starting
+# state, not a stored preference.
 _COLUMN_DEFS = [
     # key          header                              view_w  console_w  default_on
     ('num',       '#',                                  0.050,    3,  True),
     ('status',    'Status',                             0.120,    7,  True),
-    ('reason',    'Reason',                             0.230,   32,  False),
-    ('role',      'Duct Role',                          0.150,   18,  False),
+    ('reason',    'Reason',                             0.230,   32,  True),
+    ('role',      'Duct Role',                          0.150,   18,  True),
     ('size',      'Size',                               0.100,    9,  True),
     ('required',  'Required Size',                      0.140,   14,  True),
-    ('oversized', 'OVERSIZED DUCTS',                    0.180,   20,  False),
-    ('cfm',       'CFM',                                0.080,    7,  True),
+    ('cfm',       'Total CFM through Duct',             0.200,   22,  True),
     ('fpm',       'Actual FPM / Max FPM',               0.220,   21,  True),
     ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  True),
     ('length',    'Length (ft)',                        0.090,   11,  False),
     ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  False),
 ]
 
+# Always shown, no checkbox. '#' is also the number printed in the keynote
+# circles placed in the view, so it stays in the table to keep that
+# correlation.
+_FIXED_COLUMN_KEYS = frozenset(
+    ['num', 'status', 'reason', 'role', 'size', 'required', 'fpm'])
 
-def _default_column_keys():
-    """Keys of the columns that start checked in the settings dialog."""
-    return set(key for key, _h, _vw, _cw, on in _COLUMN_DEFS if on)
+
+def _optional_columns():
+    """The _COLUMN_DEFS entries that get a checkbox, in definition order."""
+    return [c for c in _COLUMN_DEFS if c[0] not in _FIXED_COLUMN_KEYS]
 
 
 def _selected_columns(selected_keys):
-    """The _COLUMN_DEFS entries the user kept, in definition order.
+    """The _COLUMN_DEFS entries to render: every fixed column plus the
+    optional ones the user checked, in definition order.
 
     Both renderers call this so column ORDER is defined once too, not just
     the set - a dialog that returned an unordered set would otherwise let the
     two tables order themselves differently.
     """
-    return [c for c in _COLUMN_DEFS if c[0] in selected_keys]
+    return [c for c in _COLUMN_DEFS
+            if c[0] in _FIXED_COLUMN_KEYS or c[0] in selected_keys]
 
 
 # ── velocity settings dialog ───────────────────────────────────────────────────
@@ -331,15 +335,14 @@ def show_velocity_settings_dialog():
     _info_row('Purple (oversized):', 'a smaller standard size exists that stays within max FPM + friction')
 
     # ── Column picker ──────────────────────────────────────────────────────
-    # Drives BOTH output tables identically (see _COLUMN_DEFS). Laid out two
-    # across so fourteen checkboxes stay inside the existing dialog width
-    # instead of forcing a scrollbar.
+    # Drives BOTH output tables identically (see _COLUMN_DEFS). Only the
+    # optional columns appear here; the rest are always in the tables.
     col_sep = Separator()
     col_sep.Margin = Thickness(0, 12, 0, 8)
     outer.Children.Add(col_sep)
 
     col_hdr = TextBlock()
-    col_hdr.Text = 'Output table columns'
+    col_hdr.Text = 'Optional output table columns'
     col_hdr.FontWeight = FontWeights.Bold
     col_hdr.Foreground = SolidColorBrush(Colors.DimGray)
     col_hdr.Margin = Thickness(0, 0, 0, 4)
@@ -352,14 +355,15 @@ def show_velocity_settings_dialog():
         cd.Width = GridLength(CONTENT_W / float(_COL_PICKER_COLS))
         col_grid.ColumnDefinitions.Add(cd)
     # Ceiling division, written the Python 2 way (// on ints floors).
-    _col_rows = (len(_COLUMN_DEFS) + _COL_PICKER_COLS - 1) // _COL_PICKER_COLS
+    _optional = _optional_columns()
+    _col_rows = (len(_optional) + _COL_PICKER_COLS - 1) // _COL_PICKER_COLS
     for _ in range(_col_rows):
         rd = RowDefinition()
         rd.Height = GridLength(22)
         col_grid.RowDefinitions.Add(rd)
 
     col_boxes = {}   # column key -> CheckBox
-    for i, (key, header, _vw, _cw, default_on) in enumerate(_COLUMN_DEFS):
+    for i, (key, header, _vw, _cw, default_on) in enumerate(_optional):
         cb = CheckBox()
         cb_txt = TextBlock()
         cb_txt.Text = header
@@ -374,16 +378,6 @@ def show_velocity_settings_dialog():
         col_boxes[key] = cb
 
     outer.Children.Add(col_grid)
-
-    col_note = TextBlock()
-    col_note.Text = ('"#" is also the number shown in the keynote circles placed in the view. '
-                     'Unchecking it only removes the column from the tables — the circles are '
-                     'still placed and still numbered the same way.')
-    col_note.TextWrapping = TextWrapping.Wrap
-    col_note.Width = CONTENT_W
-    col_note.Foreground = SolidColorBrush(Colors.DimGray)
-    col_note.Margin = Thickness(0, 4, 0, 0)
-    outer.Children.Add(col_note)
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -416,10 +410,6 @@ def show_velocity_settings_dialog():
                 out[sys_class] = (max_fpm, max_fric)
             include_oa = bool(cb_oa.IsChecked)
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
-            if not selected_cols:
-                forms.alert('Select at least one output table column.',
-                            title='Invalid Input')
-                return
             result[0] = (out, gpct, include_oa, selected_cols)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
@@ -577,10 +567,9 @@ def _branch_duct_label(dr, terminal_elem, terminal_cfm, downstream_height_in=Non
     Returns (label, max_cap_cfm, reason, BranchDiffuserResult). max_cap_cfm is
     always 0.0 — a branch has no velocity capacity figure, and the callers
     that carry that slot only ever read the label out of it. Status can be
-    GREEN, RED or GRAY but never YELLOW or PURPLE: there is no tolerance band
-    on a size match, and a branch is never reported oversized as a status (the
-    auto-sizing diffuser family sets the branch size, so oversize is surfaced
-    as an informational column only).
+    GREEN, RED or GRAY (converted to RED by _label_duct) but never YELLOW or PURPLE: there is no tolerance band
+    on a size match, and a branch is never checked for oversize (the
+    auto-sizing diffuser family sets the branch size).
     """
     res = hvac_graph.branch_diffuser_check(
         terminal_elem, terminal_cfm, hvac_graph.duct_installed_size_in(dr.elem))
@@ -593,6 +582,28 @@ def _branch_duct_label(dr, terminal_elem, terminal_cfm, downstream_height_in=Non
 
 
 def _label_duct(dr, custom_limits, tol_pct, downstream_height_in, branch_ctx):
+    """Label one duct GREEN / YELLOW / RED / PURPLE — never GRAY.
+
+    The checks below use GRAY internally for "could not be judged" (no CFM,
+    no size, unreadable diffuser, no table). That is nearly always a system
+    that isn't set up or connected properly, so it is reported as RED with the
+    reason spelled out instead of being left uncolored or quietly passed.
+    """
+    label, cap, reason, branch_res = _label_duct_checked(
+        dr, custom_limits, tol_pct, downstream_height_in, branch_ctx)
+    if label == 'GRAY':
+        label = 'RED'
+        if not reason:
+            if dr.cfm <= 0:
+                reason = 'No airflow data'
+            elif dr.area_ft2 <= 0:
+                reason = 'No duct size data'
+            else:
+                reason = 'Cannot check'
+    return label, cap, reason, branch_res
+
+
+def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch_ctx):
     """Send one duct to whichever check applies to it.
 
     branch_ctx is None for a main, or (diffuser_category, terminal_elem,
@@ -602,6 +613,7 @@ def _label_duct(dr, custom_limits, tol_pct, downstream_height_in, branch_ctx):
     Returns (label, max_cap_cfm, reason, branch_result_or_None). The fourth
     element is None for anything judged the ductulator way, which is also how
     the output tables know to print real FPM/friction numbers rather than N/A.
+    May return GRAY; _label_duct() converts that.
     """
     if branch_ctx is None:
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
@@ -879,10 +891,8 @@ def _row_cells(label, dr, reason, role, branch_res,
         fpm_cell  = 'N/A'
         fric_cell = 'N/A'
         required  = branch_res.required_size
-        oversized = branch_res.oversized_note if branch_res.oversized else ''
     else:
         required  = _suggest_size(dr, custom_limits, tol_pct, label, downstream_height_in)
-        oversized = ''    # informational branch-only column, blank for mains
         if reason == 'Diffuser/Duct Clearance':
             fpm_cell  = 'N/A'
             fric_cell = 'N/A'
@@ -896,7 +906,6 @@ def _row_cells(label, dr, reason, role, branch_res,
         'role':      role,
         'size':      _duct_size_label(dr.elem),
         'required':  required,
-        'oversized': oversized,
         'cfm':       '{:.0f}'.format(dr.cfm),
         'fpm':       fpm_cell,
         'fric':      fric_cell,
@@ -939,7 +948,6 @@ _LEGEND_ROWS = [
     ('YELLOW', 'Main only: approaching limit'),
     ('RED',    'Main: exceeds limit.  Branch: diffuser or duct undersized.  '
                'Either: fails diffuser/duct height clearance (see Reason column)'),
-    ('GRAY',   'Not checked — no CFM data, or branch could not be matched to a diffuser table'),
 ]
 
 
@@ -1050,7 +1058,7 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                     # dict (the console table numbers the same ducts
                     # differently).
                     cell_text = str(ri + 1) if col[0] == 'num' else cells.get(col[0], '')
-                    # Blank cells are real now (Oversized is branch-only), and
+                    # Blank cells are real (e.g. no Reason on a passing row), and
                     # TextNote.Create rejects an empty string — leave the cell
                     # empty rather than write a placeholder into the drawing.
                     if not cell_text:
@@ -1075,7 +1083,7 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
 
         if frt_id is not None:
             for color_key, meaning in _LEGEND_ROWS:
-                color = _COLOR_MAP.get(color_key, GRAY)
+                color = _COLOR_MAP[color_key]
                 sw_y0 = y_cursor - SWATCH - (LEGEND_ROW_H - SWATCH) / 2.0
                 _legend_swatch(doc, sched_view, frt_id, ox + PAD, sw_y0, SWATCH, color, fill_id)
                 TextNote.Create(doc, sched_view.Id,
@@ -1258,7 +1266,6 @@ def main():
     duct_roles    = {}   # ElementId -> Duct Role display string
     kind_cache    = {}   # terminal int_id -> category  (many ducts share one terminal)
     role_counts   = {'Main': 0, 'Branch': 0}
-    unclassified  = []   # (duct_id, terminal_id) for branches with no readable geometry
 
     for eid in all_duct_results.keys():
         tset = downstream_terms.get(eid_int(eid), set())
@@ -1280,8 +1287,6 @@ def main():
         branch_ctx[eid] = (kind, term_elem, all_terminals.get(term_id, (0.0, '', ''))[0])
         duct_roles[eid] = _duct_role_label(True, kind)
         role_counts['Branch'] += 1
-        if kind is None:
-            unclassified.append((eid_int(eid), term_id))
 
     output.print_md('Duct roles: **{} main**, **{} branch** '
                     '(branch = exactly one terminal downstream).'.format(
@@ -1365,7 +1370,7 @@ def main():
             new_view.Name = base_name + ' (2)'
 
         # Color overrides — worst of velocity check and friction check
-        counts         = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'GRAY': 0, 'PURPLE': 0}
+        counts         = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0}
         clearance_count = 0
         # eid -> (label, green_cap_cfm, reason) for fittings + annotations + schedule
         duct_labels  = {}
@@ -1386,14 +1391,14 @@ def main():
             branch_results[eid] = branch_res
             if reason == 'Diffuser/Duct Clearance':
                 clearance_count += 1
-            color = _COLOR_MAP.get(label, GRAY)
+            counts[label] = counts.get(label, 0) + 1
+            color = _COLOR_MAP[label]
             ogs   = OverrideGraphicSettings()
             ogs.SetSurfaceForegroundPatternColor(color)
             if fill_id != ElementId.InvalidElementId:
                 ogs.SetSurfaceForegroundPatternId(fill_id)
             ogs.SetProjectionLineColor(color)
             new_view.SetElementOverrides(eid, ogs)
-            counts[label] = counts.get(label, 0) + 1
 
         # Color fittings and accessories by worst adjacent duct color
         adj = {}
@@ -1411,16 +1416,35 @@ def main():
         for nid, elem in all_nodes.items():
             if not hvac_graph.is_fitting_or_accessory(elem):
                 continue
-            worst = 'GRAY'
-            for neighbor_id in adj.get(nid, []):
-                nb_elem = all_nodes.get(neighbor_id)
-                if nb_elem is None or not hvac_graph.is_duct(nb_elem):
-                    continue
-                nb_label = duct_labels.get(nb_elem.Id, ('GRAY', 0.0, ''))[0]
-                if _PRIORITY.get(nb_label, 0) > _PRIORITY.get(worst, 0):
-                    worst = nb_label
-            if worst == 'GRAY':
-                continue  # no adjacent colored duct — leave Revit default
+            # Worst color among the nearest ducts, walking through any
+            # fittings/accessories in between (a takeoff next to an elbow has
+            # no duct as a direct neighbour). Every fitting gets one of the
+            # four colors; one with no duct reachable at all is a piece of
+            # system that isn't properly connected, so it is RED.
+            worst   = None
+            seen    = set([nid])
+            frontier = [nid]
+            while frontier:
+                nxt = []
+                for cur in frontier:
+                    for neighbor_id in adj.get(cur, []):
+                        if neighbor_id in seen:
+                            continue
+                        seen.add(neighbor_id)
+                        nb_elem = all_nodes.get(neighbor_id)
+                        if nb_elem is None:
+                            continue
+                        if hvac_graph.is_duct(nb_elem):
+                            nb_label = duct_labels.get(nb_elem.Id, ('RED', 0.0, ''))[0]
+                            if worst is None or _PRIORITY.get(nb_label, 0) > _PRIORITY.get(worst, 0):
+                                worst = nb_label
+                        elif hvac_graph.is_fitting_or_accessory(nb_elem):
+                            nxt.append(neighbor_id)
+                if worst is not None:
+                    break
+                frontier = nxt
+            if worst is None:
+                worst = 'RED'
             color = _COLOR_MAP[worst]
             ogs   = OverrideGraphicSettings()
             ogs.SetSurfaceForegroundPatternColor(color)
@@ -1589,8 +1613,7 @@ def main():
                     'diffuser\'s own neck/face is big enough for its own CFM, and whether the '
                     'branch duct is at least as big as the diffuser connects with. Either one '
                     'failing is red; there is no yellow band on a size match. Oversize is '
-                    'reported in the optional "OVERSIZED DUCTS" column only and never '
-                    'changes the status.')
+                    'not checked on branches.')
     output.print_md('')
     output.print_md('Branches feeding a **slot diffuser** fall back to the main '
                     'velocity/friction check above — the design standard publishes no '
@@ -1606,23 +1629,9 @@ def main():
         counts.get('YELLOW', 0), fitting_counts.get('YELLOW', 0)))
     output.print_md('| Red    | {} | {} | Main: exceeds limit. Branch: diffuser or duct undersized |'.format(
         counts.get('RED',    0), fitting_counts.get('RED',    0)))
-    output.print_md('| Gray   | {} | — | Not checked: no CFM data, or no diffuser table match |'.format(
-        counts.get('GRAY',   0)))
     output.print_md('')
     output.print_md('**Diffuser/duct height clearance issues (flagged Red): {}**'.format(
         clearance_count))
-
-    # Branches that could not be matched to a diffuser table are gray, and gray
-    # ducts are not in the flagged table below — so they would otherwise vanish
-    # silently. Report them explicitly with their terminal, so the model can be
-    # checked rather than the branch quietly assumed fine.
-    if unclassified:
-        output.print_md('')
-        output.print_md('**{} branch duct(s) could not be classified — the air terminal '
-                        'has no readable connector geometry, so no diffuser table could be '
-                        'chosen. Shown gray, NOT passed:**'.format(len(unclassified)))
-        for duct_id, term_id in unclassified:
-            output.print_md('- duct id {} → terminal id {}'.format(duct_id, term_id))
 
     # Flagged duct list — RED first, then YELLOW, then PURPLE.
     # RED/YELLOW sorted by velocity descending (worst overrun first);

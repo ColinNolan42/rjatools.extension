@@ -546,8 +546,6 @@ class BranchDiffuserResult(object):
       installed_size what the branch duct actually is
       required_size  what the branch duct should be — the larger of the size
                      the CFM demands and the size the diffuser connects with
-      oversized      informational only, never affects status (see the
-                     oversize note in branch_diffuser_check)
     """
 
     def __init__(self):
@@ -560,8 +558,6 @@ class BranchDiffuserResult(object):
         self.installed_size   = '-'
         self.required_size    = '-'
         self.diffuser_max_cfm = None    # published capacity of the installed diffuser
-        self.oversized        = False
-        self.oversized_note   = ''
 
 
 def _ge_in(a, b):
@@ -569,13 +565,6 @@ def _ge_in(a, b):
     are nominal-snapped before they get here, so the tolerance only has to
     absorb representation error, never a real half-size difference."""
     return float(a) >= float(b) - diffuser_tables.SIZE_TOL_IN
-
-
-def _clearly_bigger_in(a, b):
-    """True if a is at least one full nominal size (2") above b. The threshold
-    is a whole step precisely so the informational oversize flag can never
-    fire on rounding."""
-    return float(a) >= float(b) + NOMINAL_STEP_IN - diffuser_tables.SIZE_TOL_IN
 
 
 def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
@@ -599,11 +588,9 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
     size) is GRAY with a reason naming what could not be read — except where
     the other part outright fails, in which case the real failure wins.
 
-    Oversize is never a failure. A branch fed by the auto-sizing diffuser
-    family is routed back to whatever size the diffuser computed, so a
-    genuinely oversized branch should not occur; the flag exists to surface it
-    for review if it does, through an optional column, and deliberately does
-    not touch status.
+    Oversize is never checked or reported on a branch: one fed by the
+    auto-sizing diffuser family is routed back to whatever size the diffuser
+    computed, so it should not occur.
 
     Args:
         terminal_elem:  the OST_DuctTerminal element at the end of the branch.
@@ -683,10 +670,6 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
             duct_dia          = float(installed_branch_size)
             res.installed_size = diffuser_tables.round_size_label(duct_dia)
             branch_ok          = _ge_in(duct_dia, neck_dia)
-            if branch_ok and _clearly_bigger_in(duct_dia, neck_dia):
-                res.oversized      = True
-                res.oversized_note = '{} on {}'.format(
-                    res.installed_size, res.diffuser_size)
 
     else:   # sidewall
         face_w, face_h = geom[1], geom[2]
@@ -732,12 +715,6 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
             direct  = _ge_in(duct_w, face_w) and _ge_in(duct_h, face_h)
             flipped = _ge_in(duct_w, face_h) and _ge_in(duct_h, face_w)
             branch_ok = direct or flipped
-            if branch_ok:
-                ref_w, ref_h = (face_w, face_h) if direct else (face_h, face_w)
-                if _clearly_bigger_in(duct_w, ref_w) or _clearly_bigger_in(duct_h, ref_h):
-                    res.oversized      = True
-                    res.oversized_note = '{} on {}'.format(
-                        res.installed_size, res.diffuser_size)
 
     # Compose the verdict. A real failure always beats an unverifiable half:
     # not being able to check the diffuser does not excuse an undersized duct.
