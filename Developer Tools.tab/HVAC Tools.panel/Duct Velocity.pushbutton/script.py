@@ -86,8 +86,9 @@ GREEN  = Color(0,   200,  0)
 YELLOW = Color(255, 215,  0)
 RED    = Color(210,  40, 40)
 PURPLE = Color(140,  40, 200)
+GRAY   = Color(160, 160, 160)
 
-_COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'PURPLE': PURPLE}
+_COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'PURPLE': PURPLE, 'GRAY': GRAY}
 
 
 # ── output table columns ───────────────────────────────────────────────────────
@@ -585,24 +586,23 @@ def _branch_duct_label(dr, terminal_elem, terminal_cfm, downstream_height_in=Non
 
 
 def _label_duct(dr, custom_limits, tol_pct, downstream_height_in, branch_ctx):
-    """Label one duct GREEN / YELLOW / RED / PURPLE — never GRAY.
+    """Label one duct GREEN / YELLOW / RED / PURPLE, or GRAY.
 
-    The checks below use GRAY internally for "could not be judged" (no CFM,
-    no size, unreadable diffuser, no table). That is nearly always a system
-    that isn't set up or connected properly, so it is reported as RED with the
-    reason spelled out instead of being left uncolored or quietly passed.
+    GRAY means the duct could not be judged (no airflow reaching it, no size,
+    unreadable diffuser, no table). That is nearly always a broken or
+    disconnected system, so it is shown gray in the view and explained in the
+    legend rather than passed or failed. Gray ducts are not in the flagged
+    table.
     """
     label, cap, reason, branch_res = _label_duct_checked(
         dr, custom_limits, tol_pct, downstream_height_in, branch_ctx)
-    if label == 'GRAY':
-        label = 'RED'
-        if not reason:
-            if dr.cfm <= 0:
-                reason = 'No airflow data'
-            elif dr.area_ft2 <= 0:
-                reason = 'No duct size data'
-            else:
-                reason = 'Cannot check'
+    if label == 'GRAY' and not reason:
+        if dr.cfm <= 0:
+            reason = 'No airflow data'
+        elif dr.area_ft2 <= 0:
+            reason = 'No duct size data'
+        else:
+            reason = 'Cannot check'
     return label, cap, reason, branch_res
 
 
@@ -616,7 +616,7 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
     Returns (label, max_cap_cfm, reason, branch_result_or_None). The fourth
     element is None for anything judged the ductulator way, which is also how
     the output tables know to print real FPM/friction numbers rather than N/A.
-    May return GRAY; _label_duct() converts that.
+    May return GRAY.
     """
     if branch_ctx is None:
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
@@ -951,6 +951,7 @@ _LEGEND_ROWS = [
     ('YELLOW', 'Main only: approaching limit'),
     ('RED',    'Main: exceeds limit.  Branch: diffuser or duct undersized.  '
                'Either: fails diffuser/duct height clearance (see Reason column)'),
+    ('GRAY',   'No airflow data — no CFM reaches this element; broken or disconnected system'),
 ]
 
 
@@ -1373,7 +1374,7 @@ def main():
             new_view.Name = base_name + ' (2)'
 
         # Color overrides — worst of velocity check and friction check
-        counts         = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0}
+        counts         = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0, 'GRAY': 0}
         clearance_count = 0
         # eid -> (label, green_cap_cfm, reason) for fittings + annotations + schedule
         duct_labels  = {}
@@ -1414,7 +1415,7 @@ def main():
                     adj[cid] = []
                 adj[cid].append(pid)
 
-        fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0}
+        fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0, 'GRAY': 0}
 
         for nid, elem in all_nodes.items():
             if not (hvac_graph.is_fitting_or_accessory(elem)
@@ -1423,9 +1424,9 @@ def main():
             # Worst color among the nearest ducts, walking through any
             # fittings/accessories in between (a takeoff next to an elbow has
             # no duct as a direct neighbour). A diffuser therefore takes the
-            # color of the branch duct feeding it. Every one gets one of the
-            # four colors; one with no duct reachable at all is a piece of
-            # system that isn't properly connected, so it is RED.
+            # color of the branch duct feeding it. One with no duct reachable
+            # at all is a piece of system that isn't properly connected, so it
+            # is GRAY.
             worst   = None
             seen    = set([nid])
             frontier = [nid]
@@ -1440,7 +1441,7 @@ def main():
                         if nb_elem is None:
                             continue
                         if hvac_graph.is_duct(nb_elem):
-                            nb_label = duct_labels.get(nb_elem.Id, ('RED', 0.0, ''))[0]
+                            nb_label = duct_labels.get(nb_elem.Id, ('GRAY', 0.0, ''))[0]
                             if worst is None or _PRIORITY.get(nb_label, 0) > _PRIORITY.get(worst, 0):
                                 worst = nb_label
                         elif hvac_graph.is_fitting_or_accessory(nb_elem):
@@ -1449,7 +1450,7 @@ def main():
                     break
                 frontier = nxt
             if worst is None:
-                worst = 'RED'
+                worst = 'GRAY'
             color = _COLOR_MAP[worst]
             ogs   = OverrideGraphicSettings()
             ogs.SetSurfaceForegroundPatternColor(color)
@@ -1634,6 +1635,8 @@ def main():
         counts.get('YELLOW', 0), fitting_counts.get('YELLOW', 0)))
     output.print_md('| Red    | {} | {} | Main: exceeds limit. Branch: diffuser or duct undersized |'.format(
         counts.get('RED',    0), fitting_counts.get('RED',    0)))
+    output.print_md('| Gray   | {} | {} | No airflow data: broken or disconnected system (not in the flagged table) |'.format(
+        counts.get('GRAY',   0), fitting_counts.get('GRAY',   0)))
     output.print_md('')
     output.print_md('**Diffuser/duct height clearance issues (flagged Red): {}**'.format(
         clearance_count))
