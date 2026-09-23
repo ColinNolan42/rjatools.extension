@@ -114,9 +114,9 @@ _COLUMN_DEFS = [
     ('role',      'Duct Role',                          0.150,   18,  True),
     ('size',      'Size',                               0.100,    9,  True),
     ('required',  'Required Size',                      0.140,   14,  True),
-    ('cfm',       'Total CFM through Duct',             0.200,   22,  True),
+    ('cfm',       'Total CFM through Duct',             0.200,   22,  False),
     ('fpm',       'Actual FPM / Max FPM',               0.220,   21,  True),
-    ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  True),
+    ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  False),
     ('length',    'Length (ft)',                        0.090,   11,  False),
     ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  False),
 ]
@@ -206,11 +206,14 @@ def show_velocity_settings_dialog():
     # ── system-level (traces OA too) ─────────────────────────────────────
     cb_oa = CheckBox()
     cb_oa_text = TextBlock()
-    cb_oa_text.Text = ('Outside Air — trace OA intake ductwork too (system-level). '
-                        'Unchecked = equipment-level: Supply + Return Air only, never goes upstream.')
+    cb_oa_text.Text = ('Outside Air / system-level (AHU/DOAS) — PENDING, under development. '
+                        'Not available yet: the tool runs equipment-level only '
+                        '(Supply + Return Air, never goes upstream).')
     cb_oa_text.TextWrapping = TextWrapping.Wrap
     cb_oa_text.Width = CONTENT_W - 20
     cb_oa.Content = cb_oa_text
+    cb_oa.IsChecked = False
+    cb_oa.IsEnabled = False
     cb_oa.Margin  = Thickness(2, 0, 0, 2)
     outer.Children.Add(cb_oa)
 
@@ -295,45 +298,6 @@ def show_velocity_settings_dialog():
     gpct_suffix.Margin = Thickness(0, 2, 0, 0)
     outer.Children.Add(gpct_suffix)
 
-    # Assumptions / formula reference block
-    sep = Separator()
-    sep.Margin = Thickness(0, 12, 0, 8)
-    outer.Children.Add(sep)
-
-    _INFO_LBL_W = 150
-
-    def _info_row(label_text, value_text):
-        row = StackPanel()
-        row.Orientation = Orientation.Horizontal
-        row.Margin = Thickness(0, 1, 0, 1)
-        lbl = TextBlock()
-        lbl.Text = label_text
-        lbl.Width = _INFO_LBL_W
-        lbl.FontWeight = FontWeights.Bold
-        lbl.Foreground = SolidColorBrush(Colors.DimGray)
-        val = TextBlock()
-        val.Text = value_text
-        val.TextWrapping = TextWrapping.Wrap
-        val.Width = CONTENT_W - _INFO_LBL_W
-        val.Foreground = SolidColorBrush(Colors.DimGray)
-        row.Children.Add(lbl)
-        row.Children.Add(val)
-        outer.Children.Add(row)
-
-    hdr = TextBlock()
-    hdr.Text = 'Calculation Basis'
-    hdr.FontWeight = FontWeights.Bold
-    hdr.Foreground = SolidColorBrush(Colors.DimGray)
-    hdr.Margin = Thickness(0, 0, 0, 4)
-    outer.Children.Add(hdr)
-
-    _info_row('Applies to:',      'main ducts only — branches are sized against the diffuser tables')
-    _info_row('Pressure drop:',   'Darcy-Weisbach')
-    _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
-    _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
-    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
-    _info_row('Purple (oversized):', 'a smaller standard size exists that stays within max FPM + friction')
-
     # ── Column picker ──────────────────────────────────────────────────────
     # Drives BOTH output tables identically (see _COLUMN_DEFS). Only the
     # optional columns appear here; the rest are always in the tables.
@@ -378,6 +342,45 @@ def show_velocity_settings_dialog():
         col_boxes[key] = cb
 
     outer.Children.Add(col_grid)
+
+    # Assumptions / formula reference block
+    sep = Separator()
+    sep.Margin = Thickness(0, 12, 0, 8)
+    outer.Children.Add(sep)
+
+    _INFO_LBL_W = 150
+
+    def _info_row(label_text, value_text):
+        row = StackPanel()
+        row.Orientation = Orientation.Horizontal
+        row.Margin = Thickness(0, 1, 0, 1)
+        lbl = TextBlock()
+        lbl.Text = label_text
+        lbl.Width = _INFO_LBL_W
+        lbl.FontWeight = FontWeights.Bold
+        lbl.Foreground = SolidColorBrush(Colors.DimGray)
+        val = TextBlock()
+        val.Text = value_text
+        val.TextWrapping = TextWrapping.Wrap
+        val.Width = CONTENT_W - _INFO_LBL_W
+        val.Foreground = SolidColorBrush(Colors.DimGray)
+        row.Children.Add(lbl)
+        row.Children.Add(val)
+        outer.Children.Add(row)
+
+    hdr = TextBlock()
+    hdr.Text = 'Calculation Basis'
+    hdr.FontWeight = FontWeights.Bold
+    hdr.Foreground = SolidColorBrush(Colors.DimGray)
+    hdr.Margin = Thickness(0, 0, 0, 4)
+    outer.Children.Add(hdr)
+
+    _info_row('Applies to:',      'main ducts only — branches are sized against the diffuser tables')
+    _info_row('Pressure drop:',   'Darcy-Weisbach')
+    _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
+    _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
+    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
+    _info_row('Purple (oversized):', 'a smaller standard size exists that stays within max FPM + friction')
 
     # OK / Cancel
     btn_panel = StackPanel()

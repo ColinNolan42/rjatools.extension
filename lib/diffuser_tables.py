@@ -117,6 +117,7 @@ SIDEWALL_SUPPLY_TABLE = [
     (22, 22, 2080, 32),
     (24, 24, 2485, 33),
     # --- 2:1 type ---
+    (10,  6,  150, 23),
     (12,  6,  270, 24),
     (18,  8,  585, 27),
     (18, 10,  735, 28),
@@ -147,6 +148,7 @@ SIDEWALL_RETURN_EXHAUST_TABLE = [
     (22, 22, 1570, 17),
     (24, 24, 1875, 18),
     # --- 2:1 type ---
+    (10,  6,  170, 10),
     (12,  6,  205, 10),
     (18, 10,  555, 12),
     (22, 10,  685, 13),
@@ -377,8 +379,8 @@ def _self_test():
     # Row counts as transcribed from the source doc.
     assert len(CEILING_SUPPLY_NECK_TABLE) == 6, 'ceiling supply row count'
     assert len(CEILING_RETURN_EXHAUST_NECK_TABLE) == 6, 'ceiling ret/exh row count'
-    assert len(SIDEWALL_SUPPLY_TABLE) == 24, 'sidewall supply row count'
-    assert len(SIDEWALL_RETURN_EXHAUST_TABLE) == 21, 'sidewall ret/exh row count'
+    assert len(SIDEWALL_SUPPLY_TABLE) == 25, 'sidewall supply row count'
+    assert len(SIDEWALL_RETURN_EXHAUST_TABLE) == 22, 'sidewall ret/exh row count'
 
     # Round lookups
     assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 10) == 375
