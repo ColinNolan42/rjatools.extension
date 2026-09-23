@@ -887,8 +887,8 @@ def _row_cells(label, dr, reason, role, branch_res,
             fpm_cell  = 'N/A'
             fric_cell = 'N/A'
         else:
-            fpm_cell  = '{:.0f}/{:.0f}'.format(dr.fpm, max_fpm)
-            fric_cell = '{:.3f}/{:.3f}'.format(dr.friction_per_100ft, max_fric)
+            fpm_cell  = '{:.0f}/{:.0f}'.format(float(dr.fpm), float(max_fpm))
+            fric_cell = '{:.3f}/{:.3f}'.format(float(dr.friction_per_100ft), float(max_fric))
 
     return {
         'status':    label,

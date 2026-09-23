@@ -191,14 +191,17 @@ def round_size_label(diameter_in):
     """Display string for a round neck / round duct: '10"'."""
     if diameter_in is None:
         return '-'
-    return '{:.0f}"'.format(diameter_in)
+    # float() is required: IronPython 2.7 raises ValueError for '{:.0f}' on an
+    # int, and the table values are ints. CPython accepts it, so a plain
+    # CPython test cannot catch this.
+    return '{:.0f}"'.format(float(diameter_in))
 
 
 def rect_size_label(w_in, h_in):
     """Display string for a rectangular face / rectangular duct: '18"x12"'."""
     if w_in is None or h_in is None:
         return '-'
-    return '{:.0f}"x{:.0f}"'.format(w_in, h_in)
+    return '{:.0f}"x{:.0f}"'.format(float(w_in), float(h_in))
 
 
 def row_size_label(row):
