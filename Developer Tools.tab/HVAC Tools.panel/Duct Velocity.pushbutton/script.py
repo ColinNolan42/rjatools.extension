@@ -623,6 +623,45 @@ def show_velocity_settings_dialog():
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
+# Character budget for one line of the System Summary block. The block is drawn
+# at the flagged-duct table's width, and TextNote.Create with no width
+# constraint does NOT wrap, so a longer line runs off the right edge of the chart
+# instead of folding. Sized just under the shortest lines already known to fit.
+SUMMARY_WRAP_CHARS = 92
+
+
+def _wrap_summary_lines(lines, width=SUMMARY_WRAP_CHARS):
+    """Fold over-long summary lines at word boundaries, keeping their indent.
+
+    Colin, 2026-09-24: the METHOD and NOT INCLUDED lines "are writing too far out
+    and need to be condensed (entered another line) down so it fit within the
+    chart."
+
+    A continuation gets its parent's indent plus two, so a folded sentence still
+    reads as one item rather than as a new entry. Applied to the whole list
+    rather than just the two long lines, so this cannot silently regress the next
+    time someone adds a wordy line.
+    """
+    out = []
+    for line in lines:
+        if len(line) <= width:
+            out.append(line)
+            continue
+        indent = len(line) - len(line.lstrip(' '))
+        cont   = ' ' * (indent + 2)
+        cur    = ' ' * indent
+        for word in line.split():
+            add = word if not cur.strip() else ' ' + word
+            if cur.strip() and len(cur) + len(add) > width:
+                out.append(cur)
+                cur = cont + word
+            else:
+                cur = cur + add
+        if cur.strip():
+            out.append(cur)
+    return out
+
+
 def _root_class_airflow(root_id, all_children, all_terminals):
     """Total CFM and terminal count per system class, downstream of ONE root.
 
@@ -1872,21 +1911,21 @@ def main():
 
         summary_lines.append('')
         summary_lines.append(
-            '  METHOD: duct friction by Darcy-Weisbach + Altshul-Tsal (eps 0.0003 ft '
-            'galvanized, 0.012 ft flex); fittings by C x Pv with C from RJA '
-            'SP_LOSS_WORKSHEET (1985 ASHRAE fitting numbers); take-offs dovetail, '
-            'rect elbows assumed vaned; components counted from the model and '
-            'valued in the dialog.')
+            '  METHOD: Darcy-Weisbach + Altshul-Tsal, eps 0.0003 galvanized / '
+            '0.012 flex. Fittings C x Pv per RJA SP_LOSS_WORKSHEET (1985 ASHRAE). '
+            'Dovetail take-offs, rect elbows vaned.')
         summary_lines.append(
-            '  NOT INCLUDED, BY DEFINITION: filter, coil and cabinet losses. Those '
-            'are inside the unit and already deducted from the published ESP, so '
-            'counting them here would double them. Fire and backdraft dampers are '
-            'not priced either.')
+            '  NOT INCLUDED: filter, coil and cabinet, already in the published '
+            'ESP. Fire and backdraft dampers not priced.')
+
+    # Folded once here so the drafting view and the console render identical
+    # text. print_code, not print_md: markdown collapses leading whitespace, and
+    # the per-equipment blocks are indented to show what belongs to which unit.
+    summary_lines = _wrap_summary_lines(summary_lines)
 
     output.print_md('---')
     output.print_md('### System Summary')
-    for line in summary_lines[1:]:
-        output.print_md(line.strip())
+    output.print_code('\n'.join(summary_lines[1:]))
 
     # 5. Find source sheet number
     source_sheet_num = 'NoSheet'
