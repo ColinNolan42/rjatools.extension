@@ -209,7 +209,7 @@ def show_velocity_settings_dialog():
     fric_boxes = {}   # row_idx -> TextBox (friction)
     gpct_box   = [None]
 
-    WIN_WIDTH   = 520
+    WIN_WIDTH   = 720
     CONTENT_W   = WIN_WIDTH - 28 - 20   # win width minus outer margin minus a little slack
 
     win = Window()
@@ -261,32 +261,32 @@ def show_velocity_settings_dialog():
     oa_sep.Margin = Thickness(0, 8, 0, 10)
     outer.Children.Add(oa_sep)
 
-    # Max velocity / friction and the yellow tolerance live in a collapsed
-    # Expander. Colin, 2026-09-24: "make the max velocity a drop down as well as
-    # its getting fairly large and coming of my screen." Five system rows plus a
-    # header plus the tolerance note is most of the dialog's height, and on a
-    # normal run the firm defaults are what you want anyway.
-    inputs_exp = Expander()
-    inputs_exp.Header = 'Max velocity and friction per system'
-    inputs_exp.IsExpanded = False
-    inputs_exp.Margin = Thickness(2, 0, 0, 6)
-    inputs_panel = StackPanel()
-    inputs_panel.Margin = Thickness(4, 4, 0, 2)
+    # An overarching bold title rather than a collapsed Expander. Colin tried the
+    # Expander and rejected it 2026-09-24: "i actually dont like the max velocity
+    # drop per system bar i would still like an over arching title." The window
+    # went from 520 to 720 wide and the rows got tighter instead, so the whole
+    # dialog fits without hiding anything.
+    inputs_hdr = TextBlock()
+    inputs_hdr.Text = 'Max velocity and friction per system'
+    inputs_hdr.FontWeight = FontWeights.Bold
+    inputs_hdr.Foreground = SolidColorBrush(Colors.DimGray)
+    inputs_hdr.Margin = Thickness(0, 0, 0, 4)
+    outer.Children.Add(inputs_hdr)
 
     intro = Label()
     intro.Content = 'Max velocity (FPM) and pressure drop (in. wc/100 ft) per system:'
     intro.Margin  = Thickness(0, 0, 0, 8)
-    inputs_panel.Children.Add(intro)
+    outer.Children.Add(intro)
 
     # 3-column grid: system | velocity | friction
     grid = Grid()
-    for w in (150, 130, 150):
+    for w in (200, 180, 220):
         cd = ColumnDefinition()
         cd.Width = GridLength(w)
         grid.ColumnDefinitions.Add(cd)
     for _ in range(len(ROWS) + 1):
         rd = RowDefinition()
-        rd.Height = GridLength(32)
+        rd.Height = GridLength(26)
         grid.RowDefinitions.Add(rd)
 
     def _lbl(text, col, row):
@@ -316,7 +316,7 @@ def show_velocity_settings_dialog():
             grid.Children.Add(tb)
             store[i] = tb
 
-    inputs_panel.Children.Add(grid)
+    outer.Children.Add(grid)
 
     # Green threshold row
     gpct_panel = StackPanel()
@@ -340,7 +340,7 @@ def show_velocity_settings_dialog():
     gpct_suffix_inline.Content = '% above max before red'
     gpct_suffix_inline.VerticalAlignment = VerticalAlignment.Center
     gpct_panel.Children.Add(gpct_suffix_inline)
-    inputs_panel.Children.Add(gpct_panel)
+    outer.Children.Add(gpct_panel)
 
     gpct_suffix = TextBlock()
     gpct_suffix.Text = 'At or under max = green, within tolerance = yellow, past it = red.'
@@ -348,10 +348,8 @@ def show_velocity_settings_dialog():
     gpct_suffix.Width = CONTENT_W
     gpct_suffix.Foreground = SolidColorBrush(Colors.DimGray)
     gpct_suffix.Margin = Thickness(0, 2, 0, 0)
-    inputs_panel.Children.Add(gpct_suffix)
+    outer.Children.Add(gpct_suffix)
 
-    inputs_exp.Content = inputs_panel
-    outer.Children.Add(inputs_exp)
 
     # ── Column picker ──────────────────────────────────────────────────────
     # Drives BOTH output tables identically (see _COLUMN_DEFS). Only the
