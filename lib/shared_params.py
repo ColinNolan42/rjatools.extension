@@ -14,6 +14,49 @@ PARAM_IS_GAS_FIXTURE    = "IS_GAS_FIXTURE"      # Yes/No. Identifies load-bearin
 PARAM_FIXTURE_NAME      = "FIXTURE_NAME"        # Text. Equipment tag for one-line diagram labels.
 
 # =============================================================================
+# DOMESTIC WATER FIXTURE SHARED PARAMETERS
+# Group "Water Fixture Data" in MEP_SharedParams.txt. Names are UPPERCASE to
+# match the gas group. Carried by RJA - Water Fixture (IPC Auto-Sizing).
+# FIXTURE_NAME above is reused, it is not duplicated here.
+# =============================================================================
+
+PARAM_IS_WATER_FIXTURE   = "IS_WATER_FIXTURE"    # Yes/No. Marks a load-bearing terminal.
+PARAM_CW_FIXTURE_UNITS   = "CW_FIXTURE_UNITS"    # Number, instance. Cold WSFU.
+PARAM_HW_FIXTURE_UNITS   = "HW_FIXTURE_UNITS"    # Number, instance. Hot WSFU.
+PARAM_TOTAL_FIXTURE_UNITS = "TOTAL_FIXTURE_UNITS"  # Number, instance. Total WSFU.
+PARAM_HWR_ACTIVE         = "HWR_ACTIVE"          # Yes/No, instance, read-only formula.
+
+# Family-only parameters (NOT shared). Read defensively - a third-party or
+# one-off fixture family may not carry them, which is not an error.
+PARAM_HAS_CW             = "Has CW"              # Type Yes/No. False => ignore the CW connector.
+PARAM_HAS_HW             = "Has HW"              # Type Yes/No. False => ignore the HW connector.
+PARAM_IS_PUBLIC_OCCUPANCY = "Is Public Occupancy"  # Instance Yes/No. Swaps the WSFU set.
+PARAM_CW_SUPPLY_SIZE     = "CW_Supply_Size"      # Type Length. Min fixture supply.
+PARAM_HW_SUPPLY_SIZE     = "HW_Supply_Size"      # Type Length. Min fixture supply.
+
+# Equipment / device parameters approved 2026-09-23 but NOT yet on any family.
+# Read defensively; absent means "not applicable", never an error.
+PARAM_LOAD_MODE          = "Load_Mode"           # "WSFU" or "GPM".
+PARAM_FIXED_GPM          = "Fixed_GPM"           # Number. Used when Load_Mode = GPM.
+PARAM_DEVICE_PRESSURE_DROP = "Device_Pressure_Drop_PSI"  # Number. Pressure-loss stage only.
+
+# =============================================================================
+# PIPING SYSTEM CLASSIFICATION (Connector.PipeSystemType)
+# Verified live in Revit 2024 against a real model. These are Revit enum names,
+# NOT project system-type names, so they are safe to compare against in code.
+#
+# WARNING: a hot water RECIRCULATION connector also reports DomesticHotWater.
+# The enum cannot separate supply from return. To tell them apart, compare the
+# owning PipingSystemType ELEMENT (project types "Domestic Hot Water" and
+# "Domestic Hot Water Recirc" both classify as DomesticHotWater). Never
+# hardcode a project system-type name - present the names found in the model
+# and let the user map them.
+# =============================================================================
+
+SYSTEM_DOMESTIC_COLD_WATER = "DomesticColdWater"
+SYSTEM_DOMESTIC_HOT_WATER  = "DomesticHotWater"
+
+# =============================================================================
 # REVIT BUILT-IN PARAMETER REFERENCES
 # Used by revit_helpers.py to read pipe geometry from the Revit model.
 # These reference Autodesk.Revit.DB.BuiltInParameter enum values.

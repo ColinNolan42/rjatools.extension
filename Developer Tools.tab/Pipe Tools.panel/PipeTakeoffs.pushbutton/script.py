@@ -10,6 +10,17 @@ Script builds: tee, 6in rise, elbow, horizontal run, elbow, drop to AFF,
 Assembly: 4 pipe segments + 1 tee + 3 elbows
 All branch pipe properties copied from the clicked main pipe.
 
+Fixture mode (Connect to fixture connectors): Click 1 picks the CW or HW main,
+Click 2 picks a water fixture instead of a point. The branch is built to the
+fixture's own connector and connected to it.
+  - CW main: tee off the main straight across from the fixture's CW connector.
+  - HW main, fixture HWR Active = No: same top takeoff into the HW In connector.
+  - HW main, fixture HWR Active = Yes: NOT BUILT YET (the main shall run through
+    the fixture, HW In / HW Out, with no tee). The tool stops with a message.
+Sizes come from the fixture connector and the sizer resizes everything later,
+so no pipe size, AFF or stub direction is asked for in this mode.
+The original point-pick mode is unchanged and stays available in the dialog.
+
 On activation a fixture picker dialog appears. ESC or re-click to deactivate.
 """
 
@@ -36,7 +47,10 @@ from Autodesk.Revit.DB import (
     BuiltInParameter,
     BuiltInCategory,
     FilteredElementCollector,
-    Level
+    Level,
+    FamilyInstance,
+    Domain,
+    FlowDirectionType
 )
 from Autodesk.Revit.DB.Plumbing import Pipe
 from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
@@ -65,6 +79,8 @@ _lib = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..'
 if _lib not in sys.path:
     sys.path.insert(0, _lib)
 
+import revit_helpers
+import shared_params
 from revit_helpers import eid_int
 
 # ============================================================================
@@ -76,10 +92,17 @@ ENVVAR_CUSTOM_SIZE = "PIPE_TAKEOFFS_CUSTOM_SIZE_RAW"
 ENVVAR_CUSTOM_AFF  = "PIPE_TAKEOFFS_CUSTOM_AFF_RAW"
 ENVVAR_LEVEL       = "PIPE_TAKEOFFS_LEVEL_ID"
 ENVVAR_STUB_DIR    = "PIPE_TAKEOFFS_STUB_DIR"   # "IN" or "OUT"
+ENVVAR_MODE        = "PIPE_TAKEOFFS_MODE"       # MODE_POINT or MODE_FIXTURE
+
+MODE_POINT   = "POINT"     # original: pick main, pick destination point, stub at AFF
+MODE_FIXTURE = "FIXTURE"   # pick main, pick water fixture, connect to its connectors
+DEFAULT_MODE = MODE_POINT
 
 RISE_HEIGHT       = 0.5    # 6 inches in feet
 STUB_LENGTH       = 0.5    # 6 inches in feet
 DIAGONAL_WARN_DEG = 5.0
+MIN_END_CLEARANCE = 0.25   # ft, tee/cut point must be this far from a main pipe end
+MIN_DROP_FIXTURE  = 0.25   # ft, minimum vertical drop from the rise to the fixture connector
 
 DEFAULT_FIXTURE    = "Lavatory"
 DEFAULT_CUSTOM_SIZE = "1/2"
@@ -264,7 +287,8 @@ class FixturePickerDialog(Window):
     CLR_INACTIVE  = Color.FromRgb(160, 60,  60)
 
     def __init__(self, saved_fixture, saved_custom_size, saved_custom_aff,
-                 levels, saved_level_idx, saved_stub_dir):
+                 levels, saved_level_idx, saved_stub_dir, saved_mode):
+        self.result_mode       = saved_mode or DEFAULT_MODE
         self.result_fixture    = None
         self.result_dia_ft     = None
         self.result_aff_ft     = None
@@ -283,6 +307,9 @@ class FixturePickerDialog(Window):
         self._level_combo       = None
         self._stub_btn          = None
         self._stub_dir          = self._saved_stub_dir  # current toggle state
+        self._mode              = saved_mode or DEFAULT_MODE
+        self._mode_btn          = None
+        self._point_panel       = None
 
         self._build_ui()
 
@@ -309,6 +336,44 @@ class FixturePickerDialog(Window):
         title.Margin     = Thickness(0, 0, 0, 10)
         outer.Children.Add(title)
 
+        # ---- Mode row ----
+        mode_row = StackPanel()
+        mode_row.Orientation = WpfOrientation.Horizontal
+        mode_row.Margin      = Thickness(0, 0, 0, 10)
+
+        mode_lbl = Label()
+        mode_lbl.Content    = "Mode:"
+        mode_lbl.Foreground = self._brush(self.CLR_TEXT)
+        mode_lbl.FontSize   = 11
+        mode_lbl.Padding    = Thickness(0, 4, 8, 0)
+        mode_lbl.VerticalContentAlignment = VerticalAlignment.Center
+        mode_row.Children.Add(mode_lbl)
+
+        mode_btn = Button()
+        mode_btn.Width       = 300
+        mode_btn.Height      = 26
+        mode_btn.FontSize    = 11
+        mode_btn.FontWeight  = FontWeights.Bold
+        mode_btn.BorderThickness = Thickness(0)
+        mode_btn.Click      += self._on_mode_toggle
+        self._mode_btn = mode_btn
+        mode_row.Children.Add(mode_btn)
+
+        mode_hint = Label()
+        mode_hint.Content    = "  (click to toggle)"
+        mode_hint.Foreground = self._brush(self.CLR_TEXT_DIM)
+        mode_hint.FontSize   = 10
+        mode_hint.VerticalContentAlignment = VerticalAlignment.Center
+        mode_row.Children.Add(mode_hint)
+        outer.Children.Add(mode_row)
+
+        # Everything the point mode needs (level, stub direction, fixture
+        # presets, custom size) lives in one panel that is greyed out in
+        # fixture mode, where the size and height come from the connector.
+        point_panel = StackPanel()
+        self._point_panel = point_panel
+        outer.Children.Add(point_panel)
+
         # ---- Level row ----
         level_row = StackPanel()
         level_row.Orientation = WpfOrientation.Horizontal
@@ -334,7 +399,7 @@ class FixturePickerDialog(Window):
         level_cb.SelectedIndex = max(0, min(self._saved_level_idx, len(self._levels) - 1))
         level_row.Children.Add(level_cb)
         self._level_combo = level_cb
-        outer.Children.Add(level_row)
+        point_panel.Children.Add(level_row)
 
         # ---- Stub direction row ----
         stub_row = StackPanel()
@@ -367,25 +432,25 @@ class FixturePickerDialog(Window):
         stub_hint.VerticalContentAlignment = VerticalAlignment.Center
         stub_row.Children.Add(stub_hint)
 
-        outer.Children.Add(stub_row)
+        point_panel.Children.Add(stub_row)
 
         # ---- Table header ----
-        outer.Children.Add(self._make_header())
+        point_panel.Children.Add(self._make_header())
 
         # ---- Fixture rows ----
         for i, (name, (dia_in, aff_in)) in enumerate(FIXTURES.items()):
             size_lbl = NOMINAL_SIZE_LABELS.get(dia_in, '{}"'.format(dia_in))
             aff_lbl  = '{}"'.format(int(aff_in))
-            outer.Children.Add(self._make_fixture_row(name, size_lbl, aff_lbl, i))
+            point_panel.Children.Add(self._make_fixture_row(name, size_lbl, aff_lbl, i))
 
         # ---- Separator ----
         sep = Separator()
         sep.Margin     = Thickness(0, 8, 0, 4)
         sep.Background = self._brush(self.CLR_BORDER)
-        outer.Children.Add(sep)
+        point_panel.Children.Add(sep)
 
         # ---- Custom row ----
-        outer.Children.Add(self._make_custom_row(len(FIXTURES)))
+        point_panel.Children.Add(self._make_custom_row(len(FIXTURES)))
 
         # ---- Separator ----
         sep2 = Separator()
@@ -408,6 +473,21 @@ class FixturePickerDialog(Window):
 
         self.Content = outer
         self._select_initial(self._saved_fixture)
+        self._update_mode_btn()
+
+    def _update_mode_btn(self):
+        if self._mode == MODE_FIXTURE:
+            self._mode_btn.Content    = "Connect to fixture connectors"
+            self._mode_btn.Background = self._brush(self.CLR_ACTIVE)
+        else:
+            self._mode_btn.Content    = "Stub to a picked point (AFF)"
+            self._mode_btn.Background = self._brush(self.CLR_BTN)
+        self._mode_btn.Foreground = self._brush(self.CLR_BTN_TEXT)
+        self._point_panel.IsEnabled = (self._mode != MODE_FIXTURE)
+
+    def _on_mode_toggle(self, sender, args):
+        self._mode = MODE_POINT if self._mode == MODE_FIXTURE else MODE_FIXTURE
+        self._update_mode_btn()
 
     def _update_stub_btn(self):
         if self._stub_dir == "IN":
@@ -579,6 +659,15 @@ class FixturePickerDialog(Window):
             self._radio_buttons[first].IsChecked = True
 
     def _on_start(self, sender, args):
+        script.set_envvar(ENVVAR_MODE, self._mode)
+        self.result_mode = self._mode
+
+        if self._mode == MODE_FIXTURE:
+            self.result_fixture = "Water fixture connectors"
+            self.DialogResult = True
+            self.Close()
+            return
+
         for name, rb in self._radio_buttons.items():
             if not rb.IsChecked:
                 continue
@@ -647,6 +736,7 @@ class FixturePickerDialog(Window):
         result = self.ShowDialog()
         if result:
             return (
+                self.result_mode,
                 self.result_fixture,
                 self.result_dia_ft,
                 self.result_aff_ft,
@@ -663,6 +753,9 @@ def pick_fixture():
     saved_custom_size = script.get_envvar(ENVVAR_CUSTOM_SIZE) or DEFAULT_CUSTOM_SIZE
     saved_custom_aff  = script.get_envvar(ENVVAR_CUSTOM_AFF)  or DEFAULT_CUSTOM_AFF
     saved_stub_dir    = script.get_envvar(ENVVAR_STUB_DIR)    or DEFAULT_STUB_DIR
+    saved_mode        = script.get_envvar(ENVVAR_MODE)        or DEFAULT_MODE
+    if saved_mode not in (MODE_POINT, MODE_FIXTURE):
+        saved_mode = DEFAULT_MODE
 
     if saved_fixture not in FIXTURES and not saved_fixture.startswith('Custom'):
         saved_fixture = DEFAULT_FIXTURE
@@ -677,7 +770,7 @@ def pick_fixture():
 
     dlg = FixturePickerDialog(
         saved_fixture, saved_custom_size, saved_custom_aff,
-        levels, saved_level_idx, saved_stub_dir
+        levels, saved_level_idx, saved_stub_dir, saved_mode
     )
     return dlg.show()
 
@@ -1014,8 +1107,8 @@ def place_elbow(pipe_a, point_a, pipe_b, point_b):
 # ============================================================================
 # MAIN BUILD FUNCTION
 # ============================================================================
-def build_takeoff(main_pipe, click1, click2, branch_dia_ft, aff_height, stub_dir):
-    props    = copy_main_properties(main_pipe)
+def _preflight(props, branch_dia_ft):
+    """Routing preference and diagonal-main checks. False if the user declines."""
     warnings = check_routing_preferences(
         props['pipe_type_id'], branch_dia_ft, props['pipe_type_name']
     )
@@ -1024,14 +1117,17 @@ def build_takeoff(main_pipe, click1, click2, branch_dia_ft, aff_height, stub_dir
         msg += "".join("- {}\n".format(w) for w in warnings)
         msg += "\nContinue anyway? Fittings may fail to place."
         if not forms.alert(msg, yes=True, no=True):
-            return
+            return False
 
     diag_warning = check_diagonal_main(props['direction'])
     if diag_warning:
         if not forms.alert(diag_warning, yes=True, no=True):
-            return
+            return False
+    return True
 
-    geo     = calculate_takeoff_geometry(props, click1, click2, aff_height, stub_dir)
+
+def _build_branch(props, geo, branch_dia_ft):
+    """Tee, rise, elbow, horizontal, elbow, drop, elbow, stub. Returns the stub pipe."""
     sys_id  = props['system_type_id']
     type_id = props['pipe_type_id']
     lvl_id  = props['level_id']
@@ -1059,10 +1155,262 @@ def build_takeoff(main_pipe, click1, click2, branch_dia_ft, aff_height, stub_dir
     )
     doc.Regenerate()
     place_elbow(drop_pipe, geo['drop_end'], stub_pipe, geo['stub_start'])
+    return stub_pipe
+
+
+def build_takeoff(main_pipe, click1, click2, branch_dia_ft, aff_height, stub_dir):
+    props = copy_main_properties(main_pipe)
+    if not _preflight(props, branch_dia_ft):
+        return
+
+    geo = calculate_takeoff_geometry(props, click1, click2, aff_height, stub_dir)
+    _build_branch(props, geo, branch_dia_ft)
 
     logger.debug(
         "Takeoff complete: {} - {:.3f} ft dia, {:.1f}\" AFF, stub {}"
         .format(props['pipe_type_name'], branch_dia_ft, aff_height * 12.0, stub_dir)
+    )
+
+
+# ============================================================================
+# FIXTURE MODE - connect a branch to a water fixture's own connector
+# ============================================================================
+# The fixture supplies everything the point mode asks the user for: the
+# connector position is the height (no AFF), the connector faces the way the
+# stub runs (no stub direction), and the connector diameter is the pipe size
+# (no size pick). The sizer resizes every pipe afterwards, and it treats a pipe
+# serving one fixture as no smaller than that connector, so the connector size
+# is also the size the sizer would choose for this branch.
+FIXTURE_SYSTEMS = (
+    shared_params.SYSTEM_DOMESTIC_COLD_WATER,
+    shared_params.SYSTEM_DOMESTIC_HOT_WATER,
+)
+
+
+def _fixture_connectors(element):
+    """Piping-domain connectors of a family instance ([] if it has none)."""
+    result = []
+    try:
+        manager = element.MEPModel.ConnectorManager
+        if manager is None:
+            return result
+        for conn in manager.Connectors:
+            try:
+                if conn.Domain == Domain.DomainPiping:
+                    result.append(conn)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return result
+
+
+def _connector_system(conn):
+    """Connector.PipeSystemType as a string, or None if it cannot be read."""
+    try:
+        return str(conn.PipeSystemType)
+    except Exception:
+        return None
+
+
+class WaterFixtureFilter(ISelectionFilter):
+    """Any family instance with a domestic cold or hot water piping connector.
+
+    Decided by the connector's system, never by family or Type name, so the
+    RJA water fixture family, a water heater and a one-off fixture all work.
+    """
+
+    def AllowElement(self, element):
+        if not isinstance(element, FamilyInstance):
+            return False
+        for conn in _fixture_connectors(element):
+            if _connector_system(conn) in FIXTURE_SYSTEMS:
+                return True
+        return False
+
+    def AllowReference(self, reference, position):
+        return False
+
+
+def get_main_system(pipe):
+    """The main pipe's Connector.PipeSystemType string, or None."""
+    try:
+        for conn in pipe.ConnectorManager.Connectors:
+            system = _connector_system(conn)
+            if system:
+                return system
+    except Exception:
+        pass
+    return None
+
+
+def find_fixture_connector(fixture, system):
+    """The open fixture connector a branch off a main of `system` connects to.
+
+    Cold main: the DomesticColdWater connector. Hot main: the DomesticHotWater
+    connector flowing In (HW In). Raises ValueError with a plain message when
+    the fixture cannot take this system.
+    """
+    if system == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
+        label, flag = "cold", shared_params.PARAM_HAS_CW
+    else:
+        label, flag = "hot", shared_params.PARAM_HAS_HW
+
+    has_system = revit_helpers.get_type_parameter_value(fixture, flag)
+    if has_system is not None and not has_system:
+        raise ValueError(
+            "This fixture Type does not use {} water ('{}' is No). "
+            "Pick the fixture that needs it.".format(label, flag))
+
+    matches = [c for c in _fixture_connectors(fixture)
+               if _connector_system(c) == system]
+    if not matches:
+        raise ValueError(
+            "The fixture has no {} water connector.".format(label))
+
+    open_matches = [c for c in matches if not c.IsConnected]
+    if not open_matches:
+        raise ValueError(
+            "The fixture's {} water connector is already connected.".format(label))
+
+    if system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
+        hwr_active = revit_helpers.get_parameter_value(
+            fixture, shared_params.PARAM_HWR_ACTIVE)
+        if hwr_active:
+            raise ValueError(
+                "This fixture has HWR Active = Yes, so the hot water main shall "
+                "run through it (HW In and HW Out, no tee). That mode is not "
+                "built yet. Connect it by hand, or turn Add HWR off to take "
+                "it off the main like any other fixture.")
+        inputs = [c for c in open_matches if c.Direction == FlowDirectionType.In]
+        if inputs:
+            return inputs[0]
+
+    return open_matches[0]
+
+
+def get_connector_pose(conn):
+    """(origin, horizontal facing unit vector, diameter in feet) of a connector.
+
+    ASSUMPTION, verify live: Connector.CoordinateSystem.BasisZ points OUT of
+    the element (the way a pipe leaving the connector would run).
+    """
+    origin = conn.Origin
+    facing = conn.CoordinateSystem.BasisZ
+    if abs(facing.Z) > 0.2:
+        raise ValueError(
+            "The fixture connector does not face sideways (Z component {:.2f}). "
+            "Only horizontal connectors are supported.".format(float(facing.Z)))
+    length = math.sqrt(facing.X * facing.X + facing.Y * facing.Y)
+    if length < 1e-6:
+        raise ValueError("Cannot read the fixture connector direction.")
+    direction = XYZ(facing.X / length, facing.Y / length, 0)
+    try:
+        diameter = conn.Radius * 2.0
+    except Exception:
+        raise ValueError("Cannot read the fixture connector size.")
+    if diameter <= 0:
+        raise ValueError("The fixture connector has no size.")
+    return origin, direction, diameter
+
+
+def calculate_fixture_geometry(props, conn_origin, conn_facing):
+    """Same segments as the point mode, aimed at a connector.
+
+    The tee sits on the main straight across from the stub, so the branch is
+    one perpendicular run with no jog. The rise height matches the point mode.
+    """
+    cl_z        = props['centerline_z']
+    main_radius = props['radius']
+    main_dir    = props['direction']
+    start, end  = props['start'], props['end']
+
+    stub_start = XYZ(
+        conn_origin.X + conn_facing.X * STUB_LENGTH,
+        conn_origin.Y + conn_facing.Y * STUB_LENGTH,
+        conn_origin.Z
+    )
+    stub_end = XYZ(conn_origin.X, conn_origin.Y, conn_origin.Z)
+
+    # Foot of the perpendicular from the stub start onto the main, in plan.
+    vx, vy = end.X - start.X, end.Y - start.Y
+    length_sq = vx * vx + vy * vy
+    if length_sq < 1e-10:
+        raise ValueError("Selected main has no length.")
+    t = ((stub_start.X - start.X) * vx + (stub_start.Y - start.Y) * vy) / length_sq
+    main_len = math.sqrt(length_sq)
+    along = t * main_len
+    if along < MIN_END_CLEARANCE or (main_len - along) < MIN_END_CLEARANCE:
+        raise ValueError(
+            "The fixture is not alongside the picked main pipe (or is within "
+            "{:.0f} in of its end). Pick the main segment that runs beside "
+            "the fixture.".format(MIN_END_CLEARANCE * 12.0))
+
+    tee_center = XYZ(start.X + t * vx, start.Y + t * vy, cl_z)
+    rise_start = XYZ(tee_center.X, tee_center.Y, cl_z)
+    rise_end   = XYZ(tee_center.X, tee_center.Y, cl_z + main_radius + RISE_HEIGHT)
+
+    perp_dir       = get_perpendicular_toward_target(main_dir, tee_center, stub_start)
+    to_stub_xy     = XYZ(stub_start.X - tee_center.X, stub_start.Y - tee_center.Y, 0)
+    horiz_distance = abs(to_stub_xy.DotProduct(perp_dir))
+
+    horiz_end  = XYZ(stub_start.X, stub_start.Y, rise_end.Z)
+    drop_start = XYZ(horiz_end.X, horiz_end.Y, horiz_end.Z)
+    drop_end   = XYZ(stub_start.X, stub_start.Y, stub_start.Z)
+
+    if (rise_end.Z - drop_end.Z) < MIN_DROP_FIXTURE:
+        raise ValueError(
+            "The fixture connector is at or above the main's horizontal run "
+            "(connector {:.3f} ft, run {:.3f} ft). The connector shall be at "
+            "least {:.0f} in below it. Select a higher main."
+            .format(drop_end.Z, rise_end.Z, MIN_DROP_FIXTURE * 12.0))
+    if horiz_distance < 0.083:
+        raise ValueError("The fixture is too close to the main.")
+
+    return {
+        'tee_center':     tee_center,
+        'rise_start':     rise_start,
+        'rise_end':       rise_end,
+        'horiz_start':    rise_end,
+        'horiz_end':      horiz_end,
+        'drop_start':     drop_start,
+        'drop_end':       drop_end,
+        'stub_start':     stub_start,
+        'stub_end':       stub_end,
+        'perp_direction': perp_dir,
+        'stub_direction': XYZ(-conn_facing.X, -conn_facing.Y, 0),
+        'horiz_distance': horiz_distance,
+    }
+
+
+def build_fixture_takeoff(main_pipe, fixture):
+    """Branch off `main_pipe` and connect it to the fixture's connector."""
+    props  = copy_main_properties(main_pipe)
+    system = get_main_system(main_pipe)
+    if system not in FIXTURE_SYSTEMS:
+        raise ValueError(
+            "The picked main is not domestic cold or hot water "
+            "(system reads '{}').".format(system))
+
+    fixture_conn = find_fixture_connector(fixture, system)
+    origin, facing, dia_ft = get_connector_pose(fixture_conn)
+
+    if not _preflight(props, dia_ft):
+        return
+
+    geo       = calculate_fixture_geometry(props, origin, facing)
+    stub_pipe = _build_branch(props, geo, dia_ft)
+
+    stub_conn = get_open_connector_closest_to(stub_pipe, geo['stub_end'])
+    if stub_conn is None:
+        raise ValueError("No open connector on the stub pipe at the fixture.")
+    stub_conn.ConnectTo(fixture_conn)
+    doc.Regenerate()
+
+    logger.debug(
+        "Fixture takeoff complete: {} main, {:.3f} ft dia to connector at "
+        "({:.2f}, {:.2f}, {:.2f})".format(
+            system, dia_ft, origin.X, origin.Y, origin.Z)
     )
 
 
@@ -1100,28 +1448,49 @@ def main():
     if pick_result is None:
         return
 
-    fixture_name, branch_dia_ft, aff_height_ft, stub_dir = pick_result
-    script.set_envvar(ENVVAR_FIXTURE, fixture_name)
+    mode, fixture_name, branch_dia_ft, aff_height_ft, stub_dir = pick_result
+    if mode == MODE_POINT:
+        script.set_envvar(ENVVAR_FIXTURE, fixture_name)
 
     script.set_envvar(ENVVAR_ACTIVE, True)
     script.toggle_icon(True)
 
-    pipe_filter = WaterPipeFilter()
+    pipe_filter    = WaterPipeFilter()
+    fixture_filter = WaterFixtureFilter()
 
     try:
         while True:
             try:
+                if mode == MODE_FIXTURE:
+                    main_prompt = ("Pick the CW or HW main pipe  |  "
+                                   "connect to fixture  (ESC to exit)")
+                else:
+                    main_prompt = ("Pick CW/HW/HWC/NG main pipe  |  {}  Stub {}  "
+                                   "(ESC to exit)".format(fixture_name, stub_dir))
                 ref = uidoc.Selection.PickObject(
                     ObjectType.Element,
                     pipe_filter,
-                    "Pick CW/HW/HWC/NG main pipe  |  {}  Stub {}  (ESC to exit)"
-                    .format(fixture_name, stub_dir)
+                    main_prompt
                 )
                 main_pipe = doc.GetElement(ref.ElementId)
                 click1    = ref.GlobalPoint
 
                 if main_pipe is None:
                     forms.alert("Could not read selected pipe. Try again.")
+                    continue
+
+                if mode == MODE_FIXTURE:
+                    fixture_ref = uidoc.Selection.PickObject(
+                        ObjectType.Element,
+                        fixture_filter,
+                        "Pick the water fixture to connect  (ESC to cancel)"
+                    )
+                    fixture = doc.GetElement(fixture_ref.ElementId)
+                    if fixture is None:
+                        forms.alert("Could not read the selected fixture. Try again.")
+                        continue
+                    with revit.Transaction("Pipe Takeoff - Fixture"):
+                        build_fixture_takeoff(main_pipe, fixture)
                     continue
 
                 click2 = uidoc.Selection.PickPoint(

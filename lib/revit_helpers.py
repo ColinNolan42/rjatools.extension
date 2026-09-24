@@ -28,6 +28,16 @@ try:
 except ImportError:
     FLOW_DIRECTION_AVAILABLE = False
 
+# MEPSystem is the base class of PipingSystem / MechanicalSystem. Connector.AllRefs
+# returns these SYSTEM elements alongside the physical neighbour (verified live in
+# Revit 2024: a water heater's inlet reported "3608712:Pipes | 3608700:Piping
+# Systems"). They are not physical neighbours and must never be traversed into.
+try:
+    from Autodesk.Revit.DB import MEPSystem
+    MEP_SYSTEM_AVAILABLE = True
+except ImportError:
+    MEP_SYSTEM_AVAILABLE = False
+
 import shared_params
 
 from pyrevit import HOST_APP
@@ -230,6 +240,42 @@ def get_parameter_value(element, param_name):
         return None
 
 
+def get_type_parameter_value(element, param_name):
+    """Read a TYPE parameter from a family instance.
+
+    LookupParameter on an instance only reaches instance parameters, so Type
+    parameters (for example the water fixture family's 'Has CW' / 'Has HW')
+    have to be read off the instance's Symbol. Falls back to the instance
+    itself, because some families expose the same name in both places.
+
+    Returns the value in a Python-native type, or None if not found.
+    """
+    fn = "get_type_parameter_value"
+
+    if element is None:
+        _log_entry("ERROR", fn, None,
+                   "Element is None. Cannot read type parameter '{}'.".format(param_name))
+        return None
+
+    symbol = None
+    try:
+        symbol = element.Symbol
+    except Exception:
+        try:
+            type_id = element.GetTypeId()
+            if type_id is not None and eid_int(type_id) > 0:
+                symbol = element.Document.GetElement(type_id)
+        except Exception:
+            symbol = None
+
+    if symbol is not None:
+        value = get_parameter_value(symbol, param_name)
+        if value is not None:
+            return value
+
+    return get_parameter_value(element, param_name)
+
+
 # =============================================================================
 # PIPE GEOMETRY
 # =============================================================================
@@ -307,6 +353,26 @@ def get_pipe_diameter_inches(pipe):
 # =============================================================================
 # CONNECTOR INSPECTION
 # =============================================================================
+
+def _is_mep_system(element):
+    """True if the element is an MEPSystem (a Piping/Mechanical System object).
+
+    Connector.AllRefs returns the owning system element alongside the physical
+    neighbour, so every caller that walks AllRefs must skip these. Falls back to
+    a class-name test if the MEPSystem type could not be imported.
+    """
+    if element is None:
+        return False
+    if MEP_SYSTEM_AVAILABLE:
+        try:
+            return isinstance(element, MEPSystem)
+        except Exception:
+            pass
+    try:
+        return "System" in element.GetType().Name
+    except Exception:
+        return False
+
 
 def _get_connector_manager(element):
     """Return the ConnectorManager for any MEP element.
@@ -395,7 +461,12 @@ def get_connectors(element):
             "is_connected": False,
             "connected_element_id": None,
             "connected_element_type": None,
-            "origin_xyz": None
+            "origin_xyz": None,
+            # Added for the water tools. Gas callers ignore these; existing keys
+            # above are unchanged so pipe_graph.py behaves exactly as before.
+            "connected_system_element_id": None,   # MEPSystem ref, never traversed
+            "system_type": None,                   # e.g. "DomesticColdWater"
+            "diameter_in": None                    # connector size, inches
         }
 
         # --- Flow direction ---
@@ -418,6 +489,10 @@ def get_connectors(element):
                        "Connector {}: could not read Direction: {}".format(i, str(e)))
 
         # --- Connection status and connected element ---
+        # AllRefs mixes the physical neighbour with the MEPSystem element that
+        # owns the run, and the order is not guaranteed. Prefer a physical
+        # neighbour; never hand an MEPSystem back as connected_element_id,
+        # because traversal would then try to walk into the system object.
         try:
             entry["is_connected"] = connector.IsConnected
             if connector.IsConnected:
@@ -426,15 +501,38 @@ def get_connectors(element):
                     try:
                         owner = ref.Owner
                         owner_eid = eid_int(owner.Id)
-                        if owner_eid != eid:
-                            entry["connected_element_id"] = owner_eid
-                            entry["connected_element_type"] = owner.GetType().Name
-                            break
+                        if owner_eid == eid:
+                            continue
+                        if _is_mep_system(owner):
+                            if entry["connected_system_element_id"] is None:
+                                entry["connected_system_element_id"] = owner_eid
+                            continue
+                        entry["connected_element_id"] = owner_eid
+                        entry["connected_element_type"] = owner.GetType().Name
+                        break
                     except Exception:
                         continue
         except Exception as e:
             _log_entry("WARNING", fn, eid,
                        "Connector {}: could not read connection refs: {}".format(i, str(e)))
+
+        # --- Piping system type (water traversal needs this; gas ignores it) ---
+        # Verified live in Revit 2024: returns DomesticColdWater / DomesticHotWater /
+        # Sanitary / Vent / OtherPipe. NOTE a hot-water RECIRC connector also reports
+        # DomesticHotWater, so this enum alone cannot separate supply from return -
+        # callers must compare the owning PipingSystemType element for that.
+        try:
+            entry["system_type"] = str(connector.PipeSystemType)
+        except Exception as e:
+            _log_entry("INFO", fn, eid,
+                       "Connector {}: no PipeSystemType ({}).".format(i, str(e)))
+
+        # --- Connector diameter in inches ---
+        try:
+            entry["diameter_in"] = connector.Radius * 2.0 * shared_params.INCHES_PER_FOOT
+        except Exception as e:
+            _log_entry("INFO", fn, eid,
+                       "Connector {}: no Radius ({}).".format(i, str(e)))
 
         # --- Connector origin (location) ---
         try:
@@ -459,6 +557,98 @@ def get_connectors(element):
                    ))
 
     return results
+
+
+# =============================================================================
+# PIPE DIAMETER WRITE-BACK
+# Shared by Size Gas and Size Water. Lives here, not in a pushbutton, so both
+# tools inherit the same fixes - a local re-definition of a shared helper is
+# exactly what broke the takeoff tools on Revit 2026.
+# =============================================================================
+
+# Which API approach worked, remembered after the first success so the other
+# approaches are not retried for every pipe in the run.
+_confirmed_diameter_approach = [None]
+
+
+def reset_pipe_diameter_approach():
+    """Forget the cached approach. Call once at the start of a sizing run."""
+    _confirmed_diameter_approach[0] = None
+
+
+def _apply_diameter_approach(approach_name, pipe, nominal_feet):
+    """Apply one specific write approach. Returns (success, approach_name)."""
+    try:
+        if approach_name == "RBS_PIPE_NOMINAL_DIAMETER":
+            param = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_NOMINAL_DIAMETER)
+        elif approach_name == "RBS_PIPE_DIAMETER_PARAM":
+            param = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)
+        elif approach_name == "LookupParameter":
+            param = pipe.LookupParameter("Diameter")
+        else:
+            return False, approach_name
+
+        if param is None:
+            return False, approach_name
+        if param.IsReadOnly:
+            return False, approach_name
+
+        param.Set(nominal_feet)
+        return True, approach_name
+
+    except Exception:
+        return False, approach_name
+
+
+def set_pipe_diameter(pipe, nominal_inches):
+    """Set a pipe's nominal diameter, trying three API approaches in order.
+
+    Revit exposes pipe diameter differently depending on version and pipe type,
+    so the three known-working parameters are tried in order and the first one
+    that succeeds is cached for the rest of the run.
+
+    Args:
+        pipe:           Revit Pipe element.
+        nominal_inches: float, nominal diameter in inches.
+
+    Returns:
+        (success: bool, approach_name: str). approach_name is "FAILED" when
+        every approach was rejected.
+    """
+    fn = "set_pipe_diameter"
+    nominal_feet = nominal_inches / shared_params.INCHES_PER_FOOT
+
+    try:
+        pipe_id = eid_int(pipe.Id)
+    except Exception:
+        pipe_id = None
+
+    # Try the remembered approach first. If it fails, fall through and retry
+    # all of them rather than giving up: this module stays loaded between
+    # pyRevit runs, so the cached approach can be stale (different Revit
+    # version, different pipe type) and must never become a dead end.
+    if _confirmed_diameter_approach[0] is not None:
+        ok, name = _apply_diameter_approach(
+            _confirmed_diameter_approach[0], pipe, nominal_feet)
+        if ok:
+            return True, name
+        _log_entry("WARNING", fn, pipe_id,
+                   "Cached approach '{}' failed, retrying all approaches.".format(name))
+        _confirmed_diameter_approach[0] = None
+
+    for approach in ("RBS_PIPE_NOMINAL_DIAMETER",
+                     "RBS_PIPE_DIAMETER_PARAM",
+                     "LookupParameter"):
+        ok, name = _apply_diameter_approach(approach, pipe, nominal_feet)
+        if ok:
+            _confirmed_diameter_approach[0] = name
+            _log_entry("INFO", fn, pipe_id,
+                       "API approach confirmed: {}.".format(name))
+            return True, name
+
+    _log_entry("ERROR", fn, pipe_id,
+               "All three diameter API approaches failed.")
+    return False, "FAILED"
 
 
 # =============================================================================
