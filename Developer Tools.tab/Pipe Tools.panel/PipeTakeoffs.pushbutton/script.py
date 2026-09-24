@@ -15,8 +15,12 @@ Click 2 picks a water fixture instead of a point. The branch is built to the
 fixture's own connector and connected to it.
   - CW main: tee off the main straight across from the fixture's CW connector.
   - HW main, fixture HWR Active = No: same top takeoff into the HW In connector.
-  - HW main, fixture HWR Active = Yes: NOT BUILT YET (the main shall run through
-    the fixture, HW In / HW Out, with no tee). The tool stops with a message.
+  - HW main, fixture HWR Active = Yes: no tee. The main is cut at the HW In and
+    HW Out positions, the piece between is removed, and each half turns over
+    to the fixture (elbow, over, elbow, down) and connects to HW In / HW Out.
+    The tool asks for one extra pick, a point on the heater side of the main,
+    to know which half is upstream. At the dead end of a run only HW In is
+    connected and HW Out is left open for the return pipe.
 Sizes come from the fixture connector and the sizer resizes everything later,
 so no pipe size, AFF or stub direction is asked for in this mode.
 The original point-pick mode is unchanged and stays available in the dialog.
@@ -52,7 +56,7 @@ from Autodesk.Revit.DB import (
     Domain,
     FlowDirectionType
 )
-from Autodesk.Revit.DB.Plumbing import Pipe
+from Autodesk.Revit.DB.Plumbing import Pipe, PlumbingUtils
 from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 from Autodesk.Revit.Exceptions import (
     OperationCanceledException,
@@ -102,6 +106,7 @@ RISE_HEIGHT       = 0.5    # 6 inches in feet
 STUB_LENGTH       = 0.5    # 6 inches in feet
 DIAGONAL_WARN_DEG = 5.0
 MIN_END_CLEARANCE = 0.25   # ft, tee/cut point must be this far from a main pipe end
+MIN_HW_SEPARATION = 0.1    # ft, HW In / HW Out feet must be this far apart along the main
 MIN_DROP_FIXTURE  = 0.25   # ft, minimum vertical drop from the rise to the fixture connector
 
 DEFAULT_FIXTURE    = "Lavatory"
@@ -1244,12 +1249,11 @@ def get_main_system(pipe):
     return None
 
 
-def find_fixture_connector(fixture, system):
-    """The open fixture connector a branch off a main of `system` connects to.
+def _open_system_connectors(fixture, system):
+    """Open fixture connectors of `system`. Raises ValueError with a plain message.
 
-    Cold main: the DomesticColdWater connector. Hot main: the DomesticHotWater
-    connector flowing In (HW In). Raises ValueError with a plain message when
-    the fixture cannot take this system.
+    Refuses a fixture whose Type does not use that system (Has CW / Has HW
+    is No), has no connector for it, or has every such connector connected.
     """
     if system == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
         label, flag = "cold", shared_params.PARAM_HAS_CW
@@ -1272,21 +1276,40 @@ def find_fixture_connector(fixture, system):
     if not open_matches:
         raise ValueError(
             "The fixture's {} water connector is already connected.".format(label))
+    return open_matches
 
+
+def find_fixture_connector(fixture, system):
+    """The open fixture connector a branch off a main of `system` connects to.
+
+    Cold main: the DomesticColdWater connector. Hot main: the DomesticHotWater
+    connector flowing In (HW In).
+    """
+    open_matches = _open_system_connectors(fixture, system)
     if system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
-        hwr_active = revit_helpers.get_parameter_value(
-            fixture, shared_params.PARAM_HWR_ACTIVE)
-        if hwr_active:
-            raise ValueError(
-                "This fixture has HWR Active = Yes, so the hot water main shall "
-                "run through it (HW In and HW Out, no tee). That mode is not "
-                "built yet. Connect it by hand, or turn Add HWR off to take "
-                "it off the main like any other fixture.")
         inputs = [c for c in open_matches if c.Direction == FlowDirectionType.In]
         if inputs:
             return inputs[0]
-
     return open_matches[0]
+
+
+def fixture_hwr_active(fixture):
+    """True if the fixture's HWR_ACTIVE reads Yes (the main runs through it)."""
+    return bool(revit_helpers.get_parameter_value(
+        fixture, shared_params.PARAM_HWR_ACTIVE))
+
+
+def find_hw_pair(fixture):
+    """(HW In, HW Out) open connectors of an HWR Active fixture."""
+    open_matches = _open_system_connectors(
+        fixture, shared_params.SYSTEM_DOMESTIC_HOT_WATER)
+    hw_in  = [c for c in open_matches if c.Direction == FlowDirectionType.In]
+    hw_out = [c for c in open_matches if c.Direction == FlowDirectionType.Out]
+    if not hw_in or not hw_out:
+        raise ValueError(
+            "An HWR Active fixture needs both an open HW In and an open HW Out "
+            "connector (found {} In, {} Out).".format(len(hw_in), len(hw_out)))
+    return hw_in[0], hw_out[0]
 
 
 def get_connector_pose(conn):
@@ -1383,14 +1406,23 @@ def calculate_fixture_geometry(props, conn_origin, conn_facing):
     }
 
 
-def build_fixture_takeoff(main_pipe, fixture):
-    """Branch off `main_pipe` and connect it to the fixture's connector."""
+def build_fixture_takeoff(main_pipe, fixture, upstream_pt=None):
+    """Connect `main_pipe` to the fixture.
+
+    upstream_pt is only used for an HWR Active fixture on a hot main, where the
+    main runs through the fixture (see build_hwr_series). Otherwise it is a
+    normal top takeoff, a tee branch into the one matching connector.
+    """
     props  = copy_main_properties(main_pipe)
     system = get_main_system(main_pipe)
     if system not in FIXTURE_SYSTEMS:
         raise ValueError(
             "The picked main is not domestic cold or hot water "
             "(system reads '{}').".format(system))
+
+    if upstream_pt is not None:
+        build_hwr_series(props, fixture, upstream_pt)
+        return
 
     fixture_conn = find_fixture_connector(fixture, system)
     origin, facing, dia_ft = get_connector_pose(fixture_conn)
@@ -1412,6 +1444,219 @@ def build_fixture_takeoff(main_pipe, fixture):
         "({:.2f}, {:.2f}, {:.2f})".format(
             system, dia_ft, origin.X, origin.Y, origin.Z)
     )
+
+
+# ============================================================================
+# HWR ACTIVE FIXTURE - the hot water main runs through the fixture
+# ============================================================================
+# No tee and no rise. The main is cut at the two connector positions, the piece
+# between the cuts is removed, and each cut end turns over to the fixture
+# (elbow, horizontal at main height, elbow, drop, elbow, 6 in stub) and connects
+# to HW In (upstream half) or HW Out (downstream half). The hot water then
+# passes through the fixture in series, and the next fixture on the run repeats
+# this on the downstream half.
+#
+# End of run: when the fixture is at the dead end of the picked main, there is
+# no downstream half. Only HW In is connected and HW Out is left open, for the
+# return pipe drawn by hand back to the heater.
+#
+# Pipe size: every new pipe takes the MAIN size so the run stays continuous.
+# The sizer resizes everything afterwards. If the main is larger than the
+# fixture connector the connection is made at mismatched size and left for the
+# sizer, and this is logged.
+def _along(props, point):
+    """Distance along the main from its start, in plan."""
+    start, direction = props['start'], props['direction']
+    return ((point.X - start.X) * direction.X +
+            (point.Y - start.Y) * direction.Y)
+
+
+def _main_point(props, along_ft):
+    """Point on the main's centerline at a distance along it."""
+    start, end = props['start'], props['end']
+    total = _along(props, end)
+    frac = along_ft / total if total > 1e-9 else 0.0
+    return XYZ(
+        start.X + props['direction'].X * along_ft,
+        start.Y + props['direction'].Y * along_ft,
+        start.Z + (end.Z - start.Z) * frac
+    )
+
+
+def _piece_interval(props, pipe):
+    curve = pipe.Location.Curve
+    a0 = _along(props, curve.GetEndPoint(0))
+    a1 = _along(props, curve.GetEndPoint(1))
+    return (min(a0, a1), max(a0, a1))
+
+
+def _end_connector_is_open(pipe, point):
+    """True if the pipe connector nearest `point` has nothing connected."""
+    best, best_dist = None, float('inf')
+    for conn in pipe.ConnectorManager.Connectors:
+        d = conn.Origin.DistanceTo(point)
+        if d < best_dist:
+            best, best_dist = conn, d
+    return best is not None and not best.IsConnected
+
+
+def _break_main_at(props, pieces, along_ft):
+    """Break whichever piece spans `along_ft`. Returns the new piece."""
+    target = None
+    for piece in pieces:
+        lo, hi = _piece_interval(props, piece)
+        if lo + 0.01 < along_ft < hi - 0.01:
+            target = piece
+            break
+    if target is None:
+        raise ValueError("Cannot find the main piece to break at that point.")
+    new_id = PlumbingUtils.BreakCurve(doc, target.Id, _main_point(props, along_ft))
+    new_piece = doc.GetElement(new_id)
+    if new_piece is None:
+        raise ValueError(
+            "BreakCurve failed. The cut may be too close to a fitting or pipe end.")
+    doc.Regenerate()
+    pieces.append(new_piece)
+    return new_piece
+
+
+def _check_series_leg(cut_pt, stub_start):
+    horiz = math.sqrt((stub_start.X - cut_pt.X) ** 2 + (stub_start.Y - cut_pt.Y) ** 2)
+    if horiz < 0.083:
+        raise ValueError("The fixture is too close to the main.")
+    if (cut_pt.Z - stub_start.Z) < MIN_DROP_FIXTURE:
+        raise ValueError(
+            "The fixture connector shall be at least {:.0f} in below the main "
+            "(connector {:.3f} ft, main {:.3f} ft).".format(
+                MIN_DROP_FIXTURE * 12.0, stub_start.Z, cut_pt.Z))
+
+
+def _build_series_leg(props, main_piece, cut_pt, pose, dia_ft):
+    """Cut end, elbow, horizontal, elbow, drop, elbow, stub, connect."""
+    sys_id, type_id, lvl_id = (
+        props['system_type_id'], props['pipe_type_id'], props['level_id'])
+    stub_start = pose['stub_start']
+    horiz_end  = XYZ(stub_start.X, stub_start.Y, cut_pt.Z)
+    drop_end   = XYZ(stub_start.X, stub_start.Y, stub_start.Z)
+
+    horiz_pipe = create_pipe_segment(sys_id, type_id, lvl_id, cut_pt, horiz_end, dia_ft)
+    doc.Regenerate()
+    place_elbow(main_piece, cut_pt, horiz_pipe, cut_pt)
+
+    drop_pipe = create_pipe_segment(sys_id, type_id, lvl_id, horiz_end, drop_end, dia_ft)
+    doc.Regenerate()
+    place_elbow(horiz_pipe, horiz_end, drop_pipe, horiz_end)
+
+    stub_pipe = create_pipe_segment(
+        sys_id, type_id, lvl_id, stub_start, pose['origin'], dia_ft)
+    doc.Regenerate()
+    place_elbow(drop_pipe, drop_end, stub_pipe, stub_start)
+
+    stub_conn = get_open_connector_closest_to(stub_pipe, pose['origin'])
+    if stub_conn is None:
+        raise ValueError("No open connector on the stub pipe at the fixture.")
+    stub_conn.ConnectTo(pose['conn'])
+    doc.Regenerate()
+
+
+def build_hwr_series(props, fixture, upstream_pt):
+    hw_in, hw_out = find_hw_pair(fixture)
+    dia_ft   = props['diameter']
+    main_len = _along(props, props['end'])
+
+    poses = {}
+    for label, conn in (('in', hw_in), ('out', hw_out)):
+        origin, facing, conn_dia = get_connector_pose(conn)
+        stub_start = XYZ(
+            origin.X + facing.X * STUB_LENGTH,
+            origin.Y + facing.Y * STUB_LENGTH,
+            origin.Z)
+        poses[label] = {
+            'conn': conn, 'origin': origin, 'stub_start': stub_start,
+            'dia': conn_dia, 'along': _along(props, stub_start),
+        }
+
+    if abs(poses['in']['along'] - poses['out']['along']) < MIN_HW_SEPARATION:
+        raise ValueError(
+            "The fixture's HW In and HW Out line up across the main, so the "
+            "main cannot be cut between them. Rotate the fixture so its hot "
+            "water connectors sit side by side along the main.")
+
+    # The half of the main toward the heater feeds the connector whose foot is
+    # on that side. Pairing by position keeps the two legs from crossing.
+    a_mid = (poses['in']['along'] + poses['out']['along']) / 2.0
+    upstream_low = _along(props, upstream_pt) < a_mid
+    ordered = sorted(poses.values(), key=lambda p: p['along'])
+    up, dn = (ordered[0], ordered[1]) if upstream_low else (ordered[1], ordered[0])
+
+    if up['along'] < MIN_END_CLEARANCE or up['along'] > main_len - MIN_END_CLEARANCE:
+        raise ValueError(
+            "The fixture is not alongside the picked main pipe (or is within "
+            "{:.0f} in of its end). Pick the main segment that runs beside "
+            "the fixture.".format(MIN_END_CLEARANCE * 12.0))
+
+    # Downstream cut inside the pipe = mid run. Beyond its end = end of run.
+    if upstream_low:
+        end_of_run = dn['along'] > main_len - MIN_END_CLEARANCE
+        far_end_pt = props['end']
+    else:
+        end_of_run = dn['along'] < MIN_END_CLEARANCE
+        far_end_pt = props['start']
+
+    if end_of_run and not _end_connector_is_open(props['element'], far_end_pt):
+        raise ValueError(
+            "The picked main continues past the fixture, so the fixture sits "
+            "at a fitting, not at the end of the run. Pick the main segment "
+            "that runs beside the fixture.")
+
+    up_pt = _main_point(props, up['along'])
+    _check_series_leg(up_pt, up['stub_start'])
+    dn_pt = None
+    if not end_of_run:
+        dn_pt = _main_point(props, dn['along'])
+        _check_series_leg(dn_pt, dn['stub_start'])
+
+    if not _preflight(props, dia_ft):
+        return
+
+    # Break the main, drop the piece(s) that are no longer wanted.
+    pieces = [props['element']]
+    if end_of_run:
+        _break_main_at(props, pieces, up['along'])
+        pieces.sort(key=lambda p: _piece_interval(props, p)[0])
+        if upstream_low:
+            keep_up, discard = pieces[0], pieces[1]
+        else:
+            keep_up, discard = pieces[1], pieces[0]
+        keep_dn = None
+        doc.Delete(discard.Id)
+    else:
+        first, second = sorted([up['along'], dn['along']])
+        _break_main_at(props, pieces, first)
+        _break_main_at(props, pieces, second)
+        pieces.sort(key=lambda p: _piece_interval(props, p)[0])
+        middle = pieces[1]
+        if upstream_low:
+            keep_up, keep_dn = pieces[0], pieces[2]
+        else:
+            keep_up, keep_dn = pieces[2], pieces[0]
+        doc.Delete(middle.Id)
+    doc.Regenerate()
+
+    _build_series_leg(props, keep_up, up_pt, up, dia_ft)
+    if keep_dn is not None:
+        _build_series_leg(props, keep_dn, dn_pt, dn, dia_ft)
+
+    for pose in (up, dn):
+        if abs(pose['dia'] - dia_ft) > 0.002:
+            logger.info(
+                "HWR series: main {:.3f} in, fixture connector {:.3f} in. "
+                "Connected at the main size, the sizer sets the final size."
+                .format(dia_ft * 12.0, pose['dia'] * 12.0))
+    logger.debug(
+        "HWR series complete: {} (HW Out {}).".format(
+            "end of run" if end_of_run else "mid run",
+            "left open for the return" if end_of_run else "connected"))
 
 
 # ============================================================================
@@ -1489,8 +1734,15 @@ def main():
                     if fixture is None:
                         forms.alert("Could not read the selected fixture. Try again.")
                         continue
+                    upstream_pt = None
+                    if (get_main_system(main_pipe) ==
+                            shared_params.SYSTEM_DOMESTIC_HOT_WATER and
+                            fixture_hwr_active(fixture)):
+                        upstream_pt = uidoc.Selection.PickPoint(
+                            "HWR fixture: pick a point on the WATER HEATER side "
+                            "of the main  (ESC to cancel)")
                     with revit.Transaction("Pipe Takeoff - Fixture"):
-                        build_fixture_takeoff(main_pipe, fixture)
+                        build_fixture_takeoff(main_pipe, fixture, upstream_pt)
                     continue
 
                 click2 = uidoc.Selection.PickPoint(
