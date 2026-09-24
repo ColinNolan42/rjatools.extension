@@ -83,36 +83,18 @@ def flame(d, cx, cy, w, h, field):
               fill=field)
 
 
-def table_rows(d):
-    """Bottom element for the report button: stacked table rows.
-
-    Sits where the sizing bar sits on the two sizing buttons, so Water Report
-    reads as the same family of tool while saying it produces paperwork rather
-    than changing the model.
-    """
-    row_h = N * 0.055
-    gap = N * 0.038
-    y = N * 0.700
-    for index in range(3):
-        right = N * 0.80 if index else N * 0.70   # a header row, then two data rows
-        d.rectangle([N * 0.20, y, right, y + row_h], fill=WHITE)
-        y += row_h + gap
-
-
-# Glyph geometry for the two SIZING buttons. Do not change these: the flame
+# Glyph geometry for the two sizing buttons. Do not change these: the flame
 # and droplet produced by them are the icons Colin reviewed and accepted, and
 # regenerating with different numbers silently replaces an approved icon.
 SIZING_GLYPH = (0.36, 0.40, 0.52)      # cy, w, h as fractions of the canvas
-# The report button gives up a little glyph height to the table rows below it.
-REPORT_GLYPH = (0.32, 0.38, 0.46)
 
 
-def build(field, glyph, out_path, bottom=None, geometry=SIZING_GLYPH):
+def build(field, glyph, out_path, geometry=SIZING_GLYPH):
     cy, w, h = geometry
     img = Image.new("RGBA", (N, N), field)
     d = ImageDraw.Draw(img)
     glyph(d, N * 0.50, N * cy, N * w, N * h)
-    (bottom or sizing_bar)(d)
+    sizing_bar(d)
     img.resize((32, 32), Image.LANCZOS).save(out_path)
     print("wrote " + out_path)
 

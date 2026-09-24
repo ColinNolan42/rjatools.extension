@@ -1,19 +1,23 @@
 # -*- coding: ascii -*-
 # water_run.py
-# The shared Size Water / Water Report pipeline.
+# The Size Water pipeline.
 #
-# Both buttons do the same work up to the last step, so the whole run lives
-# here and each pushbutton is a few lines. Keeping it in one place is the
-# point: a duplicated pipeline is how the two would end up reporting
-# different numbers for the same system.
+# ONE action. Pick the RPZ, answer the one dialog, and the run does the whole
+# job in order:
 #
-#   Water Report -> everything, then the take-off on a drafting view and a
-#                   sheet. The model is not touched.
-#   Size Water   -> everything, then the new sizes written to the pipes. The
-#                   report goes to the pyRevit window only.
+#   traverse -> check the system -> size -> print the report -> write the
+#   sizes into the model -> put the WSFU take-off on a drafting view and a
+#   sheet
+#
+# The take-off is not a separate mode and never was meant to be one. It is
+# the check on the sizing: it is how the fixture unit count that drove every
+# pipe size gets verified against the fixtures actually in the model. A size
+# written without a take-off to check it against is a number nobody can
+# defend, so the two always come out of the same run and can never describe
+# different systems.
 #
 # Firm standards are assumed rather than asked about on every run: minimum
-# pipe sizes always apply, and the report always goes on a drafting view and
+# pipe sizes always apply, and the take-off always goes on a drafting view and
 # a sheet. The only runtime question is which piping system types are the hot
 # water RETURN, which no standard can answer because Revit classifies a
 # recirculation system exactly like the hot supply.
@@ -37,12 +41,8 @@ import water_drafting
 import ui_helpers
 
 
-MODE_REPORT = ui_helpers.MODE_REPORT
-MODE_SIZE = ui_helpers.MODE_SIZE
-
-
 def run(doc, uidoc, output, forms):
-    """Run the tool. The dialog's two action buttons choose what happens.
+    """Run the tool: size the model and produce the take-off that checks it.
 
     Returns True if it finished.
     """
@@ -60,9 +60,6 @@ def run(doc, uidoc, output, forms):
         output.print_md("Cancelled. Nothing was changed.")
         return False
 
-    mode = settings["mode"]
-    title = "Water Report" if mode == MODE_REPORT else "Size Water"
-
     revit_helpers.reset_pipe_diameter_approach()
     graph = water_graph.build_water_network(origin, doc)
 
@@ -78,13 +75,11 @@ def run(doc, uidoc, output, forms):
             "The system is not complete. {} error(s) found:\n\n{}\n\n"
             "Continuing would produce numbers that do not describe the whole "
             "system. Continue anyway?".format(len(checks["errors"]), detail),
-            title="{} - Incomplete System".format(title), yes=True, no=True)
+            title="Size Water - Incomplete System", yes=True, no=True)
         if not proceed:
             output.print_md("Stopped. Nothing was changed.")
             return False
 
-    # Sizes are always computed, in both modes. The report shows them; only
-    # Size Water writes them.
     sizing = water_sizing_engine.size_network(
         graph,
         apply_minimums=True,
@@ -98,14 +93,14 @@ def run(doc, uidoc, output, forms):
     }
     print(water_report.build_report(graph, sizing, header))
 
-    if mode == MODE_REPORT:
-        _create_drafting_view(doc, output, graph, sizing, header)
-        output.print_md(
-            "Report only. No pipe size was written to the model. Use "
-            "**Size Water** to apply them.")
-        return True
-
+    # Sizes first, because writing them is the job. The take-off follows in
+    # its own transaction, so a project missing a drafting view family type or
+    # a title block costs the user a sheet, never the sizes already committed.
     _write_sizes(doc, output, forms, graph, sizing)
+    _create_drafting_view(doc, output, graph, sizing, header)
+    output.print_md(
+        "Check the take-off above against the fixtures in the model. The "
+        "fixture unit totals on it are what drove every pipe size.")
     return True
 
 

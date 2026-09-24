@@ -2,9 +2,10 @@
 # Size Water.pushbutton/script.py
 # Domestic water pipe sizing per the 2024 IPC.
 #
-# One button. The dialog's two action buttons choose what the run does:
-# Create Report puts the WSFU take-off on a drafting view and a sheet and
-# leaves the model alone, Size Water writes the sizes into the model.
+# One button, one action. The run sizes the system, writes the sizes into the
+# model, and puts the WSFU take-off on a drafting view and a sheet. The
+# take-off is the check on the sizing, not an alternative to it, so it comes
+# out of the same run.
 #
 # The pipeline itself lives in lib/water_run.py.
 #

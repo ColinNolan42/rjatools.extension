@@ -100,8 +100,6 @@ _WATER_XAML = (
     '<StackPanel Grid.Row="2" Orientation="Horizontal"'
     ' HorizontalAlignment="Right" Margin="0,12,0,0">'
     '<Button Name="btnCancel" Content="Cancel" Width="80" Margin="0,0,8,0"/>'
-    '<Button Name="btnReport" Content="Create Report" Width="120"'
-    ' Margin="0,0,8,0"/>'
     '<Button Name="btnSize" Content="Size Water" Width="110"/>'
     '</StackPanel>'
     '</Grid>'
@@ -109,19 +107,19 @@ _WATER_XAML = (
 )
 
 
-MODE_REPORT = "report"
-MODE_SIZE = "size"
-
-
 def show_water_dialog(title, project_info, hot_system_types):
-    """The one Size Water dialog. Its two action buttons choose what happens.
+    """The one Size Water dialog. One dialog, then everything is automatic.
 
-    One dialog, then everything is automatic. It deliberately asks nothing
-    that the firm standard already settles: minimum pipe sizes always apply,
-    and the take-off always goes on a drafting view and a sheet. The only
-    question left is the one no standard can answer, which piping system types
-    are the hot water RETURN, because Revit classifies a recirculation system
-    exactly like the hot supply.
+    There is no separate report action. Sizing always produces the WSFU
+    take-off on a drafting view and a sheet, because the take-off is how the
+    fixture unit count gets checked, and a size nobody can check against a
+    take-off is not worth writing.
+
+    It deliberately asks nothing that the firm standard already settles:
+    minimum pipe sizes always apply, and the take-off always goes on a sheet.
+    The only question left is the one no standard can answer, which piping
+    system types are the hot water RETURN, because Revit classifies a
+    recirculation system exactly like the hot supply.
 
     Args:
         title: window title string.
@@ -131,8 +129,8 @@ def show_water_dialog(title, project_info, hot_system_types):
             PipingSystemType classified as Domestic Hot Water.
 
     Returns:
-        dict with "mode" (MODE_REPORT or MODE_SIZE), "job", "job_number",
-        "by" and "return_system_type_ids" (set of ints), or None if cancelled.
+        dict with "job", "job_number", "by" and "return_system_type_ids"
+        (set of ints), or None if cancelled.
     """
     from System.Windows.Controls import CheckBox
     from System.Windows import Thickness
@@ -145,7 +143,6 @@ def show_water_dialog(title, project_info, hot_system_types):
     tb_job_no = window.FindName('tbJobNo')
     tb_by = window.FindName('tbBy')
     sp_hot = window.FindName('spHotSystems')
-    btn_report = window.FindName('btnReport')
     btn_size = window.FindName('btnSize')
     btn_cancel = window.FindName('btnCancel')
 
@@ -184,13 +181,12 @@ def show_water_dialog(title, project_info, hot_system_types):
 
     result = [None]
 
-    def collect(mode):
+    def on_size(sender, e):
         returns = set()
         for box, type_id in checkboxes:
             if box.IsChecked:
                 returns.add(type_id)
         result[0] = {
-            "mode": mode,
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
             "by": tb_by.Text.strip(),
@@ -198,18 +194,9 @@ def show_water_dialog(title, project_info, hot_system_types):
         }
         window.Close()
 
-    # The two action buttons ARE the choice of what the run does, which is why
-    # there is no report-only check box: the button the user presses says it.
-    def on_report(sender, e):
-        collect(MODE_REPORT)
-
-    def on_size(sender, e):
-        collect(MODE_SIZE)
-
     def on_cancel(sender, e):
         window.Close()
 
-    btn_report.Click += on_report
     btn_size.Click += on_size
     btn_cancel.Click += on_cancel
     window.ShowDialog()
