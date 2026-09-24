@@ -522,9 +522,8 @@ def basis_of_design_rows():
          "units. A cold branch serving only a water heater is sized on the "
          "TOTAL HOT fixture units that heater serves."),
         ("Not included:",
-         "pressure loss and velocity are NOT evaluated in this build. The "
-         "hot water return is not sized, it is sized on circulation flow "
-         "rather than on fixture units."),
+         "pressure loss and velocity are NOT evaluated in this build. Hot "
+         "water recirculation sizing is still to do."),
     ]
 
 

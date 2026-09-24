@@ -345,7 +345,7 @@ class TestBasisOfDesignRows(unittest.TestCase):
     def test_states_what_is_not_evaluated(self):
         joined = " ".join(v for _, v in wt.basis_of_design_rows())
         self.assertIn("pressure loss", joined.lower())
-        self.assertIn("return", joined.lower())
+        self.assertIn("recirculation", joined.lower())
 
 
 class TestDataIntegrity(unittest.TestCase):

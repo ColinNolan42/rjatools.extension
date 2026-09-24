@@ -188,20 +188,11 @@ def show_water_dialog(title, project_info, return_detection):
     for label_text, value_text in water_tables.basis_of_design_rows():
         _info_row(label_text, value_text)
 
-    # The detected return system is stated here as an assumption. Reported,
-    # never asked: the model already answers it.
+    # The detected return system is NOT shown here. The basis block's
+    # "Not included" row already says recirculation sizing is still to do,
+    # and the pyRevit window prints which System Type was identified and why.
+    # Carried through to the result so those pipes are skipped by the engine.
     detected = set((return_detection or {}).get("detected") or set())
-    candidates = (return_detection or {}).get("candidates") or []
-    if candidates:
-        named = [c["name"] for c in candidates if c["id"] in detected]
-        if named:
-            _info_row("Return system:",
-                      ", ".join(named) + " - detected from the pipes' System "
-                      "Types and left unsized. The pyRevit window says why.")
-        else:
-            _info_row("Return system:",
-                      "none found. Every hot water System Type on this "
-                      "network is being sized as supply.")
 
     # -- OK / Cancel ---------------------------------------------------------
     btn_panel = StackPanel()
