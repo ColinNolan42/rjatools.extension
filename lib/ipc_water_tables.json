@@ -1,0 +1,971 @@
+{
+  "_source": {
+    "generated": "2026-09-24",
+    "code": "2024 International Plumbing Code",
+    "wsfu_table": "Table E103.3(2), 2024_IPC_3.pdf PDF pages 36-37",
+    "demand_table": "Table E103.3(3), 2024_IPC_3.pdf PDF pages 38-39",
+    "fixture_flow_table": "Table 604.3, 2024_IPC_1.pdf PDF pages 260-261",
+    "fixture_supply_table": "Table 604.5, 2024_IPC_1.pdf PDF page 263",
+    "firm_sizing_table": "Template-Domestic Water Pipe Sizing Calculator.xlsx, Sheet1, flush tank, Copper Type L",
+    "firm_formula_hot_5fps": "=IF(D4<=1,0.5,IF(AND(D4>1.01,D4<=3),0.75,IF(AND(D4>3.01,D4<=7),1,IF(AND(D4>7.01,D4<=18),1.25,IF(AND(D4>18.01,D4<=40),1.5,IF(AND(D4>40.01,D4<=120),2,IF(AND(D4>120.01,D4<=250),2.5,IF(AND(D4>250.01,D4<=400),3))))))))",
+    "firm_formula_cold_8fps": "=IF(D4<=2,0.5,IF(AND(D4>2.01,D4<=6),0.75,IF(AND(D4>6.01,D4<=19),1,IF(AND(D4>19.01,D4<=55),1.25,IF(AND(D4>55.01,D4<=100),1.5,IF(AND(D4>100.01,D4<=250),2,IF(AND(D4>250.01,D4<=475),2.5,IF(AND(D4>475.01,D4<=750),3))))))))",
+    "note_cfm_typos": "The printed 2024 IPC cubic-feet-per-minute column has typographical errors (1 wsfu prints 0.04104, 2 prints 0.0684, 16 prints 2.90624). The engine uses gpm only.",
+    "note_velocity_basis": "Firm workbook cites IPC commentary figure 604.1: up to 5 fps for hot water to 140F and up to 8 fps for cold water in copper. The note under IPC Figures E103.3(2) and E103.3(3) says velocities above 5 to 8 ft/s are not usually recommended."
+  },
+  "wsfu_by_fixture": [
+    {
+      "fixture": "Bathroom group",
+      "occupancy": "Private",
+      "supply_control": "Flush tank",
+      "cold_wsfu": 2.7,
+      "hot_wsfu": 1.5,
+      "total_wsfu": 3.6
+    },
+    {
+      "fixture": "Bathroom group",
+      "occupancy": "Private",
+      "supply_control": "Flushometer valve",
+      "cold_wsfu": 6.0,
+      "hot_wsfu": 3.0,
+      "total_wsfu": 8.0
+    },
+    {
+      "fixture": "Bathtub",
+      "occupancy": "Private",
+      "supply_control": "Faucet",
+      "cold_wsfu": 1.0,
+      "hot_wsfu": 1.0,
+      "total_wsfu": 1.4
+    },
+    {
+      "fixture": "Bathtub",
+      "occupancy": "Public",
+      "supply_control": "Faucet",
+      "cold_wsfu": 3.0,
+      "hot_wsfu": 3.0,
+      "total_wsfu": 4.0
+    },
+    {
+      "fixture": "Bidet",
+      "occupancy": "Private",
+      "supply_control": "Faucet",
+      "cold_wsfu": 1.5,
+      "hot_wsfu": 1.5,
+      "total_wsfu": 2.0
+    },
+    {
+      "fixture": "Combination fixture",
+      "occupancy": "Private",
+      "supply_control": "Faucet",
+      "cold_wsfu": 2.25,
+      "hot_wsfu": 2.25,
+      "total_wsfu": 3.0
+    },
+    {
+      "fixture": "Dishwashing machine",
+      "occupancy": "Private",
+      "supply_control": "Automatic",
+      "cold_wsfu": null,
+      "hot_wsfu": 1.4,
+      "total_wsfu": 1.4
+    },
+    {
+      "fixture": "Drinking fountain",
+      "occupancy": "Offices, etc.",
+      "supply_control": "3/8\u2033 valve",
+      "cold_wsfu": 0.25,
+      "hot_wsfu": null,
+      "total_wsfu": 0.25
+    },
+    {
+      "fixture": "Kitchen sink",
+      "occupancy": "Private",
+      "supply_control": "Faucet",
+      "cold_wsfu": 1.0,
+      "hot_wsfu": 1.0,
+      "total_wsfu": 1.4
+    },
+    {
+      "fixture": "Kitchen sink",
+      "occupancy": "Hotel, restaurant",
+      "supply_control": "Faucet",
+      "cold_wsfu": 3.0,
+      "hot_wsfu": 3.0,
+      "total_wsfu": 4.0
+    },
+    {
+      "fixture": "Laundry trays (1 to 3)",
+      "occupancy": "Private",
+      "supply_control": "Faucet",
+      "cold_wsfu": 1.0,
+      "hot_wsfu": 1.0,
+      "total_wsfu": 1.4
+    },
+    {
+      "fixture": "Lavatory",
+      "occupancy": "Private",
+      "supply_control": "Faucet",
+      "cold_wsfu": 0.5,
+      "hot_wsfu": 0.5,
+      "total_wsfu": 0.7
+    },
+    {
+      "fixture": "Lavatory",
+      "occupancy": "Public",
+      "supply_control": "Faucet",
+      "cold_wsfu": 1.5,
+      "hot_wsfu": 1.5,
+      "total_wsfu": 2.0
+    },
+    {
+      "fixture": "Service sink",
+      "occupancy": "Offices, etc.",
+      "supply_control": "Faucet",
+      "cold_wsfu": 2.25,
+      "hot_wsfu": 2.25,
+      "total_wsfu": 3.0
+    },
+    {
+      "fixture": "Shower head",
+      "occupancy": "Public",
+      "supply_control": "Mixing valve",
+      "cold_wsfu": 3.0,
+      "hot_wsfu": 3.0,
+      "total_wsfu": 4.0
+    },
+    {
+      "fixture": "Shower head",
+      "occupancy": "Private",
+      "supply_control": "Mixing valve",
+      "cold_wsfu": 1.0,
+      "hot_wsfu": 1.0,
+      "total_wsfu": 1.4
+    },
+    {
+      "fixture": "Urinal",
+      "occupancy": "Public",
+      "supply_control": "1\u2033 flushometer valve",
+      "cold_wsfu": 10.0,
+      "hot_wsfu": null,
+      "total_wsfu": 10.0
+    },
+    {
+      "fixture": "Urinal",
+      "occupancy": "Public",
+      "supply_control": "3/4\u2033 flushometer valve",
+      "cold_wsfu": 5.0,
+      "hot_wsfu": null,
+      "total_wsfu": 5.0
+    },
+    {
+      "fixture": "Urinal",
+      "occupancy": "Public",
+      "supply_control": "Flush tank",
+      "cold_wsfu": 3.0,
+      "hot_wsfu": null,
+      "total_wsfu": 3.0
+    },
+    {
+      "fixture": "Washing machine (8 lb)",
+      "occupancy": "Private",
+      "supply_control": "Automatic",
+      "cold_wsfu": 1.0,
+      "hot_wsfu": 1.0,
+      "total_wsfu": 1.4
+    },
+    {
+      "fixture": "Washing machine (8 lb)",
+      "occupancy": "Public",
+      "supply_control": "Automatic",
+      "cold_wsfu": 2.25,
+      "hot_wsfu": 2.25,
+      "total_wsfu": 3.0
+    },
+    {
+      "fixture": "Washing machine (15 lb)",
+      "occupancy": "Public",
+      "supply_control": "Automatic",
+      "cold_wsfu": 3.0,
+      "hot_wsfu": 3.0,
+      "total_wsfu": 4.0
+    },
+    {
+      "fixture": "Water closet",
+      "occupancy": "Private",
+      "supply_control": "Flushometer valve",
+      "cold_wsfu": 6.0,
+      "hot_wsfu": null,
+      "total_wsfu": 6.0
+    },
+    {
+      "fixture": "Water closet",
+      "occupancy": "Private",
+      "supply_control": "Flush tank",
+      "cold_wsfu": 2.2,
+      "hot_wsfu": null,
+      "total_wsfu": 2.2
+    },
+    {
+      "fixture": "Water closet",
+      "occupancy": "Public",
+      "supply_control": "Flushometer valve",
+      "cold_wsfu": 10.0,
+      "hot_wsfu": null,
+      "total_wsfu": 10.0
+    },
+    {
+      "fixture": "Water closet",
+      "occupancy": "Public",
+      "supply_control": "Flush tank",
+      "cold_wsfu": 5.0,
+      "hot_wsfu": null,
+      "total_wsfu": 5.0
+    },
+    {
+      "fixture": "Water closet",
+      "occupancy": "Public or private",
+      "supply_control": "Flushometer tank",
+      "cold_wsfu": 2.0,
+      "hot_wsfu": null,
+      "total_wsfu": 2.0
+    }
+  ],
+  "demand_flush_tank": [
+    {
+      "wsfu": 1.0,
+      "gpm": 3.0,
+      "cfm": 0.04104
+    },
+    {
+      "wsfu": 2.0,
+      "gpm": 5.0,
+      "cfm": 0.0684
+    },
+    {
+      "wsfu": 3.0,
+      "gpm": 6.5,
+      "cfm": 0.86892
+    },
+    {
+      "wsfu": 4.0,
+      "gpm": 8.0,
+      "cfm": 1.06944
+    },
+    {
+      "wsfu": 5.0,
+      "gpm": 9.4,
+      "cfm": 1.256592
+    },
+    {
+      "wsfu": 6.0,
+      "gpm": 10.7,
+      "cfm": 1.430376
+    },
+    {
+      "wsfu": 7.0,
+      "gpm": 11.8,
+      "cfm": 1.577424
+    },
+    {
+      "wsfu": 8.0,
+      "gpm": 12.8,
+      "cfm": 1.711104
+    },
+    {
+      "wsfu": 9.0,
+      "gpm": 13.7,
+      "cfm": 1.831416
+    },
+    {
+      "wsfu": 10.0,
+      "gpm": 14.6,
+      "cfm": 1.951728
+    },
+    {
+      "wsfu": 11.0,
+      "gpm": 15.4,
+      "cfm": 2.058672
+    },
+    {
+      "wsfu": 12.0,
+      "gpm": 16.0,
+      "cfm": 2.13888
+    },
+    {
+      "wsfu": 13.0,
+      "gpm": 16.5,
+      "cfm": 2.20572
+    },
+    {
+      "wsfu": 14.0,
+      "gpm": 17.0,
+      "cfm": 2.27256
+    },
+    {
+      "wsfu": 15.0,
+      "gpm": 17.5,
+      "cfm": 2.3394
+    },
+    {
+      "wsfu": 16.0,
+      "gpm": 18.0,
+      "cfm": 2.90624
+    },
+    {
+      "wsfu": 17.0,
+      "gpm": 18.4,
+      "cfm": 2.459712
+    },
+    {
+      "wsfu": 18.0,
+      "gpm": 18.8,
+      "cfm": 2.513184
+    },
+    {
+      "wsfu": 19.0,
+      "gpm": 19.2,
+      "cfm": 2.566656
+    },
+    {
+      "wsfu": 20.0,
+      "gpm": 19.6,
+      "cfm": 2.620128
+    },
+    {
+      "wsfu": 25.0,
+      "gpm": 21.5,
+      "cfm": 2.87412
+    },
+    {
+      "wsfu": 30.0,
+      "gpm": 23.3,
+      "cfm": 3.114744
+    },
+    {
+      "wsfu": 35.0,
+      "gpm": 24.9,
+      "cfm": 3.328632
+    },
+    {
+      "wsfu": 40.0,
+      "gpm": 26.3,
+      "cfm": 3.515784
+    },
+    {
+      "wsfu": 45.0,
+      "gpm": 27.7,
+      "cfm": 3.702936
+    },
+    {
+      "wsfu": 50.0,
+      "gpm": 29.1,
+      "cfm": 3.890088
+    },
+    {
+      "wsfu": 60.0,
+      "gpm": 32.0,
+      "cfm": 4.27776
+    },
+    {
+      "wsfu": 70.0,
+      "gpm": 35.0,
+      "cfm": 4.6788
+    },
+    {
+      "wsfu": 80.0,
+      "gpm": 38.0,
+      "cfm": 5.07984
+    },
+    {
+      "wsfu": 90.0,
+      "gpm": 41.0,
+      "cfm": 5.48088
+    },
+    {
+      "wsfu": 100.0,
+      "gpm": 43.5,
+      "cfm": 5.81508
+    },
+    {
+      "wsfu": 120.0,
+      "gpm": 48.0,
+      "cfm": 6.41664
+    },
+    {
+      "wsfu": 140.0,
+      "gpm": 52.5,
+      "cfm": 7.0182
+    },
+    {
+      "wsfu": 160.0,
+      "gpm": 57.0,
+      "cfm": 7.61976
+    },
+    {
+      "wsfu": 180.0,
+      "gpm": 61.0,
+      "cfm": 8.15448
+    },
+    {
+      "wsfu": 200.0,
+      "gpm": 65.0,
+      "cfm": 8.6892
+    },
+    {
+      "wsfu": 225.0,
+      "gpm": 70.0,
+      "cfm": 9.3576
+    },
+    {
+      "wsfu": 250.0,
+      "gpm": 75.0,
+      "cfm": 10.026
+    },
+    {
+      "wsfu": 275.0,
+      "gpm": 80.0,
+      "cfm": 10.6944
+    },
+    {
+      "wsfu": 300.0,
+      "gpm": 85.0,
+      "cfm": 11.3628
+    },
+    {
+      "wsfu": 400.0,
+      "gpm": 105.0,
+      "cfm": 14.0364
+    },
+    {
+      "wsfu": 500.0,
+      "gpm": 124.0,
+      "cfm": 16.57632
+    },
+    {
+      "wsfu": 750.0,
+      "gpm": 170.0,
+      "cfm": 22.7256
+    },
+    {
+      "wsfu": 1000.0,
+      "gpm": 208.0,
+      "cfm": 27.80544
+    },
+    {
+      "wsfu": 1250.0,
+      "gpm": 239.0,
+      "cfm": 31.94952
+    },
+    {
+      "wsfu": 1500.0,
+      "gpm": 269.0,
+      "cfm": 35.95992
+    },
+    {
+      "wsfu": 1750.0,
+      "gpm": 297.0,
+      "cfm": 39.70296
+    },
+    {
+      "wsfu": 2000.0,
+      "gpm": 325.0,
+      "cfm": 43.446
+    },
+    {
+      "wsfu": 2500.0,
+      "gpm": 380.0,
+      "cfm": 50.7984
+    },
+    {
+      "wsfu": 3000.0,
+      "gpm": 433.0,
+      "cfm": 57.88344
+    },
+    {
+      "wsfu": 4000.0,
+      "gpm": 525.0,
+      "cfm": 70.182
+    },
+    {
+      "wsfu": 5000.0,
+      "gpm": 593.0,
+      "cfm": 79.27224
+    }
+  ],
+  "demand_flushometer_valve": [
+    {
+      "wsfu": 5.0,
+      "gpm": 15.0,
+      "cfm": 2.0052
+    },
+    {
+      "wsfu": 6.0,
+      "gpm": 17.4,
+      "cfm": 2.326032
+    },
+    {
+      "wsfu": 7.0,
+      "gpm": 19.8,
+      "cfm": 2.646364
+    },
+    {
+      "wsfu": 8.0,
+      "gpm": 22.2,
+      "cfm": 2.967696
+    },
+    {
+      "wsfu": 9.0,
+      "gpm": 24.6,
+      "cfm": 3.288528
+    },
+    {
+      "wsfu": 10.0,
+      "gpm": 27.0,
+      "cfm": 3.60936
+    },
+    {
+      "wsfu": 11.0,
+      "gpm": 27.8,
+      "cfm": 3.716304
+    },
+    {
+      "wsfu": 12.0,
+      "gpm": 28.6,
+      "cfm": 3.823248
+    },
+    {
+      "wsfu": 13.0,
+      "gpm": 29.4,
+      "cfm": 3.930192
+    },
+    {
+      "wsfu": 14.0,
+      "gpm": 30.2,
+      "cfm": 4.037136
+    },
+    {
+      "wsfu": 15.0,
+      "gpm": 31.0,
+      "cfm": 4.14408
+    },
+    {
+      "wsfu": 16.0,
+      "gpm": 31.8,
+      "cfm": 4.241024
+    },
+    {
+      "wsfu": 17.0,
+      "gpm": 32.6,
+      "cfm": 4.357968
+    },
+    {
+      "wsfu": 18.0,
+      "gpm": 33.4,
+      "cfm": 4.464912
+    },
+    {
+      "wsfu": 19.0,
+      "gpm": 34.2,
+      "cfm": 4.571856
+    },
+    {
+      "wsfu": 20.0,
+      "gpm": 35.0,
+      "cfm": 4.6788
+    },
+    {
+      "wsfu": 25.0,
+      "gpm": 38.0,
+      "cfm": 5.07984
+    },
+    {
+      "wsfu": 30.0,
+      "gpm": 42.0,
+      "cfm": 5.61356
+    },
+    {
+      "wsfu": 35.0,
+      "gpm": 44.0,
+      "cfm": 5.88192
+    },
+    {
+      "wsfu": 40.0,
+      "gpm": 46.0,
+      "cfm": 6.14928
+    },
+    {
+      "wsfu": 45.0,
+      "gpm": 48.0,
+      "cfm": 6.41664
+    },
+    {
+      "wsfu": 50.0,
+      "gpm": 50.0,
+      "cfm": 6.684
+    },
+    {
+      "wsfu": 60.0,
+      "gpm": 54.0,
+      "cfm": 7.21872
+    },
+    {
+      "wsfu": 70.0,
+      "gpm": 58.0,
+      "cfm": 7.75344
+    },
+    {
+      "wsfu": 80.0,
+      "gpm": 61.2,
+      "cfm": 8.181216
+    },
+    {
+      "wsfu": 90.0,
+      "gpm": 64.3,
+      "cfm": 8.595624
+    },
+    {
+      "wsfu": 100.0,
+      "gpm": 67.5,
+      "cfm": 9.0234
+    },
+    {
+      "wsfu": 120.0,
+      "gpm": 73.0,
+      "cfm": 9.75864
+    },
+    {
+      "wsfu": 140.0,
+      "gpm": 77.0,
+      "cfm": 10.29336
+    },
+    {
+      "wsfu": 160.0,
+      "gpm": 81.0,
+      "cfm": 10.82808
+    },
+    {
+      "wsfu": 180.0,
+      "gpm": 85.5,
+      "cfm": 11.42964
+    },
+    {
+      "wsfu": 200.0,
+      "gpm": 90.0,
+      "cfm": 12.0312
+    },
+    {
+      "wsfu": 225.0,
+      "gpm": 95.5,
+      "cfm": 12.76644
+    },
+    {
+      "wsfu": 250.0,
+      "gpm": 101.0,
+      "cfm": 13.50168
+    },
+    {
+      "wsfu": 275.0,
+      "gpm": 104.5,
+      "cfm": 13.96956
+    },
+    {
+      "wsfu": 300.0,
+      "gpm": 108.0,
+      "cfm": 14.43744
+    },
+    {
+      "wsfu": 400.0,
+      "gpm": 127.0,
+      "cfm": 16.97736
+    },
+    {
+      "wsfu": 500.0,
+      "gpm": 143.0,
+      "cfm": 19.11624
+    },
+    {
+      "wsfu": 750.0,
+      "gpm": 177.0,
+      "cfm": 23.66136
+    },
+    {
+      "wsfu": 1000.0,
+      "gpm": 208.0,
+      "cfm": 27.80544
+    },
+    {
+      "wsfu": 1250.0,
+      "gpm": 239.0,
+      "cfm": 31.94952
+    },
+    {
+      "wsfu": 1500.0,
+      "gpm": 269.0,
+      "cfm": 35.95992
+    },
+    {
+      "wsfu": 1750.0,
+      "gpm": 297.0,
+      "cfm": 39.70296
+    },
+    {
+      "wsfu": 2000.0,
+      "gpm": 325.0,
+      "cfm": 43.446
+    },
+    {
+      "wsfu": 2500.0,
+      "gpm": 380.0,
+      "cfm": 50.7984
+    },
+    {
+      "wsfu": 3000.0,
+      "gpm": 433.0,
+      "cfm": 57.88344
+    },
+    {
+      "wsfu": 4000.0,
+      "gpm": 525.0,
+      "cfm": 70.182
+    },
+    {
+      "wsfu": 5000.0,
+      "gpm": 593.0,
+      "cfm": 79.27224
+    }
+  ],
+  "fixture_flow_604_3": [
+    {
+      "fixture": "Bathtub, balanced-pressure, thermostatic or combination balanced-pressure/thermostatic mixing valve",
+      "flow_gpm": 4.0,
+      "flow_pressure_psi": 20.0
+    },
+    {
+      "fixture": "Bidet, thermostatic mixing valve",
+      "flow_gpm": 2.0,
+      "flow_pressure_psi": 20.0
+    },
+    {
+      "fixture": "Combination fixture",
+      "flow_gpm": 4.0,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Dishwasher, residential",
+      "flow_gpm": 2.75,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Drinking fountain",
+      "flow_gpm": 0.75,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Laundry tray",
+      "flow_gpm": 4.0,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Lavatory, private",
+      "flow_gpm": 0.8,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Lavatory, private, mixing valve",
+      "flow_gpm": 0.8,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Lavatory, public",
+      "flow_gpm": 0.4,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Shower",
+      "flow_gpm": 2.5,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Shower, balanced-pressure, thermostatic or combination balanced-pressure/thermostatic mixing valve",
+      "flow_gpm": 2.5,
+      "flow_pressure_psi": 20.0
+    },
+    {
+      "fixture": "Sill cock, hose bibb",
+      "flow_gpm": 5.0,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Sink, residential",
+      "flow_gpm": 1.75,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Sink, service",
+      "flow_gpm": 3.0,
+      "flow_pressure_psi": 8.0
+    },
+    {
+      "fixture": "Urinal, valve",
+      "flow_gpm": 12.0,
+      "flow_pressure_psi": 25.0
+    },
+    {
+      "fixture": "Water closet, blow out, flushometer valve",
+      "flow_gpm": 25.0,
+      "flow_pressure_psi": 45.0
+    },
+    {
+      "fixture": "Water closet, flushometer tank",
+      "flow_gpm": 1.6,
+      "flow_pressure_psi": 20.0
+    },
+    {
+      "fixture": "Water closet, siphonic, flushometer valve",
+      "flow_gpm": 25.0,
+      "flow_pressure_psi": 35.0
+    },
+    {
+      "fixture": "Water closet, tank, close coupled",
+      "flow_gpm": 3.0,
+      "flow_pressure_psi": 20.0
+    },
+    {
+      "fixture": "Water closet, tank, one piece",
+      "flow_gpm": 6.0,
+      "flow_pressure_psi": 20.0
+    }
+  ],
+  "fixture_supply_604_5": [
+    {
+      "fixture": "Bathtubsa(60\u2033 \u00d7 32\u2033 and smaller)",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Bathtubsa(larger than 60\u2033 \u00d7 32\u2033)",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Bidet",
+      "min_supply_in": "3/8"
+    },
+    {
+      "fixture": "Combination sink and tray",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Dishwasher, domestica",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Drinking fountain",
+      "min_supply_in": "3/8"
+    },
+    {
+      "fixture": "Hose bibbs",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Kitchen sinka",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Laundry, 1, 2 or 3 compartmentsa",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Lavatory",
+      "min_supply_in": "3/8"
+    },
+    {
+      "fixture": "Shower, single heada",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Sinks, flushing rim",
+      "min_supply_in": "3/4"
+    },
+    {
+      "fixture": "Sinks, service",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Urinal, flush tank",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Urinal, flushometer valve",
+      "min_supply_in": "3/4"
+    },
+    {
+      "fixture": "Wall hydrant",
+      "min_supply_in": "1/2"
+    },
+    {
+      "fixture": "Water closet, flush tank",
+      "min_supply_in": "3/8"
+    },
+    {
+      "fixture": "Water closet, flushometer tank",
+      "min_supply_in": "3/8"
+    },
+    {
+      "fixture": "Water closet, flushometer valve",
+      "min_supply_in": "1"
+    },
+    {
+      "fixture": "Water closet, one piecea",
+      "min_supply_in": "1/2"
+    }
+  ],
+  "firm_sizing_table": [
+    {
+      "nominal_size": "1/2",
+      "size_inches": 0.5,
+      "max_wsfu_5fps_hot": 1.0,
+      "max_wsfu_8fps_cold": 2.0
+    },
+    {
+      "nominal_size": "3/4",
+      "size_inches": 0.75,
+      "max_wsfu_5fps_hot": 3.0,
+      "max_wsfu_8fps_cold": 6.0
+    },
+    {
+      "nominal_size": "1",
+      "size_inches": 1.0,
+      "max_wsfu_5fps_hot": 7.0,
+      "max_wsfu_8fps_cold": 19.0
+    },
+    {
+      "nominal_size": "1-1/4",
+      "size_inches": 1.25,
+      "max_wsfu_5fps_hot": 18.0,
+      "max_wsfu_8fps_cold": 55.0
+    },
+    {
+      "nominal_size": "1-1/2",
+      "size_inches": 1.5,
+      "max_wsfu_5fps_hot": 40.0,
+      "max_wsfu_8fps_cold": 100.0
+    },
+    {
+      "nominal_size": "2",
+      "size_inches": 2.0,
+      "max_wsfu_5fps_hot": 120.0,
+      "max_wsfu_8fps_cold": 250.0
+    },
+    {
+      "nominal_size": "2-1/2",
+      "size_inches": 2.5,
+      "max_wsfu_5fps_hot": 250.0,
+      "max_wsfu_8fps_cold": 475.0
+    },
+    {
+      "nominal_size": "3",
+      "size_inches": 3.0,
+      "max_wsfu_5fps_hot": 400.0,
+      "max_wsfu_8fps_cold": 750.0
+    }
+  ]
+}

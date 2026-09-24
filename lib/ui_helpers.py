@@ -12,6 +12,7 @@ from System.Windows.Media import Brushes
 
 import gas_tables
 import shared_params
+import water_tables
 
 
 _PICKER_XAML = (
@@ -37,6 +38,170 @@ _PICKER_XAML = (
     '</StackPanel>'
     '</Window>'
 )
+
+
+_WATER_XAML = (
+    '<Window'
+    ' xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"'
+    ' Height="600" Width="560"'
+    ' ResizeMode="NoResize"'
+    ' WindowStartupLocation="CenterScreen">'
+    '<Grid Margin="15">'
+    '<Grid.RowDefinitions>'
+    '<RowDefinition Height="Auto"/>'
+    '<RowDefinition Height="*"/>'
+    '<RowDefinition Height="Auto"/>'
+    '</Grid.RowDefinitions>'
+
+    '<StackPanel Grid.Row="0">'
+    '<TextBlock Text="Basis of Design" FontWeight="Bold" Margin="0,0,0,4"/>'
+    '<Border BorderBrush="#CCCCCC" BorderThickness="1" Background="#F7F7F7"'
+    ' Padding="8" Margin="0,0,0,12">'
+    '<TextBlock Name="tbBasis" TextWrapping="Wrap" FontSize="11"'
+    ' Foreground="#333333"/>'
+    '</Border>'
+    '</StackPanel>'
+
+    '<ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">'
+    '<StackPanel>'
+    '<TextBlock Text="Project Information" FontWeight="Bold" Margin="0,0,0,6"/>'
+    '<TextBlock Text="Job name" FontSize="11" Margin="0,0,0,2"/>'
+    '<TextBox Name="tbJob" Margin="0,0,0,8"/>'
+    '<TextBlock Text="Job number" FontSize="11" Margin="0,0,0,2"/>'
+    '<TextBox Name="tbJobNo" Margin="0,0,0,8"/>'
+    '<TextBlock Text="By" FontSize="11" Margin="0,0,0,2"/>'
+    '<TextBox Name="tbBy" Margin="0,0,0,14"/>'
+
+    '<TextBlock Text="Hot Water System Types In This Model"'
+    ' FontWeight="Bold" Margin="0,0,0,4"/>'
+    '<TextBlock Text="Revit classifies a recirculation system as Domestic Hot'
+    ' Water, exactly like the hot supply, so the tool cannot tell them apart on'
+    ' its own. Tick any system below that is a RECIRCULATION or RETURN system.'
+    ' Ticked systems are reported but NOT sized, because return piping is sized'
+    ' on circulation flow rather than fixture units."'
+    ' FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,6"/>'
+    '<StackPanel Name="spHotSystems" Margin="8,0,0,14"/>'
+
+    '<TextBlock Text="Options" FontWeight="Bold" Margin="0,0,0,6"/>'
+    '<CheckBox Name="cbReportOnly" Content="Report only, do not write sizes'
+    ' to the model" Margin="0,0,0,6"/>'
+    '<CheckBox Name="cbMinimums" Content="Apply firm minimum sizes (single'
+    ' fixture takes its connector size, two or more fixtures not smaller than'
+    ' 3/4 inch)" Margin="0,0,0,6"/>'
+    '<CheckBox Name="cbDraftingView" Content="Create a drafting view with the'
+    ' WSFU take-off table" Margin="0,0,0,6"/>'
+    '<CheckBox Name="cbSheet" Content="Also place that drafting view on a new'
+    ' sheet" Margin="20,0,0,6"/>'
+    '</StackPanel>'
+    '</ScrollViewer>'
+
+    '<StackPanel Grid.Row="2" Orientation="Horizontal"'
+    ' HorizontalAlignment="Right" Margin="0,12,0,0">'
+    '<Button Name="btnCancel" Content="Cancel" Width="80" Margin="0,0,8,0"/>'
+    '<Button Name="btnOK" Content="Size Water" Width="100"/>'
+    '</StackPanel>'
+    '</Grid>'
+    '</Window>'
+)
+
+
+def show_water_dialog(title, project_info, hot_system_types):
+    """Startup dialog for Size Water. One dialog, then everything is automatic.
+
+    Args:
+        title: window title string.
+        project_info: dict with "job", "job_number", "by" defaults, read from
+            Revit Project Information by the caller.
+        hot_system_types: list of (element_id, name) for every PipingSystemType
+            classified as Domestic Hot Water. The user ticks the ones that are
+            recirculation, because Revit cannot distinguish them.
+
+    Returns:
+        dict with "job", "job_number", "by", "report_only", "apply_minimums",
+        "return_system_type_ids" (set of ints), or None if cancelled.
+    """
+    from System.Windows.Controls import CheckBox
+
+    window = XamlReader.Parse(_WATER_XAML)
+    window.Title = title
+
+    tb_basis = window.FindName('tbBasis')
+    tb_job = window.FindName('tbJob')
+    tb_job_no = window.FindName('tbJobNo')
+    tb_by = window.FindName('tbBy')
+    sp_hot = window.FindName('spHotSystems')
+    cb_report_only = window.FindName('cbReportOnly')
+    cb_minimums = window.FindName('cbMinimums')
+    cb_drafting = window.FindName('cbDraftingView')
+    cb_sheet = window.FindName('cbSheet')
+    btn_ok = window.FindName('btnOK')
+    btn_cancel = window.FindName('btnCancel')
+
+    # The basis block comes from the data module, so the dialog can never show
+    # a basis different from the one the sizing actually used.
+    tb_basis.Text = "\n".join(water_tables.basis_of_design_lines())
+
+    tb_job.Text = project_info.get("job", "") or ""
+    tb_job_no.Text = project_info.get("job_number", "") or ""
+    tb_by.Text = project_info.get("by", "") or ""
+    cb_minimums.IsChecked = True
+    cb_drafting.IsChecked = True
+    cb_sheet.IsChecked = True
+
+    def on_drafting_changed(sender, e):
+        # Placing it on a sheet is meaningless without the view, so that
+        # checkbox follows this one.
+        cb_sheet.IsEnabled = bool(cb_drafting.IsChecked)
+        if not cb_drafting.IsChecked:
+            cb_sheet.IsChecked = False
+
+    cb_drafting.Checked += on_drafting_changed
+    cb_drafting.Unchecked += on_drafting_changed
+
+    checkboxes = []
+    if hot_system_types:
+        for type_id, name in hot_system_types:
+            box = CheckBox()
+            box.Content = "{}  (id {})".format(name, type_id)
+            box.Margin = window.FindName('cbReportOnly').Margin
+            box.IsChecked = False
+            sp_hot.Children.Add(box)
+            checkboxes.append((box, type_id))
+    else:
+        from System.Windows.Controls import TextBlock
+        empty = TextBlock()
+        empty.Text = "No Domestic Hot Water system types found in this model."
+        empty.FontSize = 11
+        empty.Foreground = Brushes.Gray
+        sp_hot.Children.Add(empty)
+
+    result = [None]
+
+    def on_ok(sender, e):
+        returns = set()
+        for box, type_id in checkboxes:
+            if box.IsChecked:
+                returns.add(type_id)
+        result[0] = {
+            "job": tb_job.Text.strip(),
+            "job_number": tb_job_no.Text.strip(),
+            "by": tb_by.Text.strip(),
+            "report_only": bool(cb_report_only.IsChecked),
+            "apply_minimums": bool(cb_minimums.IsChecked),
+            "create_drafting_view": bool(cb_drafting.IsChecked),
+            "place_on_sheet": bool(cb_sheet.IsChecked),
+            "return_system_type_ids": returns,
+        }
+        window.Close()
+
+    def on_cancel(sender, e):
+        window.Close()
+
+    btn_ok.Click += on_ok
+    btn_cancel.Click += on_cancel
+    window.ShowDialog()
+
+    return result[0]
 
 
 def show_table_picker(title):

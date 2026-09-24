@@ -1,0 +1,8 @@
+title: Size Water
+tooltip: >
+  Select the RPZ / backflow preventer, then click to size the domestic water
+  piping per the 2024 IPC.
+  Sizes BOTH domestic cold water (on TOTAL fixture units) and domestic hot
+  water (on HOT fixture units), and writes the sizes to the model.
+  The only system it does not size is the hot water RETURN, because return
+  piping is sized on circulation flow rather than on fixture units.
