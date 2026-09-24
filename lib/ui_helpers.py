@@ -40,193 +40,206 @@ _PICKER_XAML = (
 )
 
 
-_WATER_XAML = (
-    '<Window'
-    ' xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"'
-    ' Height="600" Width="560"'
-    ' ResizeMode="NoResize"'
-    ' WindowStartupLocation="CenterScreen">'
-    '<Grid Margin="15">'
-    '<Grid.RowDefinitions>'
-    '<RowDefinition Height="Auto"/>'
-    '<RowDefinition Height="*"/>'
-    '<RowDefinition Height="Auto"/>'
-    '</Grid.RowDefinitions>'
-
-    '<StackPanel Grid.Row="0">'
-    '<TextBlock Text="Basis of Design" FontWeight="Bold" Margin="0,0,0,4"/>'
-    '<Border BorderBrush="#CCCCCC" BorderThickness="1" Background="#F7F7F7"'
-    ' Padding="8" Margin="0,0,0,12">'
-    '<TextBlock Name="tbBasis" TextWrapping="Wrap" FontSize="11"'
-    ' Foreground="#333333"/>'
-    '</Border>'
-    '</StackPanel>'
-
-    '<ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">'
-    '<StackPanel>'
-    '<TextBlock Text="Project Information" FontWeight="Bold" Margin="0,0,0,6"/>'
-    '<TextBlock Text="Job name" FontSize="11" Margin="0,0,0,2"/>'
-    '<TextBox Name="tbJob" Margin="0,0,0,8"/>'
-    '<TextBlock Text="Job number" FontSize="11" Margin="0,0,0,2"/>'
-    '<TextBox Name="tbJobNo" Margin="0,0,0,8"/>'
-    '<TextBlock Text="By" FontSize="11" Margin="0,0,0,2"/>'
-    '<TextBox Name="tbBy" Margin="0,0,0,14"/>'
-
-    '<TextBlock Text="This Run Will" FontWeight="Bold" Margin="0,0,0,6"/>'
-    '<CheckBox Name="cbSizing" IsChecked="True" IsEnabled="False"'
-    ' Margin="0,0,0,2" Content="Size the piping and write the sizes into the'
-    ' model"/>'
-    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
-    ' Margin="20,0,0,8"'
-    ' Text="Always on. Sizes domestic cold water on TOTAL fixture units and'
-    ' domestic hot water on HOT fixture units, overwrites the drawn sizes and'
-    ' resizes the fittings to match."/>'
-    '<CheckBox Name="cbWsfu" IsChecked="True" Margin="0,0,0,2"'
-    ' Content="WSFU Calculations"/>'
-    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
-    ' Margin="20,0,0,14"'
-    ' Text="Puts the water supply fixture unit take-off on a drafting view and'
-    ' a new sheet, so the fixture unit count behind every pipe size can be'
-    ' checked against the model. The take-off also prints in the pyRevit'
-    ' window either way."/>'
-
-    '<TextBlock Text="Hot Water Return System" FontWeight="Bold"'
-    ' Margin="0,0,0,4"/>'
-    '<TextBlock Name="tbReturnNote" FontSize="10" Foreground="Gray"'
-    ' TextWrapping="Wrap" Margin="0,0,0,6"/>'
-    '<StackPanel Name="spHotSystems" Margin="8,0,0,14"/>'
-    '</StackPanel>'
-    '</ScrollViewer>'
-
-    '<StackPanel Grid.Row="2" Orientation="Horizontal"'
-    ' HorizontalAlignment="Right" Margin="0,12,0,0">'
-    '<Button Name="btnCancel" Content="Cancel" Width="80" Margin="0,0,8,0"/>'
-    '<Button Name="btnSize" Content="Size Water" Width="110"/>'
-    '</StackPanel>'
-    '</Grid>'
-    '</Window>'
-)
-
-
 def show_water_dialog(title, project_info, return_detection):
-    """The one Size Water dialog. One dialog, then everything is automatic.
+    """The one Size Water dialog, laid out like the Duct Velocity dialog.
 
-    Two things happen on a run, and the check boxes say which: sizing, which
-    is always on, and the WSFU Calculations take-off, which is optional.
+    Same idiom as show_velocity_settings_dialog(): options first, bold grey
+    section headers, separators between sections, and the basis of design as
+    label / value rows at the BOTTOM, directly above OK / Cancel.
 
-    The hot water RETURN is DETECTED, not asked. It is read off the pipes'
-    System Types, which do separate the recirculation system from the hot
-    supply even though the system CLASSIFICATION does not. The detected
-    system is shown already ticked, with the reason it was picked, so the
-    dialog reports a finding the user can overrule instead of asking a
-    question the model already answers.
+    Two check boxes say what the run does. Sizing is always on and shown
+    disabled, so the dialog states the job rather than offering it. WSFU
+    Calculations is optional and produces the take-off.
+
+    The hot water RETURN is NOT asked about. It is detected from the pipes'
+    System Types before this dialog opens, because System Type separates the
+    recirculation system from the hot supply even though system
+    CLASSIFICATION does not. The finding is printed to the pyRevit window and
+    restated here as an assumption, so there is nothing to ask.
 
     Args:
         title: window title string.
         project_info: dict with "job", "job_number", "by" defaults, read from
             Revit Project Information by the caller.
         return_detection: the dict from
-            water_graph.detect_return_system_types().
+            water_graph.detect_return_system_types(). Reported, not asked.
 
     Returns:
         dict with "job", "job_number", "by", "wsfu_calcs" (bool) and
         "return_system_type_ids" (set of ints), or None if cancelled.
     """
-    from System.Windows.Controls import CheckBox, TextBlock
-    from System.Windows import Thickness, TextWrapping
+    from System.Windows import (
+        Thickness, TextWrapping, SizeToContent, WindowStartupLocation,
+        HorizontalAlignment, FontWeights, Window)
+    from System.Windows.Controls import (
+        StackPanel, TextBlock, TextBox, CheckBox, Button, Label, Separator,
+        Orientation)
+    from System.Windows.Media import SolidColorBrush, Colors
 
-    window = XamlReader.Parse(_WATER_XAML)
-    window.Title = title
-
-    tb_basis = window.FindName('tbBasis')
-    tb_job = window.FindName('tbJob')
-    tb_job_no = window.FindName('tbJobNo')
-    tb_by = window.FindName('tbBy')
-    cb_wsfu = window.FindName('cbWsfu')
-    tb_return_note = window.FindName('tbReturnNote')
-    sp_hot = window.FindName('spHotSystems')
-    btn_size = window.FindName('btnSize')
-    btn_cancel = window.FindName('btnCancel')
-
-    # The basis block comes from the data module, so the dialog can never show
-    # a basis different from the one the sizing actually used.
-    tb_basis.Text = "\n".join(water_tables.basis_of_design_lines())
-
-    tb_job.Text = project_info.get("job", "") or ""
-    tb_job_no.Text = project_info.get("job_number", "") or ""
-    tb_by.Text = project_info.get("by", "") or ""
-
-    candidates = (return_detection or {}).get("candidates") or []
-    certain = (return_detection or {}).get("certain", False)
-
-    if not candidates:
-        tb_return_note.Text = (
-            "No hot water piping was found on this network, so there is "
-            "nothing to mark as a return.")
-    elif certain:
-        tb_return_note.Text = (
-            "Detected from the model. A ticked system is REPORTED BUT NOT "
-            "SIZED, because return piping is sized on circulation flow "
-            "rather than on fixture units. Change a tick if this is wrong.")
-    else:
-        tb_return_note.Text = (
-            "No recirculation pump or return-to-heater connection was found, "
-            "so the tick below is a best guess from the System Type names "
-            "and pipe counts. CHECK IT. A ticked system is reported but NOT "
-            "sized, because return piping is sized on circulation flow "
-            "rather than on fixture units.")
-
-    checkboxes = []
-    for entry in candidates:
-        box = CheckBox()
-        box.Content = "{}  -  {} pipe(s)".format(
-            entry["name"], entry["pipe_count"])
-        box.IsChecked = bool(entry.get("detected"))
-        box.Margin = Thickness(0, 0, 0, 2)
-        sp_hot.Children.Add(box)
-        checkboxes.append((box, entry["id"]))
-
-        # Say WHY, every time, so a wrong tick is obvious rather than magic.
-        reason = TextBlock()
-        if entry.get("reasons"):
-            reason.Text = "Return, because " + "; ".join(entry["reasons"]) + "."
-        else:
-            reason.Text = "Supply. Nothing marks this as a return."
-        reason.FontSize = 10
-        reason.Foreground = Brushes.Gray
-        reason.TextWrapping = TextWrapping.Wrap
-        reason.Margin = Thickness(20, 0, 0, 8)
-        sp_hot.Children.Add(reason)
-
-    if not candidates:
-        empty = TextBlock()
-        empty.Text = "No hot water System Type found on this network."
-        empty.FontSize = 11
-        empty.Foreground = Brushes.Gray
-        sp_hot.Children.Add(empty)
+    WIN_WIDTH = 520
+    CONTENT_W = WIN_WIDTH - 28 - 20
 
     result = [None]
 
-    def on_size(sender, e):
-        returns = set()
-        for box, type_id in checkboxes:
-            if box.IsChecked:
-                returns.add(type_id)
+    win = Window()
+    win.Title = title
+    win.Width = WIN_WIDTH
+    win.SizeToContent = SizeToContent.Height
+    win.WindowStartupLocation = WindowStartupLocation.CenterScreen
+
+    outer = StackPanel()
+    outer.Margin = Thickness(14)
+
+    def _section(text):
+        hdr = TextBlock()
+        hdr.Text = text
+        hdr.FontWeight = FontWeights.Bold
+        hdr.Foreground = SolidColorBrush(Colors.DimGray)
+        hdr.Margin = Thickness(0, 0, 0, 4)
+        outer.Children.Add(hdr)
+
+    def _separator():
+        sep = Separator()
+        sep.Margin = Thickness(0, 12, 0, 8)
+        outer.Children.Add(sep)
+
+    def _note(text, indent=20):
+        tb = TextBlock()
+        tb.Text = text
+        tb.TextWrapping = TextWrapping.Wrap
+        tb.Width = CONTENT_W - indent
+        tb.Foreground = SolidColorBrush(Colors.DimGray)
+        tb.Margin = Thickness(indent, 0, 0, 8)
+        outer.Children.Add(tb)
+
+    def _checkbox(text, checked, enabled=True, bold=False):
+        box = CheckBox()
+        caption = TextBlock()
+        caption.Text = text
+        caption.TextWrapping = TextWrapping.Wrap
+        caption.Width = CONTENT_W - 20
+        box.Content = caption
+        box.IsChecked = checked
+        box.IsEnabled = enabled
+        if bold:
+            box.FontWeight = FontWeights.Bold
+        box.Margin = Thickness(2, 0, 0, 2)
+        outer.Children.Add(box)
+        return box
+
+    def _field(label_text, value):
+        lbl = Label()
+        lbl.Content = label_text
+        outer.Children.Add(lbl)
+        tb = TextBox()
+        tb.Text = value or ""
+        tb.Margin = Thickness(2, 0, 2, 8)
+        outer.Children.Add(tb)
+        return tb
+
+    # -- 1. what this run does ----------------------------------------------
+    _section("This Run Will")
+    _checkbox("Size the piping and write the sizes into the model",
+              True, enabled=False, bold=True)
+    _note("Always on. Cold water is sized on TOTAL fixture units and hot "
+          "water on HOT fixture units. Drawn sizes are overwritten and the "
+          "fittings are resized to match.")
+    cb_wsfu = _checkbox("WSFU Calculations", True)
+    _note("Puts the water supply fixture unit take-off on a drafting view "
+          "and a new sheet, so the fixture unit count behind every pipe size "
+          "can be checked against the model. The take-off prints in the "
+          "pyRevit window either way.")
+
+    _separator()
+
+    # -- 2. project information ---------------------------------------------
+    _section("Project Information")
+    tb_job = _field("Job name", project_info.get("job", ""))
+    tb_job_no = _field("Job number", project_info.get("job_number", ""))
+    tb_by = _field("By", project_info.get("by", ""))
+
+    _separator()
+
+    # -- 3. basis of design, at the bottom, matching Calculation Basis ------
+    _section("Basis of Design")
+
+    _INFO_LBL_W = 150
+
+    def _info_row(label_text, value_text):
+        row = StackPanel()
+        row.Orientation = Orientation.Horizontal
+        row.Margin = Thickness(0, 1, 0, 1)
+        lbl = TextBlock()
+        lbl.Text = label_text
+        lbl.Width = _INFO_LBL_W
+        lbl.FontWeight = FontWeights.Bold
+        lbl.Foreground = SolidColorBrush(Colors.DimGray)
+        val = TextBlock()
+        val.Text = value_text
+        val.TextWrapping = TextWrapping.Wrap
+        val.Width = CONTENT_W - _INFO_LBL_W
+        val.Foreground = SolidColorBrush(Colors.DimGray)
+        row.Children.Add(lbl)
+        row.Children.Add(val)
+        outer.Children.Add(row)
+
+    # Straight from the data module, so the dialog can never show a basis
+    # different from the one the sizing actually used.
+    for label_text, value_text in water_tables.basis_of_design_rows():
+        _info_row(label_text, value_text)
+
+    # The detected return system is stated here as an assumption. Reported,
+    # never asked: the model already answers it.
+    detected = set((return_detection or {}).get("detected") or set())
+    candidates = (return_detection or {}).get("candidates") or []
+    if candidates:
+        named = [c["name"] for c in candidates if c["id"] in detected]
+        if named:
+            _info_row("Return system:",
+                      ", ".join(named) + " - detected from the pipes' System "
+                      "Types and left unsized. The pyRevit window says why.")
+        else:
+            _info_row("Return system:",
+                      "none found. Every hot water System Type on this "
+                      "network is being sized as supply.")
+
+    # -- OK / Cancel ---------------------------------------------------------
+    btn_panel = StackPanel()
+    btn_panel.Orientation = Orientation.Horizontal
+    btn_panel.HorizontalAlignment = HorizontalAlignment.Right
+    btn_panel.Margin = Thickness(0, 14, 0, 0)
+
+    ok_btn = Button()
+    ok_btn.Content = "OK"
+    ok_btn.Width = 72
+    ok_btn.Margin = Thickness(0, 0, 8, 0)
+
+    cancel_btn = Button()
+    cancel_btn.Content = "Cancel"
+    cancel_btn.Width = 72
+
+    def on_ok(sender, e):
         result[0] = {
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
             "by": tb_by.Text.strip(),
             "wsfu_calcs": bool(cb_wsfu.IsChecked),
-            "return_system_type_ids": returns,
+            # Detected, not chosen. The dialog never asked.
+            "return_system_type_ids": set(detected),
         }
-        window.Close()
+        win.Close()
 
     def on_cancel(sender, e):
-        window.Close()
+        win.Close()
 
-    btn_size.Click += on_size
-    btn_cancel.Click += on_cancel
-    window.ShowDialog()
+    ok_btn.Click += on_ok
+    cancel_btn.Click += on_cancel
+    btn_panel.Children.Add(ok_btn)
+    btn_panel.Children.Add(cancel_btn)
+    outer.Children.Add(btn_panel)
+
+    win.Content = outer
+    win.ShowDialog()
 
     return result[0]
 

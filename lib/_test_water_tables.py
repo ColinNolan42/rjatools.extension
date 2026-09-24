@@ -315,6 +315,39 @@ class TestBasisOfDesignLines(unittest.TestCase):
         self.assertIn("5 fps", joined)
 
 
+class TestBasisOfDesignRows(unittest.TestCase):
+    """The dialog shows the basis as label / value rows, matching the Duct
+    Velocity Calculation Basis block. Same data as the printed sentences."""
+
+    def test_returns_ascii_label_value_pairs(self):
+        rows = wt.basis_of_design_rows()
+        self.assertIsInstance(rows, list)
+        self.assertGreater(len(rows), 0)
+        for row in rows:
+            self.assertEqual(len(row), 2)
+            label, value = row
+            self.assertIsInstance(label, str)
+            self.assertIsInstance(value, str)
+            label.encode("ascii")
+            value.encode("ascii")
+            self.assertTrue(label.strip(), "a label must not be blank")
+            self.assertTrue(value.strip(), "a value must not be blank")
+
+    def test_carries_the_same_key_facts_as_the_printed_lines(self):
+        """If these two ever disagree, the dialog is lying about the run."""
+        joined_rows = " ".join(l + " " + v for l, v in wt.basis_of_design_rows())
+        joined_lines = " ".join(wt.basis_of_design_lines())
+        for token in ("2024 International Plumbing Code", "E103.3(2)",
+                      "E103.3(3)", "8 fps", "5 fps", "Copper Type L"):
+            self.assertIn(token, joined_rows)
+            self.assertIn(token, joined_lines)
+
+    def test_states_what_is_not_evaluated(self):
+        joined = " ".join(v for _, v in wt.basis_of_design_rows())
+        self.assertIn("pressure loss", joined.lower())
+        self.assertIn("return", joined.lower())
+
+
 class TestDataIntegrity(unittest.TestCase):
 
     def test_firm_table_ascending_both_limit_columns(self):

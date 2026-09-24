@@ -200,8 +200,10 @@ def _print_return_detection(output, detection):
     if not detection.get("certain") and any(
             e.get("detected") for e in candidates):
         output.print_md(
-            "No recirculation pump and no return-to-heater connection was "
-            "found, so that is a best guess. Confirm it in the dialog.")
+            "> No recirculation pump and no return-to-heater connection was "
+            "found, so the RETURN above is a best guess from the System Type "
+            "name and pipe count. A system marked RETURN is left unsized. "
+            "Check it against the model before using these sizes.")
 
 
 def _create_drafting_view(doc, output, graph, sizing, header):

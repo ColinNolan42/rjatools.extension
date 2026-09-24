@@ -316,10 +316,10 @@ def exceptions_block(graph, sizing_result):
         for type_id in sorted(graph.system_types.keys()):
             lines.append("      {} (id {})".format(
                 graph.system_types[type_id], type_id))
-        lines.append("      A hot water RETURN type also classifies as "
-                     "Domestic Hot Water, so it cannot be told apart "
-                     "automatically. Any type ticked as a return in the "
-                     "dialog was reported but not sized.")
+        lines.append("      Hot supply and hot water recirculation share one "
+                     "system CLASSIFICATION, so the RETURN is identified by "
+                     "System Type instead. A system identified as the return "
+                     "is reported but not sized.")
 
     # Stated positively first, because "hot water recirculation is not sized"
     # on its own reads as "hot water is not sized", which is wrong.

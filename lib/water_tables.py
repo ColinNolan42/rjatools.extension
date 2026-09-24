@@ -465,6 +465,69 @@ def basis_of_design_lines(extra=None):
     return lines
 
 
+def basis_of_design_rows():
+    """The same basis of design, as (label, value) pairs for the dialog.
+
+    The printed report wants sentences, the Size Water dialog wants the
+    label / value layout the Duct Velocity dialog uses for its Calculation
+    Basis block. Both are generated here from the loaded tables so the
+    dialog can never show a basis different from the one the sizing used.
+
+    Returns:
+        List of (label, value) ASCII string pairs.
+    """
+    data = _load()
+    source = data["_source"]
+    firm_rows = data["firm_sizing_table"]
+
+    code_edition = source.get("code", "2024 International Plumbing Code")
+
+    wsfu_table_id = str(source.get("wsfu_table", "")).split(",")[0].strip()
+    if not wsfu_table_id:
+        wsfu_table_id = "Table E103.3(2)"
+
+    demand_table_id = str(source.get("demand_table", "")).split(",")[0].strip()
+    if not demand_table_id:
+        demand_table_id = "Table E103.3(3)"
+
+    firm_source_parts = [
+        p.strip() for p in str(source.get("firm_sizing_table", "")).split(",")
+    ]
+    pipe_material = (firm_source_parts[-1] if firm_source_parts[-1]
+                     else "Copper Type L")
+
+    cold_fps = None
+    hot_fps = None
+    for key in firm_rows[0].keys():
+        if key.endswith("_cold"):
+            cold_fps = _fps_from_limit_field(key)
+        elif key.endswith("_hot"):
+            hot_fps = _fps_from_limit_field(key)
+
+    size_min = firm_rows[0]["nominal_size"]
+    size_max = firm_rows[-1]["nominal_size"]
+
+    return [
+        ("Code:", str(code_edition)),
+        ("Fixture loads:", wsfu_table_id + ", Water Supply Fixture Units"),
+        ("Demand (gpm):", demand_table_id + ", flush tank column"),
+        ("Pipe sizing:",
+         "firm WSFU-per-size table (" + pipe_material + "), nominal " +
+         str(size_min) + "\" through " + str(size_max) + "\""),
+        ("Max velocity:",
+         _fmt_fps(cold_fps) + " fps cold water, " + _fmt_fps(hot_fps) +
+         " fps hot water"),
+        ("Sized on:",
+         "cold water on TOTAL fixture units, hot water on HOT fixture "
+         "units. A cold branch serving only a water heater is sized on the "
+         "TOTAL HOT fixture units that heater serves."),
+        ("Not included:",
+         "pressure loss and velocity are NOT evaluated in this build. The "
+         "hot water return is not sized, it is sized on circulation flow "
+         "rather than on fixture units."),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
