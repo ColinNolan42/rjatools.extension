@@ -183,7 +183,7 @@ ducts1 = build([
 ])
 terms1 = {10: (400.0, 'Supply Air', 'SD-A'), 11: (250.0, 'Supply Air', 'SD-B')}
 r1 = crit([0], children1, ducts1, terms1, {})
-sa1 = r1.get('Supply Air', {})
+sa1 = r1.get(0, {}).get('Supply Air', {})
 # hand calc: long branch friction = 0.10+0.05+0.40 = 0.55, length = 20+10+60 = 90
 # (a wrong SUM-of-both-branches implementation would give 0.30+0.55 = 0.85)
 check("case1 friction is the MAX branch (0.55), not a sum",
@@ -198,7 +198,8 @@ check("case1 length_ft is 90.0 (20+10+60)",
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Case 2: Supply and Return as separate roots -> separate system-class entries.
+# Case 2: Supply and Return as separate roots -> each root gets its own
+#         top-level entry, and within it, its own system-class entry.
 # ══════════════════════════════════════════════════════════════════════════
 children2 = {0: [1], 1: [10], 100: [2], 2: [20]}
 ducts2 = build([
@@ -207,12 +208,16 @@ ducts2 = build([
 ])
 terms2 = {10: (400.0, 'Supply Air', 'SD-1'), 20: (400.0, 'Return Air', 'RG-1')}
 r2 = crit([0, 100], children2, ducts2, terms2, {})
-check("case2 both system classes present as separate keys",
-      set(r2.keys()) == {'Supply Air', 'Return Air'}, "got %r" % (list(r2.keys()),))
+check("case2 both roots present as separate top-level keys",
+      set(r2.keys()) == {0, 100}, "got %r" % (list(r2.keys()),))
+check("case2 root 0 has only the Supply Air system class",
+      set(r2.get(0, {}).keys()) == {'Supply Air'}, "got %r" % (list(r2.get(0, {}).keys()),))
+check("case2 root 100 has only the Return Air system class",
+      set(r2.get(100, {}).keys()) == {'Return Air'}, "got %r" % (list(r2.get(100, {}).keys()),))
 check("case2 Supply Air friction == 0.31",
-      abs(r2.get('Supply Air', {}).get('friction_inwc', -1) - 0.31) < 1e-9)
+      abs(r2.get(0, {}).get('Supply Air', {}).get('friction_inwc', -1) - 0.31) < 1e-9)
 check("case2 Return Air friction == 0.12",
-      abs(r2.get('Return Air', {}).get('friction_inwc', -1) - 0.12) < 1e-9)
+      abs(r2.get(100, {}).get('Return Air', {}).get('friction_inwc', -1) - 0.12) < 1e-9)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -237,7 +242,7 @@ ducts3 = build([
 ])
 terms3 = {30: (300.0, 'Supply Air', 'SD-3')}
 r3 = crit([1], children3, ducts3, terms3, nodes3)
-sa3 = r3.get('Supply Air', {})
+sa3 = r3.get(1, {}).get('Supply Air', {})
 # hand calc:
 #   Pv(1200) = (1200/4007.7)^2
 #   bypass:   n_by = len(taps)-1 = 2 taps bypassed -> 2 * C_SUPPLY_TAP_MAIN * Pv(1200)
@@ -269,7 +274,7 @@ ducts4 = build([
 ])
 terms4 = {110: (300.0, 'Supply Air', 'SD-4')}
 r4 = crit([100], children4, ducts4, terms4, nodes4)
-sa4 = r4.get('Supply Air', {})
+sa4 = r4.get(100, {}).get('Supply Air', {})
 # hand calc: elbow priced at UPSTREAM fpm (1000, from duct 100), not the
 # downstream duct 102's 1600 fpm.
 expected_fit4 = fitting_tables.C_ROUND_ELBOW_90 * pv(1000.0)
@@ -289,7 +294,7 @@ check("case4 fitting_count == 1", sa4.get('fitting_count') == 1)
 #         subtotal_inwc must equal friction_inwc + fitting_inwc.
 # ══════════════════════════════════════════════════════════════════════════
 r5 = crit([100], children4, ducts4, terms4, nodes4, safety_pct=10.0)
-sa5 = r5.get('Supply Air', {})
+sa5 = r5.get(100, {}).get('Supply Air', {})
 check("case5 subtotal_inwc == friction_inwc + fitting_inwc",
       abs(sa5.get('subtotal_inwc', -1)
           - (sa5.get('friction_inwc', 0) + sa5.get('fitting_inwc', 0))) < 1e-9,
@@ -315,7 +320,8 @@ elapsed6 = time.time() - t0
 check("case6 cycle terminates quickly (did not hang)",
       elapsed6 < 5.0, "elapsed %.3fs" % elapsed6)
 check("case6 cycle still reaches the terminal",
-      'Supply Air' in r6 and r6['Supply Air'].get('terminal_name') == 'SD-X')
+      'Supply Air' in r6.get(200, {})
+      and r6[200]['Supply Air'].get('terminal_name') == 'SD-X')
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -328,7 +334,7 @@ nodes7 = {301: Elem(kind='unknown_fitting', family_name='Zorbo Flangeless Widget
 ducts7 = build([(300, 0.0, 5.0, 900.0, 1.0, 'Supply Air')])
 terms7 = {310: (100.0, 'Supply Air', 'SD-7')}
 r7 = crit([300], children7, ducts7, terms7, nodes7)
-sa7 = r7.get('Supply Air', {})
+sa7 = r7.get(300, {}).get('Supply Air', {})
 unpriced7 = sa7.get('unpriced', ())
 check("case7 unrecognised fitting costs 0 fitting_inwc",
       abs(sa7.get('fitting_inwc', -1) - 0.0) < 1e-9)
@@ -368,7 +374,7 @@ ducts8 = build([
 ])
 terms8 = {420: (100.0, 'Supply Air', 'SD-8')}
 r8 = crit([400], children8, ducts8, terms8, {})
-sa8 = r8.get('Supply Air', {})
+sa8 = r8.get(400, {}).get('Supply Air', {})
 found_friction8 = sa8.get('friction_inwc')
 true_worst8 = 0.50 + 0.02   # 0.52, via the 402 branch -- never discovered
 cheap_result8 = 0.05 + 0.02  # 0.07, via the 401 branch -- what the walker reports
@@ -405,7 +411,7 @@ terms9 = {920: (400.0, 'Supply Air', 'SD-9')}
 
 r9 = crit([900], children9, ducts9, terms9, nodes9,
           safety_pct=0.0, diffuser_drop=0.05, damper_drop=0.25)
-sa9 = r9['Supply Air']
+sa9 = r9[900]['Supply Air']
 expected_comp9 = 0.25 + 0.05          # one balancing damper + one diffuser
 check("case9 component_inwc == 1 balancing damper (0.25) + 1 diffuser (0.05)",
       abs(sa9['component_inwc'] - expected_comp9) < 1e-9,
@@ -425,8 +431,52 @@ check("case9 subtotal now includes components",
 r9b = crit([900], children9, ducts9, terms9, nodes9,
            safety_pct=0.0, diffuser_drop=0.0, damper_drop=0.0)
 check("case9 zeroed component drops contribute nothing",
-      abs(r9b['Supply Air']['component_inwc']) < 1e-12,
-      "got %r" % r9b['Supply Air']['component_inwc'])
+      abs(r9b[900]['Supply Air']['component_inwc']) < 1e-12,
+      "got %r" % r9b[900]['Supply Air']['component_inwc'])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Case 10: TWO separate roots (two AHUs), each with its own disconnected
+#          supply tree -- the regression test for the root_id -> sys_class
+#          shape change. One unit's loss is clearly larger than the other's.
+#          Before this change both roots' 'Supply Air' results were merged
+#          into ONE dict keyed by system class, so the smaller AHU's number
+#          was silently overwritten/hidden by whichever root's traversal
+#          happened to win the `current is None or (...) >` comparison.
+# ══════════════════════════════════════════════════════════════════════════
+#   root(500, small AHU) -> duct 501 (fric 0.10) -> T510
+#   root(600, big AHU)   -> duct 601 (fric 0.80) -> T610
+#   (disjoint node id ranges and disjoint children/ducts entries -> the two
+#   trees never touch each other)
+children10 = {500: [501], 501: [510], 600: [601], 601: [610]}
+ducts10 = build([
+    (501, 0.10, 20.0,  800.0, 1.0, 'Supply Air'),
+    (601, 0.80, 100.0, 800.0, 1.0, 'Supply Air'),
+])
+terms10 = {510: (300.0, 'Supply Air', 'SD-Small'),
+           610: (500.0, 'Supply Air', 'SD-Big')}
+r10 = crit([500, 600], children10, ducts10, terms10, {})
+check("case10 exactly two top-level keys, one per root id",
+      set(r10.keys()) == {500, 600}, "got %r" % (list(r10.keys()),))
+small10 = r10.get(500, {}).get('Supply Air', {})
+big10   = r10.get(600, {}).get('Supply Air', {})
+check("case10 small AHU (root 500) Supply Air friction == 0.10 (its own tree)",
+      abs(small10.get('friction_inwc', -1) - 0.10) < 1e-9,
+      "got %r" % small10.get('friction_inwc'))
+check("case10 big AHU (root 600) Supply Air friction == 0.80 (its own tree)",
+      abs(big10.get('friction_inwc', -1) - 0.80) < 1e-9,
+      "got %r" % big10.get('friction_inwc'))
+check("case10 small AHU's terminal is its own (SD-Small), not the big unit's",
+      small10.get('terminal_name') == 'SD-Small',
+      "got %r" % small10.get('terminal_name'))
+check("case10 big AHU's terminal is its own (SD-Big), not the small unit's",
+      big10.get('terminal_name') == 'SD-Big',
+      "got %r" % big10.get('terminal_name'))
+check("case10 REGRESSION: small root's friction is NOT overwritten/hidden by "
+      "the big root's value (the old merged-by-sys-class behavior would have "
+      "made these equal)",
+      abs(small10.get('friction_inwc', -1) - big10.get('friction_inwc', -2)) > 1e-6,
+      "small=%r big=%r" % (small10.get('friction_inwc'), big10.get('friction_inwc')))
 
 
 # ── summary ──────────────────────────────────────────────────────────────────

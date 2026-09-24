@@ -574,6 +574,38 @@ def show_velocity_settings_dialog():
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
+def _root_class_airflow(root_id, all_children, all_terminals):
+    """Total CFM and terminal count per system class, downstream of ONE root.
+
+    Per equipment, deliberately: the external static report is grouped by unit,
+    and an airflow total that silently spanned two RTUs would not match the
+    static pressure printed beside it.
+
+    Counted per REACHABLE TERMINAL, the same source the duct CFMs are built
+    from (hvac_graph reads Flow only at OST_DuctTerminal leaves), so this total
+    and the duct velocities cannot disagree. A terminal reachable from two roots
+    is counted under both, which is correct: both fans move that air.
+
+    Returns {sys_class: (total_cfm, terminal_count)}.
+    """
+    out = {}
+    stack = [root_id]
+    seen = set([root_id])
+    while stack:
+        nid = stack.pop()
+        term = all_terminals.get(nid)
+        if term is not None:
+            cfm, sys_class, _family = term
+            key = sys_class or 'Unknown'
+            tot, cnt = out.get(key, (0.0, 0))
+            out[key] = (tot + cfm, cnt + 1)
+        for cid in all_children.get(nid, []):
+            if cid not in seen:
+                seen.add(cid)
+                stack.append(cid)
+    return out
+
+
 def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         all_terminals, all_nodes, safety_pct=0.0,
                         diffuser_drop=0.0, damper_drop=0.0):
@@ -620,9 +652,16 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     all_duct_results is keyed by the real Revit ElementId, so it is re-keyed by
     its own DuctResult.element_id here rather than assumed to match.
 
-    Returns {sys_class: {...}} with friction_inwc, fitting_inwc, subtotal_inwc,
-    total_inwc, duct_count, fitting_count, tap_bypass_count, length_ft,
-    terminal_id, terminal_name, unpriced.
+    Returns {root_id: {sys_class: {...}}}, i.e. keyed by EQUIPMENT FIRST.
+    Each leaf carries friction_inwc, fitting_inwc, component_inwc,
+    subtotal_inwc, total_inwc, duct_count, fitting_count, tap_bypass_count,
+    length_ft, terminal_id, terminal_name, unpriced, truncated.
+
+    Per equipment, NOT merged across equipment. Colin, 2026-09-24: "if i
+    selected two equipments i need to total external pressure drops ... split per
+    equipment." Every unit gets its own fan, so its own index run and its own
+    external static; merging two AHUs would let the bigger one's run hide the
+    smaller one's entirely.
     """
     dr_by_int_id = {}
     for dr in all_duct_results.values():
@@ -642,8 +681,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             cont_cache[nid] = hvac_graph.duct_continues_past(nid, all_nodes, all_children)
         return cont_cache[nid]
 
-    best = {}
-    truncated = [False]
+    best = {}              # root_id -> {sys_class: {...}}
+    truncated_roots = set()  # PER ROOT: one unit truncating must not label the
+                             # others, now that results print per equipment.
 
     # Bound on total path steps. A simple-path search is exponential in the
     # worst case, and while duct networks are near-trees, a badly modelled one
@@ -652,6 +692,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     MAX_PATH_STEPS = 200000
 
     for root_id in all_root_ids:
+        best_here = {}     # this equipment's own per-system-class winners
         # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
         #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
         #  nodes already on THIS path)
@@ -663,7 +704,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if steps > MAX_PATH_STEPS:
                 log.warning('_critical_path_loss: path search truncated at %d '
                             'steps from root %s', MAX_PATH_STEPS, root_id)
-                truncated[0] = True
+                truncated_roots.add(root_id)
                 break
             (nid, fric, fit, comp, dcount, fcount, tcount, dlen,
              up_fpm, up_area, sys_class, unpriced, path) = stack.pop()
@@ -716,11 +757,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 comp_here = comp + diffuser_drop
                 _cfm, term_class, _family = term
                 key     = term_class or sys_class or 'Unknown'
-                current = best.get(key)
+                current = best_here.get(key)
                 if current is None or (fric + fit + comp_here) > (
                         current['friction_inwc'] + current['fitting_inwc'] +
                         current['component_inwc']):
-                    best[key] = {
+                    best_here[key] = {
                         'friction_inwc':    fric,
                         'fitting_inwc':     fit,
                         'component_inwc':   comp_here,
@@ -774,13 +815,19 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                               sys_class, unpriced,
                               path | frozenset([child_id])))
 
+        if best_here:
+            best[root_id] = best_here
+
     result = {}
-    for sys_class, b in best.items():
-        sub = b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc']
-        b['subtotal_inwc'] = sub
-        b['total_inwc']    = sub * (1.0 + safety_pct / 100.0)
-        b['truncated']     = truncated[0]
-        result[sys_class]  = b
+    for root_id, per_class in best.items():
+        out = {}
+        for sys_class, b in per_class.items():
+            sub = b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc']
+            b['subtotal_inwc'] = sub
+            b['total_inwc']    = sub * (1.0 + safety_pct / 100.0)
+            b['truncated']     = root_id in truncated_roots
+            out[sys_class]     = b
+        result[root_id] = out
     return result
 
 
@@ -1523,6 +1570,7 @@ def main():
     all_nodes        = {}   # merged for fitting adjacency
     all_children     = {}   # merged
     all_root_ids     = []   # one per successfully traversed system
+    root_labels      = {}   # root int_id -> equipment label, for per-unit output
     ahu_labels       = []
     ahu_totals       = []   # (ahu_name, ahu_id, discharge_cfm, terminal_count, other_class_cfm)
     all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
@@ -1550,6 +1598,8 @@ def main():
 
         root_id = eid_int(net.root.Id)
         all_root_ids.append(root_id)
+        root_labels[root_id] = '{} (id {})'.format(
+            _elem_name(net.root), eid_int(net.root.Id))
         ahu_totals.append((
             _elem_name(net.root), root_id,
             net.equipment_discharge_cfm(root_id), len(net.terminal_cfms),
@@ -1686,64 +1736,100 @@ def main():
             all_root_ids, all_children, all_duct_results, all_terminals,
             all_nodes, safety_pct, diffuser_drop, damper_drop)
         summary_lines.append(
-            'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET):')
-        for sys_class in sorted(critical.keys()):
-            c = critical[sys_class]
-            summary_lines.append(
-                '  {}: {:.3f} in. wc  =  duct {:.3f} + fittings {:.3f} + '
-                'components {:.3f}, +{:.0f}% safety'.format(
-                    sys_class, c['total_inwc'], c['friction_inwc'],
-                    c['fitting_inwc'], c['component_inwc'], safety_pct))
-            summary_lines.append(
-                '      {} ducts, {:.0f} ft, {} fittings, {} taps restricting the '
-                'main, worst run ends at {}'.format(
-                    c['duct_count'], c['length_ft'], c['fitting_count'],
-                    c['tap_bypass_count'], c['terminal_name']))
-            for u in c['unpriced']:
-                summary_lines.append('      UNPRICED FITTING: ' + u)
-            if c.get('truncated'):
-                summary_lines.append(
-                    '      WARNING: path search hit its step limit, so this may '
-                    'not be the true worst run.')
+            'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
 
-        # The fan sees the supply side and the return side in series, so the two
-        # index runs add. Which sides went in is NAMED rather than assumed: a
-        # plenum-return job, or one where only one side was traversed, would
-        # otherwise silently produce a one-sided number labelled as the whole.
-        supply  = critical.get('Supply Air')
-        returns = [(k, critical[k]) for k in ('Return Air', 'Exhaust Air')
-                   if k in critical]
-        total = 0.0
-        sides = []
-        if supply is not None:
-            total += supply['total_inwc']
-            sides.append('Supply Air')
-        if returns:
-            worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
-            total += worst_c['total_inwc']
-            sides.append(worst_k)
-        if sides:
-            summary_lines.append(
-                '  TOTAL EXTERNAL STATIC = {:.3f} in. wc   ({})'.format(
-                    total, ' + '.join(sides)))
-            if supply is None or not returns:
-                summary_lines.append(
-                    '  WARNING: only one side was traversed, so this is NOT a '
-                    'complete external static.')
+        # Grouped by EQUIPMENT, because every unit has its own fan and so its own
+        # external static. Merging them would let a big unit's index run hide a
+        # small one's completely.
+        for root_id in all_root_ids:
+            per_class = critical.get(root_id)
+            if not per_class:
+                continue
+            summary_lines.append('')
+            summary_lines.append('  === {} ==='.format(
+                root_labels.get(root_id, 'id {}'.format(root_id))))
 
+            airflow = _root_class_airflow(root_id, all_children, all_terminals)
+
+            for sys_class in sorted(per_class.keys()):
+                c = per_class[sys_class]
+                summary_lines.append(
+                    '    {}:'.format(sys_class))
+                a_cfm, a_cnt = airflow.get(sys_class, (0.0, 0))
+                summary_lines.append(
+                    '      Total airflow      {:,.0f} CFM      ({} terminals)'.format(
+                        a_cfm, a_cnt))
+                summary_lines.append(
+                    '      Duct friction      {:.3f} in. wc   ({} ducts, {:.0f} ft)'.format(
+                        c['friction_inwc'], c['duct_count'], c['length_ft']))
+                summary_lines.append(
+                    '      Fitting losses     {:.3f} in. wc   ({} fittings, {} taps '
+                    'restricting the main)'.format(
+                        c['fitting_inwc'], c['fitting_count'], c['tap_bypass_count']))
+                summary_lines.append(
+                    '      Components         {:.3f} in. wc   (dampers + diffuser, '
+                    'at {:.3f} / {:.3f} in. wc each)'.format(
+                        c['component_inwc'], damper_drop, diffuser_drop))
+                summary_lines.append(
+                    '      Subtotal           {:.3f} in. wc'.format(c['subtotal_inwc']))
+                summary_lines.append(
+                    '      Safety factor      {:.3f} in. wc   (+{:.0f}%)'.format(
+                        c['total_inwc'] - c['subtotal_inwc'], safety_pct))
+                summary_lines.append(
+                    '      TOTAL              {:.3f} in. wc   (worst run ends at {})'.format(
+                        c['total_inwc'], c['terminal_name']))
+                for u in c['unpriced']:
+                    summary_lines.append('      UNPRICED: ' + u)
+                if c.get('truncated'):
+                    summary_lines.append(
+                        '      WARNING: path search hit its step limit, so this '
+                        'may not be the true worst run.')
+
+            # The fan sees supply and return in series, so the two index runs add.
+            # Which sides went in is NAMED rather than assumed: a plenum-return
+            # job would otherwise get a one-sided number labelled as the whole.
+            supply  = per_class.get('Supply Air')
+            returns = [(k, per_class[k]) for k in ('Return Air', 'Exhaust Air')
+                       if k in per_class]
+            for sys_class in sorted(airflow.keys()):
+                if sys_class in per_class:
+                    continue
+                a_cfm, a_cnt = airflow[sys_class]
+                summary_lines.append(
+                    '    {}:  {:,.0f} CFM ({} terminals), but no index run was '
+                    'traced - no static pressure for it.'.format(
+                        sys_class, a_cfm, a_cnt))
+
+            unit_total = 0.0
+            sides = []
+            if supply is not None:
+                unit_total += supply['total_inwc']
+                sides.append('Supply Air')
+            if returns:
+                worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
+                unit_total += worst_c['total_inwc']
+                sides.append(worst_k)
+            if sides:
+                summary_lines.append(
+                    '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
+                        unit_total, ' + '.join(sides)))
+                if supply is None or not returns:
+                    summary_lines.append(
+                        '    WARNING: only one side was traversed, so this is NOT '
+                        'a complete external static.')
+
+        summary_lines.append('')
         summary_lines.append(
-            '  METHOD: duct friction by Darcy-Weisbach + Altshul-Tsal; fittings '
-            'by C x Pv with C from RJA SP_LOSS_WORKSHEET (1985 ASHRAE fitting '
-            'numbers); take-offs dovetail, rect elbows assumed vaned.')
+            '  METHOD: duct friction by Darcy-Weisbach + Altshul-Tsal (eps 0.0003 ft '
+            'galvanized, 0.012 ft flex); fittings by C x Pv with C from RJA '
+            'SP_LOSS_WORKSHEET (1985 ASHRAE fitting numbers); take-offs dovetail, '
+            'rect elbows assumed vaned; components counted from the model and '
+            'valued in the dialog.')
         summary_lines.append(
-            '  COMPONENTS: diffuser {:.3f} and balancing damper {:.3f} in. wc '
-            'each, as entered; the model supplies only the count.'.format(
-                diffuser_drop, damper_drop))
-        summary_lines.append(
-            '  NOT INCLUDED, BY DEFINITION: everything inside the unit casing '
-            '(filter, coils, cabinet). Those are already deducted from the '
-            "manufacturer's published ESP, so adding them here would "
-            'double-count. Fire and backdraft dampers are not counted either.')
+            '  NOT INCLUDED, BY DEFINITION: filter, coil and cabinet losses. Those '
+            'are inside the unit and already deducted from the published ESP, so '
+            'counting them here would double them. Fire and backdraft dampers are '
+            'not priced either.')
 
     output.print_md('---')
     output.print_md('### System Summary')
