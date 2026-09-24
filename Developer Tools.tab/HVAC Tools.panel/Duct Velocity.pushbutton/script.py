@@ -152,7 +152,7 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, full_diag) or None.
+    selected_column_keys, full_diag, static_loss) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -335,10 +335,26 @@ def show_velocity_settings_dialog():
     col_hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(col_hdr)
 
-    # Total static pressure loss has NO checkbox of its own. It is a TOTAL
-    # row at the bottom of the table, shown whenever Full System is on AND the
-    # Friction Loss column is selected, because that row is simply the sum of
-    # that column (Colin, 2026-09-24).
+    # Two DIFFERENT pressure numbers live in this tool and they are not
+    # supposed to agree:
+    #   - the TOTAL row at the bottom of the duct table sums the Friction Loss
+    #     column (shown when Full System + Friction Loss are both on). That is
+    #     an inventory of duct friction in the system.
+    #   - this checkbox reports the CRITICAL PATH per system, which is what a
+    #     fan actually has to overcome.
+    cb_static = CheckBox()
+    cb_static_text = TextBlock()
+    cb_static_text.Text = (
+        'Total static pressure loss per system (critical path / index run). '
+        'DUCT FRICTION ONLY: fitting, damper, coil, filter and diffuser '
+        'losses are not included, so this is not a fan selection figure.')
+    cb_static_text.TextWrapping = TextWrapping.Wrap
+    cb_static_text.Width = CONTENT_W - 20
+    cb_static.Content   = cb_static_text
+    cb_static.IsChecked = False
+    cb_static.Margin    = Thickness(2, 0, 0, 6)
+    outer.Children.Add(cb_static)
+
     col_grid = Grid()
     _COL_PICKER_COLS = 2
     for _ in range(_COL_PICKER_COLS):
@@ -445,7 +461,9 @@ def show_velocity_settings_dialog():
             include_oa = bool(cb_oa.IsChecked)
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
-            result[0] = (out, gpct, include_oa, selected_cols, full_diag)
+            static_loss = bool(cb_static.IsChecked)
+            result[0] = (out, gpct, include_oa, selected_cols, full_diag,
+                         static_loss)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -467,6 +485,81 @@ def show_velocity_settings_dialog():
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
+
+
+def _critical_path_loss(all_root_ids, all_children, all_duct_results, all_terminals):
+    """Worst fan-to-terminal path per system class: the index run.
+
+    Total static pressure loss is a PATH, not a sum. Air leaving the fan does
+    not travel every branch in series, it takes one route to one terminal, and
+    the fan has to beat the worst route. Shorter routes get dampered back. So
+    this walks every root-to-terminal path and keeps the highest total per
+    system class, rather than adding the whole system together.
+
+    That makes it a DIFFERENT number from the TOTAL row at the bottom of the
+    duct table, which sums the Friction Loss column. Both are wanted and they
+    are not supposed to agree: the TOTAL row answers "how much duct friction
+    is in this system", this answers "what must the fan produce".
+
+    SCOPE, and it is a real limitation, not a rounding issue: DUCT FRICTION
+    ONLY. Fitting losses (elbows, tees, takeoffs, transitions) are typically
+    30-50% of real system loss and are NOT computed anywhere in this codebase,
+    because that needs a sourced coefficient or equivalent-length table that
+    does not exist here yet. Coil, filter, damper, diffuser and casing losses
+    come off cutsheets and are not in the model at all. Every caller must
+    print that scope. Never let this be read as a fan selection figure.
+
+    all_children / all_terminals are keyed by int element id (see
+    HvacNetwork). all_duct_results is keyed by the real Revit ElementId (see
+    hvac_graph.build_network), so it is re-keyed by its own
+    DuctResult.element_id (an int) here rather than assumed to match.
+
+    Returns {sys_class: {'friction_inwc', 'duct_count', 'length_ft',
+    'terminal_id', 'terminal_name'}}.
+    """
+    dr_by_int_id = {}
+    for dr in all_duct_results.values():
+        dr_by_int_id[dr.element_id] = dr
+
+    best = {}   # sys_class -> (friction_inwc, duct_count, length_ft, terminal_id)
+
+    for root_id in all_root_ids:
+        # (node, cumulative friction, ducts on path, feet of duct on path)
+        stack = [(root_id, 0.0, 0, 0.0)]
+        visited = set()
+        while stack:
+            nid, fric, dcount, dlen = stack.pop()
+            if nid in visited:
+                continue
+            visited.add(nid)
+
+            dr = dr_by_int_id.get(nid)
+            if dr is not None:
+                fric   = fric + dr.friction_loss_inwc
+                dlen   = dlen + dr.length_ft
+                dcount = dcount + 1
+
+            term = all_terminals.get(nid)
+            if term is not None:
+                _cfm, sys_class, _family = term
+                current = best.get(sys_class)
+                if current is None or fric > current[0]:
+                    best[sys_class] = (fric, dcount, dlen, nid)
+
+            for child_id in all_children.get(nid, []):
+                stack.append((child_id, fric, dcount, dlen))
+
+    result = {}
+    for sys_class, (fric, dcount, dlen, term_id) in best.items():
+        term = all_terminals.get(term_id)
+        result[sys_class] = {
+            'friction_inwc': fric,
+            'duct_count':    dcount,
+            'length_ft':     dlen,
+            'terminal_id':   term_id,
+            'terminal_name': term[2] if term else '-',
+        }
+    return result
 
 
 # Minimum transition clearance between a duct and a genuinely smaller real
@@ -1156,8 +1249,8 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    (custom_limits, tol_pct, include_oa, selected_cols,
-     full_diag) = dialog_result
+    (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
+     static_loss) = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1371,6 +1464,35 @@ def main():
     if all_missing_flow:
         summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
             len(all_missing_flow)))
+
+    if static_loss:
+        critical = _critical_path_loss(
+            all_root_ids, all_children, all_duct_results, all_terminals)
+        summary_lines.append(
+            'TOTAL STATIC PRESSURE LOSS (critical path / index run):')
+        for sys_class in sorted(critical.keys()):
+            c = critical[sys_class]
+            summary_lines.append(
+                '  {}: {:.3f} in. wc   ({} ducts, {:.0f} ft, worst run ends at {})'.format(
+                    sys_class, c['friction_inwc'], c['duct_count'],
+                    c['length_ft'], c['terminal_name']))
+        # A fan sees the supply side and the return side in series, so the two
+        # index runs add. Only printed when both were actually traversed -
+        # naming an "external static" off one side would overstate the tool's
+        # reach.
+        supply = critical.get('Supply Air')
+        returns = [critical[k] for k in ('Return Air', 'Exhaust Air')
+                   if k in critical]
+        if supply is not None and returns:
+            worst_return = max(r['friction_inwc'] for r in returns)
+            summary_lines.append(
+                '  Supply + Return = {:.3f} in. wc external static'.format(
+                    supply['friction_inwc'] + worst_return))
+        summary_lines.append(
+            '  SCOPE: DUCT FRICTION ONLY. Excludes fitting/elbow/tee/takeoff '
+            'losses (typically 30-50% of real system loss), balancing and fire '
+            'dampers, coils, filters, diffuser and grille pressure drop, and '
+            'casing losses. NOT a fan selection figure.')
 
     output.print_md('---')
     output.print_md('### System Summary')
