@@ -248,8 +248,8 @@ sa3 = r3.get(1, {}).get('Supply Air', {})
 #   bypass:   n_by = len(taps)-1 = 2 taps bypassed -> 2 * C_SUPPLY_TAP_MAIN * Pv(1200)
 #   take-off: the exit tap itself (not end-of-main, since duct 2 makes the
 #             main continue) -> 1 * C_SUPPLY_TAP_BRANCH * Pv(1200)
-expected_fit3 = (2 * fitting_tables.C_SUPPLY_TAP_MAIN * pv(1200.0)
-                 + fitting_tables.C_SUPPLY_TAP_BRANCH * pv(1200.0))
+expected_fit3 = (2 * fitting_tables.DEFAULT_C['supply_tap_main'] * pv(1200.0)
+                 + fitting_tables.DEFAULT_C['supply_tap_branch'] * pv(1200.0))
 check("case3 friction is 0 (only fitting losses in this network)",
       abs(sa3.get('friction_inwc', -1) - 0.0) < 1e-9)
 check("case3 fitting_inwc == 2*0.28*Pv(1200) + 0.98*Pv(1200)",
@@ -277,8 +277,8 @@ r4 = crit([100], children4, ducts4, terms4, nodes4)
 sa4 = r4.get(100, {}).get('Supply Air', {})
 # hand calc: elbow priced at UPSTREAM fpm (1000, from duct 100), not the
 # downstream duct 102's 1600 fpm.
-expected_fit4 = fitting_tables.C_ROUND_ELBOW_90 * pv(1000.0)
-wrong_fit4    = fitting_tables.C_ROUND_ELBOW_90 * pv(1600.0)  # if it used downstream fpm instead
+expected_fit4 = fitting_tables.DEFAULT_C['round_elbow_90'] * pv(1000.0)
+wrong_fit4    = fitting_tables.DEFAULT_C['round_elbow_90'] * pv(1600.0)  # if it used downstream fpm instead
 check("case4 friction is 0.05 (only duct 102 has friction)",
       abs(sa4.get('friction_inwc', -1) - 0.05) < 1e-9)
 check("case4 elbow fitting_inwc uses UPSTREAM fpm (1000), not downstream (1600)",
@@ -477,6 +477,36 @@ check("case10 REGRESSION: small root's friction is NOT overwritten/hidden by "
       "made these equal)",
       abs(small10.get('friction_inwc', -1) - big10.get('friction_inwc', -2)) > 1e-6,
       "small=%r big=%r" % (small10.get('friction_inwc'), big10.get('friction_inwc')))
+
+
+# ── case 11: dialog C overrides must reach the walker ────────────────────────
+#
+# The C table is editable at runtime now, so verify an override actually changes
+# the answer rather than being collected and ignored. Reuses case 4's fixtures
+# (root 100, one duct at 1000 FPM then a round elbow then a duct at 1600 FPM).
+override_c = dict(fitting_tables.DEFAULT_C)
+override_c['round_elbow_90'] = 0.66          # exactly 2x the published 0.33
+r11 = crit([100], children4, ducts4, terms4, nodes4, c_values=override_c)
+sa11 = r11[100]['Supply Air']
+r11_default = crit([100], children4, ducts4, terms4, nodes4)
+sa11_default = r11_default[100]['Supply Air']
+check("case11 doubling the round-elbow C doubles the fitting loss",
+      abs(sa11['fitting_inwc'] - 2.0 * sa11_default['fitting_inwc']) < 1e-12,
+      "override=%.6f default=%.6f" % (sa11['fitting_inwc'],
+                                      sa11_default['fitting_inwc']))
+check("case11 the override did NOT disturb duct friction",
+      abs(sa11['friction_inwc'] - sa11_default['friction_inwc']) < 1e-12,
+      "override=%.6f default=%.6f" % (sa11['friction_inwc'],
+                                      sa11_default['friction_inwc']))
+# An override of a key the run never touches must change nothing at all.
+untouched_c = dict(fitting_tables.DEFAULT_C)
+untouched_c['abrupt_exit'] = 99.0
+r11b = crit([100], children4, ducts4, terms4, nodes4, c_values=untouched_c)
+check("case11 overriding a C the run never hits changes nothing",
+      abs(r11b[100]['Supply Air']['fitting_inwc']
+          - sa11_default['fitting_inwc']) < 1e-12,
+      "got %.6f expected %.6f" % (r11b[100]['Supply Air']['fitting_inwc'],
+                                  sa11_default['fitting_inwc']))
 
 
 # ── summary ──────────────────────────────────────────────────────────────────

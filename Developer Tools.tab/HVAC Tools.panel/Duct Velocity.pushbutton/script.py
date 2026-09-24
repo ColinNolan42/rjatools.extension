@@ -63,7 +63,7 @@ from System.Windows import (
 from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
     ColumnDefinition, RowDefinition, Orientation,
-    Separator, TextBlock, CheckBox
+    Separator, TextBlock, CheckBox, Expander, ScrollViewer
 )
 from System.Windows.Media import SolidColorBrush, Colors
 from System.Windows import FontWeights
@@ -153,7 +153,11 @@ def show_velocity_settings_dialog():
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
     selected_column_keys, full_diag, ext_static, safety_pct,
-    diffuser_drop, damper_drop) or None.
+    c_values, comp_values) or None.
+
+    c_values maps fitting_tables.C_TABLE keys to C, and comp_values maps
+    COMPONENT_TABLE keys to in. wc. Both start at the published defaults and are
+    only changed if the engineer opens the expander and edits one.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -361,13 +365,12 @@ def show_velocity_settings_dialog():
     # 2026-09-24: "maybe i just need external static pressure not total static
     # pressure ... this i feel like can be found directly in cutsheet").
     cb_static = CheckBox()
+    # Label says only what the option IS. Colin, 2026-09-24: "call the option
+    # for total external static pressure just that not all the riff raff after
+    # that can be included in the calculation basis." What it includes and
+    # excludes is stated in Calculation Basis at the bottom of this dialog.
     cb_static_text = TextBlock()
-    cb_static_text.Text = (
-        'Total EXTERNAL static pressure (index run, supply path + return '
-        'path). Includes duct friction, fitting losses (elbows, take-offs, '
-        'transitions), balancing dampers and the diffuser. Excludes filter, '
-        'coils and cabinet, which are inside the unit and already deducted '
-        "from the manufacturer's published ESP.")
+    cb_static_text.Text = 'Total external static pressure'
     cb_static_text.TextWrapping = TextWrapping.Wrap
     cb_static_text.Width = CONTENT_W - 20
     cb_static.Content   = cb_static_text
@@ -397,34 +400,64 @@ def show_velocity_settings_dialog():
     sf_panel.Children.Add(sf_suffix)
     outer.Children.Add(sf_panel)
 
-    # Component drops. These are cutsheet numbers, not geometry, so the tool
-    # COUNTS them off the model (balancing dampers on the run, and the diffuser
-    # the run ends at) and multiplies by what the engineer enters here. Set
-    # either to 0 to leave it out.
+    # Fitting C values and component drops are GIVENS with an override, not
+    # questions the dialog asks every run. Colin, 2026-09-24: "remove diffuser
+    # and balancing drops inputs and have them as givens. Maybe put a drop down
+    # menu for all C values under fittings losses and a drop down with input
+    # values for components losses ... make them input for fittings as well."
+    #
+    # An Expander rather than a ComboBox: a ComboBox picks one of a list, and
+    # what is wanted here is the whole table visible and editable at once, out
+    # of the way until it is needed. Both start collapsed, so the normal run is
+    # still one checkbox and a safety factor.
+    def _value_expander(header, rows, store, width_label, fmt):
+        """Collapsed panel of labelled value boxes. rows: (key, label, extra, default)."""
+        exp = Expander()
+        exp.Header = header
+        exp.IsExpanded = False
+        exp.Margin = Thickness(22, 2, 0, 6)
+        inner = StackPanel()
+        inner.Margin = Thickness(4, 4, 0, 2)
+        for row in rows:
+            key, label, extra, default = row
+            rp = StackPanel()
+            rp.Orientation = Orientation.Horizontal
+            rp.Margin = Thickness(0, 1, 0, 1)
+            lb = TextBlock()
+            lb.Text = label
+            lb.Width = width_label
+            lb.TextWrapping = TextWrapping.NoWrap
+            lb.VerticalAlignment = VerticalAlignment.Center
+            rp.Children.Add(lb)
+            tb = TextBox()
+            tb.Text  = fmt % default
+            tb.Width = 55
+            tb.Margin = Thickness(4, 0, 6, 0)
+            tb.VerticalAlignment = VerticalAlignment.Center
+            rp.Children.Add(tb)
+            if extra:
+                ex = TextBlock()
+                ex.Text = extra
+                ex.Foreground = SolidColorBrush(Colors.DimGray)
+                ex.VerticalAlignment = VerticalAlignment.Center
+                rp.Children.Add(ex)
+            inner.Children.Add(rp)
+            store[key] = tb
+        exp.Content = inner
+        outer.Children.Add(exp)
+        return exp
+
+    c_boxes = {}
+    _value_expander(
+        'Fitting loss coefficients (C)',
+        [(k, lbl, 'ASHRAE ' + no, v) for k, lbl, no, v in fitting_tables.C_TABLE],
+        c_boxes, 250, '%.2f')
+
     comp_boxes = {}
-    for key, label, default in (
-            ('diffuser', 'Diffuser / grille drop:', DEFAULT_DIFFUSER_DROP),
-            ('damper',   'Balancing damper drop:',  DEFAULT_DAMPER_DROP)):
-        cp = StackPanel()
-        cp.Orientation = Orientation.Horizontal
-        cp.Margin = Thickness(22, 0, 0, 4)
-        cl = Label()
-        cl.Content = label
-        cl.Width = 150
-        cl.VerticalAlignment = VerticalAlignment.Center
-        cp.Children.Add(cl)
-        ct = TextBox()
-        ct.Text  = str(default)
-        ct.Width = 55
-        ct.Margin = Thickness(4, 0, 4, 0)
-        ct.VerticalAlignment = VerticalAlignment.Center
-        cp.Children.Add(ct)
-        cs = Label()
-        cs.Content = 'in. wc each  (0 to exclude)'
-        cs.VerticalAlignment = VerticalAlignment.Center
-        cp.Children.Add(cs)
-        outer.Children.Add(cp)
-        comp_boxes[key] = ct
+    _value_expander(
+        'Component pressure drops (in. wc each)',
+        [(k, lbl, 'in. wc', v) for k, lbl, v in fitting_tables.COMPONENT_TABLE],
+        comp_boxes, 250, '%.3f')
 
     col_grid = Grid()
     _COL_PICKER_COLS = 2
@@ -499,11 +532,17 @@ def show_velocity_settings_dialog():
     _info_row('Duct roughness:',  u'ε = 0.0003 ft galvanized, 0.012 ft flex '
                                   u'(detected by category, ~1.8× the friction)')
     _info_row('Fitting losses:',  u'C × Pv, C from RJA SP_LOSS_WORKSHEET '
-                                  u'(1985 ASHRAE fitting numbers)')
-    _info_row('Components:',      'diffuser and balancing damper drops, counted from '
-                                  'the model and valued in the dialog')
-    _info_row('Not included:',    'filter, coil and cabinet losses. Those are inside '
-                                  "the unit and already in the published ESP.")
+                                  u'(1985 ASHRAE fitting numbers), editable above')
+    _info_row('External static:', 'the single most restrictive run (index run) from '
+                                  'the unit to a terminal, supply path + return path')
+    _info_row('  includes:',      'duct friction, fittings (elbows, take-offs, '
+                                  'transitions), balancing dampers, the diffuser, '
+                                  'and the safety factor')
+    _info_row('  excludes:',      'filter, coil and cabinet losses. Those are inside '
+                                  "the unit and already deducted from the "
+                                  "manufacturer's published ESP, so counting them "
+                                  'here would double them. Fire and backdraft '
+                                  'dampers are not priced.')
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -543,14 +582,24 @@ def show_velocity_settings_dialog():
                 forms.alert('Safety factor must be between 0 and 100.',
                             title='Invalid Input')
                 return
-            diffuser_drop = float(comp_boxes['diffuser'].Text)
-            damper_drop   = float(comp_boxes['damper'].Text)
-            if diffuser_drop < 0 or damper_drop < 0:
-                forms.alert('Component pressure drops cannot be negative.',
-                            title='Invalid Input')
-                return
+            c_values = {}
+            for k, box in c_boxes.items():
+                v = float(box.Text)
+                if v < 0:
+                    forms.alert('Fitting C values cannot be negative.',
+                                title='Invalid Input')
+                    return
+                c_values[k] = v
+            comp_values = {}
+            for k, box in comp_boxes.items():
+                v = float(box.Text)
+                if v < 0:
+                    forms.alert('Component pressure drops cannot be negative.',
+                                title='Invalid Input')
+                    return
+                comp_values[k] = v
             result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         ext_static, safety_pct, diffuser_drop, damper_drop)
+                         ext_static, safety_pct, c_values, comp_values)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -608,7 +657,7 @@ def _root_class_airflow(root_id, all_children, all_terminals):
 
 def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         all_terminals, all_nodes, safety_pct=0.0,
-                        diffuser_drop=0.0, damper_drop=0.0):
+                        diffuser_drop=0.0, damper_drop=0.0, c_values=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -730,7 +779,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     role, sys_class,
                     is_round=hvac_graph.fitting_is_round(elem),
                     upstream_area_ft2=up_a, downstream_area_ft2=down_a,
-                    is_end_of_main=False)
+                    is_end_of_main=False, c=c_values)
                 if c > 0.0:
                     fit    = fit + c * hvac_graph.velocity_pressure_inwg(up_fpm)
                     fcount = fcount + 1
@@ -795,7 +844,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     n_by = len(taps) - (1 if child_id in taps else 0)
                     if n_by > 0:
                         extra_fit = extra_fit + (
-                            fitting_tables.takeoff_main_c(dr.sys_class) *
+                            fitting_tables.takeoff_main_c(dr.sys_class, c_values) *
                             hvac_graph.velocity_pressure_inwg(dr.fpm) * n_by)
                         extra_t = extra_t + n_by
                     # A tap at the terminus of a main is the worksheet's "end of
@@ -805,8 +854,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         ch = all_nodes.get(child_id)
                         if ch is not None:
                             end_c = fitting_tables.takeoff_c(
-                                dr.sys_class, is_end_of_main=True)
-                            typ_c = fitting_tables.takeoff_c(dr.sys_class)
+                                dr.sys_class, is_end_of_main=True, c=c_values)
+                            typ_c = fitting_tables.takeoff_c(
+                                dr.sys_class, c=c_values)
                             extra_fit = extra_fit + (
                                 (end_c - typ_c) *
                                 hvac_graph.velocity_pressure_inwg(dr.fpm))
@@ -1513,7 +1563,9 @@ def main():
         output.print_md('**Cancelled.**')
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     ext_static, safety_pct, diffuser_drop, damper_drop) = dialog_result
+     ext_static, safety_pct, c_values, comp_values) = dialog_result
+    diffuser_drop = fitting_tables.component_of('diffuser', comp_values)
+    damper_drop   = fitting_tables.component_of('damper', comp_values)
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1734,7 +1786,7 @@ def main():
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
-            all_nodes, safety_pct, diffuser_drop, damper_drop)
+            all_nodes, safety_pct, diffuser_drop, damper_drop, c_values)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
 
