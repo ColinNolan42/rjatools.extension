@@ -94,7 +94,7 @@ def c_of(key, c=None):
 COMPONENT_TABLE = (
     ('diffuser',    'Diffuser / grille',   0.05),
     ('damper',      'Balancing damper',    0.25),
-    ('fire_damper', 'Fire / smoke damper', 0.00),
+    ('fire_damper', 'Fire / smoke damper', 0.25),
 )
 
 DEFAULT_COMPONENTS = {}
@@ -292,11 +292,13 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 # say) comes back None and the caller reports it as an uncounted accessory
 # rather than pricing it wrong.
 #
-# fire_damper defaults to 0.00 on purpose: unlike the diffuser and balancing
-# damper, the worksheet's filled example has no fire damper row, so there is no
-# RJA-sourced figure to default to and inventing one would break the project's
-# never-size-from-memory rule. The report prints the count and the value applied,
-# so a 0.00 is visible rather than a silent omission.
+# fire_damper defaults to 0.25, the same as the balancing damper, on Colin's
+# instruction 2026-09-24 ("default same as damper"). Note the provenance
+# difference: the diffuser 0.05 and balancing damper 0.25 are the two column D
+# entries in the worksheet's filled example, whereas the worksheet has no fire
+# damper row at all, so 0.25 here is Colin's call rather than a published RJA
+# figure. The report prints each component's count and the rate applied, so the
+# number in use is always visible.
 _ACCESSORY_ROLES = (
     ('damper',      ('balancing damper', 'balance damper', 'obd', 'opposed blade')),
     ('fire_damper', ('fire damper', 'smoke damper', 'fire/smoke', 'fire smoke')),
