@@ -153,7 +153,8 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, full_diag, ext_static, safety_pct) or None.
+    selected_column_keys, full_diag, ext_static, safety_pct,
+    diffuser_drop, damper_drop) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -187,6 +188,16 @@ def show_velocity_settings_dialog():
     ]
     DEFAULT_TOL_PCT = 10     # yellow band: ±this % around max
     DEFAULT_SAFETY_PCT = 10  # SP_LOSS_WORKSHEET's own last row
+    # Component drops, taken from the filled example in RJA's
+    # SP_LOSS_WORKSHEET column D ("INPUT KNOWN PRESS. DROP"): its supply
+    # diffuser row is 0.05 and its OBD row is 0.25. NOT invented, and NOT read
+    # off the Revit families: the air terminals in Grantham 4 MP carry
+    # "Total Pressure = 0.09 in-wg" but only on 11 of 22 terminals, and the
+    # `Balancing Damper - Round` family carries "Pressure Drop = 1.00 in-wg",
+    # which is almost certainly content boilerplate (15 of those would swamp
+    # the whole system). Both are user inputs so the engineer owns the number.
+    DEFAULT_DIFFUSER_DROP = 0.05
+    DEFAULT_DAMPER_DROP   = 0.25
 
     result    = [None]
     vel_boxes  = {}   # row_idx -> TextBox (velocity)
@@ -388,6 +399,35 @@ def show_velocity_settings_dialog():
     sf_panel.Children.Add(sf_suffix)
     outer.Children.Add(sf_panel)
 
+    # Component drops. These are cutsheet numbers, not geometry, so the tool
+    # COUNTS them off the model (balancing dampers on the run, and the diffuser
+    # the run ends at) and multiplies by what the engineer enters here. Set
+    # either to 0 to leave it out.
+    comp_boxes = {}
+    for key, label, default in (
+            ('diffuser', 'Diffuser / grille drop:', DEFAULT_DIFFUSER_DROP),
+            ('damper',   'Balancing damper drop:',  DEFAULT_DAMPER_DROP)):
+        cp = StackPanel()
+        cp.Orientation = Orientation.Horizontal
+        cp.Margin = Thickness(22, 0, 0, 4)
+        cl = Label()
+        cl.Content = label
+        cl.Width = 150
+        cl.VerticalAlignment = VerticalAlignment.Center
+        cp.Children.Add(cl)
+        ct = TextBox()
+        ct.Text  = str(default)
+        ct.Width = 55
+        ct.Margin = Thickness(4, 0, 4, 0)
+        ct.VerticalAlignment = VerticalAlignment.Center
+        cp.Children.Add(ct)
+        cs = Label()
+        cs.Content = 'in. wc each  (0 to exclude)'
+        cs.VerticalAlignment = VerticalAlignment.Center
+        cp.Children.Add(cs)
+        outer.Children.Add(cp)
+        comp_boxes[key] = ct
+
     col_grid = Grid()
     _COL_PICKER_COLS = 2
     for _ in range(_COL_PICKER_COLS):
@@ -501,8 +541,14 @@ def show_velocity_settings_dialog():
                 forms.alert('Safety factor must be between 0 and 100.',
                             title='Invalid Input')
                 return
+            diffuser_drop = float(comp_boxes['diffuser'].Text)
+            damper_drop   = float(comp_boxes['damper'].Text)
+            if diffuser_drop < 0 or damper_drop < 0:
+                forms.alert('Component pressure drops cannot be negative.',
+                            title='Invalid Input')
+                return
             result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         ext_static, safety_pct)
+                         ext_static, safety_pct, diffuser_drop, damper_drop)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -527,7 +573,8 @@ _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
 def _critical_path_loss(all_root_ids, all_children, all_duct_results,
-                        all_terminals, all_nodes, safety_pct=0.0):
+                        all_terminals, all_nodes, safety_pct=0.0,
+                        diffuser_drop=0.0, damper_drop=0.0):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -598,7 +645,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
         #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
         #  nodes already on THIS path)
-        stack = [(root_id, 0.0, 0.0, 0, 0, 0, 0.0, 0.0, 0.0, None, (),
+        stack = [(root_id, 0.0, 0.0, 0.0, 0, 0, 0, 0.0, 0.0, 0.0, None, (),
                   frozenset([root_id]))]
         steps = 0
         while stack:
@@ -608,7 +655,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             'steps from root %s', MAX_PATH_STEPS, root_id)
                 truncated[0] = True
                 break
-            (nid, fric, fit, dcount, fcount, tcount, dlen,
+            (nid, fric, fit, comp, dcount, fcount, tcount, dlen,
              up_fpm, up_area, sys_class, unpriced, path) = stack.pop()
 
             elem = all_nodes.get(nid)
@@ -639,16 +686,34 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 elif 'UNPRICED' in note:
                     unpriced = unpriced + ((fam or '?') + ': ' + note,)
 
+            elif elem is not None and hvac_graph.is_accessory(elem):
+                # Accessories are components, not fittings: their drop is a
+                # cutsheet number the engineer enters, and the model only
+                # supplies the COUNT. Deliberately narrow - a fire or backdraft
+                # damper must not inherit the balancing-damper figure, so it is
+                # reported as uncounted instead.
+                fam = hvac_graph.fitting_family_name(elem)
+                if fitting_tables.is_balancing_damper(fam):
+                    comp = comp + damper_drop
+                elif damper_drop > 0.0:
+                    unpriced = unpriced + (
+                        (fam or '?') + ': accessory on the run, NOT counted '
+                        '(only balancing dampers are)',)
+
             term = all_terminals.get(nid)
             if term is not None:
+                # The diffuser the run ends at is itself a component drop.
+                comp_here = comp + diffuser_drop
                 _cfm, term_class, _family = term
                 key     = term_class or sys_class or 'Unknown'
                 current = best.get(key)
-                if current is None or (fric + fit) > (current['friction_inwc'] +
-                                                      current['fitting_inwc']):
+                if current is None or (fric + fit + comp_here) > (
+                        current['friction_inwc'] + current['fitting_inwc'] +
+                        current['component_inwc']):
                     best[key] = {
                         'friction_inwc':    fric,
                         'fitting_inwc':     fit,
+                        'component_inwc':   comp_here,
                         'duct_count':       dcount,
                         'fitting_count':    fcount,
                         'tap_bypass_count': tcount,
@@ -694,13 +759,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             extra_fit = extra_fit + (
                                 (end_c - typ_c) *
                                 hvac_graph.velocity_pressure_inwg(dr.fpm))
-                stack.append((child_id, fric, extra_fit, dcount, fcount,
-                              extra_t, dlen, up_fpm, up_area, sys_class,
-                              unpriced, path | frozenset([child_id])))
+                stack.append((child_id, fric, extra_fit, comp, dcount,
+                              fcount, extra_t, dlen, up_fpm, up_area,
+                              sys_class, unpriced,
+                              path | frozenset([child_id])))
 
     result = {}
     for sys_class, b in best.items():
-        sub = b['friction_inwc'] + b['fitting_inwc']
+        sub = b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc']
         b['subtotal_inwc'] = sub
         b['total_inwc']    = sub * (1.0 + safety_pct / 100.0)
         b['truncated']     = truncated[0]
@@ -1396,7 +1462,7 @@ def main():
         output.print_md('**Cancelled.**')
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     ext_static, safety_pct) = dialog_result
+     ext_static, safety_pct, diffuser_drop, damper_drop) = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1614,16 +1680,16 @@ def main():
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
-            all_nodes, safety_pct)
+            all_nodes, safety_pct, diffuser_drop, damper_drop)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET):')
         for sys_class in sorted(critical.keys()):
             c = critical[sys_class]
             summary_lines.append(
-                '  {}: {:.3f} in. wc  =  duct {:.3f} + fittings {:.3f}, '
-                '+{:.0f}% safety'.format(
+                '  {}: {:.3f} in. wc  =  duct {:.3f} + fittings {:.3f} + '
+                'components {:.3f}, +{:.0f}% safety'.format(
                     sys_class, c['total_inwc'], c['friction_inwc'],
-                    c['fitting_inwc'], safety_pct))
+                    c['fitting_inwc'], c['component_inwc'], safety_pct))
             summary_lines.append(
                 '      {} ducts, {:.0f} ft, {} fittings, {} taps restricting the '
                 'main, worst run ends at {}'.format(
@@ -1666,10 +1732,14 @@ def main():
             'by C x Pv with C from RJA SP_LOSS_WORKSHEET (1985 ASHRAE fitting '
             'numbers); take-offs dovetail, rect elbows assumed vaned.')
         summary_lines.append(
-            '  NOT INCLUDED: balancing and fire damper drops, diffuser and '
-            'grille pressure drop, and everything inside the unit casing '
-            '(filter, coils, cabinet) - take internal losses from the unit '
-            'cutsheet.')
+            '  COMPONENTS: diffuser {:.3f} and balancing damper {:.3f} in. wc '
+            'each, as entered; the model supplies only the count.'.format(
+                diffuser_drop, damper_drop))
+        summary_lines.append(
+            '  NOT INCLUDED, BY DEFINITION: everything inside the unit casing '
+            '(filter, coils, cabinet). Those are already deducted from the '
+            "manufacturer's published ESP, so adding them here would "
+            'double-count. Fire and backdraft dampers are not counted either.')
 
     output.print_md('---')
     output.print_md('### System Summary')

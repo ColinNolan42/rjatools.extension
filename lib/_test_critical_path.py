@@ -63,6 +63,9 @@ class Elem(object):
 
 
 _FITTING_KINDS = frozenset(['tap', 'elbow', 'unknown_fitting', 'transition'])
+# Accessories are a separate Revit category and a separate code path: their drop
+# is a user-entered cutsheet number, not a C value off duct geometry.
+_ACCESSORY_KINDS = frozenset(['accessory'])
 
 
 def _takeoff_child_ids(nid, nodes, children):
@@ -79,6 +82,10 @@ def _duct_continues_past(nid, nodes, children):
 
 def _is_fitting(elem):
     return elem is not None and elem.kind in _FITTING_KINDS
+
+
+def _is_accessory(elem):
+    return elem is not None and elem.kind in _ACCESSORY_KINDS
 
 
 def _fitting_family_name(elem):
@@ -101,6 +108,7 @@ hvac_graph = types.ModuleType('hvac_graph')
 hvac_graph.takeoff_child_ids       = _takeoff_child_ids
 hvac_graph.duct_continues_past     = _duct_continues_past
 hvac_graph.is_fitting              = _is_fitting
+hvac_graph.is_accessory            = _is_accessory
 hvac_graph.fitting_family_name     = _fitting_family_name
 hvac_graph.fitting_is_round        = _fitting_is_round
 hvac_graph.transition_areas        = _transition_areas
@@ -374,6 +382,51 @@ check("case8 diamond graph: the WORSE route through a shared downstream duct "
       found_friction8 is not None and abs(found_friction8 - true_worst8) < 1e-9,
       "found=%r  expected_worst=%.2f  cheap_path_would_be=%.2f"
       % (found_friction8, true_worst8, cheap_result8))
+
+
+# ── case 9: component drops (diffuser + balancing dampers) ──────────────────
+#
+#   root(900) -> duct 901 -> BALANCING DAMPER 902 -> FIRE DAMPER 903
+#                         -> duct 904 -> terminal 920
+#
+# diffuser_drop = 0.05 applied ONCE at the terminal.
+# damper_drop   = 0.25 applied ONCE, for the balancing damper only; the fire
+#                 damper must NOT inherit it and must be reported as uncounted.
+children9 = {900: [901], 901: [902], 902: [903], 903: [904], 904: [920]}
+ducts9 = build([(901, 0.10, 10.0, 800, 1.0, 'Supply Air'),
+                (904, 0.10, 10.0, 800, 1.0, 'Supply Air')])
+nodes9 = {
+    901: Elem('duct'),
+    902: Elem('accessory', family_name='Balancing Damper - Round'),
+    903: Elem('accessory', family_name='RJA - Fire Damper - Round'),
+    904: Elem('duct'),
+}
+terms9 = {920: (400.0, 'Supply Air', 'SD-9')}
+
+r9 = crit([900], children9, ducts9, terms9, nodes9,
+          safety_pct=0.0, diffuser_drop=0.05, damper_drop=0.25)
+sa9 = r9['Supply Air']
+expected_comp9 = 0.25 + 0.05          # one balancing damper + one diffuser
+check("case9 component_inwc == 1 balancing damper (0.25) + 1 diffuser (0.05)",
+      abs(sa9['component_inwc'] - expected_comp9) < 1e-9,
+      "got %.4f expected %.4f" % (sa9['component_inwc'], expected_comp9))
+check("case9 the FIRE damper did not silently inherit the balancing-damper drop",
+      abs(sa9['component_inwc'] - (0.25 * 2 + 0.05)) > 1e-6,
+      "component_inwc=%.4f would be %.4f if both dampers counted"
+      % (sa9['component_inwc'], 0.25 * 2 + 0.05))
+check("case9 the uncounted fire damper is REPORTED, not silently dropped",
+      any('Fire Damper' in u for u in sa9['unpriced']),
+      "unpriced=%r" % (sa9['unpriced'],))
+check("case9 subtotal now includes components",
+      abs(sa9['subtotal_inwc'] -
+          (sa9['friction_inwc'] + sa9['fitting_inwc'] + sa9['component_inwc'])) < 1e-9,
+      "subtotal=%.4f" % sa9['subtotal_inwc'])
+# with both drops at 0 the components must vanish entirely
+r9b = crit([900], children9, ducts9, terms9, nodes9,
+           safety_pct=0.0, diffuser_drop=0.0, damper_drop=0.0)
+check("case9 zeroed component drops contribute nothing",
+      abs(r9b['Supply Air']['component_inwc']) < 1e-12,
+      "got %r" % r9b['Supply Air']['component_inwc'])
 
 
 # ── summary ──────────────────────────────────────────────────────────────────

@@ -235,3 +235,38 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
             return c, 'transition contraction'
         return 0.0, 'transition, size change unreadable (UNPRICED)'
     return 0.0, 'unrecognised fitting (UNPRICED)'
+
+
+# ── Duct accessories: components, not fittings ───────────────────────────────
+#
+# A balancing damper is not a fitting and has no C value in the worksheet. RJA's
+# sheet carries it as a hand-entered known pressure drop in column D (its example
+# uses 0.25 in. wc for an OBD), because a damper's drop is a cutsheet number and
+# a function of how far it is throttled, not of duct geometry.
+#
+# NOT read from the Revit family. The `Balancing Damper - Round` family in
+# Grantham 4 MP carries an instance parameter "Pressure Drop = 1.00 in-wg",
+# which is almost certainly Revit content boilerplate rather than a real
+# selection: a balancing damper near wide open is an order of magnitude below
+# that, and 15 of them at 1.00 would swamp every other loss in the system. The
+# built-in RBS_DUCT_PRESSURE_DROP is empty, which is what Revit would populate
+# if its own pressure-loss calc had ever been run. So the drop is a user input,
+# and the count comes from the model.
+_BALANCING_DAMPER_KEYWORDS = ('balancing damper', 'balance damper', 'obd',
+                              'opposed blade')
+
+
+def is_balancing_damper(family_name):
+    """True for a balancing / opposed-blade damper accessory.
+
+    Deliberately narrow. A fire damper, smoke damper or backdraft damper has a
+    different drop and must not silently inherit the balancing-damper input, so
+    anything else comes back False and the caller reports it as uncounted.
+    """
+    if not family_name:
+        return False
+    name = family_name.lower()
+    for kw in _BALANCING_DAMPER_KEYWORDS:
+        if kw in name:
+            return True
+    return False
