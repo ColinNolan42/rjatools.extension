@@ -79,6 +79,7 @@ if _lib not in sys.path:
     sys.path.insert(0, _lib)
 
 import hvac_graph
+import fitting_tables
 from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
@@ -152,7 +153,7 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, full_diag, ext_static) or None.
+    selected_column_keys, full_diag, ext_static, safety_pct) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -185,6 +186,7 @@ def show_velocity_settings_dialog():
         ('Transfer Air', 400,  0.05),
     ]
     DEFAULT_TOL_PCT = 10     # yellow band: ±this % around max
+    DEFAULT_SAFETY_PCT = 10  # SP_LOSS_WORKSHEET's own last row
 
     result    = [None]
     vel_boxes  = {}   # row_idx -> TextBox (velocity)
@@ -361,8 +363,30 @@ def show_velocity_settings_dialog():
     cb_static_text.Width = CONTENT_W - 20
     cb_static.Content   = cb_static_text
     cb_static.IsChecked = False
-    cb_static.Margin    = Thickness(2, 0, 0, 6)
+    cb_static.Margin    = Thickness(2, 0, 0, 2)
     outer.Children.Add(cb_static)
+
+    # Safety factor: the last row of RJA's SP_LOSS_WORKSHEET, a flat % on the
+    # subtotal (its example uses 10%). Applies to the external static total
+    # only, never to the per-duct friction checks.
+    sf_panel = StackPanel()
+    sf_panel.Orientation = Orientation.Horizontal
+    sf_panel.Margin = Thickness(22, 0, 0, 6)
+    sf_lbl = Label()
+    sf_lbl.Content = 'Safety factor:'
+    sf_lbl.VerticalAlignment = VerticalAlignment.Center
+    sf_panel.Children.Add(sf_lbl)
+    tb_sf = TextBox()
+    tb_sf.Text  = str(DEFAULT_SAFETY_PCT)
+    tb_sf.Width = 45
+    tb_sf.Margin = Thickness(4, 0, 4, 0)
+    tb_sf.VerticalAlignment = VerticalAlignment.Center
+    sf_panel.Children.Add(tb_sf)
+    sf_suffix = Label()
+    sf_suffix.Content = '% added to the external static total'
+    sf_suffix.VerticalAlignment = VerticalAlignment.Center
+    sf_panel.Children.Add(sf_suffix)
+    outer.Children.Add(sf_panel)
 
     col_grid = Grid()
     _COL_PICKER_COLS = 2
@@ -472,8 +496,13 @@ def show_velocity_settings_dialog():
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
             ext_static = bool(cb_static.IsChecked)
+            safety_pct = float(tb_sf.Text)
+            if safety_pct < 0 or safety_pct > 100:
+                forms.alert('Safety factor must be between 0 and 100.',
+                            title='Invalid Input')
+                return
             result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         ext_static)
+                         ext_static, safety_pct)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -497,78 +526,185 @@ def show_velocity_settings_dialog():
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
-def _critical_path_loss(all_root_ids, all_children, all_duct_results, all_terminals):
-    """Worst fan-to-terminal path per system class: the index run.
+def _critical_path_loss(all_root_ids, all_children, all_duct_results,
+                        all_terminals, all_nodes, safety_pct=0.0):
+    """Worst fan-to-terminal path per system class: the index run, with fittings.
 
-    Total static pressure loss is a PATH, not a sum. Air leaving the fan does
-    not travel every branch in series, it takes one route to one terminal, and
-    the fan has to beat the worst route. Shorter routes get dampered back. So
-    this walks every root-to-terminal path and keeps the highest total per
-    system class, rather than adding the whole system together.
+    Total external static pressure is a PATH, not a sum. Air leaving the fan
+    takes one route to one terminal and the fan has to beat the worst route;
+    shorter runs get dampered back. Colin, 2026-09-24: "we do not need to
+    account for every branch just the most restrictive run."
 
-    That makes it a DIFFERENT number from the TOTAL row at the bottom of the
-    duct table, which sums the Friction Loss column. Both are wanted and they
-    are not supposed to agree: the TOTAL row answers "how much duct friction
-    is in this system", this answers "what must the fan produce".
+    Follows RJA's SP_LOSS_WORKSHEET method:
+      duct friction   Darcy-Weisbach + Altshul-Tsal, per segment
+      fittings        C * Pv, C from fitting_tables (1985 ASHRAE numbers)
+      safety factor   a flat % on the subtotal, the sheet's own last row
 
-    SCOPE, and it is a real limitation, not a rounding issue: DUCT FRICTION
-    ONLY. Fitting losses (elbows, tees, takeoffs, transitions) are typically
-    30-50% of real system loss and are NOT computed anywhere in this codebase,
-    because that needs a sourced coefficient or equivalent-length table that
-    does not exist here yet. Coil, filter, damper, diffuser and casing losses
-    come off cutsheets and are not in the model at all. Every caller must
-    print that scope. Never let this be read as a fan selection figure.
+    TWO coefficients apply at a take-off and they are never both charged to the
+    same air, because they are two different streams through one junction:
+      - the run TURNS OFF through a tap        -> 0.98  (supply dovetail branch)
+      - the run CONTINUES past a tap on a main -> 0.28  (main duct @ take-off)
+    Over a whole index run you therefore accumulate 0.28 for every OTHER tap
+    hanging off the mains it traverses, plus one 0.98 where it finally leaves.
+    Colin: "for each branch you should add the .28 as it restricts the main duct
+    which may be the most restrictive."
 
-    all_children / all_terminals are keyed by int element id (see
-    HvacNetwork). all_duct_results is keyed by the real Revit ElementId (see
-    hvac_graph.build_network), so it is re-keyed by its own
-    DuctResult.element_id (an int) here rather than assumed to match.
+    Revit models a tap as a 2-connector in-line stub on an UNBROKEN main, so
+    there is no element on the main representing that 0.28 - which is exactly
+    why that column sits at 0 in the filled worksheet. The taps hanging off each
+    main are counted instead (hvac_graph.takeoff_child_ids).
 
-    Returns {sys_class: {'friction_inwc', 'duct_count', 'length_ft',
-    'terminal_id', 'terminal_name'}}.
+    STILL NOT INCLUDED: balancing/fire damper drops, diffuser and grille
+    pressure drop, and anything inside the unit casing (filter, coils, cabinet).
+    Those are cutsheet numbers with no model source. Colin takes internal losses
+    off the unit cutsheet, so external static stops at the casing.
+
+    all_children / all_terminals / all_nodes are keyed by int element id.
+    all_duct_results is keyed by the real Revit ElementId, so it is re-keyed by
+    its own DuctResult.element_id here rather than assumed to match.
+
+    Returns {sys_class: {...}} with friction_inwc, fitting_inwc, subtotal_inwc,
+    total_inwc, duct_count, fitting_count, tap_bypass_count, length_ft,
+    terminal_id, terminal_name, unpriced.
     """
     dr_by_int_id = {}
     for dr in all_duct_results.values():
         dr_by_int_id[dr.element_id] = dr
 
-    best = {}   # sys_class -> (friction_inwc, duct_count, length_ft, terminal_id)
+    # Cache per-duct take-off children and end-of-main, so a duct reached by
+    # several candidate paths is not re-walked for each one.
+    tap_cache = {}
+    def _taps(nid):
+        if nid not in tap_cache:
+            tap_cache[nid] = hvac_graph.takeoff_child_ids(nid, all_nodes, all_children)
+        return tap_cache[nid]
+
+    cont_cache = {}
+    def _continues(nid):
+        if nid not in cont_cache:
+            cont_cache[nid] = hvac_graph.duct_continues_past(nid, all_nodes, all_children)
+        return cont_cache[nid]
+
+    best = {}
+    truncated = [False]
+
+    # Bound on total path steps. A simple-path search is exponential in the
+    # worst case, and while duct networks are near-trees, a badly modelled one
+    # with many merge points could in principle blow up. Hitting this is
+    # reported, never silently swallowed.
+    MAX_PATH_STEPS = 200000
 
     for root_id in all_root_ids:
-        # (node, cumulative friction, ducts on path, feet of duct on path)
-        stack = [(root_id, 0.0, 0, 0.0)]
-        visited = set()
+        # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
+        #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
+        #  nodes already on THIS path)
+        stack = [(root_id, 0.0, 0.0, 0, 0, 0, 0.0, 0.0, 0.0, None, (),
+                  frozenset([root_id]))]
+        steps = 0
         while stack:
-            nid, fric, dcount, dlen = stack.pop()
-            if nid in visited:
-                continue
-            visited.add(nid)
+            steps = steps + 1
+            if steps > MAX_PATH_STEPS:
+                log.warning('_critical_path_loss: path search truncated at %d '
+                            'steps from root %s', MAX_PATH_STEPS, root_id)
+                truncated[0] = True
+                break
+            (nid, fric, fit, dcount, fcount, tcount, dlen,
+             up_fpm, up_area, sys_class, unpriced, path) = stack.pop()
 
-            dr = dr_by_int_id.get(nid)
+            elem = all_nodes.get(nid)
+            dr   = dr_by_int_id.get(nid)
+
             if dr is not None:
-                fric   = fric + dr.friction_loss_inwc
-                dlen   = dlen + dr.length_ft
-                dcount = dcount + 1
+                fric      = fric + dr.friction_loss_inwc
+                dlen      = dlen + dr.length_ft
+                dcount    = dcount + 1
+                up_fpm    = dr.fpm
+                up_area   = dr.area_ft2
+                sys_class = dr.sys_class
+
+            elif elem is not None and hvac_graph.is_fitting(elem):
+                fam  = hvac_graph.fitting_family_name(elem)
+                role = fitting_tables.classify_fitting(fam)
+                up_a, down_a = (None, None)
+                if role == 'transition':
+                    up_a, down_a = hvac_graph.transition_areas(elem, up_area)
+                c, note = fitting_tables.fitting_c(
+                    role, sys_class,
+                    is_round=hvac_graph.fitting_is_round(elem),
+                    upstream_area_ft2=up_a, downstream_area_ft2=down_a,
+                    is_end_of_main=False)
+                if c > 0.0:
+                    fit    = fit + c * hvac_graph.velocity_pressure_inwg(up_fpm)
+                    fcount = fcount + 1
+                elif 'UNPRICED' in note:
+                    unpriced = unpriced + ((fam or '?') + ': ' + note,)
 
             term = all_terminals.get(nid)
             if term is not None:
-                _cfm, sys_class, _family = term
-                current = best.get(sys_class)
-                if current is None or fric > current[0]:
-                    best[sys_class] = (fric, dcount, dlen, nid)
+                _cfm, term_class, _family = term
+                key     = term_class or sys_class or 'Unknown'
+                current = best.get(key)
+                if current is None or (fric + fit) > (current['friction_inwc'] +
+                                                      current['fitting_inwc']):
+                    best[key] = {
+                        'friction_inwc':    fric,
+                        'fitting_inwc':     fit,
+                        'duct_count':       dcount,
+                        'fitting_count':    fcount,
+                        'tap_bypass_count': tcount,
+                        'length_ft':        dlen,
+                        'terminal_id':      nid,
+                        'terminal_name':    _family or '-',
+                        'unpriced':         unpriced,
+                    }
 
             for child_id in all_children.get(nid, []):
-                stack.append((child_id, fric, dcount, dlen))
+                # Per-PATH loop guard, not a global visited set. A single shared
+                # visited set was a real bug: it marked a node seen on whichever
+                # path reached it first, so where two routes merge (two AHUs
+                # feeding a common duct, a ring main, or a mis-modelled shared
+                # segment) the second route was thrown away at the merge and its
+                # losses were never compared. Since this function exists to find
+                # the WORST path, that silently under-reported external static.
+                # Verified: a diamond graph reported 0.07 in. wc when the real
+                # critical path was 0.52.
+                if child_id in path:
+                    continue
+                extra_fit = fit
+                extra_t   = tcount
+                if dr is not None:
+                    # Every tap on this main that the run does NOT leave
+                    # through restricts it, and gets the main-duct coefficient.
+                    taps = _taps(nid)
+                    n_by = len(taps) - (1 if child_id in taps else 0)
+                    if n_by > 0:
+                        extra_fit = extra_fit + (
+                            fitting_tables.takeoff_main_c(dr.sys_class) *
+                            hvac_graph.velocity_pressure_inwg(dr.fpm) * n_by)
+                        extra_t = extra_t + n_by
+                    # A tap at the terminus of a main is the worksheet's "end of
+                    # main branch" case and carries a different C, so the swing
+                    # is applied here where the parent duct is known.
+                    if child_id in taps and not _continues(nid):
+                        ch = all_nodes.get(child_id)
+                        if ch is not None:
+                            end_c = fitting_tables.takeoff_c(
+                                dr.sys_class, is_end_of_main=True)
+                            typ_c = fitting_tables.takeoff_c(dr.sys_class)
+                            extra_fit = extra_fit + (
+                                (end_c - typ_c) *
+                                hvac_graph.velocity_pressure_inwg(dr.fpm))
+                stack.append((child_id, fric, extra_fit, dcount, fcount,
+                              extra_t, dlen, up_fpm, up_area, sys_class,
+                              unpriced, path | frozenset([child_id])))
 
     result = {}
-    for sys_class, (fric, dcount, dlen, term_id) in best.items():
-        term = all_terminals.get(term_id)
-        result[sys_class] = {
-            'friction_inwc': fric,
-            'duct_count':    dcount,
-            'length_ft':     dlen,
-            'terminal_id':   term_id,
-            'terminal_name': term[2] if term else '-',
-        }
+    for sys_class, b in best.items():
+        sub = b['friction_inwc'] + b['fitting_inwc']
+        b['subtotal_inwc'] = sub
+        b['total_inwc']    = sub * (1.0 + safety_pct / 100.0)
+        b['truncated']     = truncated[0]
+        result[sys_class]  = b
     return result
 
 
@@ -1260,7 +1396,7 @@ def main():
         output.print_md('**Cancelled.**')
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     ext_static) = dialog_result
+     ext_static, safety_pct) = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1477,32 +1613,44 @@ def main():
 
     if ext_static:
         critical = _critical_path_loss(
-            all_root_ids, all_children, all_duct_results, all_terminals)
+            all_root_ids, all_children, all_duct_results, all_terminals,
+            all_nodes, safety_pct)
         summary_lines.append(
-            'TOTAL EXTERNAL STATIC PRESSURE (critical path / index run):')
+            'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET):')
         for sys_class in sorted(critical.keys()):
             c = critical[sys_class]
             summary_lines.append(
-                '  {}: {:.3f} in. wc   ({} ducts, {:.0f} ft, worst run ends at {})'.format(
-                    sys_class, c['friction_inwc'], c['duct_count'],
-                    c['length_ft'], c['terminal_name']))
+                '  {}: {:.3f} in. wc  =  duct {:.3f} + fittings {:.3f}, '
+                '+{:.0f}% safety'.format(
+                    sys_class, c['total_inwc'], c['friction_inwc'],
+                    c['fitting_inwc'], safety_pct))
+            summary_lines.append(
+                '      {} ducts, {:.0f} ft, {} fittings, {} taps restricting the '
+                'main, worst run ends at {}'.format(
+                    c['duct_count'], c['length_ft'], c['fitting_count'],
+                    c['tap_bypass_count'], c['terminal_name']))
+            for u in c['unpriced']:
+                summary_lines.append('      UNPRICED FITTING: ' + u)
+            if c.get('truncated'):
+                summary_lines.append(
+                    '      WARNING: path search hit its step limit, so this may '
+                    'not be the true worst run.')
 
-        # The fan sees the supply side and the return side in series, so the
-        # two index runs add. Which sides are in the total is NAMED rather than
-        # assumed: a plenum return, or a system where only one side was
-        # traversed, would otherwise silently produce a one-sided number
-        # labelled as if it were the whole thing.
+        # The fan sees the supply side and the return side in series, so the two
+        # index runs add. Which sides went in is NAMED rather than assumed: a
+        # plenum-return job, or one where only one side was traversed, would
+        # otherwise silently produce a one-sided number labelled as the whole.
         supply  = critical.get('Supply Air')
         returns = [(k, critical[k]) for k in ('Return Air', 'Exhaust Air')
                    if k in critical]
-        total   = 0.0
-        sides   = []
+        total = 0.0
+        sides = []
         if supply is not None:
-            total += supply['friction_inwc']
+            total += supply['total_inwc']
             sides.append('Supply Air')
         if returns:
-            worst_k, worst_c = max(returns, key=lambda kv: kv[1]['friction_inwc'])
-            total += worst_c['friction_inwc']
+            worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
+            total += worst_c['total_inwc']
             sides.append(worst_k)
         if sides:
             summary_lines.append(
@@ -1514,11 +1662,14 @@ def main():
                     'complete external static.')
 
         summary_lines.append(
-            '  SCOPE: duct friction only. Excludes fitting/elbow/tee/takeoff '
-            'losses (typically 30-50% of real system loss), balancing and fire '
-            'dampers, and diffuser/grille pressure drop. Internal losses '
-            '(filter, coils, casing) are NOT external static - take those from '
-            'the unit cutsheet.')
+            '  METHOD: duct friction by Darcy-Weisbach + Altshul-Tsal; fittings '
+            'by C x Pv with C from RJA SP_LOSS_WORKSHEET (1985 ASHRAE fitting '
+            'numbers); take-offs dovetail, rect elbows assumed vaned.')
+        summary_lines.append(
+            '  NOT INCLUDED: balancing and fire damper drops, diffuser and '
+            'grille pressure drop, and everything inside the unit casing '
+            '(filter, coils, cabinet) - take internal losses from the unit '
+            'cutsheet.')
 
     output.print_md('---')
     output.print_md('### System Summary')

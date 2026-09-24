@@ -24,6 +24,7 @@ from Autodesk.Revit.DB import (
 from revit_helpers import eid_int
 
 import diffuser_tables
+import fitting_tables
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ def flex_duct_size(cfm):
     Returns (diameter_in, warning_or_None).
     If CFM > 750, diameter is None and warning recommends rigid duct.
     """
+    # Cast up front: '{:.0f}'.format(an int) raises ValueError under
+    # IronPython 2.7, and every caller of this reads CFM off a Revit
+    # parameter that can come back as an int.
+    cfm = float(cfm)
     if cfm > FLEX_DUCT_MAX_CFM:
         return None, 'CFM {:.0f} exceeds flex duct max ({} CFM) — use rigid duct'.format(
             cfm, FLEX_DUCT_MAX_CFM)
@@ -143,6 +148,20 @@ def is_terminal(elem):
 def is_duct(elem):
     cid = _cat_id(elem)
     return cid in (_CAT_DUCT, _CAT_FLEX_DUCT)
+
+def is_flex_duct(elem):
+    """Flex duct, which Revit keeps in its own category (OST_FlexDuctCurves).
+
+    Worth its own test because flex is 40x rougher than galvanized steel
+    (eps 0.012 ft against 0.0003), which is about 1.8x the friction for a
+    typical 8-12 in. branch. Flex runs were already being TRAVERSED - is_duct()
+    has always included this category - they were just being priced as if they
+    were sheet metal.
+
+    Colin, 2026-09-24: "flex branches are generally only ceiling diffusers so
+    you can probably include the difference of the two as i have a flex duct
+    family."""
+    return _cat_id(elem) == _CAT_FLEX_DUCT
 
 def is_equipment(elem):
     return _cat_id(elem) == _CAT_EQUIP
@@ -561,6 +580,119 @@ def duct_friction_loss_per_100ft(v_fpm, d_h_in, eps_ft=DEFAULT_ROUGHNESS_FT):
         return 0.0
     dp_per_ft_lbf = f / d_h_ft * (AIR_DENSITY_LB_FT3 * v_fps ** 2) / (2.0 * _GRAVITY_FT_S2)
     return dp_per_ft_lbf * 100.0 / _IN_WG_PER_LBF_FT2
+
+
+def fitting_family_name(elem):
+    """Family name of a fitting, or '' if unreadable.
+
+    Colin, 2026-09-24: family names ARE the right key for FITTINGS, because RJA
+    uses the same standard content on every project. The no-family-names rule
+    still applies to mechanical equipment and air terminals, which vary per job.
+
+    Goes through the FamilySymbol rather than reading Element.Name, which throws
+    under IronPython (see Claude Code memory reference_ironpython_revit_name).
+    """
+    try:
+        sym = elem.Document.GetElement(elem.GetTypeId())
+        if sym is not None:
+            return sym.Family.Name
+    except Exception:
+        pass
+    try:
+        return elem.MEPModel.ConnectorManager and ''
+    except Exception:
+        return ''
+    return ''
+
+
+def connector_areas_ft2(elem):
+    """Cross-sectional area (ft2) of every connector on a fitting, plus shape.
+
+    Returns a list of (area_ft2, is_round). Empty list if nothing is readable.
+
+    Revit reports Connector.Direction as Bidirectional on duct fittings, so this
+    deliberately does NOT try to infer flow direction - only the traversal graph
+    knows that. The caller orients these against the upstream duct.
+    """
+    out = []
+    try:
+        cm = elem.MEPModel.ConnectorManager
+    except Exception:
+        return out
+    if cm is None:
+        return out
+    try:
+        conns = list(cm.Connectors)
+    except Exception:
+        return out
+    for c in conns:
+        try:
+            if c.Shape == ConnectorProfileType.Round:
+                r = c.Radius
+                out.append((math.pi * r * r, True))
+            else:
+                out.append((c.Width * c.Height, False))
+        except Exception:
+            continue
+    return out
+
+
+def transition_areas(elem, upstream_area_ft2):
+    """Orient a transition's two connectors into (upstream, downstream) areas.
+
+    A transition's own connectors carry both sizes, but not which end the air
+    enters. This picks whichever connector is closest to the area of the duct the
+    path arrived from as the upstream end, and the other as downstream.
+
+    Returns (upstream_area, downstream_area), or (None, None) if the fitting does
+    not present two readable connectors.
+    """
+    areas = [a for a, _r in connector_areas_ft2(elem)]
+    if len(areas) < 2 or not upstream_area_ft2:
+        return None, None
+    areas.sort(key=lambda a: abs(a - upstream_area_ft2))
+    return areas[0], areas[-1]
+
+
+def fitting_is_round(elem):
+    """True if a fitting's connectors are round. Used to pick the elbow C value."""
+    shapes = [r for _a, r in connector_areas_ft2(elem)]
+    if not shapes:
+        return True
+    return shapes.count(True) >= shapes.count(False)
+
+
+def takeoff_child_ids(node_id, nodes, children):
+    """Child node ids of `node_id` that are take-off / tap fittings.
+
+    A Revit tap is a TWO-connector in-line stub hanging off an UNBROKEN main, so
+    every tap on a main duct shows up as a child of that duct in the traversal
+    (verified on Grantham 4 MP, 2026-09-24). That is what makes the worksheet's
+    "MAIN DUCT PRESSURE DROP @ TAKE-OFF" countable at all: there is no element on
+    the main to find, so the taps hanging off it get counted instead.
+    """
+    out = []
+    for cid in children.get(node_id, []):
+        elem = nodes.get(cid)
+        if elem is None or not is_fitting(elem):
+            continue
+        if fitting_tables.classify_fitting(fitting_family_name(elem)) == 'takeoff':
+            out.append(cid)
+    return out
+
+
+def duct_continues_past(node_id, nodes, children):
+    """Does a duct carry on into another DUCT downstream?
+
+    False means the main terminates here, which is the worksheet's "END OF MAIN
+    BRANCH" case and swaps the take-off C (supply 0.98 -> 0.54, exhaust
+    0.76 -> 3.63, a big swing on the exhaust side).
+    """
+    for cid in children.get(node_id, []):
+        elem = nodes.get(cid)
+        if elem is not None and is_duct(elem):
+            return True
+    return False
 
 
 def _duct_length_ft(duct):
@@ -1213,7 +1345,12 @@ class DuctResult(object):
         self.label             = smacna_label(self.fpm, sys_class)
         self.size              = duct_size_label(elem)
         self.d_h_in            = _duct_d_h_in(elem)
-        self.friction_per_100ft = duct_friction_loss_per_100ft(self.fpm, self.d_h_in)
+        self.is_flex           = is_flex_duct(elem)
+        # Flex gets its real roughness instead of being priced as sheet metal.
+        self.roughness_ft      = (ROUGHNESS_FT['Flex Duct (corrugated)']
+                                  if self.is_flex else DEFAULT_ROUGHNESS_FT)
+        self.friction_per_100ft = duct_friction_loss_per_100ft(
+            self.fpm, self.d_h_in, self.roughness_ft)
         self.length_ft          = _duct_length_ft(elem)
         self.friction_loss_inwc = self.length_ft / 100.0 * self.friction_per_100ft
 
