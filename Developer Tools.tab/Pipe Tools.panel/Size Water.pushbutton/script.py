@@ -1,9 +1,12 @@
 # -*- coding: ascii -*-
 # Size Water.pushbutton/script.py
-# Writes domestic water pipe sizes into the model, per the 2024 IPC.
+# Domestic water pipe sizing per the 2024 IPC.
 #
-# The whole pipeline lives in lib/water_run.py, shared with the Water Report
-# button, so the two can never report different numbers for the same system.
+# One button. The dialog's two action buttons choose what the run does:
+# Create Report puts the WSFU take-off on a drafting view and a sheet and
+# leaves the model alone, Size Water writes the sizes into the model.
+#
+# The pipeline itself lives in lib/water_run.py.
 #
 # IronPython 2.7 / pyRevit
 
@@ -23,4 +26,4 @@ if _lib_dir not in sys.path:
 
 import water_run
 
-water_run.run(doc, uidoc, output, forms, water_run.MODE_SIZE)
+water_run.run(doc, uidoc, output, forms)

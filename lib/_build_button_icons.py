@@ -122,6 +122,3 @@ if __name__ == "__main__":
           os.path.join(PANEL, "Size Water.pushbutton", "icon.png"))
     build(ORANGE, lambda d, cx, cy, w, h: flame(d, cx, cy, w, h, ORANGE),
           os.path.join(PANEL, "Size Gas.pushbutton", "icon.png"))
-    build(BLUE, lambda d, cx, cy, w, h: droplet(d, cx, cy, w, h),
-          os.path.join(PANEL, "Water Report.pushbutton", "icon.png"),
-          bottom=table_rows, geometry=REPORT_GLYPH)

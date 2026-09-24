@@ -41,24 +41,27 @@ MODE_REPORT = ui_helpers.MODE_REPORT
 MODE_SIZE = ui_helpers.MODE_SIZE
 
 
-def run(doc, uidoc, output, forms, mode):
-    """Run the whole tool in one of the two modes. Returns True if it finished."""
+def run(doc, uidoc, output, forms):
+    """Run the tool. The dialog's two action buttons choose what happens.
 
-    title = "Water Report" if mode == MODE_REPORT else "Size Water"
-    output.print_md("# {}".format(title))
+    Returns True if it finished.
+    """
+    output.print_md("# Size Water")
 
     origin = _pick_origin(uidoc, doc, output, forms)
     if origin is None:
         return False
 
     settings = ui_helpers.show_water_dialog(
-        "{} - 2024 IPC".format(title),
+        "Size Water - 2024 IPC",
         _project_info(doc, output),
-        _hot_water_system_types(doc, output),
-        mode=mode)
+        _hot_water_system_types(doc, output))
     if settings is None:
         output.print_md("Cancelled. Nothing was changed.")
         return False
+
+    mode = settings["mode"]
+    title = "Water Report" if mode == MODE_REPORT else "Size Water"
 
     revit_helpers.reset_pipe_diameter_approach()
     graph = water_graph.build_water_network(origin, doc)

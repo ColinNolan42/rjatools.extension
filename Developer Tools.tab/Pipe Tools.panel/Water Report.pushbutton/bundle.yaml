@@ -1,7 +1,0 @@
-title: Water Report
-tooltip: >
-  Select the RPZ / backflow preventer, then click to produce the domestic
-  water WSFU take-off per the 2024 IPC.
-  Checks the system is complete, works out every pipe size, and places the
-  take-off on a drafting view and a new sheet.
-  Changes nothing in the model. Use Size Water to write the sizes.

@@ -82,16 +82,27 @@ _WATER_XAML = (
     ' FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,6"/>'
     '<StackPanel Name="spHotSystems" Margin="8,0,0,14"/>'
 
-    '<TextBlock Name="tbWhatHappens" FontWeight="Bold" Margin="0,0,0,4"/>'
-    '<TextBlock Name="tbWhatHappensDetail" FontSize="10" Foreground="Gray"'
-    ' TextWrapping="Wrap" Margin="0,0,0,6"/>'
+    '<TextBlock Text="What This Run Will Do" FontWeight="Bold"'
+    ' Margin="0,0,0,4"/>'
+    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
+    ' Margin="0,0,0,2"'
+    ' Text="CREATE REPORT - traverses the system, checks it is complete, works'
+    ' out every pipe size, and puts the WSFU take-off on a drafting view and a'
+    ' new sheet. Nothing in the model is changed."/>'
+    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
+    ' Margin="0,0,0,6"'
+    ' Text="SIZE WATER - does the same, then writes the new size into every'
+    ' pipe it sized and resizes the fittings to match. The report prints in'
+    ' the pyRevit window."/>'
     '</StackPanel>'
     '</ScrollViewer>'
 
     '<StackPanel Grid.Row="2" Orientation="Horizontal"'
     ' HorizontalAlignment="Right" Margin="0,12,0,0">'
     '<Button Name="btnCancel" Content="Cancel" Width="80" Margin="0,0,8,0"/>'
-    '<Button Name="btnOK" Content="Run" Width="110"/>'
+    '<Button Name="btnReport" Content="Create Report" Width="120"'
+    ' Margin="0,0,8,0"/>'
+    '<Button Name="btnSize" Content="Size Water" Width="110"/>'
     '</StackPanel>'
     '</Grid>'
     '</Window>'
@@ -101,25 +112,9 @@ _WATER_XAML = (
 MODE_REPORT = "report"
 MODE_SIZE = "size"
 
-# What each button does, shown in the dialog so the run is never a surprise.
-_MODE_TEXT = {
-    MODE_REPORT: (
-        "This run will PRODUCE THE REPORT.",
-        "Traverses the system, checks it is complete, works out every pipe "
-        "size and prints the report. Puts the WSFU take-off on a drafting "
-        "view and on a new sheet. Nothing in the model is changed, no pipe "
-        "size is written."),
-    MODE_SIZE: (
-        "This run will WRITE PIPE SIZES TO THE MODEL.",
-        "Traverses the system, checks it is complete, and writes the new "
-        "size to every pipe it sized. The report is printed here in the "
-        "window. Use the Water Report button when you want the take-off on a "
-        "sheet."),
-}
 
-
-def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
-    """Startup dialog shared by the Water Report and Size Water buttons.
+def show_water_dialog(title, project_info, hot_system_types):
+    """The one Size Water dialog. Its two action buttons choose what happens.
 
     One dialog, then everything is automatic. It deliberately asks nothing
     that the firm standard already settles: minimum pipe sizes always apply,
@@ -132,13 +127,12 @@ def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
         title: window title string.
         project_info: dict with "job", "job_number", "by" defaults, read from
             Revit Project Information by the caller.
-        hot_system_types: list of (element_id, name) for every PipingSystemType
-            classified as Domestic Hot Water.
-        mode: MODE_REPORT or MODE_SIZE, which button is running.
+        hot_system_types: list of (element_id, name, pipe_count) for every
+            PipingSystemType classified as Domestic Hot Water.
 
     Returns:
-        dict with "job", "job_number", "by", "return_system_type_ids"
-        (set of ints), or None if cancelled.
+        dict with "mode" (MODE_REPORT or MODE_SIZE), "job", "job_number",
+        "by" and "return_system_type_ids" (set of ints), or None if cancelled.
     """
     from System.Windows.Controls import CheckBox
     from System.Windows import Thickness
@@ -151,9 +145,8 @@ def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
     tb_job_no = window.FindName('tbJobNo')
     tb_by = window.FindName('tbBy')
     sp_hot = window.FindName('spHotSystems')
-    tb_what = window.FindName('tbWhatHappens')
-    tb_what_detail = window.FindName('tbWhatHappensDetail')
-    btn_ok = window.FindName('btnOK')
+    btn_report = window.FindName('btnReport')
+    btn_size = window.FindName('btnSize')
     btn_cancel = window.FindName('btnCancel')
 
     # The basis block comes from the data module, so the dialog can never show
@@ -163,11 +156,6 @@ def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
     tb_job.Text = project_info.get("job", "") or ""
     tb_job_no.Text = project_info.get("job_number", "") or ""
     tb_by.Text = project_info.get("by", "") or ""
-
-    headline, detail = _MODE_TEXT.get(mode, _MODE_TEXT[MODE_SIZE])
-    tb_what.Text = headline
-    tb_what_detail.Text = detail
-    btn_ok.Content = "Create Report" if mode == MODE_REPORT else "Size Water"
 
     checkboxes = []
     if hot_system_types:
@@ -196,12 +184,13 @@ def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
 
     result = [None]
 
-    def on_ok(sender, e):
+    def collect(mode):
         returns = set()
         for box, type_id in checkboxes:
             if box.IsChecked:
                 returns.add(type_id)
         result[0] = {
+            "mode": mode,
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
             "by": tb_by.Text.strip(),
@@ -209,10 +198,19 @@ def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
         }
         window.Close()
 
+    # The two action buttons ARE the choice of what the run does, which is why
+    # there is no report-only check box: the button the user presses says it.
+    def on_report(sender, e):
+        collect(MODE_REPORT)
+
+    def on_size(sender, e):
+        collect(MODE_SIZE)
+
     def on_cancel(sender, e):
         window.Close()
 
-    btn_ok.Click += on_ok
+    btn_report.Click += on_report
+    btn_size.Click += on_size
     btn_cancel.Click += on_cancel
     window.ShowDialog()
 

@@ -152,7 +152,7 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, print_all) or None.
+    selected_column_keys, full_diag, static_loss) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -203,34 +203,33 @@ def show_velocity_settings_dialog():
     outer = StackPanel()
     outer.Margin = Thickness(14)
 
-    # ── Print ALL ducts / total static pressure loss ────────────────────────
-    # Ahead of every other option on purpose: it changes what "Optional output
-    # table columns" below applies TO (every duct, not just flagged ones), so
-    # it has to be seen and decided first.
-    cb_print_all = CheckBox()
-    cb_print_all_text = TextBlock()
-    cb_print_all_text.Text = (
-        'Print ALL ducts (not just Red/Yellow/Purple) + total static '
-        'pressure loss per system. Turns the flagged-duct table into a '
-        'whole-system table and adds a critical-path duct friction total '
-        '(ducts only - fittings and equipment are not in this total).')
-    cb_print_all_text.TextWrapping = TextWrapping.Wrap
-    cb_print_all_text.Width = CONTENT_W - 20
-    cb_print_all.Content   = cb_print_all_text
-    cb_print_all.IsChecked = False
-    cb_print_all.FontWeight = FontWeights.Bold
-    cb_print_all.Margin = Thickness(2, 0, 0, 2)
-    outer.Children.Add(cb_print_all)
+    # ── 1. Full System Diagnostic ───────────────────────────────────────────
+    # Ahead of every other option on purpose: it changes what the options
+    # below apply TO (every duct, not just the flagged ones), so it has to be
+    # seen and decided first.
+    cb_full_diag = CheckBox()
+    cb_full_diag_text = TextBlock()
+    cb_full_diag_text.Text = (
+        'Full System Diagnostic. Lists every duct in the system, and gives '
+        'every duct a numbered circle in the plan. Off shows only the '
+        'Red / Yellow / Purple ducts.')
+    cb_full_diag_text.TextWrapping = TextWrapping.Wrap
+    cb_full_diag_text.Width = CONTENT_W - 20
+    cb_full_diag.Content   = cb_full_diag_text
+    cb_full_diag.IsChecked = False
+    cb_full_diag.FontWeight = FontWeights.Bold
+    cb_full_diag.Margin = Thickness(2, 0, 0, 2)
+    outer.Children.Add(cb_full_diag)
 
-    print_all_sep = Separator()
-    print_all_sep.Margin = Thickness(0, 8, 0, 10)
-    outer.Children.Add(print_all_sep)
+    full_diag_sep = Separator()
+    full_diag_sep.Margin = Thickness(0, 8, 0, 10)
+    outer.Children.Add(full_diag_sep)
 
-    # ── Outside Air checkbox: equipment-level (SA+RA only, default) vs ──────
+    # ── 2. Outside Air: equipment-level (SA+RA only, default) vs ────────────
     # ── system-level (traces OA too) ─────────────────────────────────────
     cb_oa = CheckBox()
     cb_oa_text = TextBlock()
-    cb_oa_text.Text = ('Outside Air / system-level (AHU/DOAS) — PENDING, under development. '
+    cb_oa_text.Text = ('Include Outside Air System (AHU/DOAS) — PENDING, under development. '
                         'Not available yet: the tool runs equipment-level only '
                         '(Supply + Return Air, never goes upstream).')
     cb_oa_text.TextWrapping = TextWrapping.Wrap
@@ -329,12 +328,28 @@ def show_velocity_settings_dialog():
     col_sep.Margin = Thickness(0, 12, 0, 8)
     outer.Children.Add(col_sep)
 
+    # ── 4. Options ──────────────────────────────────────────────────────────
     col_hdr = TextBlock()
-    col_hdr.Text = 'Optional output table columns'
+    col_hdr.Text = 'Options'
     col_hdr.FontWeight = FontWeights.Bold
     col_hdr.Foreground = SolidColorBrush(Colors.DimGray)
     col_hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(col_hdr)
+
+    # Total static pressure loss is its own option, NOT part of the Full
+    # System Diagnostic above: wanting the system's pressure loss and wanting
+    # a row per duct are two different questions.
+    cb_static = CheckBox()
+    cb_static_text = TextBlock()
+    cb_static_text.Text = (
+        'Total static pressure loss per system (critical path, DUCTS ONLY - '
+        'fittings and equipment are not in this total)')
+    cb_static_text.TextWrapping = TextWrapping.Wrap
+    cb_static_text.Width = CONTENT_W - 20
+    cb_static.Content   = cb_static_text
+    cb_static.IsChecked = False
+    cb_static.Margin    = Thickness(2, 0, 0, 6)
+    outer.Children.Add(cb_static)
 
     col_grid = Grid()
     _COL_PICKER_COLS = 2
@@ -436,8 +451,10 @@ def show_velocity_settings_dialog():
                 out[sys_class] = (max_fpm, max_fric)
             include_oa = bool(cb_oa.IsChecked)
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
-            print_all = bool(cb_print_all.IsChecked)
-            result[0] = (out, gpct, include_oa, selected_cols, print_all)
+            full_diag = bool(cb_full_diag.IsChecked)
+            static_loss = bool(cb_static.IsChecked)
+            result[0] = (out, gpct, include_oa, selected_cols, full_diag,
+                         static_loss)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -1203,14 +1220,15 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    custom_limits, tol_pct, include_oa, selected_cols, print_all = dialog_result
+    (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
+     static_loss) = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
-    if print_all:
-        output.print_md('**Print ALL ducts is on** — the table below and the sheet '
-                        'schedule will list every duct, and every duct will get a '
-                        'numbered circle in the plan, not just flagged ones.')
+    if full_diag:
+        output.print_md('**Full System Diagnostic is on** — the table below and the '
+                        'sheet schedule will list every duct, and every duct will '
+                        'get a numbered circle in the plan, not just flagged ones.')
 
     # 3. Find AHUs in active view and let user pick systems
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
@@ -1418,7 +1436,7 @@ def main():
         summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
             len(all_missing_flow)))
 
-    if print_all:
+    if static_loss:
         critical = _critical_path_friction(
             all_root_ids, all_children, all_duct_results, all_terminals)
         summary_lines.append(
@@ -1572,7 +1590,7 @@ def main():
         row_cells_by_eid = {}
         for eid in sorted(duct_labels.keys(), key=lambda e: eid_int(e)):
             lbl, _, reason = duct_labels[eid]
-            if not print_all and lbl not in ('YELLOW', 'RED', 'PURPLE'):
+            if not full_diag and lbl not in ('YELLOW', 'RED', 'PURPLE'):
                 continue
             dr = all_duct_results.get(eid)
             if dr is None:
@@ -1752,7 +1770,7 @@ def main():
     flagged = []
     for eid, dr in all_duct_results.items():
         label, _, reason = duct_labels.get(eid, ('GRAY', 0.0, ''))
-        if not print_all and label not in ('RED', 'YELLOW', 'PURPLE'):
+        if not full_diag and label not in ('RED', 'YELLOW', 'PURPLE'):
             continue
         cells = row_cells_by_eid.get(eid)
         if cells is None:
@@ -1789,7 +1807,7 @@ def main():
             ]))
 
         output.print_md('')
-        output.print_md('### All Ducts' if print_all else '### Flagged Ducts')
+        output.print_md('### All Ducts' if full_diag else '### Flagged Ducts')
         output.print_code('\n'.join(rows))
 
     uidoc.ActiveView = new_sheet
