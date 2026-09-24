@@ -40,7 +40,11 @@ _confirmed_approach = [None]
 
 
 def _set_pipe_diameter(pipe, nominal_inches):
-    """Try multiple Revit API approaches to set a pipe's nominal diameter.
+    """Set a pipe's nominal diameter and report the approach to the window.
+
+    The three-approach write logic now lives in revit_helpers.set_pipe_diameter
+    so Size Gas and Size Water share one implementation. This wrapper only adds
+    the pyRevit output messages, which behave exactly as before.
 
     Args:
         pipe:           Revit Pipe element
@@ -49,70 +53,20 @@ def _set_pipe_diameter(pipe, nominal_inches):
     Returns:
         (success: bool, approach_name: str)
     """
-    nominal_feet = nominal_inches / 12.0
-    pipe_id = revit_helpers.eid_int(pipe.Id)
+    already_confirmed = _confirmed_approach[0] is not None
 
-    # If a working approach was already confirmed this run, use it directly
-    if _confirmed_approach[0] is not None:
-        return _apply_approach(_confirmed_approach[0], pipe, nominal_feet)
+    ok, name = revit_helpers.set_pipe_diameter(pipe, nominal_inches)
 
-    # --- Approach 1: RBS_PIPE_NOMINAL_DIAMETER ---
-    ok, name = _apply_approach("RBS_PIPE_NOMINAL_DIAMETER", pipe, nominal_feet)
-    if ok:
+    if ok and not already_confirmed:
         _confirmed_approach[0] = name
         output.print_md(
             ":white_check_mark: API approach confirmed: **{}**".format(name))
-        return True, name
-
-    # --- Approach 2: RBS_PIPE_DIAMETER_PARAM ---
-    ok, name = _apply_approach("RBS_PIPE_DIAMETER_PARAM", pipe, nominal_feet)
-    if ok:
-        _confirmed_approach[0] = name
+    elif not ok:
         output.print_md(
-            ":white_check_mark: API approach confirmed: **{}**".format(name))
-        return True, name
+            ":cross_mark: Pipe {}: all three API approaches failed.".format(
+                revit_helpers.eid_int(pipe.Id)))
 
-    # --- Approach 3: LookupParameter Diameter ---
-    ok, name = _apply_approach("LookupParameter", pipe, nominal_feet)
-    if ok:
-        _confirmed_approach[0] = name
-        output.print_md(
-            ":white_check_mark: API approach confirmed: **{}**".format(name))
-        return True, name
-
-    output.print_md(
-        ":cross_mark: Pipe {}: all three API approaches failed.".format(pipe_id))
-    return False, "FAILED"
-
-
-def _apply_approach(approach_name, pipe, nominal_feet):
-    """Apply one specific approach. Returns (success, approach_name)."""
-    try:
-        if approach_name == "RBS_PIPE_NOMINAL_DIAMETER":
-            param = pipe.get_Parameter(
-                BuiltInParameter.RBS_PIPE_NOMINAL_DIAMETER)
-
-        elif approach_name == "RBS_PIPE_DIAMETER_PARAM":
-            param = pipe.get_Parameter(
-                BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)
-
-        elif approach_name == "LookupParameter":
-            param = pipe.LookupParameter("Diameter")
-
-        else:
-            return False, approach_name
-
-        if param is None:
-            return False, approach_name
-
-        if param.IsReadOnly:
-            return False, approach_name
-
-        param.Set(nominal_feet)
-        return True, approach_name
-
-    except Exception:
-        return False, approach_name
+    return ok, name
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +257,9 @@ def main():
 
     revit_helpers.clear_log()
     _confirmed_approach[0] = None
+    # revit_helpers keeps its own cache and stays loaded between runs, so it
+    # has to be reset alongside the local one.
+    revit_helpers.reset_pipe_diameter_approach()
 
     # ------------------------------------------------------------------
     # STEP 1 - Pick gas meter
