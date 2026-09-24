@@ -221,6 +221,20 @@ def show_velocity_settings_dialog():
     outer = StackPanel()
     outer.Margin = Thickness(14)
 
+    def _section_title(text, top=0):
+        """One bold section title. Defined once so every section matches."""
+        tb = TextBlock()
+        tb.Text = text
+        tb.FontWeight = FontWeights.Bold
+        tb.Margin = Thickness(0, top, 0, 6)
+        outer.Children.Add(tb)
+        return tb
+
+    # 'System Settings' covers the two checkboxes below it (Full System and
+    # Include Outside Air). Colin 2026-09-24: "will the first title including the
+    # first two check marks being System Settings".
+    _section_title('System Settings')
+
     # ── 1. Full System Diagnostic ───────────────────────────────────────────
     # Ahead of every other option on purpose: it changes what the options
     # below apply TO (every duct, not just the flagged ones), so it has to be
@@ -266,12 +280,7 @@ def show_velocity_settings_dialog():
     # drop per system bar i would still like an over arching title." The window
     # went from 520 to 720 wide and the rows got tighter instead, so the whole
     # dialog fits without hiding anything.
-    inputs_hdr = TextBlock()
-    inputs_hdr.Text = 'Max velocity and friction per system'
-    inputs_hdr.FontWeight = FontWeights.Bold
-    inputs_hdr.Foreground = SolidColorBrush(Colors.DimGray)
-    inputs_hdr.Margin = Thickness(0, 0, 0, 4)
-    outer.Children.Add(inputs_hdr)
+    _section_title('Max Velocity and Friction per System')
 
     intro = Label()
     intro.Content = 'Max velocity (FPM) and pressure drop (in. wc/100 ft) per system:'
@@ -359,12 +368,7 @@ def show_velocity_settings_dialog():
     outer.Children.Add(col_sep)
 
     # ── 4. Options ──────────────────────────────────────────────────────────
-    col_hdr = TextBlock()
-    col_hdr.Text = 'Options'
-    col_hdr.FontWeight = FontWeights.Bold
-    col_hdr.Foreground = SolidColorBrush(Colors.DimGray)
-    col_hdr.Margin = Thickness(0, 0, 0, 4)
-    outer.Children.Add(col_hdr)
+    _section_title('Options')
 
     # Total external static pressure: what the fan must develop against
     # everything OUTSIDE the unit, along the single most restrictive run.
@@ -530,12 +534,7 @@ def show_velocity_settings_dialog():
         row.Children.Add(val)
         outer.Children.Add(row)
 
-    hdr = TextBlock()
-    hdr.Text = 'Calculation Basis'
-    hdr.FontWeight = FontWeights.Bold
-    hdr.Foreground = SolidColorBrush(Colors.DimGray)
-    hdr.Margin = Thickness(0, 0, 0, 4)
-    outer.Children.Add(hdr)
+    _section_title('Calculation Basis')
 
     _info_row('Velocity / friction:', 'checked on MAIN ducts only. Branches are judged '
                                       'against the diffuser capacity tables instead.')
@@ -553,11 +552,8 @@ def show_velocity_settings_dialog():
     _info_row('  includes:',      'duct friction, fittings (elbows, take-offs, '
                                   'transitions), balancing dampers, the diffuser, '
                                   'and the safety factor')
-    _info_row('  excludes:',      'filter, coil and cabinet losses. Those are inside '
-                                  "the unit and already deducted from the "
-                                  "manufacturer's published ESP, so counting them "
-                                  'here would double them. Fire and backdraft '
-                                  'dampers are not priced.')
+    _info_row('  excludes:',      'filter, coil and cabinet (already in the published '
+                                  'ESP). Fire and backdraft dampers.')
 
     # OK / Cancel
     btn_panel = StackPanel()
