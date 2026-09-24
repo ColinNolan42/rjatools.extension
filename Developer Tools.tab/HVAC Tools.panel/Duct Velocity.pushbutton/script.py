@@ -58,12 +58,14 @@ from Autodesk.Revit.UI.Selection import ObjectType
 
 from System.Windows import (
     Window, WindowStartupLocation, Thickness,
-    HorizontalAlignment, VerticalAlignment, SizeToContent, TextWrapping
+    HorizontalAlignment, VerticalAlignment, SizeToContent, TextWrapping,
+    SystemParameters
 )
 from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
     ColumnDefinition, RowDefinition, Orientation,
-    Separator, TextBlock, CheckBox, Expander, ScrollViewer
+    Separator, TextBlock, CheckBox, Expander, ScrollViewer,
+    ScrollBarVisibility
 )
 from System.Windows.Media import SolidColorBrush, Colors
 from System.Windows import FontWeights
@@ -259,10 +261,22 @@ def show_velocity_settings_dialog():
     oa_sep.Margin = Thickness(0, 8, 0, 10)
     outer.Children.Add(oa_sep)
 
+    # Max velocity / friction and the yellow tolerance live in a collapsed
+    # Expander. Colin, 2026-09-24: "make the max velocity a drop down as well as
+    # its getting fairly large and coming of my screen." Five system rows plus a
+    # header plus the tolerance note is most of the dialog's height, and on a
+    # normal run the firm defaults are what you want anyway.
+    inputs_exp = Expander()
+    inputs_exp.Header = 'Max velocity and friction per system'
+    inputs_exp.IsExpanded = False
+    inputs_exp.Margin = Thickness(2, 0, 0, 6)
+    inputs_panel = StackPanel()
+    inputs_panel.Margin = Thickness(4, 4, 0, 2)
+
     intro = Label()
     intro.Content = 'Max velocity (FPM) and pressure drop (in. wc/100 ft) per system:'
     intro.Margin  = Thickness(0, 0, 0, 8)
-    outer.Children.Add(intro)
+    inputs_panel.Children.Add(intro)
 
     # 3-column grid: system | velocity | friction
     grid = Grid()
@@ -302,7 +316,7 @@ def show_velocity_settings_dialog():
             grid.Children.Add(tb)
             store[i] = tb
 
-    outer.Children.Add(grid)
+    inputs_panel.Children.Add(grid)
 
     # Green threshold row
     gpct_panel = StackPanel()
@@ -326,7 +340,7 @@ def show_velocity_settings_dialog():
     gpct_suffix_inline.Content = '% above max before red'
     gpct_suffix_inline.VerticalAlignment = VerticalAlignment.Center
     gpct_panel.Children.Add(gpct_suffix_inline)
-    outer.Children.Add(gpct_panel)
+    inputs_panel.Children.Add(gpct_panel)
 
     gpct_suffix = TextBlock()
     gpct_suffix.Text = 'At or under max = green, within tolerance = yellow, past it = red.'
@@ -334,7 +348,10 @@ def show_velocity_settings_dialog():
     gpct_suffix.Width = CONTENT_W
     gpct_suffix.Foreground = SolidColorBrush(Colors.DimGray)
     gpct_suffix.Margin = Thickness(0, 2, 0, 0)
-    outer.Children.Add(gpct_suffix)
+    inputs_panel.Children.Add(gpct_suffix)
+
+    inputs_exp.Content = inputs_panel
+    outer.Children.Add(inputs_exp)
 
     # ── Column picker ──────────────────────────────────────────────────────
     # Drives BOTH output tables identically (see _COLUMN_DEFS). Only the
@@ -614,7 +631,20 @@ def show_velocity_settings_dialog():
     btn_panel.Children.Add(cancel_btn)
     outer.Children.Add(btn_panel)
 
-    win.Content = outer
+    # Bounded and scrollable rather than free-growing. SizeToContent.Height
+    # still sizes the window to its content, but only up to MaxHeight, past
+    # which the ScrollViewer takes over - so the OK/Cancel buttons can never end
+    # up below the bottom of the screen no matter what gets added later.
+    scroll = ScrollViewer()
+    scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+    scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+    scroll.Content = outer
+    win.Content = scroll
+    try:
+        # Usable desktop area, so the taskbar is excluded.
+        win.MaxHeight = SystemParameters.WorkArea.Height * 0.9
+    except Exception:
+        win.MaxHeight = 800.0
     win.ShowDialog()
     return result[0]
 
@@ -696,7 +726,7 @@ def _root_class_airflow(root_id, all_children, all_terminals):
 
 def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         all_terminals, all_nodes, safety_pct=0.0,
-                        diffuser_drop=0.0, damper_drop=0.0, c_values=None):
+                        c_values=None, comp_values=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -784,7 +814,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
         #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
         #  nodes already on THIS path)
-        stack = [(root_id, 0.0, 0.0, 0.0, 0, 0, 0, 0.0, 0.0, 0.0, None, (),
+        stack = [(root_id, 0.0, 0.0, (), 0, 0, 0, 0.0, 0.0, 0.0, None, (),
                   frozenset([root_id]))]
         steps = 0
         while stack:
@@ -794,7 +824,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             'steps from root %s', MAX_PATH_STEPS, root_id)
                 truncated_roots.add(root_id)
                 break
-            (nid, fric, fit, comp, dcount, fcount, tcount, dlen,
+            (nid, fric, fit, comp_keys, dcount, fcount, tcount, dlen,
              up_fpm, up_area, sys_class, unpriced, path) = stack.pop()
 
             elem = all_nodes.get(nid)
@@ -826,23 +856,27 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     unpriced = unpriced + ((fam or '?') + ': ' + note,)
 
             elif elem is not None and hvac_graph.is_accessory(elem):
-                # Accessories are components, not fittings: their drop is a
-                # cutsheet number the engineer enters, and the model only
-                # supplies the COUNT. Deliberately narrow - a fire or backdraft
-                # damper must not inherit the balancing-damper figure, so it is
-                # reported as uncounted instead.
-                fam = hvac_graph.fitting_family_name(elem)
-                if fitting_tables.is_balancing_damper(fam):
-                    comp = comp + damper_drop
-                elif damper_drop > 0.0:
+                # Accessories are components, not fittings: the drop is a
+                # cutsheet number the engineer enters and the model supplies only
+                # the COUNT. Each kind gets its OWN value - a fire or smoke damper
+                # must never inherit the balancing damper's, and anything
+                # matching neither (a backdraft damper, say) is reported as
+                # uncounted rather than priced wrong.
+                fam  = hvac_graph.fitting_family_name(elem)
+                akey = fitting_tables.classify_accessory(fam)
+                if akey is not None:
+                    comp_keys = comp_keys + (akey,)
+                else:
                     unpriced = unpriced + (
-                        (fam or '?') + ': accessory on the run, NOT counted '
-                        '(only balancing dampers are)',)
+                        (fam or '?') + ': accessory on the run, not priced',)
 
             term = all_terminals.get(nid)
             if term is not None:
                 # The diffuser the run ends at is itself a component drop.
-                comp_here = comp + diffuser_drop
+                keys_here = comp_keys + ('diffuser',)
+                comp_here = 0.0
+                for _k in keys_here:
+                    comp_here += fitting_tables.component_of(_k, comp_values)
                 _cfm, term_class, _family = term
                 key     = term_class or sys_class or 'Unknown'
                 current = best_here.get(key)
@@ -853,6 +887,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'friction_inwc':    fric,
                         'fitting_inwc':     fit,
                         'component_inwc':   comp_here,
+                        'component_keys':   keys_here,
                         'duct_count':       dcount,
                         'fitting_count':    fcount,
                         'tap_bypass_count': tcount,
@@ -899,7 +934,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             extra_fit = extra_fit + (
                                 (end_c - typ_c) *
                                 hvac_graph.velocity_pressure_inwg(dr.fpm))
-                stack.append((child_id, fric, extra_fit, comp, dcount,
+                stack.append((child_id, fric, extra_fit, comp_keys, dcount,
                               fcount, extra_t, dlen, up_fpm, up_area,
                               sys_class, unpriced,
                               path | frozenset([child_id])))
@@ -1603,8 +1638,7 @@ def main():
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
      ext_static, safety_pct, c_values, comp_values) = dialog_result
-    diffuser_drop = fitting_tables.component_of('diffuser', comp_values)
-    damper_drop   = fitting_tables.component_of('damper', comp_values)
+
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1825,7 +1859,7 @@ def main():
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
-            all_nodes, safety_pct, diffuser_drop, damper_drop, c_values)
+            all_nodes, safety_pct, c_values, comp_values)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
 
@@ -1857,10 +1891,22 @@ def main():
                     '      Fitting losses     {:.3f} in. wc   ({} fittings, {} taps '
                     'restricting the main)'.format(
                         c['fitting_inwc'], c['fitting_count'], c['tap_bypass_count']))
+                # Name what was actually counted and at what rate, so a
+                # component left at 0.00 reads as a deliberate zero rather than
+                # as something the tool failed to find.
+                tally = {}
+                for _k in c.get('component_keys', ()):
+                    tally[_k] = tally.get(_k, 0) + 1
+                parts = []
+                for _key, _lbl, _dflt in fitting_tables.COMPONENT_TABLE:
+                    if _key in tally:
+                        parts.append('{} x{} @ {:.3f}'.format(
+                            _lbl, tally[_key],
+                            fitting_tables.component_of(_key, comp_values)))
                 summary_lines.append(
-                    '      Components         {:.3f} in. wc   (dampers + diffuser, '
-                    'at {:.3f} / {:.3f} in. wc each)'.format(
-                        c['component_inwc'], damper_drop, diffuser_drop))
+                    '      Components         {:.3f} in. wc   ({})'.format(
+                        c['component_inwc'],
+                        '; '.join(parts) if parts else 'none on this run'))
                 summary_lines.append(
                     '      Subtotal           {:.3f} in. wc'.format(c['subtotal_inwc']))
                 summary_lines.append(

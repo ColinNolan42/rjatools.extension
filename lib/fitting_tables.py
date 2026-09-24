@@ -92,8 +92,9 @@ def c_of(key, c=None):
 # content boilerplate (15 of those would swamp the whole system, and the builtin
 # RBS_DUCT_PRESSURE_DROP is empty).
 COMPONENT_TABLE = (
-    ('diffuser', 'Diffuser / grille', 0.05),
-    ('damper',   'Balancing damper',  0.25),
+    ('diffuser',    'Diffuser / grille',   0.05),
+    ('damper',      'Balancing damper',    0.25),
+    ('fire_damper', 'Fire / smoke damper', 0.00),
 )
 
 DEFAULT_COMPONENTS = {}
@@ -285,21 +286,36 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 # built-in RBS_DUCT_PRESSURE_DROP is empty, which is what Revit would populate
 # if its own pressure-loss calc had ever been run. So the drop is a user input,
 # and the count comes from the model.
-_BALANCING_DAMPER_KEYWORDS = ('balancing damper', 'balance damper', 'obd',
-                              'opposed blade')
+# Accessory family name -> COMPONENT_TABLE key. First match wins. The keyword
+# sets are disjoint, so a fire or smoke damper can never inherit the balancing
+# damper's value and vice versa; anything matching neither (a backdraft damper,
+# say) comes back None and the caller reports it as an uncounted accessory
+# rather than pricing it wrong.
+#
+# fire_damper defaults to 0.00 on purpose: unlike the diffuser and balancing
+# damper, the worksheet's filled example has no fire damper row, so there is no
+# RJA-sourced figure to default to and inventing one would break the project's
+# never-size-from-memory rule. The report prints the count and the value applied,
+# so a 0.00 is visible rather than a silent omission.
+_ACCESSORY_ROLES = (
+    ('damper',      ('balancing damper', 'balance damper', 'obd', 'opposed blade')),
+    ('fire_damper', ('fire damper', 'smoke damper', 'fire/smoke', 'fire smoke')),
+)
+
+
+def classify_accessory(family_name):
+    """COMPONENT_TABLE key for a duct accessory, or None if it is not priced."""
+    if not family_name:
+        return None
+    name = family_name.lower()
+    for key, keywords in _ACCESSORY_ROLES:
+        for kw in keywords:
+            if kw in name:
+                return key
+    log.info('classify_accessory: not priced -> %r', family_name)
+    return None
 
 
 def is_balancing_damper(family_name):
-    """True for a balancing / opposed-blade damper accessory.
-
-    Deliberately narrow. A fire damper, smoke damper or backdraft damper has a
-    different drop and must not silently inherit the balancing-damper input, so
-    anything else comes back False and the caller reports it as uncounted.
-    """
-    if not family_name:
-        return False
-    name = family_name.lower()
-    for kw in _BALANCING_DAMPER_KEYWORDS:
-        if kw in name:
-            return True
-    return False
+    """Kept for callers that only care about the balancing case."""
+    return classify_accessory(family_name) == 'damper' 

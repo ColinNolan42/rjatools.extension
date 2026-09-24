@@ -295,14 +295,19 @@ check("case4 fitting_count == 1", sa4.get('fitting_count') == 1)
 # ══════════════════════════════════════════════════════════════════════════
 r5 = crit([100], children4, ducts4, terms4, nodes4, safety_pct=10.0)
 sa5 = r5.get(100, {}).get('Supply Air', {})
-check("case5 subtotal_inwc == friction_inwc + fitting_inwc",
-      abs(sa5.get('subtotal_inwc', -1)
-          - (sa5.get('friction_inwc', 0) + sa5.get('fitting_inwc', 0))) < 1e-9,
-      "got subtotal=%r friction=%r fitting=%r"
-      % (sa5.get('subtotal_inwc'), sa5.get('friction_inwc'), sa5.get('fitting_inwc')))
+check("case5 subtotal_inwc == friction + fitting + components",
+      abs(sa5['subtotal_inwc'] - (sa5['friction_inwc'] + sa5['fitting_inwc']
+                                  + sa5['component_inwc'])) < 1e-12,
+      "subtotal=%r friction=%r fitting=%r components=%r"
+      % (sa5['subtotal_inwc'], sa5['friction_inwc'], sa5['fitting_inwc'],
+         sa5['component_inwc']))
+check("case5 omitting comp_values falls back to the published givens, not zero",
+      sa5['component_inwc'] > 0.0,
+      "component_inwc=%r (DEFAULT_COMPONENTS=%r)"
+      % (sa5['component_inwc'], fitting_tables.DEFAULT_COMPONENTS))
 check("case5 total_inwc == subtotal_inwc * 1.10",
-      abs(sa5.get('total_inwc', -1) - sa5.get('subtotal_inwc', -1) * 1.10) < 1e-9,
-      "got total=%r subtotal=%r" % (sa5.get('total_inwc'), sa5.get('subtotal_inwc')))
+      abs(sa5['total_inwc'] - sa5['subtotal_inwc'] * 1.10) < 1e-12,
+      "total=%r subtotal=%r" % (sa5['total_inwc'], sa5['subtotal_inwc']))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -390,49 +395,62 @@ check("case8 diamond graph: the WORSE route through a shared downstream duct "
       % (found_friction8, true_worst8, cheap_result8))
 
 
-# ── case 9: component drops (diffuser + balancing dampers) ──────────────────
+# ── case 9: component drops (diffuser, balancing damper, fire/smoke damper) ──
 #
-#   root(900) -> duct 901 -> BALANCING DAMPER 902 -> FIRE DAMPER 903
-#                         -> duct 904 -> terminal 920
+#   root(900) -> duct 901 -> BALANCING DAMPER 902 -> FIRE/SMOKE DAMPER 903
+#             -> duct 904 -> BACKDRAFT DAMPER 905 -> terminal 920
 #
-# diffuser_drop = 0.05 applied ONCE at the terminal.
-# damper_drop   = 0.25 applied ONCE, for the balancing damper only; the fire
-#                 damper must NOT inherit it and must be reported as uncounted.
-children9 = {900: [901], 901: [902], 902: [903], 903: [904], 904: [920]}
+# Each accessory kind carries its OWN value out of comp_values. The backdraft
+# damper matches no component key, so it must be reported as not priced rather
+# than inheriting anyone else's number.
+COMP9 = {'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.10}
+
+children9 = {900: [901], 901: [902], 902: [903], 903: [904], 904: [905],
+             905: [920]}
 ducts9 = build([(901, 0.10, 10.0, 800, 1.0, 'Supply Air'),
                 (904, 0.10, 10.0, 800, 1.0, 'Supply Air')])
 nodes9 = {
     901: Elem('duct'),
     902: Elem('accessory', family_name='Balancing Damper - Round'),
-    903: Elem('accessory', family_name='RJA - Fire Damper - Round'),
+    903: Elem('accessory', family_name='RJA - Fire Smoke Damper - Rectangular'),
     904: Elem('duct'),
+    905: Elem('accessory', family_name='RJA - Backdraft Damper - Automatic - Round'),
 }
 terms9 = {920: (400.0, 'Supply Air', 'SD-9')}
 
 r9 = crit([900], children9, ducts9, terms9, nodes9,
-          safety_pct=0.0, diffuser_drop=0.05, damper_drop=0.25)
+          safety_pct=0.0, comp_values=COMP9)
 sa9 = r9[900]['Supply Air']
-expected_comp9 = 0.25 + 0.05          # one balancing damper + one diffuser
-check("case9 component_inwc == 1 balancing damper (0.25) + 1 diffuser (0.05)",
+expected_comp9 = 0.25 + 0.10 + 0.05     # balancing + fire/smoke + diffuser
+check("case9 components == balancing 0.25 + fire/smoke 0.10 + diffuser 0.05",
       abs(sa9['component_inwc'] - expected_comp9) < 1e-9,
       "got %.4f expected %.4f" % (sa9['component_inwc'], expected_comp9))
-check("case9 the FIRE damper did not silently inherit the balancing-damper drop",
+check("case9 the fire/smoke damper got its OWN value, not the balancing one",
       abs(sa9['component_inwc'] - (0.25 * 2 + 0.05)) > 1e-6,
-      "component_inwc=%.4f would be %.4f if both dampers counted"
+      "component_inwc=%.4f would be %.4f if it inherited 0.25"
       % (sa9['component_inwc'], 0.25 * 2 + 0.05))
-check("case9 the uncounted fire damper is REPORTED, not silently dropped",
-      any('Fire Damper' in u for u in sa9['unpriced']),
+check("case9 the backdraft damper is REPORTED as not priced",
+      any('Backdraft' in u for u in sa9['unpriced']),
       "unpriced=%r" % (sa9['unpriced'],))
-check("case9 subtotal now includes components",
-      abs(sa9['subtotal_inwc'] -
-          (sa9['friction_inwc'] + sa9['fitting_inwc'] + sa9['component_inwc'])) < 1e-9,
-      "subtotal=%.4f" % sa9['subtotal_inwc'])
-# with both drops at 0 the components must vanish entirely
-r9b = crit([900], children9, ducts9, terms9, nodes9,
-           safety_pct=0.0, diffuser_drop=0.0, damper_drop=0.0)
-check("case9 zeroed component drops contribute nothing",
-      abs(r9b[900]['Supply Air']['component_inwc']) < 1e-12,
-      "got %r" % r9b[900]['Supply Air']['component_inwc'])
+check("case9 component_keys names exactly what was counted",
+      sorted(sa9['component_keys']) == ['damper', 'diffuser', 'fire_damper'],
+      "got %r" % (sa9['component_keys'],))
+
+# A component left at 0.00 contributes nothing but is still counted, so the
+# report shows it as a deliberate zero rather than a miss.
+r9b = crit([900], children9, ducts9, terms9, nodes9, safety_pct=0.0,
+           comp_values={'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.0})
+check("case9 a 0.00 fire damper adds nothing but is still listed",
+      abs(r9b[900]['Supply Air']['component_inwc'] - 0.30) < 1e-9
+      and 'fire_damper' in r9b[900]['Supply Air']['component_keys'],
+      "comp=%.4f keys=%r" % (r9b[900]['Supply Air']['component_inwc'],
+                             r9b[900]['Supply Air']['component_keys']))
+
+r9c = crit([900], children9, ducts9, terms9, nodes9, safety_pct=0.0,
+           comp_values={'diffuser': 0.0, 'damper': 0.0, 'fire_damper': 0.0})
+check("case9 zeroed component values contribute nothing",
+      abs(r9c[900]['Supply Air']['component_inwc']) < 1e-12,
+      "got %r" % r9c[900]['Supply Air']['component_inwc'])
 
 
 # ══════════════════════════════════════════════════════════════════════════
