@@ -338,7 +338,7 @@ def _make_node(graph, element, element_id, system):
             element_id, node.family_name))
         return node
 
-    if _looks_like_pump(element, connectors):
+    if _looks_like_pump(element, connectors, system):
         node = WaterNode(element_id, element, KIND_PUMP)
         node.connectors = connectors
         node.connector_count = len(connectors)
@@ -482,27 +482,30 @@ def _looks_like_heater(connectors):
     return has_cold and has_hot
 
 
-def _looks_like_pump(element, connectors):
-    """A recirculation pump: Mechanical Equipment, hot water only.
+def _looks_like_pump(element, connectors, reached_on_system):
+    """A recirculation pump: Mechanical Equipment sitting on the hot side.
 
-    Identified by category and connector systems, never by family or Type
-    name. The discriminators are that a pump sits on the hot side with NO cold
-    water connector (which is what separates it from the water heater), and
-    that it is Mechanical Equipment (which is what separates it from an inline
-    balancing valve or circuit setter, which are Pipe Accessories).
+    Identified by category, by the system the traversal REACHED it on, and by
+    the absence of a cold water connector. Never by family or Type name.
 
-    This is a CANDIDATE, not a certainty: any other hot-water mechanical
-    equipment with two connectors matches too. The checks report the family
-    name so a human can confirm, rather than asserting what it is.
+    The key point, learned the hard way on (2024) Grantham 4 MP: a real
+    circulation pump does NOT report its own connectors as DomesticHotWater.
+    The HWCP ecocircXL there reports OtherPipe on two connectors and throws on
+    the third, so an earlier rule that demanded two DomesticHotWater
+    connectors never matched it and the tool wrongly reported "no pump found".
 
-    UNVERIFIED: the one circulation pump seen live (a Grundfos-style
-    ecocircXL) threw on every connector property read in a probe that guarded
-    only the outer loop. revit_helpers.get_connectors guards each property
-    separately, so some fields may still come back, but whether system_type is
-    readable on that family has NOT been confirmed. If it is not, the pump
-    cannot be classified here and will be reported as equipment with
-    unreadable connectors instead of being silently missed.
+    What is trustworthy is the system the traversal arrived on: the pipe that
+    connects to the pump IS classified, so if we walked to this element along
+    the hot water network, it sits on the hot water network whatever its own
+    connectors claim.
+
+    Still a CANDIDATE, not a certainty: any other hot-side mechanical
+    equipment with two or more connectors matches too. The checks report the
+    family name so a human can confirm, rather than asserting what it is.
     """
+    if reached_on_system != shared_params.SYSTEM_DOMESTIC_HOT_WATER:
+        return False
+
     try:
         category = element.Category.Name
     except Exception:
@@ -510,14 +513,16 @@ def _looks_like_pump(element, connectors):
     if "Equipment" not in category:
         return False
 
-    hot = 0
+    # A cold water connector means a water heater, not a pump. The heater
+    # check runs first anyway, but this keeps the rule true on its own.
     for c in connectors:
-        system = c.get("system_type")
-        if system == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
+        if c.get("system_type") == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
             return False
-        if system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
-            hot += 1
-    return hot >= 2
+
+    # An inline pump needs an inlet and an outlet. Connectors whose system
+    # could not be read still count, because unreadable is not the same as
+    # absent, and on this family several of them are unreadable.
+    return len(connectors) >= 2
 
 
 def _classify_by_category(element, connector_count):

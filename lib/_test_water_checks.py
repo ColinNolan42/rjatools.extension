@@ -138,6 +138,67 @@ class TestRecirculation(unittest.TestCase):
         self.assertIn("return_system_no_pump", codes(r))
 
 
+class TestPumpWithUnclassifiedConnectors(unittest.TestCase):
+    """Regression for (2024) Grantham 4 MP.
+
+    The real HWCP ecocircXL reports OtherPipe on two connectors and throws on
+    the third, so a rule demanding two DomesticHotWater connectors never
+    matched it and the tool wrongly said "no recirculation pump found". What
+    is trustworthy is the system the traversal ARRIVED on.
+    """
+
+    def test_pump_is_found_even_though_its_connectors_say_otherpipe(self):
+        self.assertTrue(water_graph._looks_like_pump(
+            _FakeEquipment(),
+            [conn("OtherPipe"), conn(None), conn("OtherPipe")],
+            HOT))
+
+    def test_not_a_pump_when_reached_on_the_cold_side(self):
+        self.assertFalse(water_graph._looks_like_pump(
+            _FakeEquipment(), [conn("OtherPipe"), conn("OtherPipe")], COLD))
+
+    def test_not_a_pump_with_a_cold_connector(self):
+        # That is a water heater, not a circulation pump.
+        self.assertFalse(water_graph._looks_like_pump(
+            _FakeEquipment(), [conn(COLD), conn(HOT)], HOT))
+
+    def test_not_a_pump_with_a_single_connector(self):
+        self.assertFalse(water_graph._looks_like_pump(
+            _FakeEquipment(), [conn("OtherPipe")], HOT))
+
+    def test_not_a_pump_when_not_equipment(self):
+        self.assertFalse(water_graph._looks_like_pump(
+            _FakeEquipment("Pipe Accessories"),
+            [conn("OtherPipe"), conn("OtherPipe")], HOT))
+
+
+class _FakeCategory(object):
+    def __init__(self, name):
+        self.Name = name
+
+
+class _FakeEquipment(object):
+    def __init__(self, category="Mechanical Equipment"):
+        self.Category = _FakeCategory(category)
+
+
+class TestReturnSystemWarningNamesCandidates(unittest.TestCase):
+
+    def test_warning_lists_the_system_types_and_pipe_counts(self):
+        g = build(with_heater=True, with_pump=True, hwr_fixtures=1)
+        g.system_types = {1822: "Domestic Hot Water",
+                          66256: "Domestic Hot Water Recirc"}
+        # one pipe on each type, so both are candidates
+        g.nodes[6].system_type_id = 1822
+        extra = add_node(g, 80, water_graph.KIND_PIPE, parent=6, system=HOT)
+        extra.system_type_id = 66256
+        r = water_checks.check_system(g, return_system_type_ids=[])
+        msg = [f.message for f in r["findings"]
+               if f.code == "hwr_wanted_no_return_system"][0]
+        self.assertIn("Domestic Hot Water Recirc", msg)
+        self.assertIn("pipe(s)", msg)
+
+
 class TestOrigin(unittest.TestCase):
 
     def test_origin_with_no_cold_connector_is_an_error(self):

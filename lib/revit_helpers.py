@@ -742,6 +742,91 @@ def set_pipe_diameter(pipe, nominal_inches):
     return False, "FAILED"
 
 
+def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
+    """Resize a fitting (elbow, tee, coupling) or accessory.
+
+    Revit fittings do not follow their pipes automatically, so an elbow keeps
+    whatever size it was drawn at until it is set explicitly.
+
+    Two approaches, in order:
+      1. Per-connector radius, when size_by_neighbour_id maps a connected
+         element id to its nominal inches. This is the only way a reducing
+         tee comes out right, because its three connectors differ.
+      2. The 'Nominal Radius' instance parameter, which drives the whole
+         fitting uniformly. Correct for elbows and couplings, and the approach
+         the gas tool has been using in real projects.
+
+    Args:
+        element: the fitting or accessory.
+        nominal_inches: the size to use when one uniform size is applied.
+        size_by_neighbour_id: optional {connected element id: nominal inches}.
+
+    Returns:
+        (success: bool, approach: str)
+    """
+    fn = "set_fitting_size"
+    try:
+        eid = eid_int(element.Id)
+    except Exception:
+        eid = None
+
+    # --- 1. Per-connector, so a reducing tee keeps its different sizes ---
+    if size_by_neighbour_id:
+        set_any = False
+        try:
+            manager = _get_connector_manager(element)
+            if manager is not None:
+                for connector in manager.Connectors:
+                    try:
+                        neighbour = None
+                        if connector.IsConnected:
+                            for ref in connector.AllRefs:
+                                owner = ref.Owner
+                                if owner is None:
+                                    continue
+                                owner_eid = eid_int(owner.Id)
+                                if owner_eid == eid or _is_mep_system(owner):
+                                    continue
+                                neighbour = owner_eid
+                                break
+                        if neighbour is None:
+                            continue
+                        inches = size_by_neighbour_id.get(neighbour)
+                        if not inches:
+                            continue
+                        connector.Radius = (inches / 2.0) / INCHES_PER_FOOT
+                        set_any = True
+                    except Exception:
+                        continue
+        except Exception as exc:
+            _log_entry("WARNING", fn, eid,
+                       "Per-connector resize failed: {}".format(str(exc)))
+        if set_any:
+            _log_entry("INFO", fn, eid, "Resized per connector.")
+            return True, "connector.Radius"
+
+    # --- 2. One uniform size for the whole fitting ---
+    try:
+        param = element.LookupParameter("Nominal Radius")
+        if param is not None and not param.IsReadOnly:
+            param.Set((nominal_inches / 2.0) / INCHES_PER_FOOT)
+            _log_entry("INFO", fn, eid,
+                       "Resized via Nominal Radius to {} in.".format(
+                           nominal_inches))
+            return True, "Nominal Radius"
+    except Exception as exc:
+        _log_entry("WARNING", fn, eid,
+                   "Nominal Radius resize failed: {}".format(str(exc)))
+
+    _log_entry("WARNING", fn, eid, "Could not resize by any approach.")
+    return False, "FAILED"
+
+
+# Module-level so set_fitting_size does not depend on shared_params import
+# ordering at call time.
+INCHES_PER_FOOT = 12.0
+
+
 # =============================================================================
 # ELEMENT LOCATION
 # =============================================================================

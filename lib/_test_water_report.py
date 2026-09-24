@@ -170,6 +170,97 @@ class TestDemoSizing(unittest.TestCase):
             self.assertIn(needle, text)
 
 
+class TestDownsizeAfterTheTee(unittest.TestCase):
+    """Sizes may only decrease away from the RPZ.
+
+    The inversion this guards against is real: a public flushometer water
+    closet has a 1-1/2 in supply connector, so its own branch is forced to
+    1-1/2 in by the fixture minimum. Sized purely on fixture units the main
+    feeding it is far smaller, which would hang a 1-1/2 in branch off a
+    3/4 in main.
+    """
+
+    def build(self):
+        # The main must serve TWO fixtures, so it takes the 3/4 in
+        # multi-fixture minimum rather than a fixture connector size. That is
+        # what leaves it smaller than the flushometer branch and makes the
+        # monotonic pass the only thing that can fix it.
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        main = add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=20.0)
+        main.system_type_id = 1823
+        add_node(g, 3, water_graph.KIND_FITTING, parent=2)
+
+        branch = add_node(g, 4, water_graph.KIND_PIPE, parent=3, length_feet=4.0)
+        branch.system_type_id = 1823
+        wc = add_node(g, 5, water_graph.KIND_FIXTURE, parent=4,
+                      cw=10.0, hw=0.0, total=10.0, fixture_name="WC-1")
+        wc.type_name = "Water Closet, Flushometer Valve"
+        wc.is_public = True
+        wc.connectors = [connector(COLD, 1.5)]
+
+        lav_pipe = add_node(g, 6, water_graph.KIND_PIPE, parent=3,
+                            length_feet=6.0)
+        lav_pipe.system_type_id = 1823
+        lav = add_node(g, 7, water_graph.KIND_FIXTURE, parent=6,
+                       cw=1.5, hw=1.5, total=2.0, fixture_name="L-1")
+        lav.type_name = "Lavatory"
+        lav.is_public = True
+        lav.connectors = [connector(COLD, 0.5)]
+        return g
+
+    def test_branch_takes_the_fixture_connector_size(self):
+        g = self.build()
+        water_graph._assign_demand(g)
+        res = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in res["segments"])
+        self.assertEqual(by_id[4].nominal_size, "1-1/2")
+
+    def test_main_is_raised_to_match_the_branch(self):
+        g = self.build()
+        water_graph._assign_demand(g)
+        res = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in res["segments"])
+        main, branch = by_id[2], by_id[4]
+        # 10 wsfu alone would be 1 in on the cold column. It must not end up
+        # smaller than the 1-1/2 in branch hanging off it.
+        self.assertGreaterEqual(main.size_inches, branch.size_inches)
+        self.assertEqual(main.nominal_size, "1-1/2")
+        self.assertIn("downstream", main.rule)
+
+    def test_sizes_never_increase_away_from_the_origin(self):
+        g = self.build()
+        water_graph._assign_demand(g)
+        res = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in res["segments"])
+        for seg in res["segments"]:
+            node = g.nodes.get(seg.element_id)
+            if node is None or seg.size_inches is None:
+                continue
+            for nid in g.descendants(seg.element_id, node.system):
+                down = by_id.get(nid)
+                if down is not None and down.size_inches:
+                    self.assertLessEqual(down.size_inches, seg.size_inches)
+
+
+class TestZeroDemandStillGetsASize(unittest.TestCase):
+
+    def test_placeholder_pipe_is_overwritten_not_left_alone(self):
+        # Drawn sizes are placeholders, so a zero-demand segment gets the
+        # smallest size rather than keeping whatever was drawn, matching the
+        # gas engine's "zero demand - minimum size assigned".
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        stub = add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=3.0)
+        stub.diameter_inches = 2.0
+        res = water_sizing_engine.size_network(g)
+        seg = res["segments"][0]
+        self.assertEqual(seg.nominal_size, "1/2")
+        self.assertIn("zero demand", seg.rule)
+
+
 class TestMixedTypesDoNotCollapse(unittest.TestCase):
     """Regression for the 2026-09-24 live run on (2024) Grantham 4 MP.
 

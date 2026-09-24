@@ -105,7 +105,14 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None):
             continue
 
         if selection["status"] == "no_demand":
-            result.rule = "NOT SIZED"
+            # Match the gas engine: a zero-demand segment still gets the
+            # smallest size rather than being left at whatever was drawn.
+            # Drawn sizes are placeholders, so leaving one untouched would
+            # quietly keep a wrong number on the drawing.
+            smallest = water_tables.firm_sizing_rows()[0]
+            result.nominal_size = smallest["nominal_size"]
+            result.size_inches = smallest["size_inches"]
+            result.rule = "zero demand, minimum size assigned"
             result.flag = ("no fixture demand downstream - pipe is past the "
                            "last fixture, or its fixtures carry no WSFU")
             flags.append("Pipe {}: {}".format(node.element_id, result.flag))
@@ -123,6 +130,8 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None):
 
         segments.append(result)
 
+    _enforce_downsize_after_the_tee(graph, segments, flags)
+
     segments.sort(key=lambda s: s.demand_wsfu, reverse=True)
 
     sized = [s for s in segments if s.nominal_size is not None]
@@ -133,6 +142,54 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None):
         "total_length_ft": sum(s.length_feet for s in segments),
     }
     return {"segments": segments, "flags": flags, "totals": totals}
+
+
+def _enforce_downsize_after_the_tee(graph, segments, flags):
+    """A pipe is never smaller than anything downstream of it.
+
+    Pipe is downsized AFTER a tee, never before it (Colin, 2026-09-24), so
+    sizes may only decrease as the run moves away from the RPZ. Sizing each
+    segment purely on its own WSFU does not guarantee that, because the
+    fixture minimums are applied per segment: a flushometer water closet
+    forces its own branch to 1-1/2 in, while the main feeding it may compute
+    3/4 in from fixture units alone. That would put a 1-1/2 in branch on a
+    3/4 in main, which is backwards.
+
+    Each pipe is therefore raised to the largest size found anywhere
+    downstream of it on the same system. Nothing is ever reduced here.
+    """
+    by_id = {}
+    for segment in segments:
+        by_id[segment.element_id] = segment
+
+    for segment in segments:
+        if segment.size_inches is None:
+            continue
+        node = graph.nodes.get(segment.element_id)
+        if node is None:
+            continue
+
+        largest = 0.0
+        for nid in graph.descendants(segment.element_id, node.system):
+            downstream = by_id.get(nid)
+            if downstream is not None and downstream.size_inches:
+                if downstream.size_inches > largest:
+                    largest = downstream.size_inches
+
+        if largest > segment.size_inches:
+            was = segment.nominal_size
+            for row in water_tables.firm_sizing_rows():
+                if row["size_inches"] >= largest:
+                    segment.nominal_size = row["nominal_size"]
+                    segment.size_inches = row["size_inches"]
+                    break
+            segment.rule += ("; raised from {} to match the largest pipe "
+                             "downstream, sizes only reduce after a "
+                             "tee".format(was))
+            flags.append(
+                "Pipe {}: raised from {} to {} so it is not smaller than a "
+                "pipe downstream of it.".format(
+                    segment.element_id, was, segment.nominal_size))
 
 
 def _apply_minimums(graph, node, result, fixture_ids):
@@ -254,6 +311,66 @@ def write_sizes(doc, graph, sizing_result, transaction_factory):
         raise exc
 
     return {"written": written, "failed": failed, "errors": errors}
+
+
+def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
+    """Resize elbows, tees, couplings and accessories to match their pipes.
+
+    A separate transaction from the pipe write, so a fitting family that
+    refuses to resize cannot roll back the pipe sizes that already succeeded.
+
+    Each fitting is given the size of the LARGEST pipe touching it, and a map
+    of neighbour to size so a reducing tee can take a different size on each
+    connector where the family allows it.
+    """
+    import revit_helpers
+
+    size_by_pipe_id = {}
+    for segment in sizing_result["segments"]:
+        if segment.size_inches is not None:
+            size_by_pipe_id[segment.element_id] = segment.size_inches
+
+    resized = 0
+    skipped = 0
+    errors = []
+
+    transaction = transaction_factory(doc, "RJA Tools - Size Water Fittings")
+    transaction.Start()
+    try:
+        for node in graph.nodes.values():
+            if node.kind not in (water_graph.KIND_FITTING,
+                                 water_graph.KIND_ACCESSORY):
+                continue
+            if node.element is None:
+                skipped += 1
+                continue
+
+            neighbour_sizes = {}
+            for connector in node.connectors:
+                neighbour = connector.get("connected_element_id")
+                if neighbour in size_by_pipe_id:
+                    neighbour_sizes[neighbour] = size_by_pipe_id[neighbour]
+
+            if not neighbour_sizes:
+                skipped += 1
+                continue
+
+            largest = max(neighbour_sizes.values())
+            ok, approach = revit_helpers.set_fitting_size(
+                node.element, largest, neighbour_sizes)
+            if ok:
+                resized += 1
+            else:
+                skipped += 1
+                errors.append(
+                    "Fitting {} ('{}'): could not resize to {} in.".format(
+                        node.element_id, node.family_name, largest))
+        transaction.Commit()
+    except Exception as exc:
+        transaction.RollBack()
+        raise exc
+
+    return {"resized": resized, "skipped": skipped, "errors": errors}
 
 
 def _fmt(value):

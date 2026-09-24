@@ -82,45 +82,66 @@ _WATER_XAML = (
     ' FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,6"/>'
     '<StackPanel Name="spHotSystems" Margin="8,0,0,14"/>'
 
-    '<TextBlock Text="Options" FontWeight="Bold" Margin="0,0,0,6"/>'
-    '<CheckBox Name="cbReportOnly" Content="Report only, do not write sizes'
-    ' to the model" Margin="0,0,0,6"/>'
-    '<CheckBox Name="cbMinimums" Content="Apply firm minimum sizes (single'
-    ' fixture takes its connector size, two or more fixtures not smaller than'
-    ' 3/4 inch)" Margin="0,0,0,6"/>'
-    '<CheckBox Name="cbDraftingView" Content="Create a drafting view with the'
-    ' WSFU take-off table" Margin="0,0,0,6"/>'
-    '<CheckBox Name="cbSheet" Content="Also place that drafting view on a new'
-    ' sheet" Margin="20,0,0,6"/>'
+    '<TextBlock Name="tbWhatHappens" FontWeight="Bold" Margin="0,0,0,4"/>'
+    '<TextBlock Name="tbWhatHappensDetail" FontSize="10" Foreground="Gray"'
+    ' TextWrapping="Wrap" Margin="0,0,0,6"/>'
     '</StackPanel>'
     '</ScrollViewer>'
 
     '<StackPanel Grid.Row="2" Orientation="Horizontal"'
     ' HorizontalAlignment="Right" Margin="0,12,0,0">'
     '<Button Name="btnCancel" Content="Cancel" Width="80" Margin="0,0,8,0"/>'
-    '<Button Name="btnOK" Content="Size Water" Width="100"/>'
+    '<Button Name="btnOK" Content="Run" Width="110"/>'
     '</StackPanel>'
     '</Grid>'
     '</Window>'
 )
 
 
-def show_water_dialog(title, project_info, hot_system_types):
-    """Startup dialog for Size Water. One dialog, then everything is automatic.
+MODE_REPORT = "report"
+MODE_SIZE = "size"
+
+# What each button does, shown in the dialog so the run is never a surprise.
+_MODE_TEXT = {
+    MODE_REPORT: (
+        "This run will PRODUCE THE REPORT.",
+        "Traverses the system, checks it is complete, works out every pipe "
+        "size and prints the report. Puts the WSFU take-off on a drafting "
+        "view and on a new sheet. Nothing in the model is changed, no pipe "
+        "size is written."),
+    MODE_SIZE: (
+        "This run will WRITE PIPE SIZES TO THE MODEL.",
+        "Traverses the system, checks it is complete, and writes the new "
+        "size to every pipe it sized. The report is printed here in the "
+        "window. Use the Water Report button when you want the take-off on a "
+        "sheet."),
+}
+
+
+def show_water_dialog(title, project_info, hot_system_types, mode=MODE_SIZE):
+    """Startup dialog shared by the Water Report and Size Water buttons.
+
+    One dialog, then everything is automatic. It deliberately asks nothing
+    that the firm standard already settles: minimum pipe sizes always apply,
+    and the take-off always goes on a drafting view and a sheet. The only
+    question left is the one no standard can answer, which piping system types
+    are the hot water RETURN, because Revit classifies a recirculation system
+    exactly like the hot supply.
 
     Args:
         title: window title string.
         project_info: dict with "job", "job_number", "by" defaults, read from
             Revit Project Information by the caller.
         hot_system_types: list of (element_id, name) for every PipingSystemType
-            classified as Domestic Hot Water. The user ticks the ones that are
-            recirculation, because Revit cannot distinguish them.
+            classified as Domestic Hot Water.
+        mode: MODE_REPORT or MODE_SIZE, which button is running.
 
     Returns:
-        dict with "job", "job_number", "by", "report_only", "apply_minimums",
-        "return_system_type_ids" (set of ints), or None if cancelled.
+        dict with "job", "job_number", "by", "return_system_type_ids"
+        (set of ints), or None if cancelled.
     """
     from System.Windows.Controls import CheckBox
+    from System.Windows import Thickness
 
     window = XamlReader.Parse(_WATER_XAML)
     window.Title = title
@@ -130,10 +151,8 @@ def show_water_dialog(title, project_info, hot_system_types):
     tb_job_no = window.FindName('tbJobNo')
     tb_by = window.FindName('tbBy')
     sp_hot = window.FindName('spHotSystems')
-    cb_report_only = window.FindName('cbReportOnly')
-    cb_minimums = window.FindName('cbMinimums')
-    cb_drafting = window.FindName('cbDraftingView')
-    cb_sheet = window.FindName('cbSheet')
+    tb_what = window.FindName('tbWhatHappens')
+    tb_what_detail = window.FindName('tbWhatHappensDetail')
     btn_ok = window.FindName('btnOK')
     btn_cancel = window.FindName('btnCancel')
 
@@ -144,26 +163,26 @@ def show_water_dialog(title, project_info, hot_system_types):
     tb_job.Text = project_info.get("job", "") or ""
     tb_job_no.Text = project_info.get("job_number", "") or ""
     tb_by.Text = project_info.get("by", "") or ""
-    cb_minimums.IsChecked = True
-    cb_drafting.IsChecked = True
-    cb_sheet.IsChecked = True
 
-    def on_drafting_changed(sender, e):
-        # Placing it on a sheet is meaningless without the view, so that
-        # checkbox follows this one.
-        cb_sheet.IsEnabled = bool(cb_drafting.IsChecked)
-        if not cb_drafting.IsChecked:
-            cb_sheet.IsChecked = False
-
-    cb_drafting.Checked += on_drafting_changed
-    cb_drafting.Unchecked += on_drafting_changed
+    headline, detail = _MODE_TEXT.get(mode, _MODE_TEXT[MODE_SIZE])
+    tb_what.Text = headline
+    tb_what_detail.Text = detail
+    btn_ok.Content = "Create Report" if mode == MODE_REPORT else "Size Water"
 
     checkboxes = []
     if hot_system_types:
-        for type_id, name in hot_system_types:
+        for entry in hot_system_types:
+            type_id, name = entry[0], entry[1]
+            pipe_count = entry[2] if len(entry) > 2 else None
             box = CheckBox()
-            box.Content = "{}  (id {})".format(name, type_id)
-            box.Margin = window.FindName('cbReportOnly').Margin
+            # The pipe count is the tell: on a real job the return carries far
+            # fewer pipes than the supply, which makes the right tick obvious
+            # without the tool ever matching on a project's system names.
+            if pipe_count is None:
+                box.Content = "{}  (id {})".format(name, type_id)
+            else:
+                box.Content = "{}  -  {} pipe(s)".format(name, pipe_count)
+            box.Margin = Thickness(0, 0, 0, 6)
             box.IsChecked = False
             sp_hot.Children.Add(box)
             checkboxes.append((box, type_id))
@@ -186,10 +205,6 @@ def show_water_dialog(title, project_info, hot_system_types):
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
             "by": tb_by.Text.strip(),
-            "report_only": bool(cb_report_only.IsChecked),
-            "apply_minimums": bool(cb_minimums.IsChecked),
-            "create_drafting_view": bool(cb_drafting.IsChecked),
-            "place_on_sheet": bool(cb_sheet.IsChecked),
             "return_system_type_ids": returns,
         }
         window.Close()

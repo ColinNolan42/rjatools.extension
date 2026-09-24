@@ -259,10 +259,26 @@ def _check_recirculation(graph, profile, returns, findings):
             "the fixtures that need it."))
 
     if hwr_fixtures and not returns:
+        # Name the candidates and their pipe counts. The return system is
+        # almost always the one with far fewer pipes, so telling the user what
+        # was found is more use than telling them something is missing.
+        candidates = []
+        for type_id in sorted(hot_types):
+            name = graph.system_types.get(type_id, "id {}".format(type_id))
+            pipes = len([n for n in graph.nodes.values()
+                         if n.kind == water_graph.KIND_PIPE and
+                         n.system_type_id == type_id])
+            candidates.append("'{}' ({} pipe(s))".format(name, pipes))
+
         extra = ""
-        if len(hot_types) > 1:
-            extra = (" This model has {} hot water system types, so one of "
-                     "them is probably the return.".format(len(hot_types)))
+        if len(candidates) > 1:
+            extra = (" This model has {} hot water system types: {}. Re-run "
+                     "and tick the return one in the dialog.".format(
+                         len(candidates), ", ".join(candidates)))
+        elif candidates:
+            extra = (" The only hot water system type found is {}.".format(
+                candidates[0]))
+
         findings.append(Finding(
             SEVERITY_WARNING, "hwr_wanted_no_return_system",
             "{} fixture(s) have HWR_ACTIVE set, but no piping system type was "
