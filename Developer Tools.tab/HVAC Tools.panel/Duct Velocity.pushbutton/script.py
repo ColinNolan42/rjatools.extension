@@ -120,7 +120,6 @@ _COLUMN_DEFS = [
     ('fpm',       'Actual FPM',                         0.120,   11,  True),
     ('fric',      'Actual Fric (iwc/100)',              0.180,   21,  True),
     ('length',    'Length (ft)',                        0.090,   11,  False),
-    ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  False),
 ]
 
 # Always shown, no checkbox. '#' is also the number printed in the keynote
@@ -348,14 +347,13 @@ def show_velocity_settings_dialog():
     col_hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(col_hdr)
 
-    # Two DIFFERENT pressure numbers live in this tool and they are not
-    # supposed to agree:
-    #   - the TOTAL row at the bottom of the duct table sums the Friction Loss
-    #     column (shown when Full System + Friction Loss are both on). That is
-    #     an inventory of duct friction in the system.
-    #   - this checkbox reports the CRITICAL PATH per system, added up into
-    #     TOTAL EXTERNAL STATIC PRESSURE: what the fan must develop against
-    #     everything OUTSIDE the unit.
+    # Total external static pressure: what the fan must develop against
+    # everything OUTSIDE the unit, along the single most restrictive run.
+    #
+    # This supersedes an earlier "sum the Friction Loss column" TOTAL row, which
+    # was a stand-in built before fitting losses existed. Colin, 2026-09-24: "we
+    # dont need the friction loss option anymore as we have figured out total
+    # external pressure." Both that row and the Friction Loss column are gone.
     #
     # External static deliberately stops at the unit casing. Filter, coil and
     # cabinet losses are internal, they come off the manufacturer's cutsheet,
@@ -365,11 +363,11 @@ def show_velocity_settings_dialog():
     cb_static = CheckBox()
     cb_static_text = TextBlock()
     cb_static_text.Text = (
-        'Total EXTERNAL static pressure (critical path / index run, supply '
-        'path + return path). Duct friction only so far: fitting, damper and '
-        'diffuser losses are not in it yet. Internal losses (filter, coils, '
-        'casing) are not external static at all - take those off the unit '
-        'cutsheet.')
+        'Total EXTERNAL static pressure (index run, supply path + return '
+        'path). Includes duct friction, fitting losses (elbows, take-offs, '
+        'transitions), balancing dampers and the diffuser. Excludes filter, '
+        'coils and cabinet, which are inside the unit and already deducted '
+        "from the manufacturer's published ESP.")
     cb_static_text.TextWrapping = TextWrapping.Wrap
     cb_static_text.Width = CONTENT_W - 20
     cb_static.Content   = cb_static_text
@@ -498,10 +496,14 @@ def show_velocity_settings_dialog():
     _info_row('Verified against:', u'RJA SP_LOSS_WORKSHEET, matches its duct rows to the printed digit')
     _info_row('Air density:',     u'0.0750 lb/ft³  (standard air, 68°F, SEA LEVEL, '
                                   u'not altitude-corrected)')
-    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel). Flex duct is 40× rougher '
-                                  u'and is NOT yet detected, so flex runs read low.')
-    _info_row('Not included:',    'fitting, elbow, coil, filter and equipment losses. '
-                                  'Duct friction only.')
+    _info_row('Duct roughness:',  u'ε = 0.0003 ft galvanized, 0.012 ft flex '
+                                  u'(detected by category, ~1.8× the friction)')
+    _info_row('Fitting losses:',  u'C × Pv, C from RJA SP_LOSS_WORKSHEET '
+                                  u'(1985 ASHRAE fitting numbers)')
+    _info_row('Components:',      'diffuser and balancing damper drops, counted from '
+                                  'the model and valued in the dialog')
+    _info_row('Not included:',    'filter, coil and cabinet losses. Those are inside '
+                                  "the unit and already in the published ESP.")
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -601,10 +603,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     why that column sits at 0 in the filled worksheet. The taps hanging off each
     main are counted instead (hvac_graph.takeoff_child_ids).
 
-    STILL NOT INCLUDED: balancing/fire damper drops, diffuser and grille
-    pressure drop, and anything inside the unit casing (filter, coils, cabinet).
-    Those are cutsheet numbers with no model source. Colin takes internal losses
-    off the unit cutsheet, so external static stops at the casing.
+    Components on the run are included too: a balancing damper's drop for each
+    one found, and the diffuser's at the end. Those two are COUNTED from the
+    model but VALUED in the dialog, because a damper's drop depends on how far it
+    is throttled and a diffuser's is a cutsheet figure - neither is derivable
+    from duct geometry.
+
+    NOT INCLUDED, and by definition rather than as a gap: filter, coil and
+    cabinet losses. Those are inside the unit and already deducted from the
+    manufacturer's published ESP, so counting them here would double them.
+    Fire, smoke and backdraft dampers are not priced either - they have their own
+    drops and must not inherit the balancing-damper figure - and any accessory on
+    the run that is not a balancing damper is reported as uncounted.
 
     all_children / all_terminals / all_nodes are keyed by int element id.
     all_duct_results is keyed by the real Revit ElementId, so it is re-keyed by
@@ -1249,7 +1259,6 @@ def _row_cells(label, dr, reason, role, branch_res,
         'fpm':       fpm_cell,
         'fric':      fric_cell,
         'length':    '{:.1f}'.format(dr.length_ft),
-        'fricloss':  '{:.3f}'.format(dr.friction_loss_inwc),
     }
 
 
@@ -1397,12 +1406,7 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                     # plan view, which is why it is not baked into the cell
                     # dict (the console table numbers the same ducts
                     # differently).
-                    if col[0] == 'num':
-                        # The TOTAL row is not a duct: no row number, and no
-                        # matching keynote circle out in the plan view.
-                        cell_text = '' if cells.get('_total') else str(ri + 1)
-                    else:
-                        cell_text = cells.get(col[0], '')
+                    cell_text = str(ri + 1) if col[0] == 'num' else cells.get(col[0], '')
                     # Blank cells are real (e.g. no Reason on a passing row), and
                     # TextNote.Create rejects an empty string — leave the cell
                     # empty rather than write a placeholder into the drawing.
@@ -1893,28 +1897,6 @@ def main():
             row_cells_by_eid[eid] = cells
             flagged_items.append((lbl, dr, cells))
 
-        # Total static pressure loss is the SUM of the Friction Loss column,
-        # printed as a TOTAL row at the bottom of the table (Colin,
-        # 2026-09-24). It is gated on BOTH Full System and the Friction Loss
-        # column: a total of a column that is not on screen is unreadable, and
-        # a total over a filtered subset of the ducts is not a system total.
-        #
-        # DUCTS ONLY. Nothing in this codebase computes fitting, elbow, coil,
-        # filter or equipment loss, so this is not a fan static pressure
-        # budget and the row label says so outright.
-        total_row = None
-        if full_diag and 'fricloss' in selected_cols:
-            # sum(..., 0.0) forces float - sum([]) returns int 0 in Python 2.7,
-            # and '{:.3f}'.format(int) raises ValueError under IronPython.
-            total_fric = sum((item[1].friction_loss_inwc
-                              for item in flagged_items), 0.0)
-            total_row = {
-                '_total':   True,
-                'status':   'TOTAL',
-                'reason':   'TOTAL FRICTION LOSS (DUCTS ONLY)',
-                'fricloss': '{:.3f}'.format(float(total_fric)),
-            }
-
         # Find keynote circle symbol — search by family name
         keynote_sym = None
         for fs in FilteredElementCollector(doc).OfClass(FamilySymbol).ToElements():
@@ -1975,11 +1957,8 @@ def main():
 
         # System Summary + flagged-duct table + legend, placed as second viewport on sheet
         if tn_type_id is not None:
-            table_rows = [item[2] for item in flagged_items]
-            if total_row is not None:
-                table_rows.append(total_row)
             sched_view, content_h, total_w = _build_summary_view(
-                doc, summary_lines, table_rows,
+                doc, summary_lines, [item[2] for item in flagged_items],
                 selected_cols, source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
                 # X fixed by hand in Revit (see diagram note above) and read
@@ -2122,10 +2101,6 @@ def main():
                 str(idx) if col[0] == 'num' else cells.get(col[0], '')
                 for col in cols
             ]))
-
-        if total_row is not None:
-            rows.append(separator)
-            rows.append(_fmt_row([total_row.get(col[0], '') for col in cols]))
 
         output.print_md('')
         output.print_md('### All Ducts' if full_diag else '### Flagged Ducts')
