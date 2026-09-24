@@ -470,17 +470,97 @@ def smacna_label(fpm, sys_class):
         return 'RED'
 
 
-def duct_friction_loss_per_100ft(v_fpm, d_h_in):
-    """Friction loss in in. wc per 100 ft.
+# ── Air properties and duct roughness ───────────────────────────────
+#
+# Standard air, sea level. Matches ductulator.com, Colin's standalone
+# ductulator.py, and RJA's SP_LOSS_WORKSHEET. NOT altitude-corrected: that is
+# Colin's explicit call (2026-09-24), and at Front Range elevation real friction
+# runs about 15% below these numbers.
+AIR_DENSITY_LB_FT3 = 0.0750
+_MU_DYN_LBM_FT_S   = 0.018e-2 * 6.7197e-4 / 1e-2      # ~1.21e-5, air at 68°F
+_NU_STD_FT2_S      = _MU_DYN_LBM_FT_S / AIR_DENSITY_LB_FT3
+_GRAVITY_FT_S2     = 32.174
+_WATER_LB_FT3      = 62.4
+_IN_WG_PER_LBF_FT2 = _WATER_LB_FT3 / 12.0
 
-    Formula: 6.82e-6 * V_fpm^1.82 / D_h_in^1.22
-    Derived from ASHRAE smooth-duct correlation for standard air
-    (70°F, sea level, galvanized sheet metal roughness).
-    Calibration: 10" duct at 910 FPM → 0.099 in. wc/100ft (SMACNA 0.1 target).
+# Absolute roughness, ft. ASHRAE Fundamentals Ch. 21 Table 1, same values as
+# ductulator.py. Flex is 40x galvanized, which is why it gets its own entry:
+# ceiling diffuser branches are flex and computing them as galvanized
+# understates their friction by roughly 1.8x.
+ROUGHNESS_FT = {
+    'Galvanized Steel':       0.0003,
+    'Aluminum':               0.00015,
+    'Stainless Steel':        0.00015,
+    'PVC / Rigid Liner':      0.00017,
+    'Flex Duct (corrugated)': 0.012,
+    'Fiberglass Duct Board':  0.0003,
+    'Concrete':               0.005,
+}
+DEFAULT_ROUGHNESS_FT = ROUGHNESS_FT['Galvanized Steel']
+
+# Velocity pressure constant K in Pv = (V_fpm / K)^2, derived rather than
+# hardcoded at the textbook 4005 so it stays consistent with the density above.
+VELOCITY_PRESSURE_K = math.sqrt(
+    2.0 * _GRAVITY_FT_S2 * _IN_WG_PER_LBF_FT2 * 3600.0 / AIR_DENSITY_LB_FT3)
+
+
+def velocity_pressure_inwg(v_fpm):
+    """Velocity pressure, in. wc. Pv = (V/K)^2, K ~ 4008 for standard air.
+
+    This is the Pv that fitting losses multiply: a fitting's loss is C * Pv.
+    """
+    if v_fpm <= 0:
+        return 0.0
+    return (v_fpm / VELOCITY_PRESSURE_K) ** 2
+
+
+def duct_friction_factor(reynolds, d_h_ft, eps_ft=DEFAULT_ROUGHNESS_FT):
+    """Darcy friction factor by Altshul-Tsal.
+
+    f = 0.11 * (eps/Dh + 68/Re)^0.25, and if that lands under 0.018 it is
+    corrected as f = 0.85f + 0.0028. This is the explicit approximation to
+    Colebrook-White that ASHRAE publishes and that ductulator.com uses;
+    verified against an iterative Colebrook solve to within 1.9% worst case
+    over 6-36 in. at 400-1200 FPM.
+    """
+    if reynolds <= 0 or d_h_ft <= 0:
+        return 0.0
+    f = 0.11 * (eps_ft / d_h_ft + 68.0 / reynolds) ** 0.25
+    if f < 0.018:
+        f = 0.85 * f + 0.0028
+    return f
+
+
+def duct_friction_loss_per_100ft(v_fpm, d_h_in, eps_ft=DEFAULT_ROUGHNESS_FT):
+    """Friction loss in in. wc per 100 ft, by Darcy-Weisbach.
+
+        dP/ft = f / Dh * (rho * V^2) / (2g),  converted to in. wc
+
+    with an Altshul-Tsal friction factor. SUPERSEDES the power-law fit
+    6.82e-6 * V^1.82 / Dh^1.22 that this function used until 2026-09-24.
+
+    That fit was WRONG, and by a lot: checked against the 11 duct rows of RJA's
+    own SP_LOSS_WORKSHEET (column AF, "UNLINED DUCT LOSS /100'"), it read
+    -25.1% mean and -31.5% worst. This formula reads -2.5% mean, and on the
+    rows the sheet prints to useful precision (AF >= 0.05) it matches to the
+    printed digit. ductulator.com states Altshul-Tsal as its method; nothing
+    ever justified the power-law, and its docstring claim of being calibrated
+    to "10 in. at 910 FPM -> 0.099 (SMACNA 0.1 target)" does not survive
+    contact with first principles, which give 0.127 at that point.
+
+    Do not reintroduce the power-law. See Claude Code memory
+    reference_rja_sp_loss_worksheet and reference_duct_friction_formula_gap.
     """
     if v_fpm <= 0 or d_h_in <= 0:
         return 0.0
-    return 6.82e-6 * (v_fpm ** 1.82) / (d_h_in ** 1.22)
+    d_h_ft = d_h_in / 12.0
+    v_fps  = v_fpm / 60.0
+    re     = v_fps * d_h_ft / _NU_STD_FT2_S
+    f      = duct_friction_factor(re, d_h_ft, eps_ft)
+    if f <= 0.0:
+        return 0.0
+    dp_per_ft_lbf = f / d_h_ft * (AIR_DENSITY_LB_FT3 * v_fps ** 2) / (2.0 * _GRAVITY_FT_S2)
+    return dp_per_ft_lbf * 100.0 / _IN_WG_PER_LBF_FT2
 
 
 def _duct_length_ft(duct):

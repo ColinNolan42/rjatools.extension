@@ -429,12 +429,13 @@ def show_velocity_settings_dialog():
 
     _info_row('Velocity / friction:', 'checked on MAIN ducts only. Branches are judged '
                                       'against the diffuser capacity tables instead.')
-    _info_row('Friction loss:',   u'ASHRAE power-law fit:  6.82e-6 × V^1.82 / Dh^1.22  '
-                                  u'(in. wc per 100 ft)')
-    _info_row('Calibrated to:',   u'10 in. duct at 910 FPM → 0.099 in. wc/100 ft (SMACNA 0.1 target)')
-    _info_row('Air density:',     u'0.0750 lb/ft³  (standard air, 70°F, SEA LEVEL, '
+    _info_row('Pressure drop:',   u'Darcy-Weisbach:  ΔP/ft = f/Dh × ρV²/2g')
+    _info_row('Friction factor:', u'Altshul-Tsal  (ASHRAE explicit approx. to Colebrook-White)')
+    _info_row('Verified against:', u'RJA SP_LOSS_WORKSHEET, matches its duct rows to the printed digit')
+    _info_row('Air density:',     u'0.0750 lb/ft³  (standard air, 68°F, SEA LEVEL, '
                                   u'not altitude-corrected)')
-    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel), built into the fit above')
+    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel). Flex duct is 40× rougher '
+                                  u'and is NOT yet detected, so flex runs read low.')
     _info_row('Not included:',    'fitting, elbow, coil, filter and equipment losses. '
                                   'Duct friction only.')
 
