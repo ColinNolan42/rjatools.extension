@@ -152,7 +152,7 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, full_diag, static_loss) or None.
+    selected_column_keys, full_diag, ext_static) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -340,14 +340,23 @@ def show_velocity_settings_dialog():
     #   - the TOTAL row at the bottom of the duct table sums the Friction Loss
     #     column (shown when Full System + Friction Loss are both on). That is
     #     an inventory of duct friction in the system.
-    #   - this checkbox reports the CRITICAL PATH per system, which is what a
-    #     fan actually has to overcome.
+    #   - this checkbox reports the CRITICAL PATH per system, added up into
+    #     TOTAL EXTERNAL STATIC PRESSURE: what the fan must develop against
+    #     everything OUTSIDE the unit.
+    #
+    # External static deliberately stops at the unit casing. Filter, coil and
+    # cabinet losses are internal, they come off the manufacturer's cutsheet,
+    # and there is nothing in a Revit model to derive them from (Colin,
+    # 2026-09-24: "maybe i just need external static pressure not total static
+    # pressure ... this i feel like can be found directly in cutsheet").
     cb_static = CheckBox()
     cb_static_text = TextBlock()
     cb_static_text.Text = (
-        'Total static pressure loss per system (critical path / index run). '
-        'DUCT FRICTION ONLY: fitting, damper, coil, filter and diffuser '
-        'losses are not included, so this is not a fan selection figure.')
+        'Total EXTERNAL static pressure (critical path / index run, supply '
+        'path + return path). Duct friction only so far: fitting, damper and '
+        'diffuser losses are not in it yet. Internal losses (filter, coils, '
+        'casing) are not external static at all - take those off the unit '
+        'cutsheet.')
     cb_static_text.TextWrapping = TextWrapping.Wrap
     cb_static_text.Width = CONTENT_W - 20
     cb_static.Content   = cb_static_text
@@ -461,9 +470,9 @@ def show_velocity_settings_dialog():
             include_oa = bool(cb_oa.IsChecked)
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
-            static_loss = bool(cb_static.IsChecked)
+            ext_static = bool(cb_static.IsChecked)
             result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         static_loss)
+                         ext_static)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -1250,7 +1259,7 @@ def main():
         output.print_md('**Cancelled.**')
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     static_loss) = dialog_result
+     ext_static) = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1465,34 +1474,50 @@ def main():
         summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
             len(all_missing_flow)))
 
-    if static_loss:
+    if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals)
         summary_lines.append(
-            'TOTAL STATIC PRESSURE LOSS (critical path / index run):')
+            'TOTAL EXTERNAL STATIC PRESSURE (critical path / index run):')
         for sys_class in sorted(critical.keys()):
             c = critical[sys_class]
             summary_lines.append(
                 '  {}: {:.3f} in. wc   ({} ducts, {:.0f} ft, worst run ends at {})'.format(
                     sys_class, c['friction_inwc'], c['duct_count'],
                     c['length_ft'], c['terminal_name']))
-        # A fan sees the supply side and the return side in series, so the two
-        # index runs add. Only printed when both were actually traversed -
-        # naming an "external static" off one side would overstate the tool's
-        # reach.
-        supply = critical.get('Supply Air')
-        returns = [critical[k] for k in ('Return Air', 'Exhaust Air')
+
+        # The fan sees the supply side and the return side in series, so the
+        # two index runs add. Which sides are in the total is NAMED rather than
+        # assumed: a plenum return, or a system where only one side was
+        # traversed, would otherwise silently produce a one-sided number
+        # labelled as if it were the whole thing.
+        supply  = critical.get('Supply Air')
+        returns = [(k, critical[k]) for k in ('Return Air', 'Exhaust Air')
                    if k in critical]
-        if supply is not None and returns:
-            worst_return = max(r['friction_inwc'] for r in returns)
+        total   = 0.0
+        sides   = []
+        if supply is not None:
+            total += supply['friction_inwc']
+            sides.append('Supply Air')
+        if returns:
+            worst_k, worst_c = max(returns, key=lambda kv: kv[1]['friction_inwc'])
+            total += worst_c['friction_inwc']
+            sides.append(worst_k)
+        if sides:
             summary_lines.append(
-                '  Supply + Return = {:.3f} in. wc external static'.format(
-                    supply['friction_inwc'] + worst_return))
+                '  TOTAL EXTERNAL STATIC = {:.3f} in. wc   ({})'.format(
+                    total, ' + '.join(sides)))
+            if supply is None or not returns:
+                summary_lines.append(
+                    '  WARNING: only one side was traversed, so this is NOT a '
+                    'complete external static.')
+
         summary_lines.append(
-            '  SCOPE: DUCT FRICTION ONLY. Excludes fitting/elbow/tee/takeoff '
+            '  SCOPE: duct friction only. Excludes fitting/elbow/tee/takeoff '
             'losses (typically 30-50% of real system loss), balancing and fire '
-            'dampers, coils, filters, diffuser and grille pressure drop, and '
-            'casing losses. NOT a fan selection figure.')
+            'dampers, and diffuser/grille pressure drop. Internal losses '
+            '(filter, coils, casing) are NOT external static - take those from '
+            'the unit cutsheet.')
 
     output.print_md('---')
     output.print_md('### System Summary')
