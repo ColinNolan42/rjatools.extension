@@ -170,6 +170,78 @@ class TestDemoSizing(unittest.TestCase):
             self.assertIn(needle, text)
 
 
+class TestMixedTypesDoNotCollapse(unittest.TestCase):
+    """Regression for the 2026-09-24 live run on (2024) Grantham 4 MP.
+
+    12 public water closets (5.0/0/5.0) and 6 public lavatories
+    (1.5/1.5/2.0). The Type name failed to read under IronPython, so every
+    fixture grouped as "UNKNOWN TYPE" and the table multiplied the FIRST
+    member's load by 18, printing 90 cold / 0 hot / 90 total instead of
+    69 / 9 / 72. The extended columns must sum real values, so that even a
+    total grouping failure cannot corrupt the totals.
+    """
+
+    def build(self, type_names):
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1)
+        for i in range(12):
+            n = add_node(g, 100 + i, water_graph.KIND_FIXTURE, parent=2,
+                         cw=5.0, hw=0.0, total=5.0)
+            n.type_name = type_names[0]
+            n.is_public = True
+        for i in range(6):
+            n = add_node(g, 200 + i, water_graph.KIND_FIXTURE, parent=2,
+                         cw=1.5, hw=1.5, total=2.0)
+            n.type_name = type_names[1]
+            n.is_public = True
+        return g
+
+    def test_totals_are_right_with_correct_type_names(self):
+        g = self.build(["Water Closet, Flush Tank", "Lavatory"])
+        d = water_report.wsfu_data(g)
+        self.assertEqual(len(d["rows"]), 2)
+        self.assertAlmostEqual(d["ext_cold"], 69.0)
+        self.assertAlmostEqual(d["ext_hot"], 9.0)
+        self.assertAlmostEqual(d["ext_total"], 72.0)
+
+    def test_totals_stay_right_even_if_every_type_name_fails(self):
+        # The exact failure mode: all 18 collapse into one row. The row's
+        # per-fixture columns must admit they vary, and the totals must still
+        # be 69 / 9 / 72, never 90 / 0 / 90.
+        g = self.build(["UNKNOWN TYPE", "UNKNOWN TYPE"])
+        d = water_report.wsfu_data(g)
+        self.assertEqual(len(d["rows"]), 1)
+        self.assertEqual(d["rows"][0]["qty"], "18")
+        self.assertEqual(d["rows"][0]["cold_ea"], "varies")
+        self.assertEqual(d["rows"][0]["hot_ea"], "varies")
+        self.assertAlmostEqual(d["ext_cold"], 69.0)
+        self.assertAlmostEqual(d["ext_hot"], 9.0)
+        self.assertAlmostEqual(d["ext_total"], 72.0)
+
+    def test_cold_plus_hot_deliberately_does_not_equal_total(self):
+        # 69 + 9 = 78, not 72. Note a to IPC Table E103.3(2) puts the separate
+        # hot and cold loads at three-quarters of the total, so the columns are
+        # not additive and the table has to say so.
+        g = self.build(["Water Closet, Flush Tank", "Lavatory"])
+        d = water_report.wsfu_data(g)
+        self.assertNotAlmostEqual(d["ext_cold"] + d["ext_hot"], d["ext_total"])
+        # the lavatory is the fixture that creates the gap: 1.5 = 0.75 x 2.0
+        self.assertAlmostEqual(1.5, 0.75 * 2.0)
+        note = " ".join(water_report.wsfu_load_lines(d))
+        self.assertIn("does not equal TOTAL", note)
+        self.assertIn("three-fourths", note)
+
+    def test_per_fixture_columns_shown_when_the_row_is_uniform(self):
+        g = self.build(["Water Closet, Flush Tank", "Lavatory"])
+        d = water_report.wsfu_data(g)
+        wc = [r for r in d["rows"] if r["fixture"].startswith("Water Closet")][0]
+        self.assertEqual(wc["cold_ea"], "5")
+        self.assertEqual(wc["qty"], "12")
+        self.assertEqual(wc["cold_ext"], "60")
+
+
 class TestDraftingLayout(unittest.TestCase):
     """The drafting module's pure layout helpers.
 

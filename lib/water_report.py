@@ -96,6 +96,12 @@ def wsfu_data(graph):
     "totals" (a cell dict), and the raw "ext_cold"/"ext_hot"/"ext_total"
     numbers the sizing loads are read from.
     """
+    # The extended columns SUM each fixture's own values. They are deliberately
+    # not count x (the first member's value): if the Type name ever fails to
+    # read, every fixture collapses into one group, and multiplying the first
+    # member's load by the count then silently reports a wrong total. That
+    # happened live on 2026-09-24, where 12 water closets and 6 lavatories
+    # printed as 18 x 5.0 = 90 cold and 0 hot instead of 69 cold and 9 hot.
     groups = {}
     for fid in graph.fixture_ids:
         node = graph.nodes.get(fid)
@@ -104,9 +110,14 @@ def wsfu_data(graph):
         occupancy = "PUBLIC" if node.is_public else "PRIVATE"
         key = (node.type_name, occupancy)
         if key not in groups:
-            groups[key] = {"count": 0, "cold": node.cw_wsfu,
-                           "hot": node.hw_wsfu, "total": node.total_wsfu}
-        groups[key]["count"] += 1
+            groups[key] = {"count": 0, "cold": 0.0, "hot": 0.0, "total": 0.0,
+                           "per_fixture": set()}
+        g = groups[key]
+        g["count"] += 1
+        g["cold"] += node.cw_wsfu
+        g["hot"] += node.hw_wsfu
+        g["total"] += node.total_wsfu
+        g["per_fixture"].add((node.cw_wsfu, node.hw_wsfu, node.total_wsfu))
 
     rows = []
     ext_cold = 0.0
@@ -116,21 +127,29 @@ def wsfu_data(graph):
     for key in sorted(groups.keys()):
         type_name, occupancy = key
         g = groups[key]
-        row_cold = g["count"] * g["cold"]
-        row_hot = g["count"] * g["hot"]
-        row_total = g["count"] * g["total"]
-        ext_cold += row_cold
-        ext_hot += row_hot
-        ext_total += row_total
+        ext_cold += g["cold"]
+        ext_hot += g["hot"]
+        ext_total += g["total"]
+
+        # The per-fixture columns only mean something when every fixture in the
+        # row carries the same load. If they differ, say so rather than print
+        # one member's value as if it applied to all of them.
+        if len(g["per_fixture"]) == 1:
+            each = list(g["per_fixture"])[0]
+            cold_ea, hot_ea, total_ea = (_num(each[0]), _num(each[1]),
+                                         _num(each[2]))
+        else:
+            cold_ea = hot_ea = total_ea = "varies"
+
         rows.append({
             "fixture": "{}, {}".format(type_name, occupancy),
             "qty": str(g["count"]),
-            "cold_ea": _num(g["cold"]),
-            "hot_ea": _num(g["hot"]),
-            "total_ea": _num(g["total"]),
-            "cold_ext": _num(row_cold),
-            "hot_ext": _num(row_hot),
-            "total_ext": _num(row_total),
+            "cold_ea": cold_ea,
+            "hot_ea": hot_ea,
+            "total_ea": total_ea,
+            "cold_ext": _num(g["cold"]),
+            "hot_ext": _num(g["hot"]),
+            "total_ext": _num(g["total"]),
         })
 
     totals = {
@@ -147,10 +166,16 @@ def wsfu_data(graph):
 
 
 def wsfu_load_lines(data):
-    """The two sizing-load lines printed under the take-off table.
+    """The sizing-load lines printed under the take-off table.
 
     These tie the take-off to the sizing: the TOTAL here is the load the
     building main carries in the segment table.
+
+    The footnote is not decoration. COLD + HOT does not equal TOTAL, and every
+    reader checks that sum. Note a to 2024 IPC Table E103.3(2) sets the
+    separate hot and cold loads at three-fourths of the total for any fixture
+    served by both, as a diversity allowance, so the columns are deliberately
+    not additive.
     """
     return [
         "Cold water sizing load (TOTAL wsfu): {}  ->  {} gpm".format(
@@ -159,6 +184,9 @@ def wsfu_load_lines(data):
         "Hot water sizing load (HOT wsfu): {}  ->  {} gpm".format(
             _num(data["ext_hot"]),
             _gpm(water_tables.wsfu_to_gpm(data["ext_hot"]))),
+        "Note: COLD + HOT does not equal TOTAL. Per note a to IPC Table "
+        "E103.3(2), a fixture served by both hot and cold water has its "
+        "separate hot and cold loads set at three-fourths of its total load.",
     ]
 
 

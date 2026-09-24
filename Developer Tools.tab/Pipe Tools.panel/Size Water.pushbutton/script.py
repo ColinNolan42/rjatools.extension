@@ -34,6 +34,7 @@ import shared_params
 import revit_helpers
 import water_graph
 import water_sizing_engine
+import water_checks
 import water_report
 import water_drafting
 import ui_helpers
@@ -179,20 +180,32 @@ def main():
     revit_helpers.reset_pipe_diameter_approach()
     graph = water_graph.build_water_network(origin, doc)
 
-    if not graph.fixture_ids:
-        forms.alert(
-            "No water fixtures were found on the network from that element.\n\n"
-            "Check that the fixtures carry IS_WATER_FIXTURE and that the "
-            "piping is actually connected.",
-            title="Size Water")
+    # --- 4. Completeness check, before any sizing ---
+    # A half-modelled system should fail loudly rather than be quietly sized.
+    checks = water_checks.check_system(
+        graph, return_system_type_ids=settings["return_system_type_ids"])
+    print("\n".join(water_checks.format_checks(checks)))
 
-    # --- 4. Size ---
+    if not checks["ready_for_sizing"]:
+        detail = "\n".join(
+            "  - " + f.message for f in checks["errors"][:6])
+        proceed = forms.alert(
+            "The system is not complete. {} error(s) found:\n\n{}\n\n"
+            "Sizing now would produce numbers that do not describe the whole "
+            "system. Continue anyway?".format(len(checks["errors"]), detail),
+            title="Size Water - Incomplete System", yes=True, no=True)
+        if not proceed:
+            output.print_md(
+                "Stopped before sizing. Nothing was changed.")
+            return
+
+    # --- 5. Size ---
     sizing = water_sizing_engine.size_network(
         graph,
         apply_minimums=settings["apply_minimums"],
         return_system_type_ids=settings["return_system_type_ids"])
 
-    # --- 5. Report ---
+    # --- 6. Report ---
     header = {
         "date": datetime.date.today().strftime("%Y-%m-%d"),
         "job": settings["job"],
@@ -202,13 +215,13 @@ def main():
     report = water_report.build_report(graph, sizing, header)
     print(report)
 
-    # --- 6. Drafting view ---
+    # --- 7. Drafting view ---
     # Runs even in report-only mode: report-only means "do not change pipe
     # sizes", not "produce nothing". The take-off table is a deliverable.
     if settings["create_drafting_view"]:
         _create_drafting_view(graph, sizing, header, settings)
 
-    # --- 7. Write back ---
+    # --- 8. Write back ---
     if settings["report_only"]:
         output.print_md(
             "**Report only.** No sizes were written to the model.")

@@ -240,6 +240,97 @@ def get_parameter_value(element, param_name):
         return None
 
 
+def get_element_type_name(element):
+    """Return an element's family TYPE name, or None.
+
+    Do NOT use element.Symbol.Name for this. Under pyRevit's IronPython 2.7,
+    reading .Name off a Revit element frequently raises AttributeError because
+    the property is ambiguous across the class hierarchy, even though the
+    identical call works in C#. Verified 2026-09-24: Symbol.Name returned
+    "Water Closet, Flush Tank" through the C# MCP bridge on the same elements
+    where the IronPython tool fell through to its "UNKNOWN TYPE" fallback for
+    all 18 fixtures.
+
+    BuiltInParameter is read first because it is immune to that ambiguity.
+    """
+    fn = "get_element_type_name"
+
+    try:
+        eid = eid_int(element.Id)
+    except Exception:
+        eid = None
+
+    # 1. The instance's own type parameter. Most reliable under IronPython.
+    try:
+        param = element.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM)
+        if param is not None:
+            value = param.AsValueString()
+            if value:
+                return value
+    except Exception:
+        pass
+
+    # 2. The symbol's name parameter.
+    try:
+        symbol = element.Symbol
+        param = symbol.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)
+        if param is not None:
+            value = param.AsString()
+            if value:
+                return value
+    except Exception:
+        pass
+
+    # 3. Static accessor, which sidesteps the instance-property ambiguity.
+    try:
+        from Autodesk.Revit.DB import Element
+        return Element.Name.GetValue(element.Symbol)
+    except Exception:
+        pass
+
+    # 4. Plain attribute access, last because this is the one that throws.
+    try:
+        return element.Symbol.Name
+    except Exception:
+        pass
+
+    _log_entry("WARNING", fn, eid, "Could not read the type name by any path.")
+    return None
+
+
+def get_element_family_name(element):
+    """Return an element's FAMILY name, or None. Same .Name hazard as above."""
+    fn = "get_element_family_name"
+
+    try:
+        eid = eid_int(element.Id)
+    except Exception:
+        eid = None
+
+    try:
+        param = element.get_Parameter(BuiltInParameter.ELEM_FAMILY_PARAM)
+        if param is not None:
+            value = param.AsValueString()
+            if value:
+                return value
+    except Exception:
+        pass
+
+    try:
+        from Autodesk.Revit.DB import Element
+        return Element.Name.GetValue(element.Symbol.Family)
+    except Exception:
+        pass
+
+    try:
+        return element.Symbol.Family.Name
+    except Exception:
+        pass
+
+    _log_entry("WARNING", fn, eid, "Could not read the family name by any path.")
+    return None
+
+
 def get_type_parameter_value(element, param_name):
     """Read a TYPE parameter from a family instance.
 

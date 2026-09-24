@@ -37,6 +37,7 @@ KIND_FITTING    = "fitting"
 KIND_ACCESSORY  = "accessory"
 KIND_FIXTURE    = "fixture"      # IS_WATER_FIXTURE = Yes
 KIND_HEATER     = "heater"       # cold in + hot out, not a fixture
+KIND_PUMP       = "pump"         # hot-only equipment, the recirculation pump
 KIND_EQUIPMENT  = "equipment"
 KIND_UNKNOWN    = "unknown"
 
@@ -99,6 +100,7 @@ class WaterGraph(object):
         self.open_ends    = []     # (element_id, system) with an unconnected connector
         self.loops        = []     # element ids reached more than once
         self.heater_ids   = []
+        self.pump_ids     = []
         self.fixture_ids  = []
         self.unreadable   = []     # elements whose connectors could not be read
         self.system_types = {}     # PipingSystemType element id -> name
@@ -336,6 +338,16 @@ def _make_node(graph, element, element_id, system):
             element_id, node.family_name))
         return node
 
+    if _looks_like_pump(element, connectors):
+        node = WaterNode(element_id, element, KIND_PUMP)
+        node.connectors = connectors
+        node.connector_count = len(connectors)
+        graph.pump_ids.append(element_id)
+        graph.log("PUMP CANDIDATE {}: '{}' (hot-only equipment, {} "
+                  "connectors)".format(element_id, node.family_name,
+                                       len(connectors)))
+        return node
+
     kind = _classify_by_category(element, len(connectors))
     node = WaterNode(element_id, element, kind)
     node.connectors = connectors
@@ -470,6 +482,44 @@ def _looks_like_heater(connectors):
     return has_cold and has_hot
 
 
+def _looks_like_pump(element, connectors):
+    """A recirculation pump: Mechanical Equipment, hot water only.
+
+    Identified by category and connector systems, never by family or Type
+    name. The discriminators are that a pump sits on the hot side with NO cold
+    water connector (which is what separates it from the water heater), and
+    that it is Mechanical Equipment (which is what separates it from an inline
+    balancing valve or circuit setter, which are Pipe Accessories).
+
+    This is a CANDIDATE, not a certainty: any other hot-water mechanical
+    equipment with two connectors matches too. The checks report the family
+    name so a human can confirm, rather than asserting what it is.
+
+    UNVERIFIED: the one circulation pump seen live (a Grundfos-style
+    ecocircXL) threw on every connector property read in a probe that guarded
+    only the outer loop. revit_helpers.get_connectors guards each property
+    separately, so some fields may still come back, but whether system_type is
+    readable on that family has NOT been confirmed. If it is not, the pump
+    cannot be classified here and will be reported as equipment with
+    unreadable connectors instead of being silently missed.
+    """
+    try:
+        category = element.Category.Name
+    except Exception:
+        return False
+    if "Equipment" not in category:
+        return False
+
+    hot = 0
+    for c in connectors:
+        system = c.get("system_type")
+        if system == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
+            return False
+        if system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
+            hot += 1
+    return hot >= 2
+
+
 def _classify_by_category(element, connector_count):
     """Fall back to the Revit category for anything not a pipe/fixture/heater."""
     try:
@@ -511,10 +561,14 @@ def _is_pipe(element):
 
 
 def _get_family_name(element):
-    try:
-        return element.Symbol.Family.Name
-    except Exception:
-        pass
+    """Family name, via the shared helper.
+
+    Never read .Name directly here: it throws under pyRevit's IronPython even
+    though it works in C#. revit_helpers handles the fallbacks.
+    """
+    name = revit_helpers.get_element_family_name(element)
+    if name:
+        return name
     try:
         return element.Name
     except Exception:
@@ -522,8 +576,9 @@ def _get_family_name(element):
 
 
 def _get_type_name(element):
-    """The family Type name, which is what the WSFU schedule groups by."""
-    try:
-        return element.Symbol.Name
-    except Exception:
-        return "UNKNOWN TYPE"
+    """The family Type name, which is what the WSFU schedule groups by.
+
+    Getting this wrong is not cosmetic: the take-off groups rows by Type, so a
+    failed lookup collapses every fixture into one row.
+    """
+    return revit_helpers.get_element_type_name(element) or "UNKNOWN TYPE"
