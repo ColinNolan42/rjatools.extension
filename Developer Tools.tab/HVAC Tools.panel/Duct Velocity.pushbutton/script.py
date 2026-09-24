@@ -152,7 +152,7 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys) or None.
+    selected_column_keys, print_all) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -202,6 +202,29 @@ def show_velocity_settings_dialog():
 
     outer = StackPanel()
     outer.Margin = Thickness(14)
+
+    # ── Print ALL ducts / total static pressure loss ────────────────────────
+    # Ahead of every other option on purpose: it changes what "Optional output
+    # table columns" below applies TO (every duct, not just flagged ones), so
+    # it has to be seen and decided first.
+    cb_print_all = CheckBox()
+    cb_print_all_text = TextBlock()
+    cb_print_all_text.Text = (
+        'Print ALL ducts (not just Red/Yellow/Purple) + total static '
+        'pressure loss per system. Turns the flagged-duct table into a '
+        'whole-system table and adds a critical-path duct friction total '
+        '(ducts only - fittings and equipment are not in this total).')
+    cb_print_all_text.TextWrapping = TextWrapping.Wrap
+    cb_print_all_text.Width = CONTENT_W - 20
+    cb_print_all.Content   = cb_print_all_text
+    cb_print_all.IsChecked = False
+    cb_print_all.FontWeight = FontWeights.Bold
+    cb_print_all.Margin = Thickness(2, 0, 0, 2)
+    outer.Children.Add(cb_print_all)
+
+    print_all_sep = Separator()
+    print_all_sep.Margin = Thickness(0, 8, 0, 10)
+    outer.Children.Add(print_all_sep)
 
     # ── Outside Air checkbox: equipment-level (SA+RA only, default) vs ──────
     # ── system-level (traces OA too) ─────────────────────────────────────
@@ -413,7 +436,8 @@ def show_velocity_settings_dialog():
                 out[sys_class] = (max_fpm, max_fric)
             include_oa = bool(cb_oa.IsChecked)
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
-            result[0] = (out, gpct, include_oa, selected_cols)
+            print_all = bool(cb_print_all.IsChecked)
+            result[0] = (out, gpct, include_oa, selected_cols, print_all)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -435,6 +459,66 @@ def show_velocity_settings_dialog():
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
+
+
+def _critical_path_friction(all_root_ids, all_children, all_duct_results, all_terminals):
+    """Highest-cumulative-duct-friction path from any root to any terminal,
+    one result per system class actually reached by a terminal.
+
+    DUCTS ONLY. This codebase does not compute fitting, elbow or equipment
+    pressure loss anywhere, so this is a duct-friction estimate of the
+    critical (index) run, not a full system static pressure budget. The
+    caller must disclose that scope in whatever it prints - never present
+    this number as "total system static pressure."
+
+    all_children / all_terminals are keyed by int element id (see
+    HvacNetwork). all_duct_results is keyed by the real Revit ElementId
+    (see hvac_graph.build_network), so it is re-keyed by its own
+    DuctResult.element_id (int) here rather than assumed to match.
+
+    Returns {sys_class: {'friction_inwc', 'duct_count', 'terminal_id',
+    'terminal_name'}}.
+    """
+    dr_by_int_id = {}
+    for dr in all_duct_results.values():
+        dr_by_int_id[dr.element_id] = dr
+
+    best = {}   # sys_class -> (friction_inwc, duct_count, terminal_id)
+
+    for root_id in all_root_ids:
+        stack = [(root_id, 0.0, 0)]   # (node_id, cumulative friction, duct count)
+        visited = set()
+        while stack:
+            nid, fric, dcount = stack.pop()
+            if nid in visited:
+                continue
+            visited.add(nid)
+
+            dr = dr_by_int_id.get(nid)
+            if dr is not None:
+                fric   = fric + dr.friction_loss_inwc
+                dcount = dcount + 1
+
+            term = all_terminals.get(nid)
+            if term is not None:
+                _cfm, sys_class, _family = term
+                current = best.get(sys_class)
+                if current is None or fric > current[0]:
+                    best[sys_class] = (fric, dcount, nid)
+
+            for child_id in all_children.get(nid, []):
+                stack.append((child_id, fric, dcount))
+
+    result = {}
+    for sys_class, (fric, dcount, term_id) in best.items():
+        term = all_terminals.get(term_id)
+        result[sys_class] = {
+            'friction_inwc': fric,
+            'duct_count':    dcount,
+            'terminal_id':   term_id,
+            'terminal_name': term[2] if term else '-',
+        }
+    return result
 
 # Minimum transition clearance between a duct and a genuinely smaller real
 # downstream neighbour, inches.
@@ -1119,10 +1203,14 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    custom_limits, tol_pct, include_oa, selected_cols = dialog_result
+    custom_limits, tol_pct, include_oa, selected_cols, print_all = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
+    if print_all:
+        output.print_md('**Print ALL ducts is on** — the table below and the sheet '
+                        'schedule will list every duct, and every duct will get a '
+                        'numbered circle in the plan, not just flagged ones.')
 
     # 3. Find AHUs in active view and let user pick systems
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
@@ -1330,6 +1418,19 @@ def main():
         summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
             len(all_missing_flow)))
 
+    if print_all:
+        critical = _critical_path_friction(
+            all_root_ids, all_children, all_duct_results, all_terminals)
+        summary_lines.append(
+            'Total Static Pressure Loss (critical path, DUCTS ONLY - no '
+            'fittings/equipment):')
+        for sys_class in sorted(critical.keys()):
+            c = critical[sys_class]
+            summary_lines.append(
+                '  {}: {:.3f} in. wc  ({} ducts, to {})'.format(
+                    sys_class, c['friction_inwc'], c['duct_count'],
+                    c['terminal_name']))
+
     output.print_md('---')
     output.print_md('### System Summary')
     for line in summary_lines[1:]:
@@ -1471,7 +1572,7 @@ def main():
         row_cells_by_eid = {}
         for eid in sorted(duct_labels.keys(), key=lambda e: eid_int(e)):
             lbl, _, reason = duct_labels[eid]
-            if lbl not in ('YELLOW', 'RED', 'PURPLE'):
+            if not print_all and lbl not in ('YELLOW', 'RED', 'PURPLE'):
                 continue
             dr = all_duct_results.get(eid)
             if dr is None:
@@ -1651,7 +1752,7 @@ def main():
     flagged = []
     for eid, dr in all_duct_results.items():
         label, _, reason = duct_labels.get(eid, ('GRAY', 0.0, ''))
-        if label not in ('RED', 'YELLOW', 'PURPLE'):
+        if not print_all and label not in ('RED', 'YELLOW', 'PURPLE'):
             continue
         cells = row_cells_by_eid.get(eid)
         if cells is None:
@@ -1688,7 +1789,7 @@ def main():
             ]))
 
         output.print_md('')
-        output.print_md('### Flagged Ducts')
+        output.print_md('### All Ducts' if print_all else '### Flagged Ducts')
         output.print_code('\n'.join(rows))
 
     uidoc.ActiveView = new_sheet
