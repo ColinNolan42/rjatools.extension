@@ -1,0 +1,6 @@
+title: Diagnose
+tooltip: >
+  Select the gas meter, the domestic water RPZ, or any HVAC equipment/duct/
+  terminal, then click. The discipline is auto-detected from the pick and a
+  summary of what the model actually contains is printed - no sizer run,
+  no dialogs, no prompts.

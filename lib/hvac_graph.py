@@ -1071,6 +1071,17 @@ class HvacNetwork(object):
         return [e for e in self.nodes.values() if is_equipment(e)]
 
     @property
+    def accessories(self):
+        return [e for e in self.nodes.values() if is_accessory(e)]
+
+    @property
+    def fittings(self):
+        """Fittings only (OST_DuctFitting) - excludes accessories, which
+        Diagnose reports as their own row. is_fitting_or_accessory() covers
+        both categories for callers that don't need the split."""
+        return [e for e in self.nodes.values() if is_fitting(e)]
+
+    @property
     def ready_for_visualization(self):
         return len(self.errors) == 0 and len(self.ducts) > 0
 
