@@ -111,13 +111,13 @@ _COLUMN_DEFS = [
     # key          header                              view_w  console_w  default_on
     ('num',       '#',                                  0.050,    3,  True),
     ('status',    'Status',                             0.120,    7,  True),
-    ('reason',    'Reason',                             0.230,   32,  True),
+    ('reason',    'Reason',                             0.245,   34,  True),
     ('role',      'Duct Role',                          0.150,   18,  True),
     ('size',      'Size',                               0.100,    9,  True),
     ('required',  'Required Size',                      0.140,   14,  True),
     ('cfm',       'Total CFM through Duct',             0.200,   22,  False),
-    ('fpm',       'Actual FPM / Max FPM',               0.220,   21,  True),
-    ('fric',      'Actual Fric / Max Fric (iwc/100)',   0.300,   32,  False),
+    ('fpm',       'Actual FPM',                         0.120,   11,  True),
+    ('fric',      'Actual Fric (iwc/100)',              0.180,   21,  True),
     ('length',    'Length (ft)',                        0.090,   11,  False),
     ('fricloss',  'Friction Loss (iwc)',                0.130,   19,  False),
 ]
@@ -126,7 +126,7 @@ _COLUMN_DEFS = [
 # circles placed in the view, so it stays in the table to keep that
 # correlation.
 _FIXED_COLUMN_KEYS = frozenset(
-    ['num', 'status', 'reason', 'role', 'size', 'required', 'fpm'])
+    ['num', 'status', 'reason', 'role', 'size', 'required', 'fpm', 'fric'])
 
 
 def _optional_columns():
@@ -152,7 +152,7 @@ def show_velocity_settings_dialog():
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, full_diag, static_loss) or None.
+    selected_column_keys, full_diag) or None.
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -210,9 +210,8 @@ def show_velocity_settings_dialog():
     cb_full_diag = CheckBox()
     cb_full_diag_text = TextBlock()
     cb_full_diag_text.Text = (
-        'Full System Diagnostic. Lists every duct in the system, and gives '
-        'every duct a numbered circle in the plan. Off shows only the '
-        'Red / Yellow / Purple ducts.')
+        'Full System.  Unchecked = only failing ducts '
+        '(Red, Yellow, Purple).')
     cb_full_diag_text.TextWrapping = TextWrapping.Wrap
     cb_full_diag_text.Width = CONTENT_W - 20
     cb_full_diag.Content   = cb_full_diag_text
@@ -229,9 +228,9 @@ def show_velocity_settings_dialog():
     # ── system-level (traces OA too) ─────────────────────────────────────
     cb_oa = CheckBox()
     cb_oa_text = TextBlock()
-    cb_oa_text.Text = ('Include Outside Air System (AHU/DOAS) — PENDING, under development. '
-                        'Not available yet: the tool runs equipment-level only '
-                        '(Supply + Return Air, never goes upstream).')
+    cb_oa_text.Text = ('Include Outside Air (AHU/DOAS systems).  PENDING, under '
+                       'development. The tool runs equipment-level only for now '
+                       '(Supply + Return Air, never goes upstream).')
     cb_oa_text.TextWrapping = TextWrapping.Wrap
     cb_oa_text.Width = CONTENT_W - 20
     cb_oa.Content = cb_oa_text
@@ -336,21 +335,10 @@ def show_velocity_settings_dialog():
     col_hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(col_hdr)
 
-    # Total static pressure loss is its own option, NOT part of the Full
-    # System Diagnostic above: wanting the system's pressure loss and wanting
-    # a row per duct are two different questions.
-    cb_static = CheckBox()
-    cb_static_text = TextBlock()
-    cb_static_text.Text = (
-        'Total static pressure loss per system (critical path, DUCTS ONLY - '
-        'fittings and equipment are not in this total)')
-    cb_static_text.TextWrapping = TextWrapping.Wrap
-    cb_static_text.Width = CONTENT_W - 20
-    cb_static.Content   = cb_static_text
-    cb_static.IsChecked = False
-    cb_static.Margin    = Thickness(2, 0, 0, 6)
-    outer.Children.Add(cb_static)
-
+    # Total static pressure loss has NO checkbox of its own. It is a TOTAL
+    # row at the bottom of the table, shown whenever Full System is on AND the
+    # Friction Loss column is selected, because that row is simply the sum of
+    # that column (Colin, 2026-09-24).
     col_grid = Grid()
     _COL_PICKER_COLS = 2
     for _ in range(_COL_PICKER_COLS):
@@ -414,11 +402,16 @@ def show_velocity_settings_dialog():
     hdr.Margin = Thickness(0, 0, 0, 4)
     outer.Children.Add(hdr)
 
-    _info_row('Applies to:',      'main ducts only — branches are sized against the diffuser tables')
-    _info_row('Pressure drop:',   'Darcy-Weisbach')
-    _info_row('Friction factor:', 'Altshul-Tsal  (ASHRAE approx. to Colebrook-White)')
-    _info_row('Air density:',     u'0.0750 lb/ft³  (standard, 68°F, sea level)')
-    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel)')
+    _info_row('Velocity / friction:', 'checked on MAIN ducts only. Branches are judged '
+                                      'against the diffuser capacity tables instead.')
+    _info_row('Friction loss:',   u'ASHRAE power-law fit:  6.82e-6 × V^1.82 / Dh^1.22  '
+                                  u'(in. wc per 100 ft)')
+    _info_row('Calibrated to:',   u'10 in. duct at 910 FPM → 0.099 in. wc/100 ft (SMACNA 0.1 target)')
+    _info_row('Air density:',     u'0.0750 lb/ft³  (standard air, 70°F, SEA LEVEL, '
+                                  u'not altitude-corrected)')
+    _info_row('Duct roughness:',  u'ε = 0.0003 ft  (galvanized steel), built into the fit above')
+    _info_row('Not included:',    'fitting, elbow, coil, filter and equipment losses. '
+                                  'Duct friction only.')
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -439,7 +432,7 @@ def show_velocity_settings_dialog():
         try:
             gpct = float(gpct_box[0].Text)
             if not (0 < gpct < 100):
-                forms.alert('Green threshold must be between 0 and 100.', title='Invalid Input')
+                forms.alert('Yellow tolerance must be between 0 and 100.', title='Invalid Input')
                 return
             out = {}
             for i, (sys_class, _, _) in enumerate(ROWS):
@@ -452,9 +445,7 @@ def show_velocity_settings_dialog():
             include_oa = bool(cb_oa.IsChecked)
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
-            static_loss = bool(cb_static.IsChecked)
-            result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         static_loss)
+            result[0] = (out, gpct, include_oa, selected_cols, full_diag)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -477,65 +468,6 @@ def show_velocity_settings_dialog():
 # ── helpers ────────────────────────────────────────────────────────────────────
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
-
-def _critical_path_friction(all_root_ids, all_children, all_duct_results, all_terminals):
-    """Highest-cumulative-duct-friction path from any root to any terminal,
-    one result per system class actually reached by a terminal.
-
-    DUCTS ONLY. This codebase does not compute fitting, elbow or equipment
-    pressure loss anywhere, so this is a duct-friction estimate of the
-    critical (index) run, not a full system static pressure budget. The
-    caller must disclose that scope in whatever it prints - never present
-    this number as "total system static pressure."
-
-    all_children / all_terminals are keyed by int element id (see
-    HvacNetwork). all_duct_results is keyed by the real Revit ElementId
-    (see hvac_graph.build_network), so it is re-keyed by its own
-    DuctResult.element_id (int) here rather than assumed to match.
-
-    Returns {sys_class: {'friction_inwc', 'duct_count', 'terminal_id',
-    'terminal_name'}}.
-    """
-    dr_by_int_id = {}
-    for dr in all_duct_results.values():
-        dr_by_int_id[dr.element_id] = dr
-
-    best = {}   # sys_class -> (friction_inwc, duct_count, terminal_id)
-
-    for root_id in all_root_ids:
-        stack = [(root_id, 0.0, 0)]   # (node_id, cumulative friction, duct count)
-        visited = set()
-        while stack:
-            nid, fric, dcount = stack.pop()
-            if nid in visited:
-                continue
-            visited.add(nid)
-
-            dr = dr_by_int_id.get(nid)
-            if dr is not None:
-                fric   = fric + dr.friction_loss_inwc
-                dcount = dcount + 1
-
-            term = all_terminals.get(nid)
-            if term is not None:
-                _cfm, sys_class, _family = term
-                current = best.get(sys_class)
-                if current is None or fric > current[0]:
-                    best[sys_class] = (fric, dcount, nid)
-
-            for child_id in all_children.get(nid, []):
-                stack.append((child_id, fric, dcount))
-
-    result = {}
-    for sys_class, (fric, dcount, term_id) in best.items():
-        term = all_terminals.get(term_id)
-        result[sys_class] = {
-            'friction_inwc': fric,
-            'duct_count':    dcount,
-            'terminal_id':   term_id,
-            'terminal_name': term[2] if term else '-',
-        }
-    return result
 
 # Minimum transition clearance between a duct and a genuinely smaller real
 # downstream neighbour, inches.
@@ -714,8 +646,9 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
     downstream-terminal map, so the graph is only walked once.
 
     Returns (label, max_cap_cfm, reason, branch_result_or_None). The fourth
-    element is None for anything judged the ductulator way, which is also how
-    the output tables know to print real FPM/friction numbers rather than N/A.
+    element is None for anything judged the ductulator way, and is what tells
+    the output tables where the Required Size came from. It does NOT change
+    whether velocity/friction print: every duct prints its real numbers.
     May return GRAY.
     """
     if branch_ctx is None:
@@ -982,26 +915,24 @@ def _row_cells(label, dr, reason, role, branch_res,
     placed in the view (element-id order), while the console list is re-sorted
     worst-first — so each renderer supplies its own row index.
 
-    A branch judged against the diffuser tables reports N/A for velocity and
-    friction rather than the real numbers: those numbers played no part in its
-    verdict, and printing them beside it invites the reader to conclude they
-    were what failed.
-    """
-    defaults          = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-    max_fpm, max_fric = custom_limits.get(dr.sys_class, defaults)
+    Every duct prints its REAL velocity and friction, mains and branches
+    alike. Nothing is ever N/A, and the limits are NOT repeated per row: the
+    engineer set them in the dialog, and Status + Reason already say whether
+    velocity or friction is what failed.
 
+    A branch shows its numbers WITHOUT being judged on them. A branch's verdict
+    comes from the diffuser tables only (Colin, 2026-09-24: "a branch at 1100
+    FPM with a correct diffuser goes to green as the diffuser is the limiting
+    factor ... there should never be a time that a diffuser works but the duct
+    fails greatly").
+    """
     if branch_res is not None:
-        fpm_cell  = 'N/A'
-        fric_cell = 'N/A'
-        required  = branch_res.required_size
+        required = branch_res.required_size
     else:
-        required  = _suggest_size(dr, custom_limits, tol_pct, label, downstream_height_in)
-        if reason == 'Diffuser/Duct Clearance':
-            fpm_cell  = 'N/A'
-            fric_cell = 'N/A'
-        else:
-            fpm_cell  = '{:.0f}/{:.0f}'.format(float(dr.fpm), float(max_fpm))
-            fric_cell = '{:.3f}/{:.3f}'.format(float(dr.friction_per_100ft), float(max_fric))
+        required = _suggest_size(dr, custom_limits, tol_pct, label, downstream_height_in)
+
+    fpm_cell  = '{:.0f}'.format(float(dr.fpm))
+    fric_cell = '{:.3f}'.format(float(dr.friction_per_100ft))
 
     return {
         'status':    label,
@@ -1161,7 +1092,12 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                     # plan view, which is why it is not baked into the cell
                     # dict (the console table numbers the same ducts
                     # differently).
-                    cell_text = str(ri + 1) if col[0] == 'num' else cells.get(col[0], '')
+                    if col[0] == 'num':
+                        # The TOTAL row is not a duct: no row number, and no
+                        # matching keynote circle out in the plan view.
+                        cell_text = '' if cells.get('_total') else str(ri + 1)
+                    else:
+                        cell_text = cells.get(col[0], '')
                     # Blank cells are real (e.g. no Reason on a passing row), and
                     # TextNote.Create rejects an empty string — leave the cell
                     # empty rather than write a placeholder into the drawing.
@@ -1220,8 +1156,8 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     static_loss) = dialog_result
+    (custom_limits, tol_pct, include_oa, selected_cols,
+     full_diag) = dialog_result
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
         else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
@@ -1436,19 +1372,6 @@ def main():
         summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
             len(all_missing_flow)))
 
-    if static_loss:
-        critical = _critical_path_friction(
-            all_root_ids, all_children, all_duct_results, all_terminals)
-        summary_lines.append(
-            'Total Static Pressure Loss (critical path, DUCTS ONLY - no '
-            'fittings/equipment):')
-        for sys_class in sorted(critical.keys()):
-            c = critical[sys_class]
-            summary_lines.append(
-                '  {}: {:.3f} in. wc  ({} ducts, to {})'.format(
-                    sys_class, c['friction_inwc'], c['duct_count'],
-                    c['terminal_name']))
-
     output.print_md('---')
     output.print_md('### System Summary')
     for line in summary_lines[1:]:
@@ -1497,8 +1420,8 @@ def main():
         # eid -> (label, green_cap_cfm, reason) for fittings + annotations + schedule
         duct_labels  = {}
         # eid -> BranchDiffuserResult, or None for anything judged the
-        # ductulator way. Also what tells the output tables whether to print
-        # real FPM/friction numbers or N/A.
+        # ductulator way. Only decides where Required Size comes from; every
+        # duct prints its real velocity and friction either way.
         branch_results = {}
         # eid -> effective height (in) of this duct's real downstream neighbor,
         # precomputed once here so _duct_label/_suggest_size don't need graph access
@@ -1601,6 +1524,28 @@ def main():
             row_cells_by_eid[eid] = cells
             flagged_items.append((lbl, dr, cells))
 
+        # Total static pressure loss is the SUM of the Friction Loss column,
+        # printed as a TOTAL row at the bottom of the table (Colin,
+        # 2026-09-24). It is gated on BOTH Full System and the Friction Loss
+        # column: a total of a column that is not on screen is unreadable, and
+        # a total over a filtered subset of the ducts is not a system total.
+        #
+        # DUCTS ONLY. Nothing in this codebase computes fitting, elbow, coil,
+        # filter or equipment loss, so this is not a fan static pressure
+        # budget and the row label says so outright.
+        total_row = None
+        if full_diag and 'fricloss' in selected_cols:
+            # sum(..., 0.0) forces float - sum([]) returns int 0 in Python 2.7,
+            # and '{:.3f}'.format(int) raises ValueError under IronPython.
+            total_fric = sum((item[1].friction_loss_inwc
+                              for item in flagged_items), 0.0)
+            total_row = {
+                '_total':   True,
+                'status':   'TOTAL',
+                'reason':   'TOTAL FRICTION LOSS (DUCTS ONLY)',
+                'fricloss': '{:.3f}'.format(float(total_fric)),
+            }
+
         # Find keynote circle symbol — search by family name
         keynote_sym = None
         for fs in FilteredElementCollector(doc).OfClass(FamilySymbol).ToElements():
@@ -1661,8 +1606,11 @@ def main():
 
         # System Summary + flagged-duct table + legend, placed as second viewport on sheet
         if tn_type_id is not None:
+            table_rows = [item[2] for item in flagged_items]
+            if total_row is not None:
+                table_rows.append(total_row)
             sched_view, content_h, total_w = _build_summary_view(
-                doc, summary_lines, [item[2] for item in flagged_items],
+                doc, summary_lines, table_rows,
                 selected_cols, source_sheet_num, tn_type_id, ts, fill_id)
             if sched_view is not None:
                 # X fixed by hand in Revit (see diagram note above) and read
@@ -1805,6 +1753,10 @@ def main():
                 str(idx) if col[0] == 'num' else cells.get(col[0], '')
                 for col in cols
             ]))
+
+        if total_row is not None:
+            rows.append(separator)
+            rows.append(_fmt_row([total_row.get(col[0], '') for col in cols]))
 
         output.print_md('')
         output.print_md('### All Ducts' if full_diag else '### Flagged Ducts')

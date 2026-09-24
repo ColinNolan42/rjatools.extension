@@ -732,7 +732,11 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
         res.reason = 'Cannot check: ' + '; '.join(unverified)
     else:
         res.status = 'GREEN'
-        res.reason = ''
+        # A passing branch states WHY it passed rather than leaving Reason
+        # blank: a branch is never judged on velocity or friction, so a reader
+        # seeing its (real, printed) FPM next to an empty Reason would assume
+        # the velocity limit is what cleared it. Colin, 2026-09-24.
+        res.reason = 'BRANCH DUCTING SIZED OFF DIFFUSER'
 
     log.info('branch_diffuser_check: terminal id=%s cat=%s class=%s cfm=%.0f '
              'diffuser=%s installed=%s required=%s -> %s %s',

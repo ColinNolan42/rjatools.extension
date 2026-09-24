@@ -265,6 +265,115 @@ class TestTwoFixturesShareAHeater(unittest.TestCase):
         self.assertAlmostEqual(g.nodes[2].demand_wsfu, 2.5)
 
 
+class TestReturnSystemDetection(unittest.TestCase):
+    """Hot supply and hot recirculation share one CLASSIFICATION but not one
+    System Type. These check the return is worked out from the model."""
+
+    def _hot_pipe(self, g, nid, parent, type_id, type_name):
+        node = add_node(g, nid, water_graph.KIND_PIPE, parent=parent,
+                        system=HOT)
+        node.system_type_id = type_id
+        node.system_type_name = type_name
+        g.system_types[type_id] = type_name
+        return node
+
+    def test_pump_decides_even_when_the_name_says_nothing(self):
+        """The strongest signal is topological, so a project that names its
+        systems 'HW-1' and 'HW-2' still gets the right answer."""
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_HEATER, system=HOT)
+        self._hot_pipe(g, 2, 1, 100, "HW-1")
+        self._hot_pipe(g, 3, 1, 200, "HW-2")
+        add_node(g, 4, water_graph.KIND_PUMP, parent=3, system=HOT)
+        g.pump_ids.append(4)
+
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["detected"], set([200]))
+        self.assertTrue(found["certain"])
+        picked = [c for c in found["candidates"] if c["id"] == 200][0]
+        self.assertIn("pump", " ".join(picked["reasons"]))
+
+    def test_pump_reached_through_a_fitting(self):
+        """A pump connects through fittings, so the walk has to step past
+        them to find the pipe that carries the System Type."""
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_HEATER, system=HOT)
+        self._hot_pipe(g, 2, 1, 100, "Domestic Hot Water")
+        add_node(g, 3, water_graph.KIND_FITTING, parent=1, system=HOT)
+        self._hot_pipe(g, 4, 3, 200, "Domestic Hot Water Recirculation")
+        add_node(g, 5, water_graph.KIND_FITTING, parent=4, system=HOT)
+        add_node(g, 6, water_graph.KIND_PUMP, parent=5, system=HOT)
+        g.pump_ids.append(6)
+
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["detected"], set([200]))
+
+    def test_name_decides_when_there_is_no_pump(self):
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_HEATER, system=HOT)
+        self._hot_pipe(g, 2, 1, 100, "Domestic Hot Water")
+        self._hot_pipe(g, 3, 1, 200, "Domestic Hot Water Recirculation")
+
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["detected"], set([200]))
+        # Nothing topological spoke, so the tool must not claim certainty.
+        self.assertFalse(found["certain"])
+
+    def test_pump_beats_a_misleading_name(self):
+        """If the names and the pump disagree, topology wins."""
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_HEATER, system=HOT)
+        self._hot_pipe(g, 2, 1, 100, "HWR Main")     # named like a return
+        self._hot_pipe(g, 3, 1, 200, "Hot Water")
+        add_node(g, 4, water_graph.KIND_PUMP, parent=3, system=HOT)
+        g.pump_ids.append(4)
+
+        found = water_graph.detect_return_system_types(g)
+        self.assertTrue(found["certain"])
+        self.assertIn(200, found["detected"])
+
+    def test_single_hot_system_is_never_called_a_return(self):
+        """One hot System Type and no pump means a job with no recirculation.
+        Marking it a return would leave the hot water unsized."""
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_HEATER, system=HOT)
+        self._hot_pipe(g, 2, 1, 100, "Domestic Hot Water")
+        self._hot_pipe(g, 3, 1, 100, "Domestic Hot Water")
+
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["detected"], set())
+
+    def test_minority_guess_is_flagged_as_unconfirmed(self):
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_HEATER, system=HOT)
+        for nid in range(2, 12):
+            self._hot_pipe(g, nid, 1, 100, "HW A")
+        self._hot_pipe(g, 20, 1, 200, "HW B")
+
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["detected"], set([200]))
+        self.assertFalse(found["certain"])
+        picked = [c for c in found["candidates"] if c["id"] == 200][0]
+        self.assertIn("NOTHING CONFIRMED THIS", " ".join(picked["reasons"]))
+
+    def test_no_hot_piping_detects_nothing(self):
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1)
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["detected"], set())
+        self.assertEqual(found["candidates"], [])
+
+    def test_cold_piping_is_never_a_return_candidate(self):
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        cold = add_node(g, 2, water_graph.KIND_PIPE, parent=1, system=COLD)
+        cold.system_type_id = 900
+        cold.system_type_name = "Domestic Cold Water Recirculation"
+        found = water_graph.detect_return_system_types(g)
+        self.assertEqual(found["candidates"], [])
+
+
 def _run():
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
     result = unittest.TextTestRunner(verbosity=2).run(suite)

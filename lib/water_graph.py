@@ -360,28 +360,212 @@ def _make_node(graph, element, element_id, system):
 def _read_pipe_system_type(graph, pipe, node):
     """Record the pipe's PipingSystemType ELEMENT, not just the enum.
 
-    The enum cannot separate hot water supply from hot water recirculation:
-    both report DomesticHotWater. The project's PipingSystemType element does
-    separate them, so it is recorded here for the caller to map. Names are
-    reported, never matched against in code.
+    This is the distinction that matters. System CLASSIFICATION is
+    DomesticHotWater for hot supply and hot water recirculation alike, so
+    classification alone can never separate them. The System TYPE can: a
+    project carries "Domestic Hot Water" and "Domestic Hot Water
+    Recirculation" as two different PipingSystemType elements, with different
+    ids and different names. That is what is recorded here, and what
+    detect_return_system_types() reasons over.
+
+    The id is taken FIRST and separately from the name, because reading a name
+    can throw under IronPython and an exception while getting the name used to
+    discard the id along with it, leaving the recirculation system
+    indistinguishable for the rest of the run.
     """
+    system_type = None
     try:
-        type_id = pipe.MEPSystem.GetTypeId()
-        system_type = pipe.Document.GetElement(type_id)
-        if system_type is not None:
+        system_type = pipe.Document.GetElement(pipe.MEPSystem.GetTypeId())
+    except Exception:
+        system_type = None
+
+    if system_type is not None:
+        try:
             node.system_type_id = revit_helpers.eid_int(system_type.Id)
-            node.system_type_name = system_type.Name
-            graph.system_types[node.system_type_id] = node.system_type_name
-            return
-    except Exception:
-        pass
-    try:
-        from Autodesk.Revit.DB import BuiltInParameter
-        param = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
-        if param is not None:
-            node.system_type_name = param.AsValueString()
-    except Exception:
-        node.system_type_name = None
+        except Exception:
+            node.system_type_id = None
+        node.system_type_name = revit_helpers.get_element_type_name(system_type)
+
+    if not node.system_type_name:
+        # The pipe's own parameter gives the same name without touching the
+        # type element, so it still works when the element read failed.
+        try:
+            from Autodesk.Revit.DB import BuiltInParameter
+            param = pipe.get_Parameter(
+                BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
+            if param is not None:
+                node.system_type_name = param.AsValueString()
+        except Exception:
+            pass
+
+    if node.system_type_id is not None:
+        graph.system_types[node.system_type_id] = (
+            node.system_type_name or "(unnamed system type)")
+
+
+# Words a recirculation system type is named with. Only ever used to
+# CORROBORATE the topology below, and always reported to the user as a reason
+# they can overrule, so a project that names its systems differently loses a
+# hint and never gets a wrong answer.
+_RETURN_NAME_HINTS = ("recirc", "re-circ", "return", "hwr", "hwc")
+
+
+def detect_return_system_types(graph):
+    """Work out which hot water System Types are the RETURN, from the model.
+
+    Hot supply and hot water recirculation share one system CLASSIFICATION
+    (DomesticHotWater), which is why classification cannot answer this. They
+    do NOT share a System Type: they are two separate PipingSystemType
+    elements. This reads those types off the pipes actually traversed and
+    decides which is the return, rather than asking the user to.
+
+    Evidence, strongest first. Everything found is reported, not just the
+    winner, so the user can see why:
+
+      1. A recirculation pump sits on it. The pump is found by topology, so
+         this holds whatever anyone named anything.
+      2. It returns to a water heater that another hot type feeds. A supply
+         type leaves the heater; a return type arrives at one.
+      3. Its name says so.
+      4. It is the minority type: on a real job the return carries far fewer
+         pipes than the supply (11 against 66 on Grantham 4).
+
+    Signal 1 or 2 alone is enough to decide. Otherwise 3 decides, and 4 alone
+    is treated as a suggestion rather than a decision, because a small supply
+    branch on a job with no return would otherwise be mislabelled.
+
+    Returns:
+        dict with "detected" (set of system type ids), "candidates" (list of
+        dicts with id, name, pipe_count, reasons, detected, decisive) and
+        "certain" (True when topology decided it).
+    """
+    hot = {}
+    for node in graph.nodes.values():
+        if node.kind != KIND_PIPE:
+            continue
+        if node.system != shared_params.SYSTEM_DOMESTIC_HOT_WATER:
+            continue
+        if node.system_type_id is None:
+            continue
+        entry = hot.setdefault(node.system_type_id, {
+            "id": node.system_type_id,
+            "name": node.system_type_name or "(unnamed system type)",
+            "pipe_count": 0,
+            "reasons": [],
+            "detected": False,
+            "decisive": False,
+        })
+        entry["pipe_count"] += 1
+
+    if not hot:
+        return {"detected": set(), "candidates": [], "certain": False}
+
+    # --- 1. the pump's own system type -------------------------------------
+    for pump_id in graph.pump_ids:
+        for type_id in _nearby_pipe_system_types(graph, pump_id):
+            if type_id in hot:
+                entry = hot[type_id]
+                if not entry["decisive"]:
+                    entry["reasons"].append(
+                        "a recirculation pump sits on it")
+                entry["detected"] = True
+                entry["decisive"] = True
+
+    # --- 2. arrives at a heater that a different hot type leaves -----------
+    for heater_id in graph.heater_ids:
+        arriving = _nearby_pipe_system_types(graph, heater_id)
+        if len(arriving) > 1:
+            # More than one hot type touches this heater. The supply is the
+            # one the heater feeds outward, which is the type carried by the
+            # heater's children; anything else at the heater comes back to it.
+            outgoing = set()
+            node = graph.nodes.get(heater_id)
+            if node is not None:
+                for child_id in node.children_by_system.get(
+                        shared_params.SYSTEM_DOMESTIC_HOT_WATER, []):
+                    child = graph.nodes.get(child_id)
+                    if child is not None and child.system_type_id is not None:
+                        outgoing.add(child.system_type_id)
+            for type_id in arriving:
+                if type_id in hot and type_id not in outgoing:
+                    entry = hot[type_id]
+                    if not entry["decisive"]:
+                        entry["reasons"].append(
+                            "it returns to a water heater rather than "
+                            "leaving one")
+                        entry["detected"] = True
+                        entry["decisive"] = True
+
+    # --- 3. the name --------------------------------------------------------
+    for entry in hot.values():
+        lowered = (entry["name"] or "").lower()
+        for hint in _RETURN_NAME_HINTS:
+            if hint in lowered:
+                entry["reasons"].append(
+                    "its System Type is named '{}'".format(entry["name"]))
+                if not any(e["decisive"] for e in hot.values()):
+                    entry["detected"] = True
+                break
+
+    # --- 4. the minority ----------------------------------------------------
+    if len(hot) > 1:
+        ordered = sorted(hot.values(), key=lambda e: e["pipe_count"])
+        smallest, largest = ordered[0], ordered[-1]
+        if smallest["pipe_count"] * 2 <= largest["pipe_count"]:
+            smallest["reasons"].append(
+                "it carries far fewer pipes than '{}' ({} against {})".format(
+                    largest["name"], smallest["pipe_count"],
+                    largest["pipe_count"]))
+            if not any(e["detected"] for e in hot.values()):
+                # Suggestion only. Nothing stronger spoke, so say so.
+                smallest["detected"] = True
+                smallest["reasons"].append(
+                    "NOTHING CONFIRMED THIS, CHECK IT")
+
+    candidates = sorted(hot.values(), key=lambda e: (-e["pipe_count"],
+                                                     e["name"]))
+    return {
+        "detected": set(e["id"] for e in candidates if e["detected"]),
+        "candidates": candidates,
+        "certain": any(e["decisive"] for e in candidates),
+    }
+
+
+def _nearby_pipe_system_types(graph, node_id, max_hops=3):
+    """System Type ids of the pipes within a few hops of an element.
+
+    A pump or heater connects through fittings, so its own neighbours are
+    often not pipes. Only a pipe carries a System Type, so the walk steps
+    past the fittings to reach one.
+    """
+    found = set()
+    seen = set([node_id])
+    frontier = [(node_id, 0)]
+    while frontier:
+        current_id, depth = frontier.pop()
+        if depth >= max_hops:
+            continue
+        node = graph.nodes.get(current_id)
+        if node is None:
+            continue
+        neighbours = []
+        for system, parent_id in node.parent_by_system.items():
+            neighbours.append(parent_id)
+        for system, child_ids in node.children_by_system.items():
+            neighbours.extend(child_ids)
+        for neighbour_id in neighbours:
+            if neighbour_id in seen:
+                continue
+            seen.add(neighbour_id)
+            neighbour = graph.nodes.get(neighbour_id)
+            if neighbour is None:
+                continue
+            if (neighbour.kind == KIND_PIPE and
+                    neighbour.system_type_id is not None):
+                found.add(neighbour.system_type_id)
+                continue    # a pipe ends the search down this leg
+            frontier.append((neighbour_id, depth + 1))
+    return found
 
 
 def _connector_is_disabled(node, system):

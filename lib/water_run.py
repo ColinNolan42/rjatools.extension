@@ -5,30 +5,27 @@
 # ONE action. Pick the RPZ, answer the one dialog, and the run does the whole
 # job in order:
 #
-#   traverse -> check the system -> size -> print the report -> write the
-#   sizes into the model -> put the WSFU take-off on a drafting view and a
-#   sheet
+#   traverse -> detect the return system -> dialog -> check the system ->
+#   size -> print the report -> write the sizes -> WSFU take-off on a
+#   drafting view and a sheet
 #
-# The take-off is not a separate mode and never was meant to be one. It is
-# the check on the sizing: it is how the fixture unit count that drove every
-# pipe size gets verified against the fixtures actually in the model. A size
-# written without a take-off to check it against is a number nobody can
-# defend, so the two always come out of the same run and can never describe
-# different systems.
+# Two check boxes say what a run does. SIZING is always on. WSFU CALCULATIONS
+# is optional, and produces the take-off: the check ON the sizing, how the
+# fixture unit count that drove every pipe size gets verified against the
+# fixtures actually in the model.
+#
+# The traversal runs BEFORE the dialog, because the dialog reports the hot
+# water RETURN system rather than asking for it, and that is read off the
+# System Types of the pipes the traversal found.
 #
 # Firm standards are assumed rather than asked about on every run: minimum
-# pipe sizes always apply, and the take-off always goes on a drafting view and
-# a sheet. The only runtime question is which piping system types are the hot
-# water RETURN, which no standard can answer because Revit classifies a
-# recirculation system exactly like the hot supply.
+# pipe sizes always apply.
 #
 # IronPython 2.7 / pyRevit
 
 import datetime
 
-from Autodesk.Revit.DB import (
-    BuiltInParameter, Transaction, FilteredElementCollector)
-from Autodesk.Revit.DB.Plumbing import PipingSystemType
+from Autodesk.Revit.DB import BuiltInParameter, Transaction
 from Autodesk.Revit.UI.Selection import ObjectType
 
 import shared_params
@@ -52,16 +49,21 @@ def run(doc, uidoc, output, forms):
     if origin is None:
         return False
 
+    # Traverse BEFORE the dialog. The dialog reports which hot water System
+    # Type is the return, and that is read off the pipes the traversal found,
+    # so the network has to exist before the dialog can say anything true
+    # about it.
+    revit_helpers.reset_pipe_diameter_approach()
+    graph = water_graph.build_water_network(origin, doc)
+
+    detection = water_graph.detect_return_system_types(graph)
+    _print_return_detection(output, detection)
+
     settings = ui_helpers.show_water_dialog(
-        "Size Water - 2024 IPC",
-        _project_info(doc, output),
-        _hot_water_system_types(doc, output))
+        "Size Water - 2024 IPC", _project_info(doc, output), detection)
     if settings is None:
         output.print_md("Cancelled. Nothing was changed.")
         return False
-
-    revit_helpers.reset_pipe_diameter_approach()
-    graph = water_graph.build_water_network(origin, doc)
 
     # Completeness check, before anything is sized or written. A half-modelled
     # system should fail loudly rather than be quietly sized.
@@ -97,10 +99,16 @@ def run(doc, uidoc, output, forms):
     # its own transaction, so a project missing a drafting view family type or
     # a title block costs the user a sheet, never the sizes already committed.
     _write_sizes(doc, output, forms, graph, sizing)
-    _create_drafting_view(doc, output, graph, sizing, header)
-    output.print_md(
-        "Check the take-off above against the fixtures in the model. The "
-        "fixture unit totals on it are what drove every pipe size.")
+
+    if settings["wsfu_calcs"]:
+        _create_drafting_view(doc, output, graph, sizing, header)
+        output.print_md(
+            "Check the take-off against the fixtures in the model. The "
+            "fixture unit totals on it are what drove every pipe size.")
+    else:
+        output.print_md(
+            "WSFU Calculations were not requested, so no drafting view or "
+            "sheet was made. The take-off above is print only.")
     return True
 
 
@@ -165,70 +173,35 @@ def _project_info(doc, output):
     return info
 
 
-def _hot_water_system_types(doc, output):
-    """Every PipingSystemType classified as Domestic Hot Water, with a count
-    of how many pipes in the model actually use it.
+def _print_return_detection(output, detection):
+    """Say in the window which hot water System Type was taken as the return.
 
-    Both the hot supply and the recirculation system classify identically, so
-    the user has to say which is which. The pipe count is shown next to each
-    name because it is what makes the answer obvious at a glance without the
-    tool hardcoding any project's naming: on a real job the return carries far
-    fewer pipes than the supply (11 against 66 on Grantham 4).
-
-    Returns a list of (element_id, name, pipe_count).
+    System CLASSIFICATION is DomesticHotWater for the hot supply and for the
+    recirculation system alike, so it can never separate them. The System TYPE
+    does: they are two different PipingSystemType elements. The traversal
+    records each pipe's System Type, so the return is worked out from the
+    model rather than asked about.
     """
-    found = []
-    try:
-        for element in FilteredElementCollector(doc).OfClass(PipingSystemType):
-            try:
-                classification = str(element.SystemClassification)
-            except Exception:
-                continue
-            if classification == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
-                name = (revit_helpers.get_element_type_name(element) or
-                        _safe_name(element))
-                found.append([revit_helpers.eid_int(element.Id), name, 0])
-    except Exception as exc:
+    candidates = (detection or {}).get("candidates") or []
+    if not candidates:
         output.print_md(
-            "Could not list piping system types ({}).".format(str(exc)))
-        return []
+            "No hot water piping found on this network, so there is no "
+            "return system to identify.")
+        return
 
-    by_name = {}
-    for entry in found:
-        by_name[entry[1]] = entry
+    output.print_md("## Hot water System Types found")
+    for entry in candidates:
+        label = "RETURN" if entry.get("detected") else "SUPPLY"
+        reasons = entry.get("reasons") or []
+        output.print_md("- **{}** - `{}`, {} pipe(s){}".format(
+            label, entry["name"], entry["pipe_count"],
+            ", because " + "; ".join(reasons) if reasons else ""))
 
-    try:
-        from Autodesk.Revit.DB import BuiltInCategory
-        pipes = (FilteredElementCollector(doc)
-                 .OfCategory(BuiltInCategory.OST_PipeCurves)
-                 .WhereElementIsNotElementType())
-        for pipe in pipes:
-            try:
-                param = pipe.get_Parameter(
-                    BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
-                if param is None:
-                    continue
-                entry = by_name.get(param.AsValueString())
-                if entry is not None:
-                    entry[2] += 1
-            except Exception:
-                continue
-    except Exception as exc:
+    if not detection.get("certain") and any(
+            e.get("detected") for e in candidates):
         output.print_md(
-            "Could not count pipes per system type ({}).".format(str(exc)))
-
-    found.sort(key=lambda row: row[1])
-    return [tuple(row) for row in found]
-
-
-def _safe_name(element):
-    """Last-resort name read. .Name throws under IronPython often enough that
-    it is never the first choice, but a PipingSystemType has no type
-    parameter to read instead."""
-    try:
-        return element.Name
-    except Exception:
-        return "(unnamed system type)"
+            "No recirculation pump and no return-to-heater connection was "
+            "found, so that is a best guess. Confirm it in the dialog.")
 
 
 def _create_drafting_view(doc, output, graph, sizing, header):

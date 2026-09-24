@@ -72,28 +72,29 @@ _WATER_XAML = (
     '<TextBlock Text="By" FontSize="11" Margin="0,0,0,2"/>'
     '<TextBox Name="tbBy" Margin="0,0,0,14"/>'
 
-    '<TextBlock Text="Hot Water System Types In This Model"'
-    ' FontWeight="Bold" Margin="0,0,0,4"/>'
-    '<TextBlock Text="Revit classifies a recirculation system as Domestic Hot'
-    ' Water, exactly like the hot supply, so the tool cannot tell them apart on'
-    ' its own. Tick any system below that is a RECIRCULATION or RETURN system.'
-    ' Ticked systems are reported but NOT sized, because return piping is sized'
-    ' on circulation flow rather than fixture units."'
-    ' FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,6"/>'
-    '<StackPanel Name="spHotSystems" Margin="8,0,0,14"/>'
+    '<TextBlock Text="This Run Will" FontWeight="Bold" Margin="0,0,0,6"/>'
+    '<CheckBox Name="cbSizing" IsChecked="True" IsEnabled="False"'
+    ' Margin="0,0,0,2" Content="Size the piping and write the sizes into the'
+    ' model"/>'
+    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
+    ' Margin="20,0,0,8"'
+    ' Text="Always on. Sizes domestic cold water on TOTAL fixture units and'
+    ' domestic hot water on HOT fixture units, overwrites the drawn sizes and'
+    ' resizes the fittings to match."/>'
+    '<CheckBox Name="cbWsfu" IsChecked="True" Margin="0,0,0,2"'
+    ' Content="WSFU Calculations"/>'
+    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
+    ' Margin="20,0,0,14"'
+    ' Text="Puts the water supply fixture unit take-off on a drafting view and'
+    ' a new sheet, so the fixture unit count behind every pipe size can be'
+    ' checked against the model. The take-off also prints in the pyRevit'
+    ' window either way."/>'
 
-    '<TextBlock Text="What This Run Will Do" FontWeight="Bold"'
+    '<TextBlock Text="Hot Water Return System" FontWeight="Bold"'
     ' Margin="0,0,0,4"/>'
-    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
-    ' Margin="0,0,0,2"'
-    ' Text="CREATE REPORT - traverses the system, checks it is complete, works'
-    ' out every pipe size, and puts the WSFU take-off on a drafting view and a'
-    ' new sheet. Nothing in the model is changed."/>'
-    '<TextBlock FontSize="10" Foreground="Gray" TextWrapping="Wrap"'
-    ' Margin="0,0,0,6"'
-    ' Text="SIZE WATER - does the same, then writes the new size into every'
-    ' pipe it sized and resizes the fittings to match. The report prints in'
-    ' the pyRevit window."/>'
+    '<TextBlock Name="tbReturnNote" FontSize="10" Foreground="Gray"'
+    ' TextWrapping="Wrap" Margin="0,0,0,6"/>'
+    '<StackPanel Name="spHotSystems" Margin="8,0,0,14"/>'
     '</StackPanel>'
     '</ScrollViewer>'
 
@@ -107,33 +108,32 @@ _WATER_XAML = (
 )
 
 
-def show_water_dialog(title, project_info, hot_system_types):
+def show_water_dialog(title, project_info, return_detection):
     """The one Size Water dialog. One dialog, then everything is automatic.
 
-    There is no separate report action. Sizing always produces the WSFU
-    take-off on a drafting view and a sheet, because the take-off is how the
-    fixture unit count gets checked, and a size nobody can check against a
-    take-off is not worth writing.
+    Two things happen on a run, and the check boxes say which: sizing, which
+    is always on, and the WSFU Calculations take-off, which is optional.
 
-    It deliberately asks nothing that the firm standard already settles:
-    minimum pipe sizes always apply, and the take-off always goes on a sheet.
-    The only question left is the one no standard can answer, which piping
-    system types are the hot water RETURN, because Revit classifies a
-    recirculation system exactly like the hot supply.
+    The hot water RETURN is DETECTED, not asked. It is read off the pipes'
+    System Types, which do separate the recirculation system from the hot
+    supply even though the system CLASSIFICATION does not. The detected
+    system is shown already ticked, with the reason it was picked, so the
+    dialog reports a finding the user can overrule instead of asking a
+    question the model already answers.
 
     Args:
         title: window title string.
         project_info: dict with "job", "job_number", "by" defaults, read from
             Revit Project Information by the caller.
-        hot_system_types: list of (element_id, name, pipe_count) for every
-            PipingSystemType classified as Domestic Hot Water.
+        return_detection: the dict from
+            water_graph.detect_return_system_types().
 
     Returns:
-        dict with "job", "job_number", "by" and "return_system_type_ids"
-        (set of ints), or None if cancelled.
+        dict with "job", "job_number", "by", "wsfu_calcs" (bool) and
+        "return_system_type_ids" (set of ints), or None if cancelled.
     """
-    from System.Windows.Controls import CheckBox
-    from System.Windows import Thickness
+    from System.Windows.Controls import CheckBox, TextBlock
+    from System.Windows import Thickness, TextWrapping
 
     window = XamlReader.Parse(_WATER_XAML)
     window.Title = title
@@ -142,6 +142,8 @@ def show_water_dialog(title, project_info, hot_system_types):
     tb_job = window.FindName('tbJob')
     tb_job_no = window.FindName('tbJobNo')
     tb_by = window.FindName('tbBy')
+    cb_wsfu = window.FindName('cbWsfu')
+    tb_return_note = window.FindName('tbReturnNote')
     sp_hot = window.FindName('spHotSystems')
     btn_size = window.FindName('btnSize')
     btn_cancel = window.FindName('btnCancel')
@@ -154,27 +156,51 @@ def show_water_dialog(title, project_info, hot_system_types):
     tb_job_no.Text = project_info.get("job_number", "") or ""
     tb_by.Text = project_info.get("by", "") or ""
 
-    checkboxes = []
-    if hot_system_types:
-        for entry in hot_system_types:
-            type_id, name = entry[0], entry[1]
-            pipe_count = entry[2] if len(entry) > 2 else None
-            box = CheckBox()
-            # The pipe count is the tell: on a real job the return carries far
-            # fewer pipes than the supply, which makes the right tick obvious
-            # without the tool ever matching on a project's system names.
-            if pipe_count is None:
-                box.Content = "{}  (id {})".format(name, type_id)
-            else:
-                box.Content = "{}  -  {} pipe(s)".format(name, pipe_count)
-            box.Margin = Thickness(0, 0, 0, 6)
-            box.IsChecked = False
-            sp_hot.Children.Add(box)
-            checkboxes.append((box, type_id))
+    candidates = (return_detection or {}).get("candidates") or []
+    certain = (return_detection or {}).get("certain", False)
+
+    if not candidates:
+        tb_return_note.Text = (
+            "No hot water piping was found on this network, so there is "
+            "nothing to mark as a return.")
+    elif certain:
+        tb_return_note.Text = (
+            "Detected from the model. A ticked system is REPORTED BUT NOT "
+            "SIZED, because return piping is sized on circulation flow "
+            "rather than on fixture units. Change a tick if this is wrong.")
     else:
-        from System.Windows.Controls import TextBlock
+        tb_return_note.Text = (
+            "No recirculation pump or return-to-heater connection was found, "
+            "so the tick below is a best guess from the System Type names "
+            "and pipe counts. CHECK IT. A ticked system is reported but NOT "
+            "sized, because return piping is sized on circulation flow "
+            "rather than on fixture units.")
+
+    checkboxes = []
+    for entry in candidates:
+        box = CheckBox()
+        box.Content = "{}  -  {} pipe(s)".format(
+            entry["name"], entry["pipe_count"])
+        box.IsChecked = bool(entry.get("detected"))
+        box.Margin = Thickness(0, 0, 0, 2)
+        sp_hot.Children.Add(box)
+        checkboxes.append((box, entry["id"]))
+
+        # Say WHY, every time, so a wrong tick is obvious rather than magic.
+        reason = TextBlock()
+        if entry.get("reasons"):
+            reason.Text = "Return, because " + "; ".join(entry["reasons"]) + "."
+        else:
+            reason.Text = "Supply. Nothing marks this as a return."
+        reason.FontSize = 10
+        reason.Foreground = Brushes.Gray
+        reason.TextWrapping = TextWrapping.Wrap
+        reason.Margin = Thickness(20, 0, 0, 8)
+        sp_hot.Children.Add(reason)
+
+    if not candidates:
         empty = TextBlock()
-        empty.Text = "No Domestic Hot Water system types found in this model."
+        empty.Text = "No hot water System Type found on this network."
         empty.FontSize = 11
         empty.Foreground = Brushes.Gray
         sp_hot.Children.Add(empty)
@@ -190,6 +216,7 @@ def show_water_dialog(title, project_info, hot_system_types):
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
             "by": tb_by.Text.strip(),
+            "wsfu_calcs": bool(cb_wsfu.IsChecked),
             "return_system_type_ids": returns,
         }
         window.Close()
