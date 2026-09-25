@@ -169,13 +169,13 @@ def _print_pre(text):
 # ============================================================================
 # GAS SUMMARY
 # ============================================================================
-# Keyword classification for THIS SUMMARY ONLY, mirrored from the family-name
-# keywords One-Line.pushbutton already uses to place PRV/isolation symbols
-# (_PRV_KW / _ISOLATION_KW there). Not imported from One-Line - that script is
-# the most actively worked, most fragile file in the codebase, so this stays
-# a read-only duplicate rather than a shared dependency. If the real keyword
-# list there changes, update this list to match.
-_GAS_PRV_KW = ("prv", "regulator", "regulating")
+# Keyword classification for THIS SUMMARY ONLY. The PRV keywords are the one
+# shared list in shared_params (also used by pipe_graph and One-Line). The
+# isolation-valve list is mirrored from One-Line.pushbutton's _ISOLATION_KW,
+# which is not imported: that script is the most actively worked, most
+# fragile file in the codebase, so this stays a read-only duplicate. If the
+# real list there changes, update this one to match.
+_GAS_PRV_KW = shared_params.PRV_FAMILY_KEYWORDS
 _GAS_ISO_KW = ("isolation", "shutoff", "shut-off", "ball valve", "gas valve")
 
 
@@ -244,10 +244,20 @@ def diagnose_gas(element):
 
     if accessories:
         output.print_md('\n### Accessories (PRVs / Isolation Valves)')
-        output.print_md('| Kind | Family | Element ID |')
-        output.print_md('| --- | --- | --- |')
+        output.print_md('| Kind | Family | Element ID | Pipe downstream | Sizing |')
+        output.print_md('| --- | --- | --- | --- | --- |')
         for n, kind in accessories:
-            output.print_md('| {} | {} | {} |'.format(kind, n.family_name, n.element_id))
+            if kind == "PRV":
+                downstream = '{:.1f} ft'.format(n.downstream_pipe_ft or 0.0)
+                if n.is_midstream_prv:
+                    role = 'mid-stream step down'
+                else:
+                    role = 'equipment PRV, ignored (within {:g} ft)'.format(
+                        shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)
+            else:
+                downstream, role = '-', '-'
+            output.print_md('| {} | {} | {} | {} | {} |'.format(
+                kind, n.family_name, n.element_id, downstream, role))
 
     errors = []
     warnings = []
@@ -264,6 +274,11 @@ def diagnose_gas(element):
     if graph.disconnected:
         warnings.append("{} disconnected element(s) found.".format(
             len(graph.disconnected)))
+    if graph.nested_prv_ids:
+        errors.append(
+            "Mid-stream PRV(s) {} sit downstream of another mid-stream PRV. "
+            "Size Gas supports a single step down only.".format(
+                ", ".join(str(i) for i in graph.nested_prv_ids)))
 
     _print_errors_warnings(errors, warnings)
 

@@ -47,6 +47,23 @@ class NetworkNode(object):
         # Cumulative load at this node  -  sum of all downstream fixture loads
         self.cumulative_load_mbh = 0.0
 
+        # Pressure regulating valve  -  auto-detected by family name
+        # (shared_params.PRV_FAMILY_KEYWORDS), no custom parameters.
+        # is_midstream_prv is True only when the pipe run downstream of it is
+        # longer than shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT. A PRV
+        # closer to its equipment than that is the equipment's own regulator
+        # and is ignored for sizing. downstream_pipe_ft is that run length.
+        self.is_prv             = False
+        self.is_midstream_prv   = False
+        self.downstream_pipe_ft = None
+
+        # Pressure zone  -  number of PRVs between the meter and this node
+        # (a PRV itself is still in the zone it regulates FROM). run_key is
+        # the element ID of the meter or PRV whose downstream system this
+        # node belongs to. Set by _assign_pressure_zones().
+        self.zone               = 0
+        self.run_key            = None
+
 
 class NetworkEdge(object):
     """An edge in the piping network  -  a single pipe segment."""
@@ -74,6 +91,12 @@ class NetworkEdge(object):
         # Cumulative load carried by this segment  -  set after traversal
         self.cumulative_load_mbh = 0.0
 
+        # Pressure zone of this segment (0 = meter side of every PRV, 1 =
+        # after one PRV) and the meter/PRV element ID whose longest run
+        # governs its sizing. Set by _assign_pressure_zones().
+        self.zone               = 0
+        self.run_key            = None
+
 
 class NetworkGraph(object):
     """The complete piping network graph."""
@@ -88,6 +111,16 @@ class NetworkGraph(object):
         self.node_children      = {}    # node_id -> [child_node_id, ...]
                                         # Records direct fitting-to-fitting connections
                                         # where no pipe exists between them in the model
+        self.prv_ids            = []    # element IDs of every PRV reached
+        self.midstream_prv_ids  = []    # the PRVs that count as a step down
+                                        # (downstream run over the threshold);
+                                        # the rest are equipment PRVs, ignored
+        self.nested_prv_ids     = []    # mid-stream PRVs downstream of another
+                                        # (more than one step down - unsupported)
+        self.zone_runs          = {}    # meter/PRV element ID -> longest-run dict
+                                        # for the system that node feeds. Only
+                                        # filled when the graph has a mid-stream
+                                        # PRV.
 
     def add_node(self, node):
         self.nodes[node.element_id] = node
@@ -185,6 +218,9 @@ def build_network(origin_element, doc):
     # --- Post-traversal calculations ---
     _calculate_cumulative_loads(graph)
     _find_longest_run(graph)
+    _classify_midstream_prvs(graph)
+    _assign_pressure_zones(graph)
+    _find_zone_runs(graph)
 
     graph.log("TRAVERSAL COMPLETE: {} nodes, {} edges.".format(
         len(graph.nodes), len(graph.edges)))
@@ -282,6 +318,16 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
         graph.log(
             "FITTING/TEE {}: family='{}', connectors={}, type={}".format(
                 eid, family_name, connector_count, node_type))
+
+    # --- Check if this is a pressure regulating valve ---
+    # Auto-detected by family name; whether it is a mid-stream step down is
+    # decided after traversal by _classify_midstream_prvs().
+    lowered_name = (family_name or "").lower()
+    if (not is_gas_fixture and
+            any(kw in lowered_name for kw in shared_params.PRV_FAMILY_KEYWORDS)):
+        node.is_prv = True
+        graph.prv_ids.append(eid)
+        graph.log("PRV {}: family='{}'".format(eid, family_name))
 
     graph.add_node(node)
 
@@ -384,6 +430,22 @@ def _find_longest_run(graph):
     if graph.origin_id is None:
         return
 
+    graph.longest_run = _longest_run_from(graph, graph.origin_id, False)
+
+
+def _longest_run_from(graph, start_id, stop_at_prv):
+    """Longest developed length from start_id to any terminal, as the dict
+    _find_longest_run() has always produced.
+
+    Args:
+        start_id:     element ID of the node to walk out from (the meter, or
+                      a PRV when sizing the system downstream of it).
+        stop_at_prv:  True to treat any MID-STREAM PRV other than start_id as
+                      a terminal (the walk ends there, it does not continue
+                      through the regulator). False walks straight through
+                      every PRV, which is the whole-system length
+                      _find_longest_run() reports.
+    """
     ELBOW_EQUIV_FT = 5.0
 
     longest = {
@@ -409,11 +471,14 @@ def _find_longest_run(graph):
 
         total_length = pipe_length + (local_elbow_count * ELBOW_EQUIV_FT)
 
-        if node.is_gas_fixture:
+        ends_at_prv = stop_at_prv and node.is_midstream_prv and node_id != start_id
+        if node.is_gas_fixture or ends_at_prv:
+            end_name = node.fixture_name if node.is_gas_fixture else "PRV {}".format(node_id)
             graph.log(
-                "PATH to fixture '{}': pipe={:.2f}ft, elbows={}, "
+                "PATH to {} '{}': pipe={:.2f}ft, elbows={}, "
                 "equiv={:.0f}ft, total={:.2f}ft".format(
-                    node.fixture_name,
+                    "fixture" if node.is_gas_fixture else "regulator",
+                    end_name,
                     pipe_length,
                     local_elbow_count,
                     local_elbow_count * ELBOW_EQUIV_FT,
@@ -426,7 +491,7 @@ def _find_longest_run(graph):
                 longest["elbow_equiv_length_feet"]  = local_elbow_count * ELBOW_EQUIV_FT
                 longest["path_element_ids"]         = list(current_path)
                 longest["farthest_fixture_id"]      = node_id
-                longest["farthest_fixture_name"]    = node.fixture_name
+                longest["farthest_fixture_name"]    = end_name
             return
 
         for edge in graph.edges.values():
@@ -443,8 +508,123 @@ def _find_longest_run(graph):
             _dfs(child_id, pipe_length, local_elbow_count,
                  current_path + [child_id])
 
-    _dfs(graph.origin_id, 0.0, 0, [graph.origin_id])
-    graph.longest_run = longest
+    _dfs(start_id, 0.0, 0, [start_id])
+    return longest
+
+
+# =============================================================================
+# PRESSURE ZONES (gas regulators)
+# =============================================================================
+
+def _classify_midstream_prvs(graph):
+    """Decide which PRVs are a mid-stream step down.
+
+    A PRV is mid-stream when the actual pipe length from it to its farthest
+    fixture is longer than shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT.
+    A regulator right at its equipment is that equipment's own and is ignored
+    for sizing (it stays in graph.prv_ids for reporting). Pipe length only,
+    no elbow equivalents: a regulator a few feet from the equipment with a
+    couple of elbows is still "at the equipment".
+    """
+    graph.midstream_prv_ids = []
+    for pid in graph.prv_ids:
+        node = graph.nodes.get(pid)
+        if node is None:
+            continue
+        run = _longest_run_from(graph, pid, False)
+        node.downstream_pipe_ft = run["pipe_length_feet"]
+        node.is_midstream_prv = (
+            node.downstream_pipe_ft > shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)
+        if node.is_midstream_prv:
+            graph.midstream_prv_ids.append(pid)
+        graph.log(
+            "PRV {}: {:.1f} ft of pipe downstream -> {}".format(
+                pid, node.downstream_pipe_ft,
+                "MID-STREAM step down" if node.is_midstream_prv
+                else "equipment PRV, ignored for sizing"))
+
+
+def _assign_pressure_zones(graph):
+    """Tag every node and edge with its pressure zone and governing run.
+
+    The meter feeds zone 0. Each MID-STREAM PRV starts the next zone for
+    everything downstream of it. Every node/edge also gets a run_key: the
+    element ID of the meter or PRV whose downstream system it belongs to, so
+    a segment can be sized on its own system's longest run. Equipment PRVs
+    (see _classify_midstream_prvs) do not start a zone.
+
+    A PRV is itself in the zone it regulates FROM (it is the far end of the
+    upstream system), and its outgoing pipes are in the next zone. A
+    mid-stream PRV reached while already downstream of another one is
+    recorded in graph.nested_prv_ids - only a single step down is supported.
+
+    With no mid-stream PRV in the graph every node and edge stays in zone 0
+    with the meter as run_key, so behaviour is unchanged.
+    """
+    if graph.origin_id is None:
+        return
+
+    origin = graph.nodes.get(graph.origin_id)
+    if origin is None:
+        return
+    origin.zone = 0
+    origin.run_key = graph.origin_id
+
+    out_edges = {}
+    for edge in graph.edges.values():
+        out_edges.setdefault(edge.from_node_id, []).append(edge)
+
+    seen = set()
+    stack = [graph.origin_id]
+    while stack:
+        nid = stack.pop()
+        if nid in seen:
+            continue
+        seen.add(nid)
+        node = graph.nodes.get(nid)
+        if node is None:
+            continue
+
+        if node.is_midstream_prv:
+            if node.zone >= 1 and nid not in graph.nested_prv_ids:
+                graph.nested_prv_ids.append(nid)
+            out_zone, out_key = node.zone + 1, nid
+        else:
+            out_zone, out_key = node.zone, node.run_key
+
+        for edge in out_edges.get(nid, []):
+            edge.zone = out_zone
+            edge.run_key = out_key
+            child = graph.nodes.get(edge.to_node_id)
+            if child is not None and child.element_id not in seen:
+                child.zone = out_zone
+                child.run_key = out_key
+                stack.append(child.element_id)
+
+        for child_id in graph.node_children.get(nid, []):
+            child = graph.nodes.get(child_id)
+            if child is not None and child_id not in seen:
+                child.zone = out_zone
+                child.run_key = out_key
+                stack.append(child_id)
+
+
+def _find_zone_runs(graph):
+    """Longest developed length for the system fed by the meter and by each
+    mid-stream PRV, stored in graph.zone_runs keyed by that element's ID.
+
+    The meter's system ends at the farthest fixture OR mid-stream PRV on its
+    side of the regulator; each PRV's system runs from the PRV to its
+    farthest fixture. Same developed-length rule as _find_longest_run() (pipe
+    length plus 5 ft per elbow along the path). Skipped when the graph has no
+    mid-stream PRV.
+    """
+    graph.zone_runs = {}
+    if graph.origin_id is None or not graph.midstream_prv_ids:
+        return
+
+    for start_id in [graph.origin_id] + list(graph.midstream_prv_ids):
+        graph.zone_runs[start_id] = _longest_run_from(graph, start_id, True)
 
 
 # =============================================================================

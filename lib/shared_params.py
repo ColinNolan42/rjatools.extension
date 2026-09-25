@@ -13,6 +13,17 @@ PARAM_GAS_LOAD_MBH      = "GAS_LOAD_MBH"       # Number. Gas load in MBH. Instan
 PARAM_IS_GAS_FIXTURE    = "IS_GAS_FIXTURE"      # Yes/No. Identifies load-bearing terminal nodes.
 PARAM_FIXTURE_NAME      = "FIXTURE_NAME"        # Text. Equipment tag for one-line diagram labels.
 
+# Pressure regulating valves carry NO custom parameters. A PRV is auto-detected
+# during traversal by a case-insensitive match of these words in its family
+# name. One list, used by pipe_graph, One-Line and Diagnose.
+PRV_FAMILY_KEYWORDS = ("prv", "regulator", "regulating")
+
+# A PRV only counts as a MID-STREAM step down when the pipe run downstream of
+# it, to its farthest fixture, is LONGER than this (feet of actual pipe, no
+# elbow equivalents). A regulator closer to its equipment than this is that
+# equipment's own regulator: it is ignored for sizing.
+PRV_MIDSTREAM_MIN_DOWNSTREAM_FT = 10.0
+
 # =============================================================================
 # DOMESTIC WATER FIXTURE SHARED PARAMETERS
 # Group "Water Fixture Data" in MEP_SharedParams.txt. Names are UPPERCASE to

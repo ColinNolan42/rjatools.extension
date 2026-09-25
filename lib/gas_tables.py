@@ -424,6 +424,22 @@ def get_table_option_labels_for_material(material):
     return [_short_label(opt) for opt in TABLE_OPTIONS if opt["material"] == material]
 
 
+def get_table_option_labels_for_material_and_gas(material, gas):
+    """Short labels for one material AND one gas, in TABLE_OPTIONS order.
+
+    Feeds the downstream-of-regulator dropdown: a regulator steps pressure
+    down within the same pipe material and the same gas, so only those tables
+    are offered.
+
+    Args:
+        material: Material string matching a TABLE_OPTIONS 'material' field.
+        gas:      Gas string matching a TABLE_OPTIONS 'gas' field
+                  ("Natural" or "Propane").
+    """
+    return [_short_label(opt) for opt in TABLE_OPTIONS
+            if opt["material"] == material and opt["gas"] == gas]
+
+
 def get_table_option_by_material_and_short_label(material, short_label):
     """Return the TABLE_OPTIONS entry matching a material and short label.
 

@@ -18,7 +18,7 @@ import water_tables
 _PICKER_XAML = (
     '<Window'
     ' xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"'
-    ' Height="310" Width="460"'
+    ' Width="460" SizeToContent="Height"'
     ' ResizeMode="NoResize"'
     ' WindowStartupLocation="CenterScreen">'
     '<StackPanel Margin="15">'
@@ -26,6 +26,18 @@ _PICKER_XAML = (
     '<ComboBox Name="cbMaterial" Margin="0,0,0,12"/>'
     '<TextBlock Text="IFGC Table" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<ComboBox Name="cbTable" Margin="0,0,0,12"/>'
+    '<CheckBox Name="cbPrv" Content="Mid Stream PRV" FontWeight="SemiBold"'
+    ' Visibility="Collapsed" Margin="0,0,0,8"/>'
+    '<StackPanel Name="pnlPrv" Visibility="Collapsed" Margin="18,0,0,8">'
+    '<TextBlock Text="IFGC Table Downstream of the PRV" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<ComboBox Name="cbDownstream" Margin="0,0,0,4"/>'
+    '<TextBlock Text="Same material and gas as above. Pipe after each mid-stream regulator is sized on'
+    ' this table and on its own longest run; pipe before it uses the table above. A regulator with'
+    ' 10 ft of pipe or less after it is treated as an equipment regulator and ignored."'
+    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,4"/>'
+    '<TextBlock Name="tbPrvError" Foreground="Firebrick" FontSize="11"'
+    ' TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,4"/>'
+    '</StackPanel>'
     '<TextBlock Text="Heat Content of Gas (BTU/CF)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<TextBox Name="tbHeatContent" Margin="0,0,0,4"/>'
     '<TextBlock Text="RJA standard: CFH = BTUH / Heat Content of Gas. Get this value from the'
@@ -240,7 +252,9 @@ def show_table_picker(title):
     Content of Gas field (used for the RJA MBH->CFH conversion - see
     sizing_engine.mbh_to_cfh()).
 
-    Selecting a material instantly repopulates the table list.
+    Selecting a material instantly repopulates the table list. This is the
+    no-regulator dialog (One-Line uses it); Size Gas uses
+    show_size_gas_dialog(), which adds the Mid Stream PRV option.
 
     Args:
         title: Window title string.
@@ -249,10 +263,44 @@ def show_table_picker(title):
         (pipe_material, short_table_label, heat_content_btu_per_cf) or
         (None, None, None) if cancelled.
     """
+    res = _show_picker(title, False)
+    if res is None:
+        return None, None, None
+    return res["pipe_material"], res["table_label"], res["heat_content"]
+
+
+def show_size_gas_dialog(title):
+    """show_table_picker() plus a "Mid Stream PRV" check box.
+
+    Checking the box reveals a second dropdown for the IFGC table that governs
+    the piping after each pressure regulating valve (same pipe material and
+    gas as the first table; it may not be a higher pressure). The user picks
+    the table rather than it being inferred: several tables share one
+    pressure (four different drops under 2 psi), and the regulator family
+    carries no pressure of its own. Only a MID-STREAM regulator (more than
+    shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT of pipe after it) switches
+    tables; the traversal decides which regulators those are.
+
+    Returns:
+        dict with "pipe_material", "table_label", "heat_content",
+        "mid_stream_prv" (bool) and "downstream_table_label" (short label, or
+        None when the box is off), or None if cancelled.
+    """
+    return _show_picker(title, True)
+
+
+def _show_picker(title, prv_option):
+    """Shared implementation behind the two public dialogs."""
+    from System.Windows import Visibility
+
     window          = XamlReader.Parse(_PICKER_XAML)
     window.Title    = title
     cb_material     = window.FindName('cbMaterial')
     cb_table        = window.FindName('cbTable')
+    cb_prv          = window.FindName('cbPrv')
+    pnl_prv         = window.FindName('pnlPrv')
+    cb_downstream   = window.FindName('cbDownstream')
+    tb_prv_error    = window.FindName('tbPrvError')
     tb_heat_content = window.FindName('tbHeatContent')
     btn_ok          = window.FindName('btnOK')
     btn_cancel      = window.FindName('btnCancel')
@@ -261,6 +309,37 @@ def show_table_picker(title):
     for m in materials:
         cb_material.Items.Add(m)
     cb_material.SelectedIndex = 0
+
+    def _upstream_option():
+        if cb_material.SelectedItem is None or cb_table.SelectedItem is None:
+            return None
+        try:
+            return gas_tables.get_table_option_by_material_and_short_label(
+                cb_material.SelectedItem, cb_table.SelectedItem)
+        except ValueError:
+            return None
+
+    def populate_downstream():
+        """Offer same-material, same-gas tables; pre-select the first one
+        that is a real step down from the upstream table."""
+        cb_downstream.Items.Clear()
+        up = _upstream_option()
+        if up is None:
+            return
+        labels = gas_tables.get_table_option_labels_for_material_and_gas(
+            up["material"], up["gas"])
+        pick = 0
+        found_lower = False
+        for i, lbl in enumerate(labels):
+            cb_downstream.Items.Add(lbl)
+            if not found_lower:
+                opt = gas_tables.get_table_option_by_material_and_short_label(
+                    up["material"], lbl)
+                if opt["inlet_pressure_psi"] < up["inlet_pressure_psi"]:
+                    pick = i
+                    found_lower = True
+        if cb_downstream.Items.Count > 0:
+            cb_downstream.SelectedIndex = pick
 
     def populate_table(mat):
         cb_table.Items.Clear()
@@ -272,13 +351,29 @@ def show_table_picker(title):
     populate_table(materials[0])
     tb_heat_content.Text = str(int(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
 
+    if prv_option:
+        cb_prv.Visibility = Visibility.Visible
+        populate_downstream()
+
     def on_material_changed(sender, e):
         if cb_material.SelectedItem is not None:
             populate_table(cb_material.SelectedItem)
 
-    cb_material.SelectionChanged += on_material_changed
+    def on_table_changed(sender, e):
+        if prv_option:
+            populate_downstream()
 
-    result = [None, None, None]
+    def on_prv_toggled(sender, e):
+        on = bool(cb_prv.IsChecked)
+        pnl_prv.Visibility = Visibility.Visible if on else Visibility.Collapsed
+        tb_prv_error.Visibility = Visibility.Collapsed
+
+    cb_material.SelectionChanged += on_material_changed
+    cb_table.SelectionChanged    += on_table_changed
+    cb_prv.Checked               += on_prv_toggled
+    cb_prv.Unchecked             += on_prv_toggled
+
+    result = [None]
 
     def on_ok(sender, e):
         try:
@@ -289,9 +384,32 @@ def show_table_picker(title):
             tb_heat_content.Background = Brushes.LightPink
             return
         tb_heat_content.Background = Brushes.White
-        result[0] = cb_material.SelectedItem
-        result[1] = cb_table.SelectedItem
-        result[2] = heat_content
+
+        use_prv = bool(cb_prv.IsChecked) if prv_option else False
+        downstream_label = None
+        if use_prv:
+            up = _upstream_option()
+            downstream_label = cb_downstream.SelectedItem
+            if up is None or downstream_label is None:
+                tb_prv_error.Text = "Pick the table downstream of the PRV."
+                tb_prv_error.Visibility = Visibility.Visible
+                return
+            down = gas_tables.get_table_option_by_material_and_short_label(
+                up["material"], downstream_label)
+            if down["inlet_pressure_psi"] > up["inlet_pressure_psi"]:
+                tb_prv_error.Text = (
+                    "The downstream table is a higher pressure than the "
+                    "table above. A regulator steps pressure down.")
+                tb_prv_error.Visibility = Visibility.Visible
+                return
+
+        result[0] = {
+            "pipe_material":          cb_material.SelectedItem,
+            "table_label":            cb_table.SelectedItem,
+            "heat_content":           heat_content,
+            "mid_stream_prv":         use_prv,
+            "downstream_table_label": downstream_label,
+        }
         window.Close()
 
     def on_cancel(sender, e):
@@ -301,4 +419,7 @@ def show_table_picker(title):
     btn_cancel.Click += on_cancel
     window.ShowDialog()
 
-    return result[0], result[1], result[2]
+    res = result[0]
+    if res is None or not res["pipe_material"] or not res["table_label"]:
+        return None
+    return res

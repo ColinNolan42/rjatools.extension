@@ -87,7 +87,7 @@ NOTES_Y_BASE     = LEVEL_HEIGHT + 4.0
 ELBOW_EQUIV_FT   = 5.0  # ft per elbow, per IFGC A103.1 -- must match
                         # pipe_graph._find_longest_run's ELBOW_EQUIV_FT
 
-_PRV_KW       = ("prv", "regulator", "regulating")
+_PRV_KW       = shared_params.PRV_FAMILY_KEYWORDS
 _ISOLATION_KW = ("valve", "ball", "gate", "check", "shutoff")
 _VALVE_KW     = _PRV_KW + _ISOLATION_KW  # combined for legacy checks
 

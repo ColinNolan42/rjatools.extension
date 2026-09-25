@@ -232,8 +232,65 @@ def high_pressure_capacity_cfh(diameter_in, inlet_absolute_psi,
 # Main sizing function
 # ---------------------------------------------------------------------------
 
+def _zone_label(graph, key):
+    """Human label for the system fed by the meter or a PRV."""
+    if key == graph.origin_id:
+        return "Meter to regulator(s)" if graph.midstream_prv_ids else "Meter"
+    return "After PRV {}".format(key)
+
+
+def _build_zone_contexts(graph, table_id, downstream_table_id, overall_run_ft):
+    """Table, pipe sizes and longest-run row for each system being sized.
+
+    Without a downstream table there is one context (key None) using the
+    whole-system longest run - exactly the behaviour before regulators were
+    supported. With one, the meter's system uses table_id and each PRV's
+    system uses downstream_table_id, each on its OWN longest run (IFGC A103.1:
+    one length per system, and a regulator splits the piping into systems).
+
+    Returns:
+        dict  key -> {"table_id", "pipe_sizes", "run_ft", "row_ft", "label",
+                      "farthest_name"}
+    """
+    if downstream_table_id is None:
+        row_ft, _ = gas_tables.get_length_row(table_id, overall_run_ft)
+        return {None: {
+            "table_id": table_id,
+            "pipe_sizes": gas_tables.list_pipe_sizes(table_id),
+            "run_ft": overall_run_ft,
+            "row_ft": row_ft,
+            "label": "Meter",
+            "farthest_name": (graph.longest_run or {}).get(
+                "farthest_fixture_name", ""),
+        }}
+
+    contexts = {}
+    for key, run in graph.zone_runs.items():
+        this_table = table_id if key == graph.origin_id else downstream_table_id
+        label = _zone_label(graph, key)
+        run_ft = run["total_length_feet"]
+        if run_ft <= 0:
+            raise ValueError(
+                "{}: no fixture found downstream, so there is no run to "
+                "size. Check that its gas appliances are connected and have "
+                "IS_GAS_FIXTURE = Yes.".format(label))
+        try:
+            row_ft, _ = gas_tables.get_length_row(this_table, run_ft)
+        except ValueError as e:
+            raise ValueError("{}: {}".format(label, str(e)))
+        contexts[key] = {
+            "table_id": this_table,
+            "pipe_sizes": gas_tables.list_pipe_sizes(this_table),
+            "run_ft": run_ft,
+            "row_ft": row_ft,
+            "label": label,
+            "farthest_name": run.get("farthest_fixture_name", ""),
+        }
+    return contexts
+
+
 def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
-                 heat_content_btu_per_cf=None):
+                 heat_content_btu_per_cf=None, downstream_table_id=None):
     """Size every pipe segment using the IFGC Longest Run Method.
 
     Per IFGC A103.1:
@@ -263,21 +320,38 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
                              Gas, BTU per actual cubic foot. Defaults to
                              shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF
                              (Denver) if not supplied.
+        downstream_table_id: str  optional - IFGC table for the piping
+                             downstream of a mid-stream PRV. When supplied
+                             the graph shall contain at least one mid-stream
+                             PRV (see pipe_graph._classify_midstream_prvs); pipes
+                             on the meter side use table_id, pipes after a
+                             PRV use this table, and each of those systems is
+                             sized on its own longest run. When None the
+                             whole graph is one system (PRVs, if any, are
+                             ignored).
 
     Returns:
         dict with keys:
             sizes                 {pipe_element_id (int): nominal_size (str)}
-            table_id              str  e.g. "402.4(2)"
-            table_length_used_ft  float
-            longest_run_ft        float
+            table_id              str  e.g. "402.4(2)"  (the meter's table)
+            table_length_used_ft  float  (table row of the meter's system)
+            longest_run_ft        float  (the meter's system when zoned,
+                                  else the whole system)
             pipe_material         str
             inlet_pressure_psi    float
             heat_content_btu_per_cf  float
+            downstream_table_id   str or None
+            zones                 list of dicts - one per system sized
+                                  (label, table_id, run_ft, row_ft,
+                                  farthest_name)
+            edge_context          {pipe_id: {"table_id", "longest_run_ft"}}
+                                  the table and run each pipe was sized on
             segment_detail        list of dicts - one per sized segment
 
     Raises:
-        ValueError: If longest run is missing, table not available, or any
-                    pipe demand exceeds the maximum table capacity.
+        ValueError: If longest run is missing, table not available, any
+                    pipe demand exceeds the maximum table capacity, or a
+                    downstream table is given with no PRV / with nested PRVs.
     """
     if heat_content_btu_per_cf is None:
         heat_content_btu_per_cf = shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF
@@ -296,12 +370,35 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         table_id = gas_tables.select_table(inlet_pressure_psi, pipe_material)
     else:
         gas_tables.get_table(table_id)  # validate table exists
-    pipe_sizes = gas_tables.list_pipe_sizes(table_id)
-    table_length_used, _ = gas_tables.get_length_row(table_id, longest_run_ft)
+
+    zoned = downstream_table_id is not None
+    if zoned:
+        gas_tables.get_table(downstream_table_id)  # validate table exists
+        if not graph.midstream_prv_ids:
+            raise ValueError(
+                "A downstream table was given but no mid-stream pressure "
+                "regulating valve was found. A PRV counts as mid-stream when "
+                "more than {:g} ft of pipe runs downstream of it; nearer "
+                "ones are equipment PRVs and are ignored.".format(
+                    shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))
+        if graph.nested_prv_ids:
+            raise ValueError(
+                "Mid-stream PRV(s) {} sit downstream of another mid-stream "
+                "PRV. Only a single step down is supported.".format(
+                    ", ".join(str(i) for i in graph.nested_prv_ids)))
+
+    contexts = _build_zone_contexts(
+        graph, table_id, downstream_table_id, longest_run_ft)
+    meter_key = graph.origin_id if zoned else None
+    meter_ctx = contexts[meter_key]
+    table_length_used = meter_ctx["row_ft"]
+    if zoned:
+        longest_run_ft = meter_ctx["run_ft"]
 
     sizes = {}
     segment_detail = []
     sizing_errors = []
+    edge_context = {}
 
     def _apply_minimum(nom, pipe_sizes_list):
         """If nom is smaller than MIN_PIPE_INCHES, return the first size in
@@ -320,15 +417,30 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
 
         demand_mbh = edge.cumulative_load_mbh
 
+        # Which system this pipe belongs to sets its table and its run. A
+        # pipe with no zone (not reached by the zone walk) is treated as
+        # meter-side.
+        ctx = contexts.get(edge.run_key if zoned else None)
+        if ctx is None:
+            ctx = meter_ctx
+        e_table_id = ctx["table_id"]
+        e_sizes    = ctx["pipe_sizes"]
+        e_run_ft   = ctx["run_ft"]
+        e_row_ft   = ctx["row_ft"]
+        edge_context[edge.element_id] = {
+            "table_id":       e_table_id,
+            "longest_run_ft": e_run_ft,
+        }
+
         # CFH = BTUH / Heat Content of Gas (see mbh_to_cfh() docstring).
         demand_cfh_effective = mbh_to_cfh(demand_mbh, heat_content_btu_per_cf)
 
         # Zero demand: assign minimum available pipe size
         if demand_mbh <= 0:
-            selected = pipe_sizes[0]
-            selected, upsized = _apply_minimum(selected, pipe_sizes)
+            selected = e_sizes[0]
+            selected, upsized = _apply_minimum(selected, e_sizes)
             capacity_at_size = gas_tables.get_capacity(
-                table_id, longest_run_ft, selected)
+                e_table_id, e_run_ft, selected)
             note = "zero demand - minimum size assigned"
             if upsized:
                 note += " (upsized to 3/4\" firm minimum)"
@@ -338,6 +450,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
                 "demand_cfh":          0.0,
                 "selected_size":       selected,
                 "capacity_mbh":        capacity_at_size,
+                "table_id":            e_table_id,
                 "note":                note
             })
             sizes[edge.element_id] = selected
@@ -346,10 +459,10 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         # Find smallest size whose capacity >= demand
         selected = None
         selected_capacity = None
-        for size in pipe_sizes:
+        for size in e_sizes:
             try:
                 capacity = gas_tables.get_capacity(
-                    table_id, longest_run_ft, size)
+                    e_table_id, e_run_ft, size)
                 if capacity >= demand_cfh_effective:
                     selected = size
                     selected_capacity = capacity
@@ -363,13 +476,13 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
                 "Pipe {}: demand {:.1f} MBH ({:.1f} CFH) exceeds max table "
                 "capacity at {:.0f} ft in Table {}.".format(
                     edge.element_id, demand_mbh, demand_cfh_effective,
-                    table_length_used, table_id))
+                    e_row_ft, e_table_id))
             continue
 
-        selected, upsized = _apply_minimum(selected, pipe_sizes)
+        selected, upsized = _apply_minimum(selected, e_sizes)
         if upsized:
             selected_capacity = gas_tables.get_capacity(
-                table_id, longest_run_ft, selected)
+                e_table_id, e_run_ft, selected)
 
         sizes[edge.element_id] = selected
         segment_detail.append({
@@ -378,6 +491,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
             "demand_cfh":          round(demand_cfh_effective, 1),
             "selected_size":       selected,
             "capacity_mbh":        selected_capacity,
+            "table_id":            e_table_id,
             "note":                "upsized to 3/4\" firm minimum" if upsized else ""
         })
 
@@ -385,6 +499,9 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         raise ValueError(
             "Sizing failed for {} pipe(s):\n{}".format(
                 len(sizing_errors), "\n".join(sizing_errors)))
+
+    ordered_keys = [meter_key] + sorted(
+        k for k in contexts if k != meter_key)
 
     return {
         "sizes":                  sizes,
@@ -394,6 +511,15 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         "pipe_material":          pipe_material,
         "inlet_pressure_psi":     inlet_pressure_psi,
         "heat_content_btu_per_cf": heat_content_btu_per_cf,
+        "downstream_table_id":    downstream_table_id,
+        "zones":                  [
+            {"label":         c["label"],
+             "table_id":      c["table_id"],
+             "run_ft":        c["run_ft"],
+             "row_ft":        c["row_ft"],
+             "farthest_name": c["farthest_name"]}
+            for c in [contexts[k] for k in ordered_keys]],
+        "edge_context":           edge_context,
         "segment_detail":         segment_detail,
     }
 
@@ -459,6 +585,15 @@ def format_sizing_output(sizing_result, graph):
         sizing_result["longest_run_ft"]))
     lines.append("Pipe material: {}".format(sizing_result["pipe_material"]))
     lines.append("Inlet PSI:     {}".format(sizing_result["inlet_pressure_psi"]))
+    if sizing_result.get("downstream_table_id"):
+        lines.append("Downstream:    {}  (after each PRV)".format(
+            sizing_result["downstream_table_id"]))
+        for z in sizing_result.get("zones", []):
+            lines.append(
+                "  {}: Table {}, longest run {:.1f} ft (row {} ft), "
+                "farthest {}".format(
+                    z["label"], z["table_id"], z["run_ft"], z["row_ft"],
+                    z["farthest_name"] or "-"))
     lines.append("Heat Content:  {:.0f} BTU/CF".format(
         sizing_result.get("heat_content_btu_per_cf",
                            shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)))
@@ -485,6 +620,10 @@ def format_sizing_output(sizing_result, graph):
                     (" ..." if len(fixtures) > 3 else ""))
 
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
+        if (sizing_result.get("downstream_table_id")
+                and detail.get("table_id") == sizing_result["downstream_table_id"]
+                and detail.get("table_id") != sizing_result["table_id"]):
+            note += "  [Table {}]".format(detail["table_id"])
         cfh_note = ""
         if abs(detail.get("demand_cfh", detail["demand_mbh"]) - detail["demand_mbh"]) > 0.05:
             cfh_note = "  [{:.1f} CFH]".format(detail.get("demand_cfh", 0.0))

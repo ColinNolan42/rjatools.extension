@@ -227,9 +227,13 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result, overloaded_list
     demand_cfh = sizing_engine.mbh_to_cfh(
         demand, result.get("heat_content_btu_per_cf",
                             shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+    # The table and run this pipe was sized on (differs after a PRV).
+    ctx = result.get("edge_context", {}).get(pipe_id, {})
     try:
         current_cap = gas_tables.get_capacity(
-            result["table_id"], result["longest_run_ft"], current_nom)
+            ctx.get("table_id", result["table_id"]),
+            ctx.get("longest_run_ft", result["longest_run_ft"]),
+            current_nom)
     except ValueError:
         # Nominal not in this table (e.g. copper table selected for steel pipe)
         current_cap = 0.0
@@ -301,20 +305,33 @@ def main():
     # ------------------------------------------------------------------
     # STEP 3 - Startup dialog: select pipe material and IFGC table
     # ------------------------------------------------------------------
-    pipe_material, selected_table_label, heat_content_btu_per_cf = ui_helpers.show_table_picker(
-        "Size Gas - Select IFGC Table")
-    if not pipe_material or not selected_table_label or heat_content_btu_per_cf is None:
+    choice = ui_helpers.show_size_gas_dialog("Size Gas - Select IFGC Table")
+    if choice is None:
         output.print_md(
             "Cancelled at table selection. No changes were made to the model.")
         return
+    pipe_material           = choice["pipe_material"]
+    selected_table_label    = choice["table_label"]
+    heat_content_btu_per_cf = choice["heat_content"]
+    mid_stream_prv          = choice["mid_stream_prv"]
 
     selected_opt       = gas_tables.get_table_option_by_material_and_short_label(
         pipe_material, selected_table_label)
     table_id           = selected_opt["table_id"]
     inlet_pressure_psi = selected_opt["inlet_pressure_psi"]
 
+    downstream_opt      = None
+    downstream_table_id = None
+    if mid_stream_prv:
+        downstream_opt = gas_tables.get_table_option_by_material_and_short_label(
+            pipe_material, choice["downstream_table_label"])
+        downstream_table_id = downstream_opt["table_id"]
+
     output.print_md("**Table:**     {} ({})".format(
         table_id, selected_opt["label"].split("  [")[0]))
+    if downstream_opt is not None:
+        output.print_md("**Downstream of PRV:** {} ({})".format(
+            downstream_table_id, downstream_opt["label"].split("  [")[0]))
     output.print_md("**Material:**  {}".format(pipe_material))
     output.print_md("**Gas:**       {}".format(selected_opt["gas"]))
     output.print_md("**Heat Content of Gas:** {:.0f} BTU/CF".format(heat_content_btu_per_cf))
@@ -360,13 +377,70 @@ def main():
         return
 
     # ------------------------------------------------------------------
+    # STEP 4b - Pressure regulating valves
+    # PRVs are auto-detected by family name. Only a MID-STREAM one (more than
+    # PRV_MIDSTREAM_MIN_DOWNSTREAM_FT of pipe downstream of it) is a step
+    # down; a regulator at its equipment is that equipment's own and is
+    # ignored. Nothing changes unless "Mid Stream PRV" is checked.
+    # ------------------------------------------------------------------
+    min_ft         = shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT
+    prv_nodes      = [graph.nodes[i] for i in graph.prv_ids]
+    midstream_prvs = [graph.nodes[i] for i in graph.midstream_prv_ids]
+    prv_warnings   = []
+
+    if mid_stream_prv and not midstream_prvs:
+        if prv_nodes:
+            why = ("{} regulator(s) were found, but each has {:g} ft of pipe "
+                   "or less downstream, so they are treated as equipment "
+                   "PRVs and ignored.".format(len(prv_nodes), min_ft))
+        else:
+            why = ("No pressure regulating valve was found. A PRV is "
+                   "recognised by 'PRV', 'regulator' or 'regulating' in its "
+                   "family name; check it is connected to the piping.")
+        forms.alert(
+            "Mid Stream PRV is checked, but there is no mid-stream "
+            "regulator in this system.\n\n{}\n\nUncheck Mid Stream PRV "
+            "to size the system as one.".format(why),
+            title="Size Gas - No Mid-Stream PRV"
+        )
+        return
+
+    if mid_stream_prv and graph.nested_prv_ids:
+        forms.alert(
+            "Mid-stream PRV(s) {} sit downstream of another mid-stream "
+            "PRV.\n\nOnly a single step down is supported.".format(
+                ", ".join(str(i) for i in graph.nested_prv_ids)),
+            title="Size Gas - Nested PRVs"
+        )
+        return
+
+    if prv_nodes:
+        output.print_md("---")
+        output.print_md("## Pressure Regulating Valves")
+        output.print_md("| Element ID | Family | Pipe downstream | Treated as |")
+        output.print_md("| --- | --- | --- | --- |")
+        for n in prv_nodes:
+            output.print_md("| {} | {} | {:.1f} ft | {} |".format(
+                n.element_id, n.family_name, n.downstream_pipe_ft or 0.0,
+                "mid-stream step down" if n.is_midstream_prv
+                else "equipment PRV, ignored (within {:g} ft)".format(min_ft)))
+
+        if midstream_prvs and not mid_stream_prv:
+            prv_warnings.append(
+                "{} mid-stream PRV(s) found but Mid Stream PRV is unchecked - "
+                "the whole system is sized as one system on the meter's "
+                "table, including the piping after the regulator(s).".format(
+                    len(midstream_prvs)))
+
+    # ------------------------------------------------------------------
     # STEP 5 - IFGC sizing calculation
     # ------------------------------------------------------------------
     output.print_md("**Running IFGC sizing...**")
     try:
         result = sizing_engine.size_system(
             graph, pipe_material, inlet_pressure_psi, table_id,
-            heat_content_btu_per_cf=heat_content_btu_per_cf)
+            heat_content_btu_per_cf=heat_content_btu_per_cf,
+            downstream_table_id=downstream_table_id)
     except ValueError as e:
         forms.alert(
             "Sizing failed:\n\n{}".format(str(e)),
@@ -391,9 +465,12 @@ def main():
     unnamed        = [n for n in fixture_nodes
                       if n.fixture_name in ("", "UNNAMED", None)]
 
-    if no_load or unnamed or graph.disconnected:
+    if no_load or unnamed or graph.disconnected or prv_warnings:
         output.print_md("---")
         output.print_md("## :warning: Pre-Sizing Warnings")
+
+        for w in prv_warnings:
+            output.print_md("**PRV:** {}".format(w))
 
         if no_load:
             output.print_md(
@@ -644,10 +721,16 @@ def main():
     output.print_md("| IFGC table | {} |".format(result["table_id"]))
     output.print_md("| Heat Content of Gas | {:.0f} BTU/CF |".format(
         result["heat_content_btu_per_cf"]))
-    output.print_md("| Longest run | {:.1f} ft |".format(
-        result["longest_run_ft"]))
-    output.print_md("| Table row used | {} ft |".format(
-        result["table_length_used_ft"]))
+    if result.get("downstream_table_id"):
+        # One row per system: the meter side, then each PRV.
+        for z in result["zones"]:
+            output.print_md("| {} | Table {}, run {:.1f} ft (row {} ft) |".format(
+                z["label"], z["table_id"], z["run_ft"], z["row_ft"]))
+    else:
+        output.print_md("| Longest run | {:.1f} ft |".format(
+            result["longest_run_ft"]))
+        output.print_md("| Table row used | {} ft |".format(
+            result["table_length_used_ft"]))
 
     if fail_list:
         output.print_md("---")
