@@ -94,7 +94,7 @@ def c_of(key, c=None):
 COMPONENT_TABLE = (
     ('diffuser',    'Diffuser / grille',   0.05),
     ('damper',      'Balancing damper',    0.25),
-    ('fire_damper', 'Fire / smoke damper', 0.25),
+    ('fire_damper', 'Fire / smoke damper', 0.05),
 )
 
 DEFAULT_COMPONENTS = {}
@@ -278,6 +278,14 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 # uses 0.25 in. wc for an OBD), because a damper's drop is a cutsheet number and
 # a function of how far it is throttled, not of duct geometry.
 #
+# 0.25 stands (Colin 2026-09-25, "most of the time the balancing damper will be
+# slightly closed so maybe we lean towards the .25") AFTER being checked against
+# a real cutsheet: Ruskin PDD-109 galvanized steel airfoil averages 0.058 in. wc
+# over all 112 sizes at 1000 FPM, and reads 0.03 at 24 x 24. That is the WIDE
+# OPEN number. Sizing a fan off a wide open balancing damper under-predicts the
+# static a balanced system actually needs, so the catalog figure is recorded
+# here as evidence, not adopted as the default. Do not "correct" 0.25 to 0.06.
+#
 # NOT read from the Revit family. The `Balancing Damper - Round` family in
 # Grantham 4 MP carries an instance parameter "Pressure Drop = 1.00 in-wg",
 # which is almost certainly Revit content boilerplate rather than a real
@@ -292,13 +300,20 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 # say) comes back None and the caller reports it as an uncounted accessory
 # rather than pricing it wrong.
 #
-# fire_damper defaults to 0.25, the same as the balancing damper, on Colin's
-# instruction 2026-09-24 ("default same as damper"). Note the provenance
-# difference: the diffuser 0.05 and balancing damper 0.25 are the two column D
-# entries in the worksheet's filled example, whereas the worksheet has no fire
-# damper row at all, so 0.25 here is Colin's call rather than a published RJA
-# figure. The report prints each component's count and the rate applied, so the
-# number in use is always visible.
+# fire_damper defaults to 0.05, NOT to the balancing damper's 0.25 (Colin
+# 2026-09-25, superseding the 2026-09-24 "default same as damper"). A balancing
+# damper earns 0.25 because it spends its life throttled; a fire or smoke damper
+# is open or it is closed, so its catalog wide open figure IS its design
+# figure. Ruskin SDPDD-799 (AIR PERFORMANCE DATA FOR ALL SMOKE DAMPERS, SD60 /
+# 60-2 / 37 / SD50 and SD36 / 35 / 34) puts an SD series damper between 0.017
+# and 0.031 in. wc at 1000 FPM face velocity across its whole size table, so
+# 0.05 sits above every published value and stays conservative.
+#
+# Note the provenance difference: the diffuser 0.05 and balancing damper 0.25
+# are the two column D entries in the worksheet's filled example, whereas the
+# worksheet has no fire damper row at all, so 0.05 here is a cutsheet figure
+# rounded up, not an RJA published number. The report prints each component's
+# count and the rate applied, so the number in use is always visible.
 _ACCESSORY_ROLES = (
     ('damper',      ('balancing damper', 'balance damper', 'obd', 'opposed blade')),
     ('fire_damper', ('fire damper', 'smoke damper', 'fire/smoke', 'fire smoke')),

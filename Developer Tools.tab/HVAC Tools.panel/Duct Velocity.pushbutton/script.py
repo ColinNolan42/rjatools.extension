@@ -54,7 +54,7 @@ from Autodesk.Revit.DB import (
     FamilySymbol, StorageType,
     FilledRegion, FilledRegionType, CurveLoop
 )
-from Autodesk.Revit.UI.Selection import ObjectType
+from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 
 from System.Windows import (
     Window, WindowStartupLocation, Thickness,
@@ -65,7 +65,7 @@ from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
     ColumnDefinition, RowDefinition, Orientation,
     Separator, TextBlock, CheckBox, Expander, ScrollViewer,
-    ScrollBarVisibility
+    ScrollBarVisibility, ListBox, SelectionMode
 )
 from System.Windows.Media import SolidColorBrush, Colors
 from System.Windows import FontWeights
@@ -193,16 +193,9 @@ def show_velocity_settings_dialog():
     ]
     DEFAULT_TOL_PCT = 10     # yellow band: ±this % around max
     DEFAULT_SAFETY_PCT = 10  # SP_LOSS_WORKSHEET's own last row
-    # Component drops, taken from the filled example in RJA's
-    # SP_LOSS_WORKSHEET column D ("INPUT KNOWN PRESS. DROP"): its supply
-    # diffuser row is 0.05 and its OBD row is 0.25. NOT invented, and NOT read
-    # off the Revit families: the air terminals in Grantham 4 MP carry
-    # "Total Pressure = 0.09 in-wg" but only on 11 of 22 terminals, and the
-    # `Balancing Damper - Round` family carries "Pressure Drop = 1.00 in-wg",
-    # which is almost certainly content boilerplate (15 of those would swamp
-    # the whole system). Both are user inputs so the engineer owns the number.
-    DEFAULT_DIFFUSER_DROP = 0.05
-    DEFAULT_DAMPER_DROP   = 0.25
+    # Component drops are NOT defined here: the rows below are built straight
+    # from fitting_tables.COMPONENT_TABLE so there is exactly one place to
+    # change a default. Provenance for each figure lives beside it there.
 
     result    = [None]
     vel_boxes  = {}   # row_idx -> TextBox (velocity)
@@ -639,6 +632,165 @@ def show_velocity_settings_dialog():
         win.MaxHeight = SystemParameters.WorkArea.Height * 0.9
     except Exception:
         win.MaxHeight = 800.0
+    win.ShowDialog()
+    return result[0]
+
+
+# ── system picker (second screen) ────────────────────────────────────
+#
+# Replaces forms.SelectFromList so the screen can carry a SECOND action button.
+# The equipment list only ever holds equipment found in the ACTIVE VIEW, so a
+# system whose AHU sits on another floor, in a mechanical room that is not on
+# this plan, or outside the view crop used to be unreachable. "Select a Duct
+# System" lets the user point at the ductwork instead (Colin 2026-09-25).
+#
+# Picking a duct does NOT change how the run is rooted: build_network still
+# walks to that duct's base equipment and roots there, so CFM direction and
+# every downstream sum stay correct. It only changes how the system is NAMED
+# to the tool.
+class _DuctPickFilter(ISelectionFilter):
+    """Restricts picking to rigid and flex duct, so nothing else is clickable."""
+
+    def AllowElement(self, elem):
+        # hvac_graph.is_duct() already covers rigid AND flex duct, and is the
+        # same test the traversal uses, so the filter can never allow something
+        # the traversal would then refuse to walk.
+        try:
+            return hvac_graph.is_duct(elem)
+        except Exception:
+            return False
+
+    def AllowReference(self, ref, point):
+        return False
+
+
+def _pick_duct_system():
+    """Pick one supply duct, then optionally one return duct.
+
+    Returns a list of picked duct elements (1 or 2), or [] if cancelled at the
+    first pick. Esc at the SECOND pick is not a cancel - it means "supply only",
+    which is a real case (exhaust-only fan, return air plenum with no ducted
+    return).
+    """
+    try:
+        filt = _DuctPickFilter()
+    except Exception:
+        filt = None
+        log_msg = ('Duct selection filter unavailable, picking is unfiltered; '
+                   'click a duct, not a fitting.')
+        output.print_md(':warning: {}'.format(log_msg))
+
+    picked = []
+    prompts = [
+        ('SUPPLY', 'Select a SUPPLY duct in the system to analyze'),
+        ('RETURN', 'Select a RETURN duct (or press Esc to run supply only)'),
+    ]
+    for role, prompt in prompts:
+        try:
+            if filt is not None:
+                ref = uidoc.Selection.PickObject(ObjectType.Element, filt, prompt)
+            else:
+                ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
+        except Exception:
+            # Esc on the supply pick cancels the run; Esc on the return pick
+            # just ends the picking.
+            break
+        elem = doc.GetElement(ref.ElementId)
+        if elem is None:
+            break
+        picked.append(elem)
+        output.print_md('{} duct picked: **{}** (id {})'.format(
+            role, _elem_name(elem), eid_int(elem.Id)))
+    return picked
+
+
+def show_system_picker(display_names):
+    """Second screen. Returns ('equipment', [names]), ('ducts', None) or None.
+
+    display_names is the sorted list of equipment labels found in the active
+    view; it may be empty, in which case only the duct route is offered.
+    """
+    result = [None]
+
+    win = Window()
+    win.Title = 'Select Systems to Visualize'
+    win.Width = 520
+    win.SizeToContent = SizeToContent.Height
+    win.WindowStartupLocation = WindowStartupLocation.CenterScreen
+
+    outer = StackPanel()
+    outer.Margin = Thickness(14)
+
+    head = TextBlock()
+    head.Text = ('Equipment found in the active view. Select one or more, or '
+                 'select a duct system instead if the equipment is not on this '
+                 'plan.')
+    head.TextWrapping = TextWrapping.Wrap
+    head.Margin = Thickness(0, 0, 0, 10)
+    outer.Children.Add(head)
+
+    lst = ListBox()
+    lst.SelectionMode = SelectionMode.Extended
+    lst.MaxHeight = 300
+    for n in display_names:
+        lst.Items.Add(n)
+    if display_names:
+        lst.SelectedIndex = 0
+    else:
+        lst.IsEnabled = False
+        empty = TextBlock()
+        empty.Text = ('No mechanical equipment in this view. Use Select a Duct '
+                      'System.')
+        empty.TextWrapping = TextWrapping.Wrap
+        empty.Margin = Thickness(0, 0, 0, 8)
+        outer.Children.Add(empty)
+    outer.Children.Add(lst)
+
+    btn_panel = StackPanel()
+    btn_panel.Orientation = Orientation.Horizontal
+    btn_panel.HorizontalAlignment = HorizontalAlignment.Right
+    btn_panel.Margin = Thickness(0, 14, 0, 0)
+
+    duct_btn = Button()
+    duct_btn.Content = 'Select a Duct System'
+    duct_btn.Width   = 150
+    duct_btn.Margin  = Thickness(0, 0, 8, 0)
+
+    run_btn = Button()
+    run_btn.Content = 'Run Duct Velocity'
+    run_btn.Width   = 128
+    run_btn.Margin  = Thickness(0, 0, 8, 0)
+    run_btn.IsEnabled = bool(display_names)
+
+    cancel_btn = Button()
+    cancel_btn.Content = 'Cancel'
+    cancel_btn.Width   = 72
+
+    def on_run(s, e):
+        names = [str(i) for i in lst.SelectedItems]
+        if not names:
+            forms.alert('Select at least one system, or use Select a Duct '
+                        'System.', title='Nothing Selected')
+            return
+        result[0] = ('equipment', names)
+        win.Close()
+
+    def on_ducts(s, e):
+        result[0] = ('ducts', None)
+        win.Close()
+
+    def on_cancel(s, e):
+        win.Close()
+
+    run_btn.Click    += on_run
+    duct_btn.Click   += on_ducts
+    cancel_btn.Click += on_cancel
+    btn_panel.Children.Add(duct_btn)
+    btn_panel.Children.Add(run_btn)
+    btn_panel.Children.Add(cancel_btn)
+    outer.Children.Add(btn_panel)
+
+    win.Content = outer
     win.ShowDialog()
     return result[0]
 
@@ -1646,9 +1798,9 @@ def main():
                          .OfCategory(BuiltInCategory.OST_MechanicalEquipment)
                          .WhereElementIsNotElementType())
 
+    name_to_elem = {}
     if equip_in_view:
         # Build display name → element map (deduplicate names)
-        name_to_elem = {}
         for eq in equip_in_view:
             try:
                 name = eq.Symbol.Family.Name + ' : ' + eq.Name
@@ -1661,28 +1813,29 @@ def main():
                 suffix += 1
             name_to_elem[key] = eq
 
-        selected_names = forms.SelectFromList.show(
-            sorted(name_to_elem.keys()),
-            title='Select AHU Systems to Visualize',
-            multiselect=True,
-            button_name='Run Duct Velocity'
-        )
-        if not selected_names:
-            output.print_md('**Cancelled.**')
-            return
-        sel_elems = [name_to_elem[n] for n in selected_names]
+        choice = show_system_picker(sorted(name_to_elem.keys()))
     else:
-        # No equipment found in view — fall back to manual pick
-        output.print_md('No mechanical equipment found in active view. Pick an element manually.')
-        try:
-            ref = uidoc.Selection.PickObject(
-                ObjectType.Element,
-                'Select any duct, air terminal, or AHU in the system to visualize'
-            )
-        except Exception:
+        # Nothing in this view to list. The picker still opens, with the list
+        # empty and only the duct route live, so the run is not dead-ended.
+        output.print_md('No mechanical equipment found in active view.')
+        choice = show_system_picker([])
+
+    if choice is None:
+        output.print_md('**Cancelled.**')
+        return
+
+    mode, names = choice
+    if mode == 'equipment':
+        sel_elems = [name_to_elem[n] for n in names]
+    else:
+        sel_elems = _pick_duct_system()
+        if not sel_elems:
             output.print_md('**Cancelled.**')
             return
-        sel_elems = [doc.GetElement(ref.ElementId)]
+        output.print_md(
+            '_Rooted from the picked duct(s): the traversal still walks back '
+            'to the base equipment for each one, so airflow direction and '
+            'downstream CFM sums are unchanged._')
 
     # 4. Traverse each system and merge results
     all_duct_results = {}   # ElementId -> DuctResult  (worst-wins on overlap)
@@ -1704,6 +1857,13 @@ def main():
         if net.errors:
             for e in net.errors:
                 output.print_md('- :warning: {}'.format(e))
+            continue
+
+        # Two picked ducts on the same system re-root at the same AHU. Without
+        # this the unit would be listed, totalled and summed twice.
+        if eid_int(net.root.Id) in all_root_ids:
+            output.print_md('  already covered by **{}** - skipped.'.format(
+                root_labels.get(eid_int(net.root.Id), _elem_name(net.root))))
             continue
 
         ahu_labels.append('{} (id {})'.format(_elem_name(net.root), eid_int(net.root.Id)))
