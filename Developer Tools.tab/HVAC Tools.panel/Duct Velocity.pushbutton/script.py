@@ -642,7 +642,8 @@ def show_velocity_settings_dialog():
 # The equipment list only ever holds equipment found in the ACTIVE VIEW, so a
 # system whose AHU sits on another floor, in a mechanical room that is not on
 # this plan, or outside the view crop used to be unreachable. "Select a Duct
-# System" lets the user point at the ductwork instead (Colin 2026-09-25).
+# System" lets the user point at the ductwork instead (Colin 2026-09-25): two
+# clicks, either order, supply or return, no roles to declare.
 #
 # Picking a duct does NOT change how the run is rooted: build_network still
 # walks to that duct's base equipment and roots there, so CFM direction and
@@ -665,42 +666,45 @@ class _DuctPickFilter(ISelectionFilter):
 
 
 def _pick_duct_system():
-    """Pick one supply duct, then optionally one return duct.
+    """Pick two ducts, in any order, supply or return - no roles assigned.
 
-    Returns a list of picked duct elements (1 or 2), or [] if cancelled at the
-    first pick. Esc at the SECOND pick is not a cancel - it means "supply only",
-    which is a real case (exhaust-only fan, return air plenum with no ducted
-    return).
+    Colin 2026-09-25: "it should just be click two ducts no particular order it
+    can be return or supply". Nothing downstream needs to know which is which:
+    each pick is rooted at its own base equipment and the system class is read
+    off the ductwork itself, so making the user label them would be busywork
+    that could only be got wrong.
+
+    Returns a list of picked duct elements (1 or 2), or [] if cancelled on the
+    first pick. Esc on the SECOND pick is not a cancel, it means "just the one",
+    which is a real case (a single ducted system, or a return air plenum with no
+    ducted return to click).
     """
     try:
         filt = _DuctPickFilter()
     except Exception:
         filt = None
-        log_msg = ('Duct selection filter unavailable, picking is unfiltered; '
-                   'click a duct, not a fitting.')
-        output.print_md(':warning: {}'.format(log_msg))
+        output.print_md(':warning: Duct selection filter unavailable, picking '
+                        'is unfiltered; click a duct, not a fitting.')
 
     picked = []
     prompts = [
-        ('SUPPLY', 'Select a SUPPLY duct in the system to analyze'),
-        ('RETURN', 'Select a RETURN duct (or press Esc to run supply only)'),
+        'Select a duct in the system to analyze (supply or return, either one)',
+        'Select a second duct on the other system, or press Esc to run just the first',
     ]
-    for role, prompt in prompts:
+    for i, prompt in enumerate(prompts):
         try:
             if filt is not None:
                 ref = uidoc.Selection.PickObject(ObjectType.Element, filt, prompt)
             else:
                 ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
         except Exception:
-            # Esc on the supply pick cancels the run; Esc on the return pick
-            # just ends the picking.
             break
         elem = doc.GetElement(ref.ElementId)
         if elem is None:
             break
         picked.append(elem)
-        output.print_md('{} duct picked: **{}** (id {})'.format(
-            role, _elem_name(elem), eid_int(elem.Id)))
+        output.print_md('Duct {} picked: **{}** (id {})'.format(
+            i + 1, _elem_name(elem), eid_int(elem.Id)))
     return picked
 
 
