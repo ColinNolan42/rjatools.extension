@@ -1622,7 +1622,8 @@ _LEGEND_ROWS = [
 
 
 def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
-                        source_sheet_num, tn_type_id, ts, fill_id):
+                        source_sheet_num, tn_type_id, ts, fill_id,
+                        show_r_marker_note=False):
     """Create a Drafting View with a System Summary block + flagged-duct table
     + color legend.
 
@@ -1760,6 +1761,14 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                                 XYZ(ox + PAD + SWATCH + PAD * 2.0, y_cursor - PAD, 0.0),
                                 '{} — {}'.format(color_key.title(), meaning), opts)
                 y_cursor -= LEGEND_ROW_H
+
+        if show_r_marker_note:
+            TextNote.Create(
+                doc, sched_view.Id, XYZ(ox + PAD, y_cursor - PAD, 0.0),
+                '(R) — Most restrictive diffuser: ends the index run that sets '
+                'required external static pressure for its equipment/system',
+                opts)
+            y_cursor -= LEGEND_ROW_H
 
         return sched_view, (oy - y_cursor), total_w
 
@@ -2014,6 +2023,14 @@ def main():
         summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
             len(all_missing_flow)))
 
+    # Terminal ids of the most-restrictive diffuser per equipment/system class
+    # — the one the index run (_critical_path_loss) ends at, i.e. the one that
+    # actually sizes the fan's external static. Only populated when External
+    # Static is on, since that is the only place this path search runs.
+    # Marked in the view with a circled "R" (see transaction below), on top
+    # of the diffuser's real pass/fail color — never replacing it.
+    restrictive_terminal_ids = set()
+
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
@@ -2036,6 +2053,7 @@ def main():
 
             for sys_class in sorted(per_class.keys()):
                 c = per_class[sys_class]
+                restrictive_terminal_ids.add(c['terminal_id'])
                 summary_lines.append(
                     '    {}:'.format(sys_class))
                 a_cfm, a_cnt = airflow.get(sys_class, (0.0, 0))
@@ -2313,6 +2331,44 @@ def main():
             except Exception:
                 pass
 
+        # Most-restrictive-diffuser markers — circled "R" next to the
+        # terminal each equipment/system's index run ends at (see
+        # restrictive_terminal_ids above). Placed on top of the diffuser's
+        # real pass/fail color, never in place of it: a restrictive diffuser
+        # that also fails its own check still shows red, with an R beside it.
+        # Reuses the same keynote-circle family as the numbered callouts
+        # above (falls back to plain '(R)' text the same way, including
+        # where the family's Label param is an integer and can't hold a
+        # letter).
+        for tid in sorted(restrictive_terminal_ids):
+            term_elem = all_nodes.get(tid)
+            if term_elem is None:
+                continue
+            try:
+                r_pt = term_elem.Location.Point
+            except Exception:
+                continue
+            if r_pt is None:
+                continue
+            # Offset off the diffuser symbol itself so the marker doesn't
+            # sit directly on top of it.
+            mark_pt = XYZ(r_pt.X + text_h_ft * 2.0, r_pt.Y + text_h_ft * 2.0, r_pt.Z)
+            try:
+                placed = False
+                if keynote_sym is not None:
+                    inst      = doc.Create.NewFamilyInstance(mark_pt, keynote_sym, new_view)
+                    num_param = inst.LookupParameter('Label')
+                    if num_param and not num_param.IsReadOnly and num_param.StorageType == StorageType.String:
+                        num_param.Set('R')
+                        placed = True
+                    else:
+                        doc.Delete(inst.Id)
+                if not placed and tn_type_id is not None:
+                    opts = TextNoteOptions(tn_type_id)
+                    TextNote.Create(doc, new_vid, mark_pt, '(R)', opts)
+            except Exception:
+                pass
+
         # Output sheet
         new_sheet             = ViewSheet.Create(doc, tb_id)
         new_sheet.SheetNumber = 'DV-{}-{}'.format(source_sheet_num, ts)
@@ -2340,7 +2396,8 @@ def main():
         if tn_type_id is not None:
             sched_view, content_h, total_w = _build_summary_view(
                 doc, summary_lines, [item[2] for item in flagged_items],
-                selected_cols, source_sheet_num, tn_type_id, ts, fill_id)
+                selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
+                show_r_marker_note=bool(restrictive_terminal_ids))
             if sched_view is not None:
                 # X fixed by hand in Revit (see diagram note above) and read
                 # back via Revit MCP. Y keeps the original bottom-anchored,
