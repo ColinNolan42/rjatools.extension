@@ -230,7 +230,7 @@ _SETTINGS_XAML = '''
                     <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Outputs"/>
                 </Border>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,2"
-                           Text="Optional columns in the sheet table and the pyRevit window table."/>
+                           Text="Optional columns in the sheet table and the pyRevit window table, and the external static pressure total."/>
                 <Grid x:Name="grid_cols">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -238,11 +238,8 @@ _SETTINGS_XAML = '''
                     </Grid.ColumnDefinitions>
                 </Grid>
 
-                <!-- External static pressure -->
-                <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
-                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="External static pressure"/>
-                </Border>
-                <CheckBox x:Name="cb_static" Content="Calculate total external static pressure"
+                <!-- External static pressure, grouped under Outputs -->
+                <CheckBox x:Name="cb_static" Content="Calculate total external static pressure" Margin="0,10,0,0"
                           ToolTip="The fan static along the most restrictive run outside the unit, supply path plus return path. See Calculation basis."/>
                 <Border x:Name="pnl_static" Style="{DynamicResource RjaGroupBorder}" Margin="20,4,0,0">
                     <StackPanel>
