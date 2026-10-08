@@ -149,8 +149,579 @@ def _selected_columns(selected_keys):
 
 
 # ── velocity settings dialog ───────────────────────────────────────────────────
+# ── settings dialog, themed XAML version ──────────────────────────────────────
+# The dialog the user sees. The code-built version further down
+# (_show_velocity_settings_dialog_legacy) is kept ONLY as a fallback: if the XAML
+# dialog raises anything while building or loading, show_velocity_settings_dialog
+# calls it so the tool can never fail to launch because of styling.
+#
+# Defaults live here once, for both versions.
+_DV_ROWS = [
+    ('Supply Air',   800,  0.08),
+    ('Return Air',   600,  0.05),
+    ('Exhaust Air',  600,  0.05),
+    ('Outside Air',  600,  0.05),
+    ('Transfer Air', 400,  0.05),
+]
+_DV_DEFAULT_TOL_PCT = 10      # yellow band: this % above max before red
+_DV_DEFAULT_SAFETY_PCT = 10   # SP_LOSS_WORKSHEET's own last row
+
+_SETTINGS_XAML = '''
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Duct Velocity Settings"
+        Width="680" MinWidth="560" MaxWidth="900"
+        SizeToContent="Height" ResizeMode="CanResizeWithGrip"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="White" FontFamily="Segoe UI" FontSize="12"
+        Foreground="{DynamicResource RjaTextBrush}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    @@RESOURCES@@
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        @@HEADER@@
+
+        <ScrollViewer x:Name="scroll_main" Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="16,4,16,12">
+
+                <!-- Scope -->
+                <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,10,0,6">
+                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Scope"/>
+                </Border>
+                <CheckBox x:Name="cb_full_diag" Content="Report all ducts"
+                          ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
+                           Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
+                <CheckBox x:Name="cb_oa" Content="Include Outside Air (pending)" IsEnabled="False"
+                          ToolTip="Pending. The tool runs at equipment level only: Supply Air and Return Air, never upstream."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                           Text="Pending, for AHU and DOAS systems. The tool runs at equipment level only: Supply Air and Return Air, never upstream."/>
+
+                <!-- Main duct limits -->
+                <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
+                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Main duct limits"/>
+                </Border>
+                <Grid x:Name="grid_limits">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                </Grid>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="Yellow tolerance" VerticalAlignment="Center"/>
+                    <TextBox x:Name="tb_tol" Width="56" Margin="8,0,6,0"
+                             ToolTip="At or under max is green. Within tolerance is yellow. Past it is red. Must be above 0 and below 100."/>
+                    <TextBlock Text="% above max before red" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                           Text="At or under max is green, within tolerance is yellow, past it is red."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                           Text="Limits apply to main ducts. Branches are checked against the diffuser tables."/>
+
+                <!-- Outputs -->
+                <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
+                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Outputs"/>
+                </Border>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,2"
+                           Text="Optional columns in the sheet table and the pyRevit window table."/>
+                <Grid x:Name="grid_cols">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                </Grid>
+
+                <!-- External static pressure -->
+                <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
+                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="External static pressure"/>
+                </Border>
+                <CheckBox x:Name="cb_static" Content="Calculate total external static pressure"
+                          ToolTip="The fan static along the most restrictive run outside the unit, supply path plus return path. See Calculation basis."/>
+                <Border x:Name="pnl_static" Style="{DynamicResource RjaGroupBorder}" Margin="20,4,0,0">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Safety factor" VerticalAlignment="Center"/>
+                            <TextBox x:Name="tb_sf" Width="56" Margin="8,0,6,0"
+                                     ToolTip="Percent added to the external static total. Does not affect the per duct checks. Range 0 to 100."/>
+                            <TextBlock Text="% added to the external static total" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <CheckBox x:Name="cb_filter" Content="Include return filter" VerticalAlignment="Center"
+                                      ToolTip="A known filter drop added once to the return path. Leave off when the filter is inside the unit and already deducted from its published ESP."/>
+                            <TextBox x:Name="tb_filter" Width="56" Margin="8,0,6,0"
+                                     ToolTip="Known filter drop in in. wc. Cannot be negative."/>
+                            <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Advanced -->
+                <Expander x:Name="exp_adv" IsExpanded="False" Margin="0,16,0,0"
+                          ToolTip="Overrides to the calculation basis. Standard values apply unless changed.">
+                    <Expander.Header>
+                        <TextBlock FontSize="13" FontWeight="SemiBold" Text="Advanced"/>
+                    </Expander.Header>
+                    <Border Style="{DynamicResource RjaGroupBorder}" Margin="0,6,0,0">
+                        <StackPanel>
+                            <TextBlock x:Name="tb_adv_note" Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap"
+                                       Text="Overrides apply to every duct in the run. Leave at standard values unless the project needs otherwise."/>
+                            <Expander x:Name="exp_c" IsExpanded="False" Margin="0,8,0,0"
+                                      Header="Fitting loss coefficients (C)"
+                                      ToolTip="Defaults from the RJA SP loss worksheet (1985 ASHRAE fitting numbers). Cannot be negative.">
+                                <Grid x:Name="grid_c" Margin="16,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                </Grid>
+                            </Expander>
+                            <Expander x:Name="exp_comp" IsExpanded="False" Margin="0,4,0,0"
+                                      Header="Component pressure drops (in. wc each)"
+                                      ToolTip="Defaults from the component table. Cannot be negative.">
+                                <Grid x:Name="grid_comp" Margin="16,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                </Grid>
+                            </Expander>
+                            <Expander x:Name="exp_basis" IsExpanded="False" Margin="0,4,0,0"
+                                      Header="Calculation basis for friction"
+                                      ToolTip="Must be greater than 0.">
+                                <StackPanel Margin="16,4,0,4">
+                                    <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"
+                                               Text="Applies to every duct in the run, not one system. Air density also drives velocity pressure (fitting losses)."/>
+                                    <Grid x:Name="grid_basis">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                    </Grid>
+                                </StackPanel>
+                            </Expander>
+                        </StackPanel>
+                    </Border>
+                </Expander>
+
+                <!-- Calculation basis reference -->
+                <Expander x:Name="exp_ref" IsExpanded="False" Margin="0,8,0,0">
+                    <Expander.Header>
+                        <TextBlock FontSize="13" FontWeight="SemiBold" Text="Calculation basis"/>
+                    </Expander.Header>
+                    <Grid x:Name="grid_ref" Margin="16,6,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                </Expander>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Background="{DynamicResource RjaPanelBrush}"
+                BorderBrush="{DynamicResource RjaRuleBrush}" BorderThickness="0,1,0,0"
+                Padding="16,10,16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="tb_error" Foreground="#C62828" TextWrapping="Wrap"
+                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="btn_cancel" Content="Cancel" IsCancel="True"
+                            Style="{DynamicResource RjaSecondaryButton}" MinWidth="88" Margin="0,0,8,0"/>
+                    <Button x:Name="btn_ok" Content="OK" IsDefault="True"
+                            Style="{DynamicResource RjaPrimaryButton}" MinWidth="88"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
+'''
+
+
+def _wpf_named(win, name):
+    """The element carrying x:Name `name`. Raises if it is not there, so a
+    missing name sends the caller to the fallback dialog instead of failing later."""
+    el = getattr(win, name, None)
+    if el is None:
+        el = win.FindName(name)
+    if el is None:
+        raise RuntimeError('XAML element not found: ' + name)
+    return el
+
+
+def _show_velocity_settings_xaml(use_theme):
+    """The XAML settings dialog. Returns the 11 element tuple or None (cancel).
+
+    Raises if the window cannot be built, which show_velocity_settings_dialog
+    catches and answers with the next simpler dialog.
+    """
+    import ui_helpers
+    from System.Windows import FontWeights as _FW
+
+    xaml = (_SETTINGS_XAML
+            .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
+            .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
+                'Duct Velocity Check',
+                'Checks main ducts against velocity and friction limits and '
+                'branches against the diffuser tables.')))
+    win = forms.WPFWindow(xaml, literal_string=True)
+
+    N = lambda name: _wpf_named(win, name)
+    img_logo = N('img_logo')
+    cb_full_diag = N('cb_full_diag')
+    cb_oa = N('cb_oa')
+    grid_limits = N('grid_limits')
+    tb_tol = N('tb_tol')
+    grid_cols = N('grid_cols')
+    cb_static = N('cb_static')
+    pnl_static = N('pnl_static')
+    tb_sf = N('tb_sf')
+    cb_filter = N('cb_filter')
+    tb_filter = N('tb_filter')
+    exp_adv = N('exp_adv')
+    exp_c = N('exp_c')
+    exp_comp = N('exp_comp')
+    exp_basis = N('exp_basis')
+    grid_c = N('grid_c')
+    grid_comp = N('grid_comp')
+    grid_basis = N('grid_basis')
+    grid_ref = N('grid_ref')
+    tb_error = N('tb_error')
+    btn_ok = N('btn_ok')
+    btn_cancel = N('btn_cancel')
+    scroll_main = N('scroll_main')
+
+    ui_helpers.rja_apply_logo(win, img_logo)
+    try:
+        win.MaxHeight = SystemParameters.WorkArea.Height * 0.9
+    except Exception:
+        win.MaxHeight = 800.0
+
+    result = [None]
+    all_boxes = []   # every TextBox that can be flagged invalid
+
+    def _box(text, width, margin):
+        tb = TextBox()
+        tb.Text = text
+        tb.Width = width
+        tb.Margin = margin
+        tb.VerticalAlignment = VerticalAlignment.Center
+        tb.HorizontalAlignment = HorizontalAlignment.Left
+        ui_helpers.rja_attach_clear_on_edit(tb)
+        all_boxes.append(tb)
+        return tb
+
+    def _put(grid, el, col, row):
+        Grid.SetColumn(el, col)
+        Grid.SetRow(el, row)
+        grid.Children.Add(el)
+
+    def _add_row_def(grid):
+        rd = RowDefinition()
+        rd.Height = GridLength.Auto
+        grid.RowDefinitions.Add(rd)
+
+    # defaults into the fixed boxes
+    tb_tol.Text = str(_DV_DEFAULT_TOL_PCT)
+    tb_sf.Text = str(_DV_DEFAULT_SAFETY_PCT)
+    tb_filter.Text = '%g' % fitting_tables.DEFAULT_RETURN_FILTER_INWC
+    for b in (tb_tol, tb_sf, tb_filter):
+        ui_helpers.rja_attach_clear_on_edit(b)
+        all_boxes.append(b)
+    cb_full_diag.IsChecked = False
+    cb_oa.IsChecked = False
+    cb_static.IsChecked = False
+    cb_filter.IsChecked = False
+
+    # ── main duct limits grid ───────────────────────────────────────────────
+    _add_row_def(grid_limits)
+    for col, head in ((0, 'System'), (1, 'Max velocity (FPM)'),
+                      (2, 'Max friction (in. wc/100 ft)')):
+        h = TextBlock()
+        h.Text = head
+        h.FontWeight = _FW.SemiBold
+        h.Margin = Thickness(0, 0, 24, 2)
+        _put(grid_limits, h, col, 0)
+    vel_boxes = {}
+    fric_boxes = {}
+    for i, (sys_class, def_fpm, def_fric) in enumerate(_DV_ROWS):
+        r = i + 1
+        _add_row_def(grid_limits)
+        lb = TextBlock()
+        lb.Text = sys_class
+        lb.VerticalAlignment = VerticalAlignment.Center
+        _put(grid_limits, lb, 0, r)
+        vb = _box(str(def_fpm), 80, Thickness(0, 2, 24, 2))
+        vb.ToolTip = 'Maximum velocity for ' + sys_class + ' main ducts, in FPM. Must be greater than 0.'
+        _put(grid_limits, vb, 1, r)
+        vel_boxes[i] = vb
+        fb = _box(str(def_fric), 80, Thickness(0, 2, 24, 2))
+        fb.ToolTip = ('Maximum friction rate for ' + sys_class +
+                      ' main ducts, in in. wc per 100 ft. Must be greater than 0.')
+        _put(grid_limits, fb, 2, r)
+        fric_boxes[i] = fb
+
+    # ── outputs: optional column checkboxes, two columns ────────────────────
+    _optional = _optional_columns()
+    _ncols = 2
+    _nrows = (len(_optional) + _ncols - 1) // _ncols
+    for _ in range(max(_nrows, 1)):
+        _add_row_def(grid_cols)
+    col_boxes = {}
+    for i, (key, header, _vw, _cw, default_on) in enumerate(_optional):
+        cb = CheckBox()
+        cb.Content = header
+        cb.IsChecked = default_on
+        cb.ToolTip = 'Optional column in the sheet table and the pyRevit window table.'
+        _put(grid_cols, cb, i // _nrows, i % _nrows)
+        col_boxes[key] = cb
+
+    # ── advanced value rows (same defaults and stores as the legacy dialog) ─
+    def _fill_value_grid(grid, rows, store, order, fmt):
+        """rows: (key, label, extra, default). order collects (key, label)."""
+        for r, (key, label, extra, default) in enumerate(rows):
+            _add_row_def(grid)
+            lb = TextBlock()
+            lb.Text = label
+            lb.Margin = Thickness(0, 2, 12, 2)
+            lb.VerticalAlignment = VerticalAlignment.Center
+            _put(grid, lb, 0, r)
+            tb = _box(fmt % default, 64, Thickness(0, 2, 8, 2))
+            _put(grid, tb, 1, r)
+            store[key] = tb
+            order.append((key, label))
+            if extra:
+                ex = ui_helpers.rja_hint_block(win, extra)
+                ex.VerticalAlignment = VerticalAlignment.Center
+                _put(grid, ex, 2, r)
+
+    c_boxes = {}
+    c_order = []
+    _fill_value_grid(
+        grid_c,
+        [(k, lbl, 'ASHRAE ' + no, v) for k, lbl, no, v in fitting_tables.C_TABLE],
+        c_boxes, c_order, '%.2f')
+    comp_boxes = {}
+    comp_order = []
+    _fill_value_grid(
+        grid_comp,
+        [(k, lbl, 'in. wc', v) for k, lbl, v in fitting_tables.COMPONENT_TABLE],
+        comp_boxes, comp_order, '%.3f')
+    basis_boxes = {}
+    basis_order = []
+    _fill_value_grid(
+        grid_basis,
+        [('rigid_roughness', 'Duct roughness, rigid (ft)',
+          '0.0003 galvanized, 0.005 interior insulated',
+          hvac_graph.STANDARD_RIGID_ROUGHNESS_FT),
+         ('flex_roughness', 'Duct roughness, flex (ft)',
+          '0.012 corrugated flex',
+          hvac_graph.STANDARD_FLEX_ROUGHNESS_FT),
+         ('air_density', 'Air density (lb/ft3)',
+          '0.075 standard air, sea level',
+          hvac_graph.STANDARD_AIR_DENSITY_LB_FT3)],
+        basis_boxes, basis_order, '%g')
+
+    # ── calculation basis reference (condensed) ─────────────────────────────
+    ref_rows = [
+        ('Limits', 'Checked on main ducts only. Branches are judged against the '
+                   'diffuser capacity tables.'),
+        ('Friction', 'Darcy Weisbach with the Altshul Tsal friction factor '
+                     '(explicit approximation to Colebrook White), checked against '
+                     'the RJA SP loss worksheet.'),
+        ('Air density', '%g lb/ft3, standard air at sea level, not altitude '
+                        'corrected. Editable under Advanced.'
+                        % hvac_graph.STANDARD_AIR_DENSITY_LB_FT3),
+        ('Roughness', '%g ft galvanized, %g ft flex (flex detected by category). '
+                      'Editable under Advanced.'
+                      % (hvac_graph.STANDARD_RIGID_ROUGHNESS_FT,
+                         hvac_graph.STANDARD_FLEX_ROUGHNESS_FT)),
+        ('Fittings', 'C x Pv, with C from the RJA SP loss worksheet (1985 ASHRAE '
+                     'fitting numbers). Editable under Advanced.'),
+        ('External static', 'The most restrictive run (index run) from the unit to '
+                            'a terminal, supply path plus return path. Includes duct '
+                            'friction, fittings, balancing dampers, the diffuser and '
+                            'the safety factor. Excludes the coil and cabinet (already '
+                            'in the published ESP), fire and backdraft dampers, and the '
+                            'filter unless Include return filter is ticked.'),
+    ]
+    for r, (lab, val) in enumerate(ref_rows):
+        _add_row_def(grid_ref)
+        a = TextBlock()
+        a.Text = lab
+        a.FontWeight = _FW.SemiBold
+        a.Margin = Thickness(0, 2, 12, 2)
+        a.VerticalAlignment = VerticalAlignment.Top
+        _put(grid_ref, a, 0, r)
+        v = ui_helpers.rja_hint_block(win, val)
+        v.Margin = Thickness(0, 2, 0, 2)
+        _put(grid_ref, v, 1, r)
+
+    # ── grey out the external static group until its checkbox is ticked ─────
+    def sync_enable(s=None, e=None):
+        master = bool(cb_static.IsChecked)
+        pnl_static.IsEnabled = master
+        pnl_static.Opacity = 1.0 if master else 0.55
+        tb_filter.IsEnabled = bool(cb_filter.IsChecked)
+    cb_static.Checked += sync_enable
+    cb_static.Unchecked += sync_enable
+    cb_filter.Checked += sync_enable
+    cb_filter.Unchecked += sync_enable
+    sync_enable()
+
+    # ── OK: validate every field, report inline, window stays open ──────────
+    def _collect():
+        """Returns (errors, values). errors: list of (box, message, expanders)."""
+        errors = []
+
+        def num(box, label, kind, expanders=()):
+            try:
+                v = float(box.Text)
+                if math.isnan(v) or math.isinf(v):
+                    raise ValueError('not finite')
+            except (ValueError, TypeError):
+                errors.append((box, label + ' must be a number.', expanders))
+                return None
+            if kind == 'open_pct' and not (0 < v < 100):
+                errors.append((box, label + ' must be above 0 and below 100.', expanders))
+                return None
+            if kind == 'pct' and not (0 <= v <= 100):
+                errors.append((box, label + ' must be between 0 and 100.', expanders))
+                return None
+            if kind == 'pos' and v <= 0:
+                errors.append((box, label + ' must be greater than 0.', expanders))
+                return None
+            if kind == 'nonneg' and v < 0:
+                errors.append((box, label + ' cannot be negative.', expanders))
+                return None
+            return v
+
+        gpct = num(tb_tol, 'Yellow tolerance', 'open_pct')
+        out = {}
+        for i, (sys_class, _d1, _d2) in enumerate(_DV_ROWS):
+            max_fpm = num(vel_boxes[i], sys_class + ' max velocity', 'pos')
+            max_fric = num(fric_boxes[i], sys_class + ' max friction', 'pos')
+            if max_fpm is not None and max_fric is not None:
+                out[sys_class] = (max_fpm, max_fric)
+
+        ext_static = bool(cb_static.IsChecked)
+        if ext_static:
+            safety_pct = num(tb_sf, 'Safety factor', 'pct')
+        else:
+            # Box is greyed out and not used. Still returned, as before; an
+            # unusable value falls back to the default rather than blocking OK.
+            try:
+                safety_pct = float(tb_sf.Text)
+                if math.isnan(safety_pct) or not (0 <= safety_pct <= 100):
+                    safety_pct = float(_DV_DEFAULT_SAFETY_PCT)
+            except (ValueError, TypeError):
+                safety_pct = float(_DV_DEFAULT_SAFETY_PCT)
+
+        c_values = {}
+        for k, label in c_order:
+            v = num(c_boxes[k], 'Fitting C value, ' + label, 'nonneg', (exp_adv, exp_c))
+            if v is not None:
+                c_values[k] = v
+        comp_values = {}
+        for k, label in comp_order:
+            v = num(comp_boxes[k], label + ' pressure drop', 'nonneg', (exp_adv, exp_comp))
+            if v is not None:
+                comp_values[k] = v
+        calc_basis = {}
+        for k, label in basis_order:
+            v = num(basis_boxes[k], label, 'pos', (exp_adv, exp_basis))
+            if v is not None:
+                calc_basis[k] = v
+
+        filter_inwc = 0.0
+        if ext_static and bool(cb_filter.IsChecked):
+            f = num(tb_filter, 'Return filter drop', 'nonneg')
+            if f is not None:
+                filter_inwc = f
+
+        include_oa = bool(cb_oa.IsChecked)
+        selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
+        full_diag = bool(cb_full_diag.IsChecked)
+        values = (out, gpct, include_oa, selected_cols, full_diag,
+                  ext_static, safety_pct, c_values, comp_values, calc_basis,
+                  filter_inwc)
+        return errors, values
+
+    def on_ok(s, e):
+        try:
+            for b in all_boxes:
+                ui_helpers.rja_clear_error(b)
+            tb_error.Text = ''
+            errors, values = _collect()
+            if errors:
+                for box, _msg, exps in errors:
+                    ui_helpers.rja_mark_error(box, exps)
+                msg = errors[0][1]
+                if len(errors) > 1:
+                    msg += '  (%d more highlighted)' % (len(errors) - 1)
+                tb_error.Text = msg
+                try:
+                    win.UpdateLayout()
+                    errors[0][0].BringIntoView()
+                    errors[0][0].Focus()
+                except Exception:
+                    pass
+                return
+            result[0] = values
+            win.Close()
+        except Exception as ex:
+            # Never let a handler fault escape into ShowDialog.
+            try:
+                tb_error.Text = 'Unexpected error: ' + str(ex)
+            except Exception:
+                pass
+
+    def on_cancel(s, e):
+        win.Close()
+
+    btn_ok.Click += on_ok
+    btn_cancel.Click += on_cancel
+
+    win.ShowDialog()
+    return result[0]
+
+
 def show_velocity_settings_dialog():
-    """WPF dialog — Outside Air scope, per-system max velocity + friction,
+    """The settings dialog. Returns ({sys_class: (max_fpm, max_friction_inwc)},
+    tol_pct, include_oa, selected_column_keys, full_diag, ext_static, safety_pct,
+    c_values, comp_values, calc_basis, filter_inwc) or None if cancelled.
+
+    Tries the themed XAML dialog first, then the same dialog without the theme
+    file, then the original code-built dialog, so the tool always opens. The
+    meaning of every returned element is documented on
+    _show_velocity_settings_dialog_legacy.
+    """
+    log = script.get_logger()
+    for use_theme in (True, False):
+        try:
+            return _show_velocity_settings_xaml(use_theme)
+        except Exception:
+            log.warning('Themed settings dialog failed (theme=%s), falling back:\n%s'
+                        % (use_theme, traceback.format_exc()))
+    return _show_velocity_settings_dialog_legacy()
+
+
+def _show_velocity_settings_dialog_legacy():
+    """FALLBACK ONLY. Code-built WPF dialog — Outside Air scope, per-system max velocity + friction,
     a yellow/red tolerance %, and which columns the output tables show.
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
@@ -190,15 +761,9 @@ def show_velocity_settings_dialog():
     """
     # Defaults: firm design standard. Main ducts only — branches no longer
     # share these values (see the docstring above).
-    ROWS = [
-        ('Supply Air',   800,  0.08),
-        ('Return Air',   600,  0.05),
-        ('Exhaust Air',  600,  0.05),
-        ('Outside Air',  600,  0.05),
-        ('Transfer Air', 400,  0.05),
-    ]
-    DEFAULT_TOL_PCT = 10     # yellow band: ±this % around max
-    DEFAULT_SAFETY_PCT = 10  # SP_LOSS_WORKSHEET's own last row
+    ROWS = list(_DV_ROWS)
+    DEFAULT_TOL_PCT = _DV_DEFAULT_TOL_PCT
+    DEFAULT_SAFETY_PCT = _DV_DEFAULT_SAFETY_PCT
     # Component drops are NOT defined here: the rows below are built straight
     # from fitting_tables.COMPONENT_TABLE so there is exactly one place to
     # change a default. Provenance for each figure lives beside it there.
@@ -816,11 +1381,202 @@ def _warn_if_same_side(picked):
             'one of each.'.format(a))
 
 
+_PICKER_DUCT_TAG = '__select_duct_system__'
+
+_PICKER_XAML = '''
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Select Systems to Visualize"
+        Width="520" MinWidth="420" MaxWidth="760"
+        SizeToContent="Height" ResizeMode="CanResizeWithGrip"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="White" FontFamily="Segoe UI" FontSize="12"
+        Foreground="{DynamicResource RjaTextBrush}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    @@RESOURCES@@
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        @@HEADER@@
+
+        <StackPanel Grid.Row="1" Margin="16,12,16,12">
+            <TextBlock x:Name="tb_picker_hint" Style="{DynamicResource RjaHint}" FontSize="11"
+                       TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <ListBox x:Name="lst" SelectionMode="Extended" MaxHeight="300"
+                     BorderBrush="#D0D0D0" BorderThickness="1"/>
+        </StackPanel>
+
+        <Border Grid.Row="2" Background="{DynamicResource RjaPanelBrush}"
+                BorderBrush="{DynamicResource RjaRuleBrush}" BorderThickness="0,1,0,0"
+                Padding="16,10,16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="tb_error" Foreground="#C62828" TextWrapping="Wrap"
+                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="btn_cancel" Content="Cancel" IsCancel="True"
+                            Style="{DynamicResource RjaSecondaryButton}" MinWidth="88" Margin="0,0,8,0"/>
+                    <Button x:Name="btn_ok" Content="OK" IsDefault="True"
+                            Style="{DynamicResource RjaPrimaryButton}" MinWidth="88"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
+'''
+
+
+def _show_system_picker_xaml(display_names, use_theme):
+    """Themed picker: ONE list, duct system entry first, equipment below it.
+    Returns ('equipment', [names]), ('ducts', None) or None. Raises if the
+    window cannot be built (caller falls back)."""
+    import ui_helpers
+    from System.Windows.Controls import ListBoxItem
+    from System.Windows import FontWeights as _FW
+
+    xaml = (_PICKER_XAML
+            .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
+            .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
+                'Duct Velocity Check', 'Select the system to analyze.')))
+    win = forms.WPFWindow(xaml, literal_string=True)
+
+    N = lambda name: _wpf_named(win, name)
+    lst = N('lst')
+    tb_hint = N('tb_picker_hint')
+    tb_error = N('tb_error')
+    btn_ok = N('btn_ok')
+    btn_cancel = N('btn_cancel')
+    ui_helpers.rja_apply_logo(win, N('img_logo'))
+    try:
+        win.MaxHeight = SystemParameters.WorkArea.Height * 0.9
+    except Exception:
+        win.MaxHeight = 800.0
+
+    result = [None]
+
+    if display_names:
+        tb_hint.Text = ('Select one or more units found in this view, or choose '
+                        'Select Duct System if the unit is not on this plan.')
+    else:
+        tb_hint.Text = ('No mechanical equipment found in this view. Use Select '
+                        'Duct System.')
+
+    # First entry: the duct system route, with a one line hint under it.
+    duct_item = ListBoxItem()
+    duct_item.Tag = _PICKER_DUCT_TAG
+    duct_panel = StackPanel()
+    duct_title = TextBlock()
+    duct_title.Text = 'Select Duct System (SA/RA)'
+    duct_title.FontWeight = _FW.SemiBold
+    duct_panel.Children.Add(duct_title)
+    duct_hint = ui_helpers.rja_hint_block(
+        win, 'Pick one supply duct and one return duct. Use when the unit is not '
+             'on this plan.')
+    duct_hint.Margin = Thickness(0, 2, 0, 0)
+    duct_panel.Children.Add(duct_hint)
+    duct_item.Content = duct_panel
+    lst.Items.Add(duct_item)
+
+    equip_items = []
+    for n in display_names:
+        it = ListBoxItem()
+        it.Content = n
+        it.Tag = n
+        lst.Items.Add(it)
+        equip_items.append(it)
+
+    # Preselect: first unit if there are any (as before), else the duct entry.
+    first = equip_items[0] if equip_items else duct_item
+    first.IsSelected = True
+
+    # The duct system entry and unit entries exclude each other: selecting one
+    # kind clears the other.
+    busy = [False]
+
+    def _is_duct(item):
+        return item.Tag == _PICKER_DUCT_TAG
+
+    def on_selection_changed(s, e):
+        if busy[0]:
+            return
+        busy[0] = True
+        try:
+            added = list(e.AddedItems)
+            if any(_is_duct(i) for i in added):
+                for i in list(lst.SelectedItems):
+                    if not _is_duct(i):
+                        lst.SelectedItems.Remove(i)
+            elif added:
+                for i in list(lst.SelectedItems):
+                    if _is_duct(i):
+                        lst.SelectedItems.Remove(i)
+            tb_error.Text = ''
+        finally:
+            busy[0] = False
+    lst.SelectionChanged += on_selection_changed
+
+    def on_ok(s, e):
+        try:
+            sel = list(lst.SelectedItems)
+            if not sel:
+                tb_error.Text = 'Select at least one entry.'
+                return
+            if any(_is_duct(i) for i in sel):
+                result[0] = ('ducts', None)
+            else:
+                result[0] = ('equipment', [str(i.Tag) for i in sel])
+            win.Close()
+        except Exception as ex:
+            try:
+                tb_error.Text = 'Unexpected error: ' + str(ex)
+            except Exception:
+                pass
+
+    def on_cancel(s, e):
+        win.Close()
+
+    def on_loaded(s, e):
+        try:
+            first.Focus()
+        except Exception:
+            pass
+
+    btn_ok.Click += on_ok
+    btn_cancel.Click += on_cancel
+    win.Loaded += on_loaded
+    win.ShowDialog()
+    return result[0]
+
+
 def show_system_picker(display_names):
     """Second screen. Returns ('equipment', [names]), ('ducts', None) or None.
 
     display_names is the sorted list of equipment labels found in the active
-    view; it may be empty, in which case only the duct route is offered.
+    view; it may be empty, in which case only the duct system entry is shown.
+    Falls back to the original two button picker if the themed one cannot be
+    built.
+    """
+    log = script.get_logger()
+    for use_theme in (True, False):
+        try:
+            return _show_system_picker_xaml(display_names, use_theme)
+        except Exception:
+            log.warning('Themed system picker failed (theme=%s), falling back:\n%s'
+                        % (use_theme, traceback.format_exc()))
+    return _show_system_picker_legacy(display_names)
+
+
+def _show_system_picker_legacy(display_names):
+    """FALLBACK ONLY. Original two button picker.
+
+    Returns ('equipment', [names]), ('ducts', None) or None.
     """
     result = [None]
 

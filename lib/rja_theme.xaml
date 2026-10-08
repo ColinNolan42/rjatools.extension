@@ -1,0 +1,175 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- RJA dialog theme. Shared by the Duct Velocity dialogs.
+         Primary #0070C0 was sampled from the RJA logo. The dark, tint, muted,
+         rule, panel and error colors are derived and proposed, not from a brand file.
+         Result colors (green, yellow, red, purple) are deliberately NOT used here
+         so they keep their meaning in the report. -->
+
+    <SolidColorBrush x:Key="RjaBlueBrush" Color="#0070C0"/>
+    <SolidColorBrush x:Key="RjaBlueDarkBrush" Color="#005A9C"/>
+    <SolidColorBrush x:Key="RjaTintBrush" Color="#E6F1FA"/>
+    <SolidColorBrush x:Key="RjaTextBrush" Color="#1F1F1F"/>
+    <SolidColorBrush x:Key="RjaMutedBrush" Color="#595959"/>
+    <SolidColorBrush x:Key="RjaRuleBrush" Color="#D0D0D0"/>
+    <SolidColorBrush x:Key="RjaPanelBrush" Color="#F5F7FA"/>
+    <SolidColorBrush x:Key="RjaErrorBrush" Color="#C62828"/>
+    <SolidColorBrush x:Key="RjaErrorFillBrush" Color="#FDECEA"/>
+
+    <!-- Text boxes -->
+    <Style TargetType="TextBox">
+        <Setter Property="Foreground" Value="{StaticResource RjaTextBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource RjaRuleBrush}"/>
+        <Setter Property="Padding" Value="3,2,3,2"/>
+        <Setter Property="MinHeight" Value="24"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Style.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Background" Value="{StaticResource RjaPanelBrush}"/>
+                <Setter Property="Foreground" Value="{StaticResource RjaMutedBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Check boxes -->
+    <Style TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource RjaTextBrush}"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Margin" Value="0,3,0,3"/>
+    </Style>
+
+    <!-- Expanders -->
+    <Style TargetType="Expander">
+        <Setter Property="Foreground" Value="{StaticResource RjaTextBrush}"/>
+    </Style>
+
+    <!-- List box rows (system picker) -->
+    <Style TargetType="ListBoxItem">
+        <Setter Property="Padding" Value="8,6,8,6"/>
+        <Setter Property="Foreground" Value="{StaticResource RjaTextBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="bd" Background="Transparent" BorderBrush="Transparent"
+                            BorderThickness="1" Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource RjaPanelBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource RjaTintBrush}"/>
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource RjaBlueBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Section header: tint band with a blue left edge -->
+    <Style x:Key="RjaSectionHeader" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource RjaTintBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource RjaBlueBrush}"/>
+        <Setter Property="BorderThickness" Value="3,0,0,0"/>
+        <Setter Property="Padding" Value="8,4,8,4"/>
+    </Style>
+    <Style x:Key="RjaSectionTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{StaticResource RjaBlueDarkBrush}"/>
+    </Style>
+
+    <!-- Hint text -->
+    <Style x:Key="RjaHint" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground" Value="{StaticResource RjaMutedBrush}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <!-- Bordered sub group -->
+    <Style x:Key="RjaGroupBorder" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource RjaPanelBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource RjaRuleBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="3"/>
+        <Setter Property="Padding" Value="10"/>
+    </Style>
+
+    <!-- Primary button (OK) -->
+    <Style x:Key="RjaPrimaryButton" TargetType="Button">
+        <Setter Property="Foreground" Value="White"/>
+        <Setter Property="Background" Value="{StaticResource RjaBlueBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource RjaBlueBrush}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="MinWidth" Value="88"/>
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="Padding" Value="12,2,12,2"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                            CornerRadius="3" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource RjaBlueDarkBrush}"/>
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource RjaBlueDarkBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource RjaBlueDarkBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource RjaTextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="bd" Property="Opacity" Value="0.5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Secondary button (Cancel) -->
+    <Style x:Key="RjaSecondaryButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource RjaTextBrush}"/>
+        <Setter Property="Background" Value="White"/>
+        <Setter Property="BorderBrush" Value="{StaticResource RjaRuleBrush}"/>
+        <Setter Property="MinWidth" Value="88"/>
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="Padding" Value="12,2,12,2"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                            CornerRadius="3" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource RjaTintBrush}"/>
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource RjaBlueBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource RjaRuleBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource RjaBlueBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="bd" Property="Opacity" Value="0.5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

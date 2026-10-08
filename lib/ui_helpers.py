@@ -423,3 +423,208 @@ def _show_picker(title, prv_option):
     if res is None or not res["pipe_material"] or not res["table_label"]:
         return None
     return res
+
+
+# =============================================================================
+# RJA theme helpers (added for the Duct Velocity dialogs)
+# =============================================================================
+# Everything below is NEW and self-contained. Nothing above this line uses it,
+# so the gas and water dialogs are unaffected. Imports are done inside each
+# function so a problem here can never stop this module from importing.
+#
+# Every cosmetic step (theme file, logo, icon) degrades silently: a dialog built
+# from these helpers is always usable, just plainer.
+
+RJA_COLORS = {
+    'blue':       (0x00, 0x70, 0xC0),   # sampled from the RJA logo
+    'blue_dark':  (0x00, 0x5A, 0x9C),   # derived
+    'tint':       (0xE6, 0xF1, 0xFA),   # derived
+    'text':       (0x1F, 0x1F, 0x1F),
+    'muted':      (0x59, 0x59, 0x59),
+    'rule':       (0xD0, 0xD0, 0xD0),
+    'panel':      (0xF5, 0xF7, 0xFA),
+    'error':      (0xC6, 0x28, 0x28),
+    'error_fill': (0xFD, 0xEC, 0xEA),
+}
+
+
+def rja_brush(name):
+    """A new SolidColorBrush for one of the RJA_COLORS names."""
+    from System.Windows.Media import SolidColorBrush, Color
+    r, g, b = RJA_COLORS[name]
+    return SolidColorBrush(Color.FromRgb(r, g, b))
+
+
+def _rja_lib_dir():
+    import os
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def rja_theme_path():
+    """Absolute path of lib/rja_theme.xaml, or None if the file is missing."""
+    import os
+    p = os.path.join(_rja_lib_dir(), 'rja_theme.xaml')
+    return p if os.path.isfile(p) else None
+
+
+def rja_logo_path():
+    """Absolute path of lib/assets/rja_logo.png, or None if the file is missing."""
+    import os
+    p = os.path.join(_rja_lib_dir(), 'assets', 'rja_logo.png')
+    return p if os.path.isfile(p) else None
+
+
+def rja_window_resources_xaml(use_theme=True):
+    """The <Window.Resources> XAML fragment that merges rja_theme.xaml.
+
+    Returns an empty string when the theme is not wanted or not found, so the
+    window loads with plain default styling. The theme is referenced by an
+    absolute file URI built by System.Uri, which escapes the space in the
+    user profile path.
+    """
+    if not use_theme:
+        return ''
+    try:
+        from System import Uri
+        from xml.sax.saxutils import escape
+        p = rja_theme_path()
+        if p is None:
+            return ''
+        uri = Uri(p).AbsoluteUri
+        return ('<Window.Resources><ResourceDictionary>'
+                '<ResourceDictionary.MergedDictionaries>'
+                '<ResourceDictionary Source="' + escape(uri, {'"': '&quot;'}) + '"/>'
+                '</ResourceDictionary.MergedDictionaries>'
+                '</ResourceDictionary></Window.Resources>')
+    except Exception:
+        return ''
+
+
+def rja_header_xaml(title, purpose=None):
+    """XAML for the white header band: logo (x:Name img_logo), title, purpose.
+
+    Sits in Grid.Row 0. A 3 px RJA blue rule runs under it. The rule color is
+    written literally so it shows even when the theme file did not load.
+    """
+    from xml.sax.saxutils import escape
+    q = {'"': '&quot;'}
+    purpose_xaml = ''
+    if purpose:
+        purpose_xaml = ('<TextBlock Style="{DynamicResource RjaHint}" TextWrapping="Wrap"'
+                        ' FontSize="11" Margin="0,2,0,0" Text="' + escape(purpose, q) + '"/>')
+    return (
+        '<Border Grid.Row="0" Background="White" BorderBrush="#0070C0"'
+        ' BorderThickness="0,0,0,3" Padding="16,10,16,10">'
+        '<Grid>'
+        '<Grid.ColumnDefinitions>'
+        '<ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>'
+        '</Grid.ColumnDefinitions>'
+        '<Image x:Name="img_logo" Height="44" Stretch="Uniform"'
+        ' RenderOptions.BitmapScalingMode="HighQuality"'
+        ' VerticalAlignment="Center" Margin="0,0,14,0"/>'
+        '<StackPanel Grid.Column="1" VerticalAlignment="Center">'
+        '<TextBlock FontSize="16" FontWeight="Bold" Text="' + escape(title, q) + '"/>'
+        + purpose_xaml +
+        '</StackPanel>'
+        '</Grid>'
+        '</Border>')
+
+
+def rja_logo_bitmap():
+    """The logo as a frozen BitmapImage, or None if missing or unreadable.
+
+    OnLoad caching releases the file handle straight away, so the file is never
+    left locked.
+    """
+    try:
+        p = rja_logo_path()
+        if p is None:
+            return None
+        from System import Uri, UriKind
+        from System.Windows.Media.Imaging import (
+            BitmapImage, BitmapCacheOption, BitmapCreateOptions)
+        bmp = BitmapImage()
+        bmp.BeginInit()
+        bmp.UriSource = Uri(p, UriKind.Absolute)
+        bmp.CacheOption = BitmapCacheOption.OnLoad
+        bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache
+        bmp.EndInit()
+        bmp.Freeze()
+        return bmp
+    except Exception:
+        return None
+
+
+def rja_apply_logo(window, image_element):
+    """Show the logo in image_element and use it as the window icon.
+
+    On any failure the Image is collapsed (title shifts left) and nothing is
+    raised.
+    """
+    bmp = rja_logo_bitmap()
+    try:
+        if bmp is None:
+            from System.Windows import Visibility
+            image_element.Visibility = Visibility.Collapsed
+            return False
+        image_element.Source = bmp
+    except Exception:
+        return False
+    try:
+        window.Icon = bmp
+    except Exception:
+        pass
+    return True
+
+
+def rja_hint_block(element, text):
+    """A muted, wrapping hint TextBlock. Uses the theme's RjaHint style when it
+    loaded on `element`, otherwise sets the same look directly."""
+    from System.Windows.Controls import TextBlock
+    from System.Windows import TextWrapping
+    tb = TextBlock()
+    tb.Text = text
+    tb.TextWrapping = TextWrapping.Wrap
+    style = None
+    try:
+        style = element.TryFindResource('RjaHint')
+    except Exception:
+        style = None
+    if style is not None:
+        tb.Style = style
+    else:
+        tb.FontSize = 11
+        tb.Foreground = rja_brush('muted')
+    return tb
+
+
+def rja_mark_error(box, expanders=None):
+    """Red border and light red fill on a TextBox, and open every Expander in
+    `expanders` so the user can see it."""
+    try:
+        box.BorderBrush = rja_brush('error')
+        box.Background = rja_brush('error_fill')
+    except Exception:
+        pass
+    for exp in (expanders or ()):
+        try:
+            exp.IsExpanded = True
+        except Exception:
+            pass
+
+
+def rja_clear_error(box):
+    """Remove the error highlight and fall back to the theme or default look."""
+    try:
+        from System.Windows.Controls import Control
+        box.ClearValue(Control.BorderBrushProperty)
+        box.ClearValue(Control.BackgroundProperty)
+    except Exception:
+        pass
+
+
+def rja_attach_clear_on_edit(box):
+    """Clear the error highlight the moment the user edits the box."""
+    def _on_changed(sender, args):
+        rja_clear_error(sender)
+    box.TextChanged += _on_changed
