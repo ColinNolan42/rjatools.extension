@@ -155,11 +155,14 @@ def show_velocity_settings_dialog():
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
     selected_column_keys, full_diag, ext_static, safety_pct,
-    c_values, comp_values) or None.
+    c_values, comp_values, calc_basis) or None.
 
     c_values maps fitting_tables.C_TABLE keys to C, and comp_values maps
     COMPONENT_TABLE keys to in. wc. Both start at the published defaults and are
     only changed if the engineer opens the expander and edits one.
+
+    calc_basis maps 'rigid_roughness' / 'flex_roughness' (ft) and 'air_density'
+    (lb/ft3) to the Advanced settings values, passed to hvac_graph.set_calc_basis().
 
     The velocity and friction limits here apply to MAIN ducts only. Branch
     ducts (a run feeding exactly one terminal) are sized against the published
@@ -471,6 +474,32 @@ def show_velocity_settings_dialog():
         [(k, lbl, 'in. wc', v) for k, lbl, v in fitting_tables.COMPONENT_TABLE],
         comp_boxes, 250, '%.3f')
 
+    # The calculation basis itself, for the rare job that departs from it.
+    # Colin, 2026-10-08: interior-insulated duct has eps 0.005, not 0.0003.
+    # Collapsed and at the standard values, so a normal run never touches it.
+    basis_boxes = {}
+    adv_exp = _value_expander(
+        'Advanced settings (calculation basis)',
+        [('rigid_roughness', 'Duct roughness, rigid (ft)',
+          u'0.0003 galvanized, 0.005 interior-insulated',
+          hvac_graph.STANDARD_RIGID_ROUGHNESS_FT),
+         ('flex_roughness', 'Duct roughness, flex (ft)',
+          u'0.012 corrugated flex',
+          hvac_graph.STANDARD_FLEX_ROUGHNESS_FT),
+         ('air_density', u'Air density (lb/ft³)',
+          u'0.075 standard air, sea level',
+          hvac_graph.STANDARD_AIR_DENSITY_LB_FT3)],
+        basis_boxes, 250, '%g')
+    adv_note = TextBlock()
+    adv_note.Text = (u'Applies to EVERY duct in the run, not one system. Leave at the '
+                     u'standard values unless the project needs otherwise. Air density '
+                     u'also drives velocity pressure (fitting losses).')
+    adv_note.TextWrapping = TextWrapping.Wrap
+    adv_note.Width = CONTENT_W - 40
+    adv_note.Foreground = SolidColorBrush(Colors.DimGray)
+    adv_note.Margin = Thickness(0, 0, 0, 4)
+    adv_exp.Content.Children.Insert(0, adv_note)
+
     col_grid = Grid()
     _COL_PICKER_COLS = 2
     for _ in range(_COL_PICKER_COLS):
@@ -535,9 +564,10 @@ def show_velocity_settings_dialog():
     _info_row('Friction factor:', u'Altshul-Tsal  (ASHRAE explicit approx. to Colebrook-White)')
     _info_row('Verified against:', u'RJA SP_LOSS_WORKSHEET, matches its duct rows to the printed digit')
     _info_row('Air density:',     u'0.0750 lb/ft³  (standard air, 68°F, SEA LEVEL, '
-                                  u'not altitude-corrected)')
+                                  u'not altitude-corrected). Editable under Advanced settings.')
     _info_row('Duct roughness:',  u'ε = 0.0003 ft galvanized, 0.012 ft flex '
-                                  u'(detected by category, ~1.8× the friction)')
+                                  u'(detected by category, ~1.8× the friction). '
+                                  u'Editable under Advanced settings.')
     _info_row('Fitting losses:',  u'C × Pv, C from RJA SP_LOSS_WORKSHEET '
                                   u'(1985 ASHRAE fitting numbers), editable above')
     _info_row('External static:', 'the single most restrictive run (index run) from '
@@ -602,8 +632,16 @@ def show_velocity_settings_dialog():
                                 title='Invalid Input')
                     return
                 comp_values[k] = v
+            calc_basis = {}
+            for k, box in basis_boxes.items():
+                v = float(box.Text)
+                if v <= 0:
+                    forms.alert('Advanced settings (roughness, air density) must '
+                                'be greater than 0.', title='Invalid Input')
+                    return
+                calc_basis[k] = v
             result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         ext_static, safety_pct, c_values, comp_values)
+                         ext_static, safety_pct, c_values, comp_values, calc_basis)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -1796,7 +1834,21 @@ def main():
         output.print_md('**Cancelled.**')
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     ext_static, safety_pct, c_values, comp_values) = dialog_result
+     ext_static, safety_pct, c_values, comp_values, calc_basis) = dialog_result
+
+    # Every run, even at the standard values, so nothing set by an earlier run
+    # in the same session carries over.
+    hvac_graph.set_calc_basis(air_density=calc_basis['air_density'],
+                              rigid_roughness=calc_basis['rigid_roughness'],
+                              flex_roughness=calc_basis['flex_roughness'])
+    if (calc_basis['rigid_roughness'] != hvac_graph.STANDARD_RIGID_ROUGHNESS_FT
+            or calc_basis['flex_roughness'] != hvac_graph.STANDARD_FLEX_ROUGHNESS_FT
+            or calc_basis['air_density'] != hvac_graph.STANDARD_AIR_DENSITY_LB_FT3):
+        output.print_md(
+            '**Calculation basis overridden (Advanced settings):** rigid duct '
+            'eps = {:g} ft, flex eps = {:g} ft, air density = {:g} lb/ft3.'.format(
+                calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
+                calc_basis['air_density']))
 
     output.print_md('Scope: **{}**'.format(
         'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
@@ -2133,9 +2185,12 @@ def main():
 
         summary_lines.append('')
         summary_lines.append(
-            '  METHOD: Darcy-Weisbach + Altshul-Tsal, eps 0.0003 galvanized / '
-            '0.012 flex. Fittings C x Pv per RJA SP_LOSS_WORKSHEET (1985 ASHRAE). '
-            'Dovetail take-offs, rect elbows vaned.')
+            '  METHOD: Darcy-Weisbach + Altshul-Tsal, eps {:g} ft rigid / '
+            '{:g} ft flex, air density {:g} lb/ft3. Fittings C x Pv per RJA '
+            'SP_LOSS_WORKSHEET (1985 ASHRAE). '
+            'Dovetail take-offs, rect elbows vaned.'.format(
+                calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
+                calc_basis['air_density']))
         summary_lines.append(
             '  NOT INCLUDED: filter, coil and cabinet, already in the published '
             'ESP. Fire and backdraft dampers not priced.')

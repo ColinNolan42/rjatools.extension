@@ -495,7 +495,8 @@ def smacna_label(fpm, sys_class):
 # ductulator.py, and RJA's SP_LOSS_WORKSHEET. NOT altitude-corrected: that is
 # Colin's explicit call (2026-09-24), and at Front Range elevation real friction
 # runs about 15% below these numbers.
-AIR_DENSITY_LB_FT3 = 0.0750
+STANDARD_AIR_DENSITY_LB_FT3 = 0.0750
+AIR_DENSITY_LB_FT3 = STANDARD_AIR_DENSITY_LB_FT3
 _MU_DYN_LBM_FT_S   = 0.018e-2 * 6.7197e-4 / 1e-2      # ~1.21e-5, air at 68°F
 _NU_STD_FT2_S      = _MU_DYN_LBM_FT_S / AIR_DENSITY_LB_FT3
 _GRAVITY_FT_S2     = 32.174
@@ -515,12 +516,41 @@ ROUGHNESS_FT = {
     'Fiberglass Duct Board':  0.0003,
     'Concrete':               0.005,
 }
-DEFAULT_ROUGHNESS_FT = ROUGHNESS_FT['Galvanized Steel']
+STANDARD_RIGID_ROUGHNESS_FT = ROUGHNESS_FT['Galvanized Steel']
+STANDARD_FLEX_ROUGHNESS_FT  = ROUGHNESS_FT['Flex Duct (corrugated)']
+DEFAULT_ROUGHNESS_FT = STANDARD_RIGID_ROUGHNESS_FT
 
 # Velocity pressure constant K in Pv = (V_fpm / K)^2, derived rather than
 # hardcoded at the textbook 4005 so it stays consistent with the density above.
 VELOCITY_PRESSURE_K = math.sqrt(
     2.0 * _GRAVITY_FT_S2 * _IN_WG_PER_LBF_FT2 * 3600.0 / AIR_DENSITY_LB_FT3)
+
+
+def set_calc_basis(air_density=None, rigid_roughness=None, flex_roughness=None):
+    """Override the calculation basis for this run. None means the standard value.
+
+    The three numbers every friction and velocity-pressure result rests on:
+    air density (also drives velocity pressure and Reynolds number), absolute
+    roughness of rigid duct, and absolute roughness of flex. The standard values
+    are sea-level air, galvanized and corrugated flex; they are only changed for
+    cases like interior-insulated (lined) duct, where eps is about 0.005 ft
+    against 0.0003.
+
+    Rigid roughness applies to every non-flex duct in the run. Always call this
+    once per run, even with all None, so a value set by an earlier run in the
+    same session cannot leak into this one.
+    """
+    global AIR_DENSITY_LB_FT3, _NU_STD_FT2_S, VELOCITY_PRESSURE_K, DEFAULT_ROUGHNESS_FT
+    AIR_DENSITY_LB_FT3 = (STANDARD_AIR_DENSITY_LB_FT3 if air_density is None
+                          else float(air_density))
+    _NU_STD_FT2_S = _MU_DYN_LBM_FT_S / AIR_DENSITY_LB_FT3
+    VELOCITY_PRESSURE_K = math.sqrt(
+        2.0 * _GRAVITY_FT_S2 * _IN_WG_PER_LBF_FT2 * 3600.0 / AIR_DENSITY_LB_FT3)
+    DEFAULT_ROUGHNESS_FT = (STANDARD_RIGID_ROUGHNESS_FT if rigid_roughness is None
+                            else float(rigid_roughness))
+    ROUGHNESS_FT['Flex Duct (corrugated)'] = (STANDARD_FLEX_ROUGHNESS_FT
+                                              if flex_roughness is None
+                                              else float(flex_roughness))
 
 
 def velocity_pressure_inwg(v_fpm):
@@ -533,7 +563,7 @@ def velocity_pressure_inwg(v_fpm):
     return (v_fpm / VELOCITY_PRESSURE_K) ** 2
 
 
-def duct_friction_factor(reynolds, d_h_ft, eps_ft=DEFAULT_ROUGHNESS_FT):
+def duct_friction_factor(reynolds, d_h_ft, eps_ft=None):
     """Darcy friction factor by Altshul-Tsal.
 
     f = 0.11 * (eps/Dh + 68/Re)^0.25, and if that lands under 0.018 it is
@@ -544,13 +574,15 @@ def duct_friction_factor(reynolds, d_h_ft, eps_ft=DEFAULT_ROUGHNESS_FT):
     """
     if reynolds <= 0 or d_h_ft <= 0:
         return 0.0
+    if eps_ft is None:
+        eps_ft = DEFAULT_ROUGHNESS_FT   # read at call time so set_calc_basis() takes effect
     f = 0.11 * (eps_ft / d_h_ft + 68.0 / reynolds) ** 0.25
     if f < 0.018:
         f = 0.85 * f + 0.0028
     return f
 
 
-def duct_friction_loss_per_100ft(v_fpm, d_h_in, eps_ft=DEFAULT_ROUGHNESS_FT):
+def duct_friction_loss_per_100ft(v_fpm, d_h_in, eps_ft=None):
     """Friction loss in in. wc per 100 ft, by Darcy-Weisbach.
 
         dP/ft = f / Dh * (rho * V^2) / (2g),  converted to in. wc
