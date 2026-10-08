@@ -746,6 +746,39 @@ def _pick_duct_system():
     return picked
 
 
+def _pick_side(duct):
+    """'supply', 'return' or None, from the duct's System Type name.
+
+    Exhaust counts as the return side, matching how the external static adds
+    the worst of Return/Exhaust to Supply. None when the name says neither, so
+    an unusual System Type name never produces a false warning.
+    """
+    try:
+        name = (hvac_graph.duct_sys_class(duct) or '').lower()
+    except Exception:
+        return None
+    if 'supply' in name:
+        return 'supply'
+    if 'return' in name or 'exhaust' in name:
+        return 'return'
+    return None
+
+
+def _warn_if_same_side(picked):
+    """Fail-safe for the single-system route: one supply duct and one return
+    duct make one system. Two of the same side cannot, so say so (Colin,
+    2026-10-08). A warning, not a stop: the run still goes ahead."""
+    if len(picked) != 2:
+        return
+    a, b = _pick_side(picked[0]), _pick_side(picked[1])
+    if a is not None and a == b:
+        output.print_md(
+            ':warning: **Both picked ducts are {} ducts.** A single system needs '
+            'one supply duct and one return duct, so the external static below '
+            'will not be a complete supply + return total. Run again and pick '
+            'one of each.'.format(a))
+
+
 def show_system_picker(display_names):
     """Second screen. Returns ('equipment', [names]), ('ducts', None) or None.
 
@@ -1897,6 +1930,7 @@ def main():
         if not sel_elems:
             output.print_md('**Cancelled.**')
             return
+        _warn_if_same_side(sel_elems)
         output.print_md(
             '_Rooted from the picked duct(s): the traversal still walks back '
             'to the base equipment for each one, so airflow direction and '
@@ -1908,6 +1942,7 @@ def main():
     all_children     = {}   # merged
     all_root_ids     = []   # one per successfully traversed system
     root_labels      = {}   # root int_id -> equipment label, for per-unit output
+    duct_rooted_ids  = set()  # roots that are a picked duct, not equipment (no unit connected)
     ahu_labels       = []
     ahu_totals       = []   # (ahu_name, ahu_id, discharge_cfm, terminal_count, other_class_cfm)
     all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
@@ -1932,6 +1967,12 @@ def main():
             continue
 
         ahu_labels.append('{} (id {})'.format(_elem_name(net.root), eid_int(net.root.Id)))
+
+        # No unit anywhere on the picked ductwork: build_network rooted at the
+        # duct itself. Remembered so a supply duct and a return duct picked this
+        # way can be added into ONE system's external static further down.
+        if str(net.ahu_method).startswith('fallback'):
+            duct_rooted_ids.add(eid_int(net.root.Id))
 
         if net.warnings:
             for w in net.warnings:
@@ -2093,6 +2134,7 @@ def main():
         # Grouped by EQUIPMENT, because every unit has its own fan and so its own
         # external static. Merging them would let a big unit's index run hide a
         # small one's completely.
+        one_sided = []   # (root_id, total_inwc, side names, is_supply) for roots with one side only
         for root_id in all_root_ids:
             per_class = critical.get(root_id)
             if not per_class:
@@ -2174,14 +2216,49 @@ def main():
                 worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
                 unit_total += worst_c['total_inwc']
                 sides.append(worst_k)
-            if sides:
+            if supply is not None and returns:
                 summary_lines.append(
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
                         unit_total, ' + '.join(sides)))
-                if supply is None or not returns:
-                    summary_lines.append(
-                        '    WARNING: only one side was traversed, so this is NOT '
-                        'a complete external static.')
+            elif sides:
+                # One side only. Held back, not warned about yet: whether it is
+                # half of a system depends on what else was selected.
+                one_sided.append((root_id, unit_total, sides, supply is not None))
+
+        # One-sided roots. A picked supply duct and return duct that reach a
+        # unit both re-root at it and are complete above. With NO unit
+        # connected, each pick roots at its own duct, so one supply root plus one
+        # return root IS one system, and its external static is the two index
+        # runs added (Colin, 2026-10-08). Nothing to warn about there.
+        # Only duct-rooted ones are paired, so a plenum-return unit and a
+        # different unit's return can never be added together by mistake.
+        sup_only = [o for o in one_sided if o[3] and o[0] in duct_rooted_ids]
+        ret_only = [o for o in one_sided if not o[3] and o[0] in duct_rooted_ids]
+        paired = set()
+        if len(sup_only) == 1 and len(ret_only) == 1:
+            s_o, r_o = sup_only[0], ret_only[0]
+            paired.update([s_o[0], r_o[0]])
+            summary_lines.append('')
+            summary_lines.append('  === {} + {} ==='.format(
+                root_labels.get(s_o[0], 'id {}'.format(s_o[0])),
+                root_labels.get(r_o[0], 'id {}'.format(r_o[0]))))
+            summary_lines.append(
+                '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({} + {})'.format(
+                    s_o[1] + r_o[1], s_o[2][0], r_o[2][0]))
+        leftover = [o for o in one_sided if o[0] not in paired]
+        for _rid, _tot, _sides, _is_sup in leftover:
+            summary_lines.append('')
+            summary_lines.append('  === {} ==='.format(
+                root_labels.get(_rid, 'id {}'.format(_rid))))
+            summary_lines.append(
+                '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({} only)'.format(
+                    _tot, ' + '.join(_sides)))
+        if len([o for o in leftover if o[0] in duct_rooted_ids]) > 1:
+            summary_lines.append('')
+            summary_lines.append(
+                '  WARNING: more than one system was selected, so these one-sided '
+                'runs cannot be paired into a single external static. Pick one '
+                'supply duct and one return duct per system.')
 
         summary_lines.append('')
         summary_lines.append(
