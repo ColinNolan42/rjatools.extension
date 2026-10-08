@@ -102,6 +102,14 @@ for _k, _lbl, _v in COMPONENT_TABLE:
     DEFAULT_COMPONENTS[_k] = _v
 
 
+# Return filter known pressure drop, in. wc. Off by default: the filter is normally
+# inside the unit and already deducted from the published ESP. Colin, 2026-10-08:
+# an "Include Return Filter" option adds this once to the RETURN path total. The
+# 0.14 is the MERV 8 figure from the PM's hand calc on the Kyrus job (RTU-3), a
+# known drop, not a C value; it is editable in the dialog.
+DEFAULT_RETURN_FILTER_INWC = 0.14
+
+
 def component_of(key, comps=None):
     """One component drop in in. wc: override if given, else the given default."""
     if comps is not None and key in comps:

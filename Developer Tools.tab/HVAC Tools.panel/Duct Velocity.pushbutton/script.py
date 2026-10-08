@@ -155,7 +155,10 @@ def show_velocity_settings_dialog():
 
     Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
     selected_column_keys, full_diag, ext_static, safety_pct,
-    c_values, comp_values, calc_basis) or None.
+    c_values, comp_values, calc_basis, filter_inwc) or None.
+
+    filter_inwc is 0.0 unless "Include return filter" is ticked, else the known
+    drop in in. wc, added once to the RETURN path total.
 
     c_values maps fitting_tables.C_TABLE keys to C, and comp_values maps
     COMPONENT_TABLE keys to in. wc. Both start at the published defaults and are
@@ -415,6 +418,31 @@ def show_velocity_settings_dialog():
     sf_panel.Children.Add(sf_suffix)
     outer.Children.Add(sf_panel)
 
+    # Return filter as a known drop on the return path total. Off by default
+    # because the filter is normally inside the unit and already deducted from
+    # its published ESP. Colin, 2026-10-08: "Include Return Filter", 0.14 known drop.
+    filt_panel = StackPanel()
+    filt_panel.Orientation = Orientation.Horizontal
+    filt_panel.Margin = Thickness(22, 0, 0, 6)
+    cb_filter = CheckBox()
+    cb_filter_text = TextBlock()
+    cb_filter_text.Text = 'Include return filter'
+    cb_filter.Content = cb_filter_text
+    cb_filter.IsChecked = False
+    cb_filter.VerticalAlignment = VerticalAlignment.Center
+    filt_panel.Children.Add(cb_filter)
+    tb_filter = TextBox()
+    tb_filter.Text  = '%g' % fitting_tables.DEFAULT_RETURN_FILTER_INWC
+    tb_filter.Width = 45
+    tb_filter.Margin = Thickness(8, 0, 4, 0)
+    tb_filter.VerticalAlignment = VerticalAlignment.Center
+    filt_panel.Children.Add(tb_filter)
+    filt_suffix = Label()
+    filt_suffix.Content = 'in. wc known drop (MERV 8), added to the return total'
+    filt_suffix.VerticalAlignment = VerticalAlignment.Center
+    filt_panel.Children.Add(filt_suffix)
+    outer.Children.Add(filt_panel)
+
     # Fitting C values and component drops are GIVENS with an override, not
     # questions the dialog asks every run. Colin, 2026-09-24: "remove diffuser
     # and balancing drops inputs and have them as givens. Maybe put a drop down
@@ -575,8 +603,9 @@ def show_velocity_settings_dialog():
     _info_row('  includes:',      'duct friction, fittings (elbows, take-offs, '
                                   'transitions), balancing dampers, the diffuser, '
                                   'and the safety factor')
-    _info_row('  excludes:',      'filter, coil and cabinet (already in the published '
-                                  'ESP). Fire and backdraft dampers.')
+    _info_row('  excludes:',      'filter (unless Include return filter is ticked), coil '
+                                  'and cabinet (already in the published ESP). Fire and '
+                                  'backdraft dampers.')
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -640,8 +669,16 @@ def show_velocity_settings_dialog():
                                 'be greater than 0.', title='Invalid Input')
                     return
                 calc_basis[k] = v
+            filter_inwc = 0.0
+            if bool(cb_filter.IsChecked):
+                filter_inwc = float(tb_filter.Text)
+                if filter_inwc < 0:
+                    forms.alert('The return filter drop cannot be negative.',
+                                title='Invalid Input')
+                    return
             result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         ext_static, safety_pct, c_values, comp_values, calc_basis)
+                         ext_static, safety_pct, c_values, comp_values, calc_basis,
+                         filter_inwc)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -947,7 +984,8 @@ def _root_class_airflow(root_id, all_children, all_terminals):
 
 def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         all_terminals, all_nodes, safety_pct=0.0,
-                        c_values=None, comp_values=None):
+                        c_values=None, comp_values=None,
+                        duct_rooted_ids=None, return_filter_inwc=0.0):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -982,7 +1020,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
     NOT INCLUDED, and by definition rather than as a gap: filter, coil and
     cabinet losses. Those are inside the unit and already deducted from the
-    manufacturer's published ESP, so counting them here would double them.
+    manufacturer's published ESP, so counting them here would double them. The one
+    exception is the return filter, added as a known drop when the engineer ticks
+    "Include return filter" (return_filter_inwc), for a filter the published ESP
+    does not already cover.
+
+    duct_rooted_ids: roots that are a picked duct because no unit was found. For
+    those, the duct and fittings between the picked duct and the unit connection
+    are priced and added to every path (see _unit_side_chain).
     Fire, smoke and backdraft dampers are not priced either - they have their own
     drops and must not inherit the balancing-damper figure - and any accessory on
     the run that is not a balancing damper is reported as uncounted.
@@ -1020,6 +1065,96 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             cont_cache[nid] = hvac_graph.duct_continues_past(nid, all_nodes, all_children)
         return cont_cache[nid]
 
+    def _price_fitting(elem, sys_class, up_fpm, up_area):
+        """(loss in. wc, counted 0/1, unpriced note or None, downstream area).
+
+        One place that prices a fitting the path passes THROUGH, used by the main
+        walk and by the unit-side chain below so the two can never disagree.
+        """
+        fam  = hvac_graph.fitting_family_name(elem)
+        role = fitting_tables.classify_fitting(fam)
+        up_a, down_a = (None, None)
+        if role == 'transition':
+            up_a, down_a = hvac_graph.transition_areas(elem, up_area)
+        c, note = fitting_tables.fitting_c(
+            role, sys_class,
+            is_round=hvac_graph.fitting_is_round(elem),
+            upstream_area_ft2=up_a, downstream_area_ft2=down_a,
+            is_end_of_main=False, c=c_values)
+        if c > 0.0:
+            return c * hvac_graph.velocity_pressure_inwg(up_fpm), 1, None, down_a
+        if 'UNPRICED' in note:
+            return 0.0, 0, (fam or '?') + ': ' + note, down_a
+        return 0.0, 0, None, down_a
+
+    def _unit_side_chain(root_id):
+        """Duct and fittings BEHIND a picked duct, on the unit side.
+
+        With no unit on the ductwork the run is rooted at the picked duct, and the
+        undirected walk hangs the stretch back toward the unit off the root as a
+        side branch that reaches no terminal, so the path search never charged it.
+        Colin, 2026-10-08: the fittings between the picked duct and the unit
+        connection are ALWAYS part of the external static, so they are priced here
+        and added to every path from this root.
+
+        Only subtrees with no terminal and that do not start at a take-off count,
+        so a tap hanging off the root is never mistaken for the unit side. The
+        air in this stretch is the root's own flow, so velocity comes from the
+        root's CFM over each duct's own area.
+
+        Returns (friction, fitting loss, fittings priced, ducts, feet, unpriced).
+        """
+        root_dr = dr_by_int_id.get(root_id)
+        if root_dr is None or not root_dr.fpm or root_dr.fpm <= 0:
+            return (0.0, 0.0, 0, 0, 0.0, ())
+        flow_cfm = root_dr.fpm * root_dr.area_ft2
+        fric = fit = dlen = 0.0
+        n_fit = n_duct = 0
+        unpriced = ()
+        for first in all_children.get(root_id, []):
+            order = []
+            todo = [first]
+            has_term = False
+            while todo:
+                n = todo.pop()
+                order.append(n)
+                if n in all_terminals:
+                    has_term = True
+                    break
+                todo.extend(all_children.get(n, []))
+            if has_term:
+                continue
+            first_elem = all_nodes.get(first)
+            if (first_elem is not None and hvac_graph.is_fitting(first_elem) and
+                    fitting_tables.classify_fitting(
+                        hvac_graph.fitting_family_name(first_elem)) == 'takeoff'):
+                continue
+            up_area = root_dr.area_ft2
+            for n in order:
+                elem = all_nodes.get(n)
+                dr   = dr_by_int_id.get(n)
+                if dr is not None:
+                    fpm = flow_cfm / dr.area_ft2 if dr.area_ft2 else 0.0
+                    d_h = getattr(dr, 'd_h_in', 0.0)
+                    if d_h > 0 and fpm > 0:
+                        fric += (hvac_graph.duct_friction_loss_per_100ft(
+                                     fpm, d_h, getattr(dr, 'roughness_ft', None))
+                                 * dr.length_ft / 100.0)
+                    dlen   += dr.length_ft
+                    n_duct += 1
+                    up_area = dr.area_ft2
+                elif elem is not None and hvac_graph.is_fitting(elem):
+                    up_fpm = flow_cfm / up_area if up_area else 0.0
+                    loss, counted, note, down_a = _price_fitting(
+                        elem, root_dr.sys_class, up_fpm, up_area)
+                    fit   += loss
+                    n_fit += counted
+                    if note:
+                        unpriced = unpriced + (note,)
+                    if down_a:
+                        up_area = down_a
+        return (fric, fit, n_fit, n_duct, dlen, unpriced)
+
     best = {}              # root_id -> {sys_class: {...}}
     truncated_roots = set()  # PER ROOT: one unit truncating must not label the
                              # others, now that results print per equipment.
@@ -1035,8 +1170,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
         #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
         #  nodes already on THIS path)
-        stack = [(root_id, 0.0, 0.0, (), 0, 0, 0, 0.0, 0.0, 0.0, None, (),
-                  frozenset([root_id]))]
+        # A duct-rooted pick starts with the unit-side stretch already priced.
+        pre = (0.0, 0.0, 0, 0, 0.0, ())
+        if duct_rooted_ids and root_id in duct_rooted_ids:
+            pre = _unit_side_chain(root_id)
+        # pre = (friction, fitting loss, fittings, ducts, feet, unpriced)
+        stack = [(root_id, pre[0], pre[1], (), pre[3], pre[2], 0, pre[4], 0.0,
+                  0.0, None, pre[5], frozenset([root_id]))]
         steps = 0
         while stack:
             steps = steps + 1
@@ -1060,21 +1200,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 sys_class = dr.sys_class
 
             elif elem is not None and hvac_graph.is_fitting(elem):
-                fam  = hvac_graph.fitting_family_name(elem)
-                role = fitting_tables.classify_fitting(fam)
-                up_a, down_a = (None, None)
-                if role == 'transition':
-                    up_a, down_a = hvac_graph.transition_areas(elem, up_area)
-                c, note = fitting_tables.fitting_c(
-                    role, sys_class,
-                    is_round=hvac_graph.fitting_is_round(elem),
-                    upstream_area_ft2=up_a, downstream_area_ft2=down_a,
-                    is_end_of_main=False, c=c_values)
-                if c > 0.0:
-                    fit    = fit + c * hvac_graph.velocity_pressure_inwg(up_fpm)
-                    fcount = fcount + 1
-                elif 'UNPRICED' in note:
-                    unpriced = unpriced + ((fam or '?') + ': ' + note,)
+                loss, counted, note, _down_a = _price_fitting(
+                    elem, sys_class, up_fpm, up_area)
+                fit    = fit + loss
+                fcount = fcount + counted
+                if note:
+                    unpriced = unpriced + (note,)
 
             elif elem is not None and hvac_graph.is_accessory(elem):
                 # Accessories are components, not fittings: the drop is a
@@ -1100,14 +1231,20 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     comp_here += fitting_tables.component_of(_k, comp_values)
                 _cfm, term_class, _family = term
                 key     = term_class or sys_class or 'Unknown'
+                # Known drop added once to the RETURN path only (the "Include
+                # Return Filter" option). Same on every return path, so it never
+                # changes which run is the worst, only the total.
+                filt    = return_filter_inwc if key == 'Return Air' else 0.0
                 current = best_here.get(key)
-                if current is None or (fric + fit + comp_here) > (
+                if current is None or (fric + fit + comp_here + filt) > (
                         current['friction_inwc'] + current['fitting_inwc'] +
-                        current['component_inwc']):
+                        current['component_inwc'] + current['filter_inwc']):
                     best_here[key] = {
                         'friction_inwc':    fric,
                         'fitting_inwc':     fit,
                         'component_inwc':   comp_here,
+                        'filter_inwc':      filt,
+                        'unit_side_fittings': pre[2],
                         'component_keys':   keys_here,
                         'duct_count':       dcount,
                         'fitting_count':    fcount,
@@ -1167,7 +1304,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     for root_id, per_class in best.items():
         out = {}
         for sys_class, b in per_class.items():
-            sub = b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc']
+            sub = (b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc'] +
+                   b['filter_inwc'])
             b['subtotal_inwc'] = sub
             b['total_inwc']    = sub * (1.0 + safety_pct / 100.0)
             b['truncated']     = root_id in truncated_roots
@@ -1867,7 +2005,8 @@ def main():
         output.print_md('**Cancelled.**')
         return
     (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     ext_static, safety_pct, c_values, comp_values, calc_basis) = dialog_result
+     ext_static, safety_pct, c_values, comp_values, calc_basis,
+     filter_inwc) = dialog_result
 
     # Every run, even at the standard values, so nothing set by an earlier run
     # in the same session carries over.
@@ -2127,7 +2266,8 @@ def main():
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
-            all_nodes, safety_pct, c_values, comp_values)
+            all_nodes, safety_pct, c_values, comp_values,
+            duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
 
@@ -2177,6 +2317,14 @@ def main():
                     '      Components         {:.3f} in. wc   ({})'.format(
                         c['component_inwc'],
                         '; '.join(parts) if parts else 'none on this run'))
+                if c.get('filter_inwc', 0.0) > 0.0:
+                    summary_lines.append(
+                        '      Return filter      {:.3f} in. wc   (known drop, '
+                        'Include Return Filter)'.format(c['filter_inwc']))
+                if c.get('unit_side_fittings', 0) > 0:
+                    summary_lines.append(
+                        '      (Includes {} fitting(s) between the picked duct and '
+                        'the unit connection.)'.format(c['unit_side_fittings']))
                 summary_lines.append(
                     '      Subtotal           {:.3f} in. wc'.format(c['subtotal_inwc']))
                 summary_lines.append(
@@ -2268,9 +2416,15 @@ def main():
             'Dovetail take-offs, rect elbows vaned.'.format(
                 calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                 calc_basis['air_density']))
-        summary_lines.append(
-            '  NOT INCLUDED: filter, coil and cabinet, already in the published '
-            'ESP. Fire and backdraft dampers not priced.')
+        if filter_inwc > 0.0:
+            summary_lines.append(
+                '  NOT INCLUDED: coil and cabinet, already in the published ESP. '
+                'Return filter IS included as a {:.3f} in. wc known drop. Fire and '
+                'backdraft dampers not priced.'.format(filter_inwc))
+        else:
+            summary_lines.append(
+                '  NOT INCLUDED: filter, coil and cabinet, already in the published '
+                'ESP. Fire and backdraft dampers not priced.')
 
     # Folded once here so the drafting view and the console render identical
     # text. print_code, not print_md: markdown collapses leading whitespace, and

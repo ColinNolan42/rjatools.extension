@@ -104,7 +104,14 @@ def _velocity_pressure_inwg(v_fpm):
     return (v_fpm / 4007.7) ** 2
 
 
+def _duct_friction_loss_per_100ft(v_fpm, d_h_in, eps_ft=None):
+    """Flat fake: 0.05 in. wc per 100 ft whatever the duct, so the unit-side
+    friction in case 12 is a number that can be checked by hand."""
+    return 0.05
+
+
 hvac_graph = types.ModuleType('hvac_graph')
+hvac_graph.duct_friction_loss_per_100ft = _duct_friction_loss_per_100ft
 hvac_graph.takeoff_child_ids       = _takeoff_child_ids
 hvac_graph.duct_continues_past     = _duct_continues_past
 hvac_graph.is_fitting              = _is_fitting
@@ -525,6 +532,93 @@ check("case11 overriding a C the run never hits changes nothing",
           - sa11_default['fitting_inwc']) < 1e-12,
       "got %.6f expected %.6f" % (r11b[100]['Supply Air']['fitting_inwc'],
                                   sa11_default['fitting_inwc']))
+
+
+# ── case 12: fittings between a picked duct and the unit are always counted ──
+#
+# Colin, 2026-10-08. With no unit on the ductwork the run is rooted at the picked
+# duct, and the stretch back toward the unit hangs off the root as a side branch
+# that reaches no terminal. Real example: Kyrus RTU-3, picked duct 3570508, with
+# a mitered elbow and a 0.2 ft stub (3570510 / 3570509) between it and the unit.
+#
+#   root duct 200 (800 FPM, 2.5 ft2)
+#     |- 201 rect elbow -> 202 stub duct (no flow of its own, 0.2 ft)   <- unit side
+#     |- 203 duct -> T210                                               <- the run
+#     `- 205 tap (dead end, no terminal)                          <- NOT unit side
+children12 = {200: [201, 203, 205], 201: [202], 203: [210]}
+nodes12 = {201: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered',
+                     is_round=False),
+           205: Elem(kind='tap', family_name='Round Takeoff - Shoe')}
+ducts12 = build([
+    (200, 0.0, 5.0, 800.0, 2.5, 'Supply Air'),
+    (202, 0.0, 0.2, 0.0,   2.5, 'Supply Air'),
+    (203, 0.0, 10.0, 800.0, 2.5, 'Supply Air'),
+])
+for _dr in ducts12.values():
+    _dr.d_h_in = 18.0
+terms12 = {210: (2000.0, 'Supply Air', 'SD-12')}
+
+r12_off = crit([200], children12, ducts12, terms12, nodes12)
+sa12_off = r12_off[200]['Supply Air']
+r12 = crit([200], children12, ducts12, terms12, nodes12, duct_rooted_ids=set([200]))
+sa12 = r12[200]['Supply Air']
+exp_elbow12 = fitting_tables.DEFAULT_C['rect_elbow_90'] * pv(800.0)
+# The dead-end tap on the root is still a tap the run passes by, so it carries the
+# 0.28 main-duct coefficient in BOTH cases; that is not unit-side loss.
+exp_bypass12 = fitting_tables.DEFAULT_C['supply_tap_main'] * pv(800.0)
+check("case12 baseline (not duct-rooted): the unit-side elbow is NOT charged "
+      "(only the bypassed tap is)",
+      sa12_off['fitting_count'] == 0
+      and abs(sa12_off['fitting_inwc'] - exp_bypass12) < 1e-9,
+      "count=%r fit=%r expected bypass only %.6f"
+      % (sa12_off['fitting_count'], sa12_off['fitting_inwc'], exp_bypass12))
+check("case12 duct-rooted: the elbow behind the picked duct IS charged "
+      "(C 0.25 x Pv(800), the root's own velocity)",
+      abs(sa12['fitting_inwc'] - (exp_bypass12 + exp_elbow12)) < 1e-9,
+      "expected %.6f got %r" % (exp_bypass12 + exp_elbow12, sa12['fitting_inwc']))
+check("case12 duct-rooted: fitting_count == 1 and unit_side_fittings == 1",
+      sa12['fitting_count'] == 1 and sa12['unit_side_fittings'] == 1,
+      "count=%r unit=%r" % (sa12['fitting_count'], sa12['unit_side_fittings']))
+check("case12 the stub's friction is added (0.05/100ft x 0.2 ft) and its length counted",
+      abs(sa12['friction_inwc'] - 0.05 * 0.2 / 100.0) < 1e-12
+      and abs(sa12['length_ft'] - (5.0 + 10.0 + 0.2)) < 1e-9,
+      "fric=%r len=%r" % (sa12['friction_inwc'], sa12['length_ft']))
+check("case12 a dead-end TAP off the root is NOT mistaken for the unit side "
+      "(counted once as a bypassed tap, never as a unit-side fitting)",
+      sa12['fitting_count'] == 1 and sa12['unit_side_fittings'] == 1
+      and sa12['tap_bypass_count'] == 1,
+      "count=%r unit=%r bypass=%r" % (sa12['fitting_count'],
+                                       sa12['unit_side_fittings'],
+                                       sa12['tap_bypass_count']))
+check("case12 the unit side is added to the run once, not per branch "
+      "(adding it changed the total by exactly one elbow)",
+      abs((sa12['fitting_inwc'] - sa12_off['fitting_inwc']) - exp_elbow12) < 1e-9,
+      "delta=%r expected %.6f" % (sa12['fitting_inwc'] - sa12_off['fitting_inwc'],
+                                   exp_elbow12))
+
+
+# ── case 13: Include Return Filter ───────────────────────────────────────────
+#
+# The filter is a known drop added once to the RETURN path total only. Reuses
+# case 2's fixtures (root 0 supply, root 100 return).
+r13_off = crit([0, 100], children2, ducts2, terms2, {}, safety_pct=10.0)
+r13 = crit([0, 100], children2, ducts2, terms2, {}, safety_pct=10.0,
+           return_filter_inwc=0.14)
+ret_off = r13_off[100]['Return Air']
+ret_on  = r13[100]['Return Air']
+sup_on  = r13[0]['Supply Air']
+check("case13 off by default: no filter on the return path",
+      ret_off['filter_inwc'] == 0.0, "got %r" % ret_off['filter_inwc'])
+check("case13 on: return filter_inwc == 0.14",
+      abs(ret_on['filter_inwc'] - 0.14) < 1e-12, "got %r" % ret_on['filter_inwc'])
+check("case13 on: return subtotal rises by exactly 0.14",
+      abs(ret_on['subtotal_inwc'] - ret_off['subtotal_inwc'] - 0.14) < 1e-12,
+      "on=%r off=%r" % (ret_on['subtotal_inwc'], ret_off['subtotal_inwc']))
+check("case13 on: the 10% safety factor applies to the filter too",
+      abs(ret_on['total_inwc'] - ret_on['subtotal_inwc'] * 1.10) < 1e-12)
+check("case13 the SUPPLY path is untouched by the return filter",
+      sup_on['filter_inwc'] == 0.0
+      and abs(sup_on['total_inwc'] - r13_off[0]['Supply Air']['total_inwc']) < 1e-12)
 
 
 # ── summary ──────────────────────────────────────────────────────────────────
