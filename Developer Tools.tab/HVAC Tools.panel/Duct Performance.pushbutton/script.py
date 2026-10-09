@@ -371,9 +371,8 @@ def _show_velocity_settings_xaml(use_theme):
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
             .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
                 'Duct Performance',
-                'Checks main duct velocity and friction, duct sizing against the '
-                'diffuser tables, and external static pressure, all against RJA '
-                'design standards.')))
+                'Checks duct sizing, velocity and friction against RJA design '
+                'standards, and calculates external static pressure.')))
     win = forms.WPFWindow(xaml, literal_string=True)
 
     N = lambda name: _wpf_named(win, name)
