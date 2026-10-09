@@ -1751,14 +1751,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     TWO coefficients apply at a take-off and they are never both charged to the
     same air, because they are two different streams through one junction:
       - the run TURNS OFF through a tap        -> 0.98  (supply dovetail branch)
-      - the run CONTINUES past a tap on a main -> 0.28  (main duct @ take-off)
-    Over a whole index run you therefore accumulate 0.28 for every OTHER tap
+      - the run CONTINUES past a tap on a main -> 0.20  (main duct @ take-off; worksheet 0.28, lowered 2026-10-09 per ASHRAE)
+    Over a whole index run you therefore accumulate 0.20 for every OTHER tap
     hanging off the mains it traverses, plus one 0.98 where it finally leaves.
-    Colin: "for each branch you should add the .28 as it restricts the main duct
+    Colin (2026-09, when it was .28): "for each branch you should add the .28 as it restricts the main duct
     which may be the most restrictive."
 
     Revit models a tap as a 2-connector in-line stub on an UNBROKEN main, so
-    there is no element on the main representing that 0.28 - which is exactly
+    there is no element on the main representing that 0.20 - which is exactly
     why that column sits at 0 in the filled worksheet. The taps hanging off each
     main are counted instead (hvac_graph.takeoff_child_ids).
 

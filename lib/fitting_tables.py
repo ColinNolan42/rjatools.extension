@@ -6,7 +6,8 @@ Source: RJA's own standard, `SP_LOSS_WORKSHEET(1).xls`
 (FOR CLAUDE\\Design Resources\\MECHANICAL\\3 - Mechanical Calculations), which
 cites 1985 ASHRAE fitting numbers. Transcribed 2026-09-24; the sum of all 16
 published C values is 19.91, which matches that sheet's own AN30 check cell, so
-the transcription is verified against the source.
+the transcription is verified against the source. Two departures since, see
+DEPARTURES_FROM_WORKSHEET below (supply main 0.28 -> 0.20; offset now K x elbow C).
 
 A fitting's pressure loss is
 
@@ -39,7 +40,7 @@ C_TABLE = (
     ('round_elbow_90',       '90 deg round elbow',                       '3-1',     0.33),
     ('supply_tap_branch',    'Supply take-off, typ branch',              '6-29',    0.98),
     ('supply_tap_end',       'Supply take-off, end of main',             '6-25',    0.54),
-    ('supply_tap_main',      'Main duct @ supply take-off',              '6-23',    0.28),
+    ('supply_tap_main',      'Main duct @ supply take-off',              '6-23',    0.20),
     ('supply_tap_conical',   'Supply conical take-off (rect/round)',     '6-27',    1.40),
     ('exhaust_tap_branch',   'Exhaust take-off, typ branch',             '6-9',     0.76),
     ('exhaust_tap_end',      'Exhaust take-off, end of main',            '6-9',     3.63),
@@ -49,7 +50,7 @@ C_TABLE = (
     ('transition_expansion',   'Transition expansion (60 deg max)',      '4-3',     0.84),
     ('transition_contraction', 'Transition contraction (60 deg max)',    '5-1',     0.08),
     ('wye_bullhead',         'Bull head 90 deg wye',                     '6-33',    0.30),
-    ('offset',               'Offset',                                   '3-13',    1.70),
+    ('offset',               'Offset (K x elbow C)',                     '3-13',    1.70),
     ('abrupt_exit',          'Abrupt exit (stacks, no cone)',            '2-11',    1.00),
 )
 
@@ -62,6 +63,24 @@ for _k, _lbl, _no, _v in C_TABLE:
 # overrides are deliberately not checked against it - the engineer may have a
 # reason to depart from the published figure, and that is their call.
 PUBLISHED_C_SUM = 19.91
+
+# Departures from the worksheet, 2026-10-09, after checking each row against the
+# 2001 ASHRAE Fundamentals (duct fitting tables, p. 34.29 on) and the 2021 Principles
+# of HVAC fitting supplement. Worksheet figures that sat inside or above ASHRAE's
+# band were left alone. Two changes were made:
+#
+#   supply_tap_main  0.28 -> 0.20  (Colin, 2026-10-09). ASHRAE SD5-9 / SD5-10 give
+#       Cs of about 0.13 to 0.20 for the air continuing past a take-off. 0.20 is the
+#       top of that band, so it stays conservative. Net change to the C table:
+#       -0.08, so the defaults now sum to 19.83, not PUBLISHED_C_SUM.
+#   offset  1.70 is a K MULTIPLIER, not a C. ASHRAE 2021 fitting 3-13 gives
+#       C = K x (single elbow C), with K = 1.70 only for a 90 deg offset at zero
+#       spacing. fitting_c() now multiplies it by the elbow C (0.25 rect, 0.33 round),
+#       about 0.43 / 0.56, instead of charging 1.70 outright. K = 1.70 is the worst
+#       case (a 45 deg offset is 0.60 to 1.2), so it stays conservative.
+DEPARTURES_FROM_WORKSHEET = (
+    ('supply_tap_main', 0.28, 0.20),
+)
 
 
 def c_of(key, c=None):
@@ -124,8 +143,10 @@ def component_of(key, comps=None):
 #    A bare mitered elbow is physically worse than a vaned one; the worksheet
 #    publishes a single rect elbow C and this is the firm's number.
 # 2. "thats fine .33" -> every round elbow gets 0.33 regardless of radius
-#    ratio, so `Round Elbow / 1 D` and `/ 1.5 D` are treated alike. 0.33 is the
-#    1D value, so 1.5D elbows are conservative.
+#    ratio, so `Round Elbow / 1 D` and `/ 1.5 D` are treated alike. In ASHRAE
+#    (2021 fitting 3-1) 0.33 is the r/D 0.75 value (r/D 1.0 is 0.22, 1.5 is 0.15),
+#    and 2001 CD3-1 die-stamped r/D 1.5 reads 0.11 to 0.30, so 0.33 is conservative
+#    for 1D and 1.5D elbows alike.
 # 3. "use dovetail"  -> supply take-offs use the DOVETAIL coefficients, never
 #    the conical 1.40, whatever the branch shape. The conical values stay in
 #    C_TABLE as data, and are now editable, in case that is revisited.
@@ -268,7 +289,10 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
     if role == 'wye':
         return c_of('wye_bullhead', c), 'bull head 90 deg wye'
     if role == 'offset':
-        return c_of('offset', c), 'offset'
+        # 'offset' is the ASHRAE K multiplier, not a C: C = K x single elbow C.
+        k = c_of('offset', c)
+        return (k * elbow_c(is_round, c),
+                'offset, K %.2f x %s elbow C' % (k, 'round' if is_round else 'rect'))
     if role == 'transition':
         val = transition_c(upstream_area_ft2, downstream_area_ft2, c)
         if val == c_of('transition_expansion', c) and val != 0.0:

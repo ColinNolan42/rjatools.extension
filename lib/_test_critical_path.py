@@ -229,7 +229,7 @@ check("case2 Return Air friction == 0.12",
 
 # ══════════════════════════════════════════════════════════════════════════
 # Case 3: a main with 3 taps, path leaves through ONE of them -> the
-#         "main past take-off" coefficient (0.28, C_SUPPLY_TAP_MAIN) must be
+#         "main past take-off" coefficient (0.20, C_SUPPLY_TAP_MAIN) must be
 #         charged for exactly 2 bypassed taps, not 3 and not 0.
 # ══════════════════════════════════════════════════════════════════════════
 #   main duct 1 (fric 0, fpm 1200) has children: taps 21, 22, 23, and a
@@ -259,7 +259,7 @@ expected_fit3 = (2 * fitting_tables.DEFAULT_C['supply_tap_main'] * pv(1200.0)
                  + fitting_tables.DEFAULT_C['supply_tap_branch'] * pv(1200.0))
 check("case3 friction is 0 (only fitting losses in this network)",
       abs(sa3.get('friction_inwc', -1) - 0.0) < 1e-9)
-check("case3 fitting_inwc == 2*0.28*Pv(1200) + 0.98*Pv(1200)",
+check("case3 fitting_inwc == 2*0.20*Pv(1200) + 0.98*Pv(1200)",
       abs(sa3.get('fitting_inwc', -1) - expected_fit3) < 1e-9,
       "expected %.6f got %r" % (expected_fit3, sa3.get('fitting_inwc')))
 check("case3 tap_bypass_count == 2 (not 3, not 0)",
@@ -564,7 +564,7 @@ r12 = crit([200], children12, ducts12, terms12, nodes12, duct_rooted_ids=set([20
 sa12 = r12[200]['Supply Air']
 exp_elbow12 = fitting_tables.DEFAULT_C['rect_elbow_90'] * pv(800.0)
 # The dead-end tap on the root is still a tap the run passes by, so it carries the
-# 0.28 main-duct coefficient in BOTH cases; that is not unit-side loss.
+# 0.20 main-duct coefficient in BOTH cases; that is not unit-side loss.
 exp_bypass12 = fitting_tables.DEFAULT_C['supply_tap_main'] * pv(800.0)
 check("case12 baseline (not duct-rooted): the unit-side elbow is NOT charged "
       "(only the bypassed tap is)",
