@@ -1523,7 +1523,7 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
     if len(net.zero_terminals) > 0:
         net.warnings.append(
             '{} terminal(s) have Flow = 0. Assign CFM values in the model '
-            'before running Duct Velocity.'.format(len(net.zero_terminals)))
+            'before running Duct Performance.'.format(len(net.zero_terminals)))
     if len(net.missing_flow) > 0:
         net.warnings.append(
             '{} terminal(s) are missing the "Flow" parameter entirely.'.format(

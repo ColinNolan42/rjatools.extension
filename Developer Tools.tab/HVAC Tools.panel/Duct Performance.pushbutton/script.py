@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Duct Velocity.pushbutton/script.py  --  HVAC Phase 1
+Duct Performance.pushbutton/script.py  --  HVAC Phase 1
 
 Colors ductwork in a copied floor plan view and flags what needs attention.
 Mains and branches are judged by two different methods:
@@ -169,7 +169,7 @@ _DV_DEFAULT_SAFETY_PCT = 10   # SP_LOSS_WORKSHEET's own last row
 _SETTINGS_XAML = '''
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Duct Velocity Settings"
+        Title="Duct Performance Settings"
         Width="680" MinWidth="560" MaxWidth="900"
         SizeToContent="Height" ResizeMode="CanResizeWithGrip"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
@@ -198,10 +198,10 @@ _SETTINGS_XAML = '''
                           ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
                            Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
-                <CheckBox x:Name="cb_oa" Content="Include Outside Air (pending)" IsEnabled="False"
-                          ToolTip="Pending. The tool runs at equipment level only: Supply Air and Return Air, never upstream."/>
+                <CheckBox x:Name="cb_oa" Content="Multi System (pending)" IsEnabled="False"
+                          ToolTip="Pending. Checks several connected systems in one run."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Pending, for AHU and DOAS systems. The tool runs at equipment level only: Supply Air and Return Air, never upstream."/>
+                           Text="Pending, for AHU, DOAS, VAV and FPB systems."/>
 
                 <!-- Main duct limits -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
@@ -229,8 +229,6 @@ _SETTINGS_XAML = '''
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
                     <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Outputs"/>
                 </Border>
-                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,2"
-                           Text="Optional columns in the sheet table and the pyRevit window table, and the external static pressure total."/>
                 <Grid x:Name="grid_cols">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -372,9 +370,10 @@ def _show_velocity_settings_xaml(use_theme):
     xaml = (_SETTINGS_XAML
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
             .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
-                'Duct Velocity Check',
-                'Checks main ducts against velocity and friction limits and '
-                'branches against the diffuser tables.')))
+                'Duct Performance',
+                'Checks main duct velocity and friction, duct sizing against the '
+                'diffuser tables, and external static pressure, all against RJA '
+                'design standards.')))
     win = forms.WPFWindow(xaml, literal_string=True)
 
     N = lambda name: _wpf_named(win, name)
@@ -774,7 +773,7 @@ def _show_velocity_settings_dialog_legacy():
     CONTENT_W   = WIN_WIDTH - 28 - 20   # win width minus outer margin minus a little slack
 
     win = Window()
-    win.Title  = 'Duct Velocity Settings'
+    win.Title  = 'Duct Performance Settings'
     win.Width  = WIN_WIDTH
     win.SizeToContent = SizeToContent.Height
     win.WindowStartupLocation = WindowStartupLocation.CenterScreen
@@ -821,9 +820,8 @@ def _show_velocity_settings_dialog_legacy():
     # ── system-level (traces OA too) ─────────────────────────────────────
     cb_oa = CheckBox()
     cb_oa_text = TextBlock()
-    cb_oa_text.Text = ('Include Outside Air (AHU/DOAS systems).  PENDING, under '
-                       'development. The tool runs equipment-level only for now '
-                       '(Supply + Return Air, never goes upstream).')
+    cb_oa_text.Text = ('Multi System (AHU/DOAS/VAV/FPB).  PENDING, under '
+                       'development.')
     cb_oa_text.TextWrapping = TextWrapping.Wrap
     cb_oa_text.Width = CONTENT_W - 20
     cb_oa.Content = cb_oa_text
@@ -1441,7 +1439,7 @@ def _show_system_picker_xaml(display_names, use_theme):
     xaml = (_PICKER_XAML
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
             .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
-                'Duct Velocity Check', 'Select the system to analyze.')))
+                'Duct Performance', 'Select the system to analyze.')))
     win = forms.WPFWindow(xaml, literal_string=True)
 
     N = lambda name: _wpf_named(win, name)
@@ -1622,7 +1620,7 @@ def _show_system_picker_legacy(display_names):
     duct_btn.Margin  = Thickness(0, 0, 8, 0)
 
     run_btn = Button()
-    run_btn.Content = 'Run Duct Velocity'
+    run_btn.Content = 'Run Duct Performance'
     run_btn.Width   = 128
     run_btn.Margin  = Thickness(0, 0, 8, 0)
     run_btn.IsEnabled = bool(display_names)
@@ -2740,7 +2738,7 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
 
 # ── main ───────────────────────────────────────────────────────────────────────
 def main():
-    output.print_md('## Duct Velocity Visualizer')
+    output.print_md('## Duct Performance')
     output.print_md('_Tip: run HVAC Diagnose first to verify CFM values and network._')
     output.print_md('---')
 
@@ -2748,7 +2746,7 @@ def main():
     active_view = doc.ActiveView
     if active_view.ViewType != ViewType.FloorPlan:
         forms.alert(
-            'Open a floor plan view first, then run Duct Velocity.',
+            'Open a floor plan view first, then run Duct Performance.',
             title='Wrong View Type', exitscript=True
         )
 
@@ -2775,9 +2773,8 @@ def main():
                 calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                 calc_basis['air_density']))
 
-    output.print_md('Scope: **{}**'.format(
-        'System-level (Supply, Return, Outside Air — upstream and downstream)' if include_oa
-        else 'Equipment-level (Supply + Return Air only — never travels upstream)'))
+    if include_oa:
+        output.print_md('Scope: **System-level (Supply, Return, Outside Air — upstream and downstream)**')
     if full_diag:
         output.print_md('**Full System Diagnostic is on** — the table below and the '
                         'sheet schedule will list every duct, and every duct will '
@@ -3211,7 +3208,7 @@ def main():
     text_h_ft  = (5.0 / (64.0 * 12.0)) * float(view_scale)
 
     # 8. Transaction: copy view → color overrides → FPM annotations → sheet
-    t = Transaction(doc, 'Duct Velocity Visualizer')
+    t = Transaction(doc, 'Duct Performance')
     t.Start()
     ts = datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')
 
@@ -3219,7 +3216,7 @@ def main():
         # Copy floor plan
         new_vid  = active_view.Duplicate(ViewDuplicateOption.Duplicate)
         new_view = doc.GetElement(new_vid)
-        base_name = 'Ducting Velocities - {} - {}'.format(source_sheet_num, ts)
+        base_name = 'Duct Performance - {} - {}'.format(source_sheet_num, ts)
         try:
             new_view.Name = base_name
         except Exception:

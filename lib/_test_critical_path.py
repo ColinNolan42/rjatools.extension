@@ -26,7 +26,7 @@ import types
 EXT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT_PATH = os.path.join(
     EXT_ROOT, "Developer Tools.tab", "HVAC Tools.panel",
-    "Duct Velocity.pushbutton", "script.py")
+    "Duct Performance.pushbutton", "script.py")
 LIB_DIR = os.path.join(EXT_ROOT, "lib")
 
 # fitting_tables.py has no Revit imports -> import the real thing.

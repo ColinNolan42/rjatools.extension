@@ -559,7 +559,7 @@ def diagnose_hvac(element):
 
     output.print_md('\n---')
     if net.ready_for_visualization and not net.errors:
-        output.print_md(':white_check_mark: **System is ready for Duct Velocity visualization.**')
+        output.print_md(':white_check_mark: **System is ready for Duct Performance.**')
     else:
         output.print_md(':cross_mark: **System is NOT ready — resolve errors above first.**')
 
