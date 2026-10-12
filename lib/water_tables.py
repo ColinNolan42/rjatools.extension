@@ -30,6 +30,8 @@ import os
 import re
 import json
 
+import shared_params
+
 
 # ---------------------------------------------------------------------------
 # Module-level data load
@@ -229,6 +231,72 @@ def firm_sizing_rows():
 
 
 # ---------------------------------------------------------------------------
+# Hot water return sizing, by circulation flow
+# ---------------------------------------------------------------------------
+
+def return_gpm_rows():
+    """The firm hot water table restated in gpm, for sizing the return.
+
+    Return piping carries circulation flow, not fixture units, so it cannot be
+    looked up in a WSFU table directly. Each row's hot water limit (WSFU at
+    5 fps) is converted to the gpm Table E103.3(3) gives for that load, flush
+    tank column, which is the flow the firm table allows in that size
+    (Colin, 2026-10-12). Derived at call time, never stored, so it cannot
+    drift from the two tables it comes from.
+
+    Returns:
+        List of dicts: nominal_size, size_inches, max_wsfu, max_gpm. The
+        first row is 1/2 inch, which is the minimum return size.
+    """
+    rows = []
+    limit_field = _SYSTEM_LIMIT_FIELDS[SYSTEM_HOT]
+    for row in _load()["firm_sizing_table"]:
+        demand = wsfu_to_gpm(row[limit_field])
+        rows.append({
+            "nominal_size": row["nominal_size"],
+            "size_inches": row["size_inches"],
+            "max_wsfu": row[limit_field],
+            "max_gpm": demand["gpm"],
+        })
+    return rows
+
+
+def select_return_size(gpm):
+    """Select the hot water return size for a circulation flow in gpm.
+
+    Rule: the SMALLEST row of return_gpm_rows() whose max_gpm is >= gpm. The
+    smallest row is 1/2 inch, so the 1/2 inch minimum return size needs no
+    separate step.
+
+    Returns:
+        Dict with keys: nominal_size, size_inches, gpm, limit_gpm, status.
+        status is "ok", "no_flow" (gpm == 0, sizes are None) or
+        "exceeds_table" (sizes are None, "max_table_gpm" is included).
+
+    Raises:
+        ValueError: If gpm is negative or non-numeric.
+    """
+    flow = _to_nonneg_float(gpm, "gpm")
+    result = {"nominal_size": None, "size_inches": None, "gpm": flow,
+              "limit_gpm": None, "status": "no_flow"}
+    if flow == 0:
+        return result
+
+    rows = return_gpm_rows()
+    for row in rows:
+        if row["max_gpm"] is not None and row["max_gpm"] >= flow:
+            result["nominal_size"] = row["nominal_size"]
+            result["size_inches"] = row["size_inches"]
+            result["limit_gpm"] = row["max_gpm"]
+            result["status"] = "ok"
+            return result
+
+    result["status"] = "exceeds_table"
+    result["max_table_gpm"] = rows[-1]["max_gpm"]
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Table E103.3(2) - WSFU by fixture
 # ---------------------------------------------------------------------------
 
@@ -392,6 +460,18 @@ def _fmt_fps(value):
     return "{:.0f}".format(float(value))
 
 
+# One wording for the return method, shared by the printed basis and the
+# dialog rows so the two cannot drift. The heat loss and temperature drop are
+# entered in the dialog, so their values are printed with the circuit setter
+# table rather than here.
+_RETURN_BASIS = (
+    "one circuit setter per return leg, flow from the heat loss over the "
+    "effective length (gpm = BTU/h / (500 x temperature drop)), " +
+    "{:.1f}".format(float(shared_params.MIN_CIRCUIT_SETTER_GPM)) +
+    " gpm minimum per circuit setter, flows added at each junction toward "
+    "the water heater.")
+
+
 def basis_of_design_lines(extra=None):
     """Build the basis-of-design text block every Domestic Water tool
     output shall print, generated from the loaded tables so it cannot
@@ -455,6 +535,12 @@ def basis_of_design_lines(extra=None):
     lines.append(
         "A cold water branch serving only a water heater is sized on the "
         "TOTAL HOT fixture units that heater serves."
+    )
+    lines.append(
+        "Hot water return piping is sized on circulation flow: " +
+        _RETURN_BASIS + " Sized against the hot water table restated in gpm "
+        "per " + demand_table_id + " (" + _fmt_fps(hot_fps) + " fps), " +
+        str(size_min) + "\" minimum."
     )
     lines.append("Pressure loss is NOT evaluated in this build.")
 
@@ -521,9 +607,12 @@ def basis_of_design_rows():
          "cold water on TOTAL fixture units, hot water on HOT fixture "
          "units. A cold branch serving only a water heater is sized on the "
          "TOTAL HOT fixture units that heater serves."),
+        ("Recirculation:",
+         _RETURN_BASIS + " Sized against the hot water table restated in "
+         "gpm per " + demand_table_id + " (" + _fmt_fps(hot_fps) +
+         " fps), " + str(size_min) + "\" minimum."),
         ("Not included:",
-         "pressure loss and velocity are NOT evaluated in this build. Hot "
-         "water recirculation sizing is still to do."),
+         "pressure loss and velocity are NOT evaluated in this build."),
     ]
 
 

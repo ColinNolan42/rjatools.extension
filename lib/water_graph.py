@@ -41,6 +41,19 @@ KIND_PUMP       = "pump"         # hot-only equipment, the recirculation pump
 KIND_EQUIPMENT  = "equipment"
 KIND_UNKNOWN    = "unknown"
 
+# Tree key for the hot water RETURN piping. The return shares the hot water
+# system CLASSIFICATION, so it cannot have a tree of its own until the return
+# System Types are known. apply_return_system_types() builds it, rooted where
+# the return ends (the water heater) with children pointing back toward the
+# fixtures, so "everything below a return pipe" is everything that drains
+# through it.
+TREE_RETURN = "HotWaterReturn"
+
+# What the return may pass through on its way back. A fixture or a heater ends
+# a return line, it never sits in the middle of one.
+_RETURN_PASSABLE_KINDS = (KIND_FITTING, KIND_ACCESSORY, KIND_PUMP,
+                          KIND_EQUIPMENT, KIND_UNKNOWN)
+
 
 class WaterNode(object):
     """One element in the water network."""
@@ -104,6 +117,11 @@ class WaterGraph(object):
         self.fixture_ids  = []
         self.unreadable   = []     # elements whose connectors could not be read
         self.system_types = {}     # PipingSystemType element id -> name
+        self.loop_edges   = []     # (from id, to id, system) joints that closed a loop
+        self.return_system_type_ids = set()   # set by apply_return_system_types
+        self.return_roots    = []  # where each return line ends (heater, or the cold tie-in)
+        self.return_unrooted = []  # return pipe ids whose end could not be found
+        self.hot_joints      = {}  # every hot water joint, kept from before the split
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -225,6 +243,12 @@ def _walk(graph, doc, start_id, system, visited):
             # System filter. A connector whose system could not be read is
             # skipped rather than guessed at, and is reported.
             c_system = c.get("system_type")
+            if (current_node.kind == KIND_PUMP and c_system != system and
+                    _pump_connector_continues(doc, c, system)):
+                # A circulation pump does not report its own connectors on the
+                # system it sits on (see _looks_like_pump), so the walk used to
+                # stop dead at it and the piping beyond was never reached.
+                c_system = system
             if c_system is None:
                 graph.log("Element {}: connector {} has no readable system "
                           "type, skipped.".format(current_id, c.get("connector_index")))
@@ -255,6 +279,10 @@ def _walk(graph, doc, start_id, system, visited):
             if next_id in visited:
                 if next_id != current_node.parent_by_system.get(system):
                     graph.loops.append(next_id)
+                    # Keep the joint itself. The spanning tree drops it, but
+                    # it is a real connection, and the return piping can only
+                    # be laid out if every joint is known.
+                    graph.loop_edges.append((current_id, next_id, system))
                     graph.log("LOOP: element {} reaches already-visited element "
                               "{} on {}.".format(current_id, next_id, system))
                 continue
@@ -279,6 +307,31 @@ def _walk(graph, doc, start_id, system, visited):
             node.parent_by_system[system] = current_id
             current_node.children_by_system.setdefault(system, []).append(next_id)
             queue.append(next_id)
+
+
+def _pump_connector_continues(doc, connector, system):
+    """True if a pump connector that does not report `system` leads on to it.
+
+    Only an unreadable or OtherPipe connector is considered, and only when the
+    element on the other side carries a connector that IS on `system`. That
+    keeps the walk from leaking into another system through a piece of
+    equipment that merely looks like a pump.
+    """
+    if connector.get("system_type") not in (None,
+                                            shared_params.SYSTEM_OTHER_PIPE):
+        return False
+    if not connector.get("is_connected"):
+        return False
+    next_id = connector.get("connected_element_id")
+    if next_id is None:
+        return False
+    neighbour = _get_element(doc, next_id)
+    if neighbour is None:
+        return False
+    for c in revit_helpers.get_connectors(neighbour):
+        if c.get("system_type") == system:
+            return True
+    return False
 
 
 def _make_node(graph, element, element_id, system):
@@ -435,8 +488,9 @@ def detect_return_system_types(graph):
     branch on a job with no return would otherwise be mislabelled.
 
     Returns:
-        dict with "detected" (set of system type ids), "candidates" (list of
-        dicts with id, name, pipe_count, reasons, detected, decisive) and
+        dict with "detected" (set of system type ids), "unconfirmed" (the
+        subset of detected picked on pipe count alone), "candidates" (list
+        of dicts with id, name, pipe_count, reasons, detected, decisive) and
         "certain" (True when topology decided it).
     """
     hot = {}
@@ -458,7 +512,8 @@ def detect_return_system_types(graph):
         entry["pipe_count"] += 1
 
     if not hot:
-        return {"detected": set(), "candidates": [], "certain": False}
+        return {"detected": set(), "unconfirmed": set(), "candidates": [],
+                "certain": False}
 
     # --- 1. the pump's own system type -------------------------------------
     for pump_id in graph.pump_ids:
@@ -509,7 +564,8 @@ def detect_return_system_types(graph):
 
     # --- 4. the minority ----------------------------------------------------
     if len(hot) > 1:
-        ordered = sorted(hot.values(), key=lambda e: e["pipe_count"])
+        ordered = sorted(hot.values(),
+                         key=lambda e: (e["pipe_count"], e["id"]))
         smallest, largest = ordered[0], ordered[-1]
         if smallest["pipe_count"] * 2 <= largest["pipe_count"]:
             smallest["reasons"].append(
@@ -519,6 +575,7 @@ def detect_return_system_types(graph):
             if not any(e["detected"] for e in hot.values()):
                 # Suggestion only. Nothing stronger spoke, so say so.
                 smallest["detected"] = True
+                smallest["unconfirmed"] = True
                 smallest["reasons"].append(
                     "NOTHING CONFIRMED THIS, CHECK IT")
 
@@ -526,6 +583,10 @@ def detect_return_system_types(graph):
                                                      e["name"]))
     return {
         "detected": set(e["id"] for e in candidates if e["detected"]),
+        # Picked on pipe count alone. Reported, but never acted on: the run
+        # does not split the network or size anything on a guess.
+        "unconfirmed": set(e["id"] for e in candidates
+                           if e.get("unconfirmed")),
         "candidates": candidates,
         "certain": any(e["decisive"] for e in candidates),
     }
@@ -564,8 +625,224 @@ def _nearby_pipe_system_types(graph, node_id, max_hops=3):
                     neighbour.system_type_id is not None):
                 found.add(neighbour.system_type_id)
                 continue    # a pipe ends the search down this leg
+            if neighbour.kind in (KIND_HEATER, KIND_FIXTURE, KIND_ORIGIN):
+                # Never look THROUGH a heater or a fixture. A pump piped
+                # close to the heater would otherwise see the supply main on
+                # the far side of the heater and call the supply the return.
+                continue
             frontier.append((neighbour_id, depth + 1))
     return found
+
+
+# =============================================================================
+# RETURN PIPING
+# =============================================================================
+
+def hot_adjacency(graph):
+    """Every hot water joint, both ways: element id -> [neighbour ids].
+
+    The hot walk leaves a spanning tree, and a spanning tree of a
+    recirculation loop is missing the joint that closed it. This puts the tree
+    links and the loop-closing joints back together.
+    """
+    hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    adjacency = {}
+
+    def _join(a, b):
+        if a not in graph.nodes or b not in graph.nodes:
+            return
+        for one, other in ((a, b), (b, a)):
+            neighbours = adjacency.setdefault(one, [])
+            if other not in neighbours:
+                neighbours.append(other)
+
+    for node_id in sorted(graph.nodes.keys()):
+        node = graph.nodes[node_id]
+        for child_id in node.children_by_system.get(hot, []):
+            _join(node_id, child_id)
+    for a, b, system in graph.loop_edges:
+        if system == hot:
+            _join(a, b)
+    return adjacency
+
+
+def is_return_pipe(graph, node):
+    """A pipe whose System Type was identified as the hot water return."""
+    return (node is not None and node.kind == KIND_PIPE and
+            node.system_type_id is not None and
+            node.system_type_id in graph.return_system_type_ids)
+
+
+def apply_return_system_types(graph, return_system_type_ids):
+    """Split the hot water network into supply and return, then redo demand.
+
+    The hot walk follows every hot water connector, and the return shares the
+    hot water classification, so on a recirculating system it walks round the
+    loop from both ends. Where the two fronts meet is decided by element
+    count, not by flow, so fixtures near the end of the main can hang off the
+    return side of the tree and drop out of the supply main's fixture units.
+
+    Once the return System Types are known this fixes it:
+      1. the hot SUPPLY tree is rebuilt from each heater without ever stepping
+         into a return pipe, so every hot fixture is counted on the supply;
+      2. the RETURN piping gets its own tree (TREE_RETURN), rooted where it
+         ends, so circulation flow can be accumulated toward the heater;
+      3. demand is reassigned on the corrected trees.
+
+    Does nothing when no return System Type was identified.
+
+    Returns:
+        the hot adjacency used, or None when there was nothing to do.
+    """
+    returns = set(return_system_type_ids or [])
+    graph.return_roots = []
+    graph.return_unrooted = []
+
+    # A return needs a supply to return from. If every hot pipe carries a
+    # return System Type the detection is wrong, and acting on it would leave
+    # no supply tree at all, so nothing is split.
+    hot_types = set(
+        node.system_type_id for node in graph.nodes.values()
+        if node.kind == KIND_PIPE and
+        node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER and
+        node.system_type_id is not None)
+    if returns and not (hot_types - returns):
+        graph.log("RETURN SPLIT REFUSED: every hot water System Type was "
+                  "identified as the return, which cannot be right.")
+        returns = set()
+
+    graph.return_system_type_ids = returns
+    if not returns:
+        return None
+
+    hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    # Taken once. After the split the hot tree no longer holds the return
+    # joints, so a second call must reuse what the first one read.
+    adjacency = graph.hot_joints or hot_adjacency(graph)
+    graph.hot_joints = adjacency
+
+    for node in graph.nodes.values():
+        node.parent_by_system.pop(hot, None)
+        node.children_by_system.pop(hot, None)
+        node.parent_by_system.pop(TREE_RETURN, None)
+        node.children_by_system.pop(TREE_RETURN, None)
+
+    # --- 1. supply -----------------------------------------------------------
+    visited = set()
+    for heater_id in graph.heater_ids:
+        if heater_id in visited or heater_id not in graph.nodes:
+            continue
+        visited.add(heater_id)
+        queue = [heater_id]
+        while queue:
+            current_id = queue.pop(0)
+            for next_id in adjacency.get(current_id, []):
+                if next_id in visited:
+                    continue
+                if is_return_pipe(graph, graph.nodes[next_id]):
+                    continue
+                visited.add(next_id)
+                graph.nodes[next_id].parent_by_system[hot] = current_id
+                graph.nodes[current_id].children_by_system.setdefault(
+                    hot, []).append(next_id)
+                queue.append(next_id)
+
+    # Every heater, including one reached on the tree of another heater, so
+    # none keeps a fixture list from the walk that went round the loop.
+    for heater_id in graph.heater_ids:
+        if heater_id not in graph.nodes:
+            continue
+        served = [nid for nid in graph.descendants(heater_id, hot)
+                  if graph.nodes[nid].kind == KIND_FIXTURE]
+        graph.nodes[heater_id].served_fixture_ids = served
+        graph.log("HEATER {}: serves {} fixtures on its hot SUPPLY tree, "
+                  "return piping excluded.".format(heater_id, len(served)))
+
+    # --- 2. return -----------------------------------------------------------
+    reached = set()
+    for heater_id in graph.heater_ids:
+        if heater_id in graph.nodes:
+            _walk_return(graph, adjacency, heater_id, reached)
+
+    # A return that ties into the cold water inlet, instead of a connector on
+    # the heater, never touches the heater on the hot side. It ends at the
+    # fitting it shares with the cold piping.
+    cold = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+    for node_id in sorted(graph.nodes.keys()):
+        node = graph.nodes[node_id]
+        if node_id in reached or not is_return_pipe(graph, node):
+            continue
+        component = _return_component(graph, adjacency, node_id)
+        tie_in = None
+        for member_id in component:
+            member = graph.nodes[member_id]
+            if member.kind == KIND_PIPE:
+                continue
+            if (cold in member.parent_by_system or
+                    member.children_by_system.get(cold)):
+                tie_in = member_id
+                break
+        if tie_in is None:
+            for member_id in component:
+                reached.add(member_id)
+                if is_return_pipe(graph, graph.nodes[member_id]):
+                    graph.return_unrooted.append(member_id)
+            graph.log("RETURN: could not find where the return line holding "
+                      "pipe {} ends. It reaches neither a water heater nor "
+                      "the cold water piping.".format(node_id))
+            continue
+        _walk_return(graph, adjacency, tie_in, reached)
+
+    # --- 3. demand -----------------------------------------------------------
+    _assign_demand(graph)
+    graph.log("RETURN SPLIT: {} return line end(s), {} return pipe(s) with no "
+              "end found.".format(len(graph.return_roots),
+                                  len(graph.return_unrooted)))
+    return adjacency
+
+
+def _return_can_enter(graph, node):
+    return is_return_pipe(graph, node) or node.kind in _RETURN_PASSABLE_KINDS
+
+
+def _walk_return(graph, adjacency, root_id, reached):
+    """Lay the return tree out from where it ends, back toward the fixtures."""
+    reached.add(root_id)
+    queue = [root_id]
+    found_pipe = False
+    while queue:
+        current_id = queue.pop(0)
+        for next_id in adjacency.get(current_id, []):
+            if next_id in reached:
+                continue
+            node = graph.nodes[next_id]
+            if not _return_can_enter(graph, node):
+                continue
+            reached.add(next_id)
+            node.parent_by_system[TREE_RETURN] = current_id
+            graph.nodes[current_id].children_by_system.setdefault(
+                TREE_RETURN, []).append(next_id)
+            if node.kind == KIND_PIPE:
+                found_pipe = True
+            queue.append(next_id)
+    if found_pipe:
+        graph.return_roots.append(root_id)
+
+
+def _return_component(graph, adjacency, start_id):
+    """The return pipes and in-line devices joined to start_id."""
+    seen = set([start_id])
+    queue = [start_id]
+    while queue:
+        current_id = queue.pop(0)
+        for next_id in adjacency.get(current_id, []):
+            if next_id in seen:
+                continue
+            if not _return_can_enter(graph, graph.nodes[next_id]):
+                continue
+            seen.add(next_id)
+            queue.append(next_id)
+    return sorted(seen)
 
 
 def _connector_is_disabled(node, system):

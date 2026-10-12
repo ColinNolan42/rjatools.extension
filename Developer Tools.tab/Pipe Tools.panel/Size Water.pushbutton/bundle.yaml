@@ -9,5 +9,6 @@ tooltip: >
   which puts the fixture unit take-off on a drafting view and a sheet so the
   count behind every pipe size can be checked.
   The hot water RETURN system is detected from the pipes' System Types and
-  left unsized, because return piping is sized on circulation flow rather
-  than on fixture units.
+  sized on circulation flow: one circuit setter per return leg, 0.5 gpm
+  minimum, flows added up toward the water heater. The report lists the flow
+  to set at each circuit setter.

@@ -19,13 +19,15 @@ import water_tables
 import water_graph
 
 
-def build_report(graph, sizing_result, header):
+def build_report(graph, sizing_result, header, recirc=None):
     """Return the whole report as a single string.
 
     Args:
         graph: the traversed WaterGraph.
         sizing_result: what water_sizing_engine.size_network returned.
         header: dict with "date", "job", "job_number", "by".
+        recirc: what water_recirc.analyze returned, or None when the system
+            has no hot water return.
     """
     lines = []
     lines.extend(basis_block(header))
@@ -34,6 +36,9 @@ def build_report(graph, sizing_result, header):
     lines.append("")
     lines.extend(segment_table(graph, sizing_result))
     lines.append("")
+    if recirc is not None and (recirc["legs"] or recirc["unrooted_pipe_ids"]):
+        lines.extend(recirc_table(recirc))
+        lines.append("")
     lines.extend(exceptions_block(graph, sizing_result))
     return "\n".join(lines)
 
@@ -238,6 +243,19 @@ def segment_table(graph, sizing_result):
         return lines
 
     for s in segments:
+        if s.is_return:
+            # Return piping carries circulation flow, not fixture units.
+            lines.append("{:<10}{:<7}{:>8}{:>8}{:>8}{:>9}{:>9}  {}".format(
+                s.element_id,
+                "HWR",
+                "-",
+                "-" if s.circ_gpm is None else "{:.2f}".format(
+                    float(s.circ_gpm)),
+                "{:.1f}".format(float(s.length_feet)),
+                _size(s.existing_size_in),
+                s.nominal_size if s.nominal_size else "-",
+                s.rule))
+            continue
         lines.append("{:<10}{:<7}{:>8}{:>8}{:>8}{:>9}{:>9}  {}".format(
             s.element_id,
             _system_label(s.system),
@@ -258,7 +276,59 @@ def segment_table(graph, sizing_result):
 
 
 # ---------------------------------------------------------------------------
-# 4. Everything the run could not do
+# 4. Hot water recirculation: the circuit setter settings
+# ---------------------------------------------------------------------------
+
+def recirc_table(recirc):
+    """One row per circuit setter, with the flow to set it to."""
+    lines = ["HOT WATER RECIRCULATION - CIRCUIT SETTER FLOWS",
+             "-" * 78,
+             "  Heat loss {} BTU/h per 100 ft, temperature drop {} F, "
+             "{} gpm minimum".format(
+                 _num(recirc["heat_loss_btu_per_100ft"]),
+                 _num(recirc["delta_t_f"]),
+                 "{:.1f}".format(float(recirc["min_gpm"]))),
+             "  per circuit setter. One circuit setter is assumed on each "
+             "return leg.",
+             "  LOOP length is the return from the last fixture back to the "
+             "water heater.",
+             "  BRANCH length is the hot supply from the main to the fixture.",
+             "-" * 78,
+             "{:<5}{:<9}{:>14}{:>12}{:>12}{:>11}{:>11}".format(
+                 "NO.", "METHOD", "STARTS PIPE", "AT ELEMENT", "EFF LEN FT",
+                 "CALC GPM", "SET GPM"),
+             "-" * 78]
+
+    for leg in recirc["legs"]:
+        lines.append("{:<5}{:<9}{:>14}{:>12}{:>12}{:>11}{:>11}".format(
+            leg["number"],
+            leg["method"],
+            leg["start_pipe_id"],
+            "-" if leg["start_element_id"] is None else leg["start_element_id"],
+            "{:.1f}".format(float(leg["effective_length_ft"])),
+            "{:.2f}".format(float(leg["calc_gpm"])),
+            "{:.2f}".format(float(leg["gpm"]))))
+    if not recirc["legs"]:
+        lines.append("  (no return leg could be laid out)")
+
+    lines.append("-" * 78)
+    for root_id in sorted(recirc["root_gpm"].keys()):
+        lines.append("  Circulation flow returning at element {}: {:.2f} "
+                     "gpm".format(root_id, float(recirc["root_gpm"][root_id])))
+    lines.append("  TOTAL CIRCULATION FLOW, {} circuit setter(s): {:.2f} "
+                 "gpm".format(len(recirc["legs"]), float(recirc["total_gpm"])))
+    if recirc["unrooted_pipe_ids"]:
+        lines.append("  {} return pipe(s) NOT SIZED, the end of their return "
+                     "line was not found: {}".format(
+                         len(recirc["unrooted_pipe_ids"]),
+                         ", ".join(str(p) for p in
+                                   recirc["unrooted_pipe_ids"][:10])))
+    lines.append("-" * 78)
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# 5. Everything the run could not do
 # ---------------------------------------------------------------------------
 
 def exceptions_block(graph, sizing_result):
@@ -319,20 +389,25 @@ def exceptions_block(graph, sizing_result):
         lines.append("      Hot supply and hot water recirculation share one "
                      "system CLASSIFICATION, so the RETURN is identified by "
                      "System Type instead. A system identified as the return "
-                     "is reported but not sized.")
+                     "is sized on circulation flow, not fixture units.")
 
-    # Stated positively first, because "hot water recirculation is not sized"
-    # on its own reads as "hot water is not sized", which is wrong.
-    cw_count = len([s for s in sizing_result["segments"]
+    segments = sizing_result["segments"]
+    cw_count = len([s for s in segments
                     if s.system == shared_params.SYSTEM_DOMESTIC_COLD_WATER
                     and s.nominal_size is not None])
-    hw_count = len([s for s in sizing_result["segments"]
+    hw_count = len([s for s in segments
                     if s.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER
-                    and s.nominal_size is not None])
-    lines.append("  SIZED BY THIS RUN: {} cold water pipe(s) and {} hot water "
-                 "pipe(s).".format(cw_count, hw_count))
-    lines.append("  NOT SIZED: the hot water RETURN line only, which is sized "
-                 "on circulation flow rather than fixture units.")
+                    and not s.is_return and s.nominal_size is not None])
+    hwr_count = len([s for s in segments
+                     if s.is_return and s.nominal_size is not None])
+    hwr_unsized = len([s for s in segments
+                       if s.is_return and s.nominal_size is None])
+    lines.append("  SIZED BY THIS RUN: {} cold water pipe(s), {} hot water "
+                 "pipe(s) and {} hot water return pipe(s).".format(
+                     cw_count, hw_count, hwr_count))
+    if hwr_unsized:
+        lines.append("  NOT SIZED: {} hot water return pipe(s), see the "
+                     "flags above.".format(hwr_unsized))
     lines.append("  NOT EVALUATED: pressure loss and velocity.")
 
     if not any_flag:

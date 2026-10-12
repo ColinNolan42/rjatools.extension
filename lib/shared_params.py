@@ -66,6 +66,20 @@ PARAM_DEVICE_PRESSURE_DROP = "Device_Pressure_Drop_PSI"  # Number. Pressure-loss
 
 SYSTEM_DOMESTIC_COLD_WATER = "DomesticColdWater"
 SYSTEM_DOMESTIC_HOT_WATER  = "DomesticHotWater"
+SYSTEM_OTHER_PIPE          = "OtherPipe"   # what a circulation pump's own connectors report
+
+# =============================================================================
+# HOT WATER RECIRCULATION (Colin, 2026-10-12)
+# From the firm calc "Template - Circ Size Calc.xlsx", tab HOT WATER RECIRC
+# HEAD LOSS: BTU/h = effective length / 100 x heat loss, gpm = BTU/h /
+# (500 x temperature drop). Heat loss and temperature drop are editable in the
+# Size Water dialog; the temperature drop may be lowered but never raised.
+# =============================================================================
+
+DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT = 5000.0
+DEFAULT_RECIRC_DELTA_T_F               = 20.0
+MAX_RECIRC_DELTA_T_F                   = 20.0
+MIN_CIRCUIT_SETTER_GPM                 = 0.5    # a circuit setter is not set lower
 
 # =============================================================================
 # REVIT BUILT-IN PARAMETER REFERENCES

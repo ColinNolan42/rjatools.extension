@@ -272,8 +272,8 @@ def _check_recirculation(graph, profile, returns, findings):
 
         extra = ""
         if len(candidates) > 1:
-            extra = (" This model has {} hot water system types: {}. Re-run "
-                     "and tick the return one in the dialog.".format(
+            extra = (" This model has {} hot water system types: {}. None "
+                     "of them could be identified as the return.".format(
                          len(candidates), ", ".join(candidates)))
         elif candidates:
             extra = (" The only hot water system type found is {}.".format(
@@ -282,22 +282,22 @@ def _check_recirculation(graph, profile, returns, findings):
         findings.append(Finding(
             SEVERITY_WARNING, "hwr_wanted_no_return_system",
             "{} fixture(s) have HWR_ACTIVE set, but no piping system type was "
-            "marked as the RETURN in the dialog, so every hot pipe was sized "
-            "as supply.{}".format(hwr_fixtures, extra)))
+            "identified as the RETURN, so every hot pipe was sized as "
+            "supply.{}".format(hwr_fixtures, extra)))
 
     if returns and not pumps:
         findings.append(Finding(
             SEVERITY_WARNING, "return_system_no_pump",
-            "A return system was marked in the dialog but no recirculation "
-            "pump was found on it. A recirculation loop needs a pump, "
+            "A return system was identified but no recirculation pump was "
+            "found on it. A recirculation loop needs a pump, "
             "gravity and thermosiphon circulation are not permitted."))
 
     if profile["has_recirc"]:
         findings.append(Finding(
             SEVERITY_INFO, "recirc_complete",
             "Recirculation is complete: return piping identified and a pump "
-            "found. Return piping is reported but NOT sized, it is sized on "
-            "circulation flow rather than fixture units."))
+            "found. Return piping is sized on circulation flow, one circuit "
+            "setter per return leg, not on fixture units."))
 
 
 def _check_connectivity(graph, findings):

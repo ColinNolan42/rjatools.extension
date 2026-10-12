@@ -66,8 +66,9 @@ def show_water_dialog(title, project_info, return_detection):
     The hot water RETURN is NOT asked about. It is detected from the pipes'
     System Types before this dialog opens, because System Type separates the
     recirculation system from the hot supply even though system
-    CLASSIFICATION does not. The finding is printed to the pyRevit window and
-    restated here as an assumption, so there is nothing to ask.
+    CLASSIFICATION does not. The finding is printed to the pyRevit window.
+    What IS asked is the pipe heat loss and temperature drop the circuit
+    setter flows are worked out from (Colin, 2026-10-12).
 
     Args:
         title: window title string.
@@ -77,12 +78,14 @@ def show_water_dialog(title, project_info, return_detection):
             water_graph.detect_return_system_types(). Reported, not asked.
 
     Returns:
-        dict with "job", "job_number", "by", "wsfu_calcs" (bool) and
-        "return_system_type_ids" (set of ints), or None if cancelled.
+        dict with "job", "job_number", "by", "wsfu_calcs" (bool),
+        "return_system_type_ids" (set of ints),
+        "recirc_heat_loss_btu_per_100ft" and "recirc_delta_t_f" (floats),
+        or None if cancelled.
     """
     from System.Windows import (
         Thickness, TextWrapping, SizeToContent, WindowStartupLocation,
-        HorizontalAlignment, FontWeights, Window)
+        HorizontalAlignment, FontWeights, Window, Visibility)
     from System.Windows.Controls import (
         StackPanel, TextBlock, TextBox, CheckBox, Button, Label, Separator,
         Orientation)
@@ -172,7 +175,44 @@ def show_water_dialog(title, project_info, return_detection):
 
     _separator()
 
-    # -- 3. basis of design, at the bottom, matching Calculation Basis ------
+    # -- 3. hot water recirculation inputs ----------------------------------
+    # The two numbers the firm circ size calc asks for. Greyed out when the
+    # traversal found no return piping, so the dialog does not ask about a
+    # system that is not there.
+    detected = set((return_detection or {}).get("detected") or set())
+
+    _section("Hot Water Recirculation")
+    tb_heat_loss = _field(
+        "Pipe heat loss (BTU/h per 100 ft)",
+        "{:.0f}".format(float(
+            shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT)))
+    tb_delta_t = _field(
+        "Temperature drop (F), {:.0f} maximum".format(
+            float(shared_params.MAX_RECIRC_DELTA_T_F)),
+        "{:.0f}".format(float(shared_params.DEFAULT_RECIRC_DELTA_T_F)))
+    if detected:
+        _note("Sets the flow at each circuit setter: effective length / 100 "
+              "x heat loss / (500 x temperature drop), {:.1f} gpm minimum. "
+              "The return is sized on the flows added up toward the water "
+              "heater.".format(float(shared_params.MIN_CIRCUIT_SETTER_GPM)),
+              indent=2)
+    else:
+        tb_heat_loss.IsEnabled = False
+        tb_delta_t.IsEnabled = False
+        _note("No hot water return piping was found on this network, so "
+              "these are not used.", indent=2)
+
+    tb_recirc_error = TextBlock()
+    tb_recirc_error.TextWrapping = TextWrapping.Wrap
+    tb_recirc_error.Width = CONTENT_W
+    tb_recirc_error.Foreground = SolidColorBrush(Colors.Firebrick)
+    tb_recirc_error.Margin = Thickness(2, 0, 0, 0)
+    tb_recirc_error.Visibility = Visibility.Collapsed
+    outer.Children.Add(tb_recirc_error)
+
+    _separator()
+
+    # -- 4. basis of design, at the bottom, matching Calculation Basis ------
     _section("Basis of Design")
 
     _INFO_LBL_W = 150
@@ -200,11 +240,9 @@ def show_water_dialog(title, project_info, return_detection):
     for label_text, value_text in water_tables.basis_of_design_rows():
         _info_row(label_text, value_text)
 
-    # The detected return system is NOT shown here. The basis block's
-    # "Not included" row already says recirculation sizing is still to do,
-    # and the pyRevit window prints which System Type was identified and why.
-    # Carried through to the result so those pipes are skipped by the engine.
-    detected = set((return_detection or {}).get("detected") or set())
+    # The detected return system is NOT shown here. The pyRevit window prints
+    # which System Type was identified and why. It is carried through to the
+    # result so the engine sizes those pipes on circulation flow.
 
     # -- OK / Cancel ---------------------------------------------------------
     btn_panel = StackPanel()
@@ -221,7 +259,33 @@ def show_water_dialog(title, project_info, return_detection):
     cancel_btn.Content = "Cancel"
     cancel_btn.Width = 72
 
+    def _recirc_error(text):
+        tb_recirc_error.Text = text
+        tb_recirc_error.Visibility = Visibility.Visible
+
+    def _positive_number(box):
+        try:
+            value = float(box.Text.strip())
+        except Exception:
+            return None
+        return value if value > 0 else None
+
     def on_ok(sender, e):
+        heat_loss = shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT
+        delta_t = shared_params.DEFAULT_RECIRC_DELTA_T_F
+        if detected:
+            heat_loss = _positive_number(tb_heat_loss)
+            delta_t = _positive_number(tb_delta_t)
+            if heat_loss is None:
+                _recirc_error(
+                    "Pipe heat loss shall be a number greater than zero.")
+                return
+            if delta_t is None or delta_t > shared_params.MAX_RECIRC_DELTA_T_F:
+                _recirc_error(
+                    "Temperature drop shall be a number greater than zero "
+                    "and not more than {:.0f} F.".format(
+                        float(shared_params.MAX_RECIRC_DELTA_T_F)))
+                return
         result[0] = {
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
@@ -229,6 +293,8 @@ def show_water_dialog(title, project_info, return_detection):
             "wsfu_calcs": bool(cb_wsfu.IsChecked),
             # Detected, not chosen. The dialog never asked.
             "return_system_type_ids": set(detected),
+            "recirc_heat_loss_btu_per_100ft": float(heat_loss),
+            "recirc_delta_t_f": float(delta_t),
         }
         win.Close()
 

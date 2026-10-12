@@ -343,9 +343,20 @@ class TestBasisOfDesignRows(unittest.TestCase):
             self.assertIn(token, joined_lines)
 
     def test_states_what_is_not_evaluated(self):
-        joined = " ".join(v for _, v in wt.basis_of_design_rows())
-        self.assertIn("pressure loss", joined.lower())
-        self.assertIn("recirculation", joined.lower())
+        rows = dict(wt.basis_of_design_rows())
+        self.assertIn("pressure loss", rows["Not included:"].lower())
+        # Recirculation is sized now, so it must not be listed as missing.
+        self.assertNotIn("recirculation", rows["Not included:"].lower())
+
+    def test_states_the_recirculation_method(self):
+        """The return is sized on circulation flow, which is not a code
+        method, so the basis has to say exactly what was done."""
+        row = dict(wt.basis_of_design_rows())["Recirculation:"]
+        joined_lines = " ".join(wt.basis_of_design_lines())
+        for token in ("circuit setter", "0.5 gpm minimum", "E103.3(3)",
+                      "5 fps", "1/2\" minimum"):
+            self.assertIn(token, row)
+            self.assertIn(token, joined_lines)
 
 
 class TestDataIntegrity(unittest.TestCase):

@@ -5,9 +5,9 @@
 # ONE action. Pick the RPZ, answer the one dialog, and the run does the whole
 # job in order:
 #
-#   traverse -> detect the return system -> dialog -> check the system ->
-#   size -> print the report -> write the sizes -> WSFU take-off on a
-#   drafting view and a sheet
+#   traverse -> detect the return system -> split supply from return ->
+#   dialog -> check the system -> circuit setter flows -> size -> print the
+#   report -> write the sizes -> WSFU take-off on a drafting view and a sheet
 #
 # Two check boxes say what a run does. SIZING is always on. WSFU CALCULATIONS
 # is optional, and produces the take-off: the check ON the sizing, how the
@@ -33,6 +33,7 @@ import revit_helpers
 import water_graph
 import water_checks
 import water_sizing_engine
+import water_recirc
 import water_report
 import water_drafting
 import ui_helpers
@@ -59,6 +60,15 @@ def run(doc, uidoc, output, forms):
     detection = water_graph.detect_return_system_types(graph)
     _print_return_detection(output, detection)
 
+    # Split supply from return before anything is counted. The hot walk goes
+    # round a recirculation loop from both ends, so until the return pipes are
+    # taken out of the supply tree the hot fixture units can land on the
+    # wrong side of it.
+    # Only a return that something confirmed. One picked on pipe count alone
+    # is reported and left unsized, never acted on.
+    water_graph.apply_return_system_types(
+        graph, detection["detected"] - detection["unconfirmed"])
+
     settings = ui_helpers.show_water_dialog(
         "Size Water - 2024 IPC", _project_info(doc, output), detection)
     if settings is None:
@@ -82,10 +92,20 @@ def run(doc, uidoc, output, forms):
             output.print_md("Stopped. Nothing was changed.")
             return False
 
+    # Circuit setter flows and the flow in every return pipe. None when the
+    # system has no return, so the report and the engine say nothing about it.
+    recirc = None
+    if settings["return_system_type_ids"]:
+        recirc = water_recirc.analyze(
+            graph,
+            heat_loss_btu_per_100ft=settings["recirc_heat_loss_btu_per_100ft"],
+            delta_t_f=settings["recirc_delta_t_f"])
+
     sizing = water_sizing_engine.size_network(
         graph,
         apply_minimums=True,
-        return_system_type_ids=settings["return_system_type_ids"])
+        return_system_type_ids=settings["return_system_type_ids"],
+        recirc=recirc)
 
     header = {
         "date": datetime.date.today().strftime("%Y-%m-%d"),
@@ -93,7 +113,7 @@ def run(doc, uidoc, output, forms):
         "job_number": settings["job_number"],
         "by": settings["by"],
     }
-    print(water_report.build_report(graph, sizing, header))
+    print(water_report.build_report(graph, sizing, header, recirc))
 
     # Sizes first, because writing them is the job. The take-off follows in
     # its own transaction, so a project missing a drafting view family type or
@@ -202,8 +222,10 @@ def _print_return_detection(output, detection):
         output.print_md(
             "> No recirculation pump and no return-to-heater connection was "
             "found, so the RETURN above is a best guess from the System Type "
-            "name and pipe count. A system marked RETURN is left unsized. "
-            "Check it against the model before using these sizes.")
+            "name and pipe count. A return identified by name is sized on "
+            "circulation flow instead of fixture units. One picked on pipe "
+            "count alone is left unsized. Check it against the model before "
+            "using these sizes.")
 
 
 def _create_drafting_view(doc, output, graph, sizing, header):

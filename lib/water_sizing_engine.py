@@ -41,20 +41,24 @@ class SegmentResult(object):
         self.flag            = ""
         self.fixture_count   = 0
         self.length_feet     = 0.0
+        self.is_return       = False    # hot water return, sized on gpm
+        self.circ_gpm        = None     # circulation flow, return pipes only
 
 
-def size_network(graph, apply_minimums=True, return_system_type_ids=None):
+def size_network(graph, apply_minimums=True, return_system_type_ids=None,
+                 recirc=None):
     """Choose a nominal size for every pipe in the graph.
 
     Args:
         graph: a traversed WaterGraph.
         apply_minimums: enforce the firm minimum sizes (single fixture takes
             its connector size, two or more fixtures take 3/4 inch minimum).
-        return_system_type_ids: PipingSystemType element ids the user marked as
-            recirculation / return. Those pipes are reported but NOT sized,
-            because return piping is sized on circulation flow, not on fixture
-            units. Revit classifies a recirc system as Domestic Hot Water, the
-            same as the supply, so this cannot be detected automatically.
+        return_system_type_ids: PipingSystemType element ids identified as the
+            hot water return. Those pipes carry circulation flow, not fixture
+            units, so they are never sized from WSFU.
+        recirc: what water_recirc.analyze returned. With it, each return pipe
+            is sized on its accumulated circulation flow. Without it the
+            return pipes are reported and left unsized.
 
     Returns:
         dict with "segments" (list of SegmentResult, sorted by demand
@@ -75,10 +79,9 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None):
         result.length_feet = node.length_feet
 
         if node.system_type_id is not None and node.system_type_id in returns:
-            result.rule = "NOT SIZED"
-            result.flag = ("recirculation / return system '{}' - sized on "
-                           "circulation flow, not fixture units, and not part "
-                           "of this build".format(node.system_type_name))
+            result.is_return = True
+            result.demand_wsfu = 0.0
+            _size_return_pipe(graph, node, result, recirc, flags)
             segments.append(result)
             continue
 
@@ -144,6 +147,65 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None):
     return {"segments": segments, "flags": flags, "totals": totals}
 
 
+def _size_return_pipe(graph, node, result, recirc, flags):
+    """Size one hot water return pipe on its circulation flow.
+
+    The flow is the sum of the circuit setters that drain through the pipe
+    (water_recirc). The size is the smallest one the firm hot water table
+    allows for that flow, 1/2 inch minimum. Flows only grow toward the water
+    heater, so the sizes can only grow that way too.
+    """
+    if recirc is None:
+        result.rule = "NOT SIZED"
+        result.flag = ("return system '{}' - sized on circulation flow, and "
+                       "no recirculation analysis was run".format(
+                           node.system_type_name))
+        return
+
+    if node.system_type_id not in graph.return_system_type_ids:
+        # Named as the return on pipe count alone, or the split was refused.
+        # Sizing it on a guess would write a wrong size into the model.
+        result.rule = "NOT SIZED"
+        result.flag = ("System Type '{}' looks like a return but nothing "
+                       "confirmed it (no pump on it, no return to a heater, "
+                       "no name hint), so it was left alone".format(
+                           node.system_type_name))
+        flags.append("Pipe {}: {}".format(node.element_id, result.flag))
+        return
+
+    flow = recirc["pipe_gpm"].get(node.element_id)
+    if flow is None:
+        result.rule = "NOT SIZED"
+        result.flag = ("return system '{}' - could not find where this "
+                       "return line ends, so its flow is unknown".format(
+                           node.system_type_name))
+        flags.append("Pipe {}: {}".format(node.element_id, result.flag))
+        return
+
+    result.circ_gpm = flow
+    selection = water_tables.select_return_size(flow)
+    if selection["status"] == "exceeds_table":
+        result.rule = "NOT SIZED"
+        result.flag = ("circulation flow {:.2f} gpm exceeds the firm table "
+                       "maximum of {:.1f} gpm".format(
+                           float(flow), float(selection["max_table_gpm"])))
+        flags.append("Pipe {}: {}".format(node.element_id, result.flag))
+        return
+    if selection["status"] == "no_flow":
+        smallest = water_tables.return_gpm_rows()[0]
+        result.nominal_size = smallest["nominal_size"]
+        result.size_inches = smallest["size_inches"]
+        result.rule = "return, no circulation flow, minimum size assigned"
+        result.flag = "return pipe with no circuit setter upstream of it"
+        flags.append("Pipe {}: {}".format(node.element_id, result.flag))
+        return
+
+    result.nominal_size = selection["nominal_size"]
+    result.size_inches = selection["size_inches"]
+    result.rule = "return, {:.2f} gpm circulation, table limit {:.1f} gpm".format(
+        float(flow), float(selection["limit_gpm"]))
+
+
 def _enforce_downsize_after_the_tee(graph, segments, flags):
     """A pipe is never smaller than anything downstream of it.
 
@@ -163,7 +225,9 @@ def _enforce_downsize_after_the_tee(graph, segments, flags):
         by_id[segment.element_id] = segment
 
     for segment in segments:
-        if segment.size_inches is None:
+        # Return piping is sized on accumulated flow, which already only
+        # grows toward the heater, and it is not downstream of the supply.
+        if segment.size_inches is None or segment.is_return:
             continue
         node = graph.nodes.get(segment.element_id)
         if node is None:
@@ -172,6 +236,8 @@ def _enforce_downsize_after_the_tee(graph, segments, flags):
         largest = 0.0
         for nid in graph.descendants(segment.element_id, node.system):
             downstream = by_id.get(nid)
+            if downstream is not None and downstream.is_return:
+                continue
             if downstream is not None and downstream.size_inches:
                 if downstream.size_inches > largest:
                     largest = downstream.size_inches
