@@ -643,15 +643,15 @@ def sizing_chart():
     for row, ret in zip(firm_rows, returns):
         rows.append([
             str(row["nominal_size"]) + "\"",
-            "up to " + _fmt_number(row[cold_field]),
-            "up to " + _fmt_number(row[hot_field]),
+            "up to " + fmt_number(row[cold_field]),
+            "up to " + fmt_number(row[hot_field]),
             ("-" if ret["max_gpm"] is None
              else "up to " + "{:.1f}".format(float(ret["max_gpm"]))),
         ])
     return {"headers": headers, "rows": rows}
 
 
-def _fmt_number(value):
+def fmt_number(value):
     """A table limit without a trailing .0 for whole numbers. Cast to float
     first: IronPython 2.7 rejects '{:.0f}'.format(an_int)."""
     number = float(value)

@@ -43,6 +43,7 @@ class SegmentResult(object):
         self.length_feet     = 0.0
         self.is_return       = False    # hot water return, sized on gpm
         self.circ_gpm        = None     # circulation flow, return pipes only
+        self.exceeds_table   = False    # load above the largest table size
 
 
 def size_network(graph, apply_minimums=True, return_system_type_ids=None,
@@ -98,6 +99,7 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
         result.size_inches = selection["size_inches"]
 
         if selection["status"] == "exceeds_table":
+            result.exceeds_table = True
             result.rule = "NOT SIZED"
             result.flag = ("demand {:.1f} wsfu exceeds the firm table maximum "
                            "of {:.0f} wsfu".format(
@@ -185,6 +187,7 @@ def _size_return_pipe(graph, node, result, recirc, flags):
     result.circ_gpm = flow
     selection = water_tables.select_return_size(flow)
     if selection["status"] == "exceeds_table":
+        result.exceeds_table = True
         result.rule = "NOT SIZED"
         result.flag = ("circulation flow {:.2f} gpm exceeds the firm table "
                        "maximum of {:.1f} gpm".format(

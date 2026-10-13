@@ -261,6 +261,26 @@ class TestZeroDemandStillGetsASize(unittest.TestCase):
         self.assertIn("zero demand", seg.rule)
 
 
+class TestOverTheTableIsFlagged(unittest.TestCase):
+
+    def test_load_above_3_inch_is_flagged_and_left_unsized(self):
+        # 3" carries 750 cold WSFU in the firm table, so 800 is over it.
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        main = add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=10.0)
+        main.demand_wsfu = 800.0
+        under = add_node(g, 3, water_graph.KIND_PIPE, parent=1, length_feet=10.0)
+        under.demand_wsfu = 700.0
+        res = water_sizing_engine.size_network(g, apply_minimums=False)
+        by_id = dict((s.element_id, s) for s in res["segments"])
+        self.assertTrue(by_id[2].exceeds_table)
+        self.assertIsNone(by_id[2].size_inches)
+        self.assertEqual(by_id[2].rule, "NOT SIZED")
+        self.assertFalse(by_id[3].exceeds_table)
+        self.assertEqual(by_id[3].nominal_size, "3")
+
+
 class TestMixedTypesDoNotCollapse(unittest.TestCase):
     """Regression for the 2026-09-24 live run on (2024) Grantham 4 MP.
 

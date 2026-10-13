@@ -388,15 +388,20 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
         float(shared_params.DEFAULT_RECIRC_DELTA_T_F))
     _named(win, 'tb_delta_t_unit').Text = "F, {:.0f} maximum".format(max_dt)
 
-    # Detected, not chosen. The return system is read off the pipes' System
-    # Types before this dialog opens, so there is nothing to ask.
+    # Detected, not chosen. With return_detection None the dialog opens
+    # before the network is picked, so the inputs stay live and are used only
+    # if the picked network turns out to have hot water return piping.
     detected = set((return_detection or {}).get("detected") or set())
-    if detected:
+    use_recirc = return_detection is None or bool(detected)
+    if use_recirc:
         tb_recirc_note.Text = (
             "Sets the flow at each circuit setter: effective length / 100 x "
             "heat loss / (500 x temperature drop), {:.1f} gpm minimum. The "
             "return is sized on the flows added up toward the water "
             "heater.".format(float(shared_params.MIN_CIRCUIT_SETTER_GPM)))
+        if return_detection is None:
+            tb_recirc_note.Text += (" Used only if the piping picked next has "
+                                    "hot water return piping.")
     else:
         pnl_recirc.IsEnabled = False
         pnl_recirc.Opacity = 0.55
@@ -409,7 +414,7 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
     def collect(errors):
         heat_loss = shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT
         delta_t = shared_params.DEFAULT_RECIRC_DELTA_T_F
-        if detected:
+        if use_recirc:
             heat_loss = _number(tb_heat_loss, 'Pipe heat loss', errors)
             delta_t = _number(tb_delta_t, 'Temperature drop', errors,
                               maximum=max_dt)

@@ -2,21 +2,24 @@
 # water_run.py
 # The Size Water pipeline.
 #
-# ONE action. Pick the RPZ, answer the one dialog, and the run does the whole
-# job in order:
+# ONE action, in the order the user sees it (Colin, 2026-10-13): the Size
+# Water dialog first, then a choice of what to pick (RPZ or a new pipe at a
+# tee to existing), then the pick, then the whole job:
 #
-#   traverse -> detect the return system -> split supply from return ->
-#   dialog -> check the system -> circuit setter flows -> size -> print the
-#   report -> write the sizes -> WSFU take-off on a drafting view and a sheet
+#   dialog -> choose RPZ / tee -> pick -> traverse -> detect the return
+#   system -> split supply from return -> check the system -> circuit setter
+#   flows -> size -> print the report -> write the sizes -> WSFU take-off on
+#   a drafting view and a sheet
 #
 # Two check boxes say what a run does. SIZING is always on. WSFU CALCULATIONS
 # is optional, and produces the take-off: the check ON the sizing, how the
 # fixture unit count that drove every pipe size gets verified against the
 # fixtures actually in the model.
 #
-# The traversal runs BEFORE the dialog, because the dialog reports the hot
-# water RETURN system rather than asking for it, and that is read off the
-# System Types of the pipes the traversal found.
+# The dialog opens before the network is known, so it cannot grey out the
+# recirculation inputs. They stay live and are used only if the traversal
+# finds hot water return piping. The return system itself is still detected
+# from the pipes' System Types after the pick, never asked about.
 #
 # Firm standards are assumed rather than asked about on every run: minimum
 # pipe sizes always apply.
@@ -35,6 +38,7 @@ import water_graph
 import water_checks
 import water_sizing_engine
 import water_recirc
+import water_tables
 import water_report
 import water_drafting
 import ui_helpers
@@ -47,14 +51,16 @@ def run(doc, uidoc, output, forms):
     """
     output.print_md("# Size Water")
 
+    settings = ui_helpers.show_water_dialog(
+        "Size Water - 2024 IPC", _project_info(doc, output), None)
+    if settings is None:
+        output.print_md("Cancelled. Nothing was changed.")
+        return False
+
     origin, upstream = _pick_origin(uidoc, doc, output, forms)
     if origin is None:
         return False
 
-    # Traverse BEFORE the dialog. The dialog reports which hot water System
-    # Type is the return, and that is read off the pipes the traversal found,
-    # so the network has to exist before the dialog can say anything true
-    # about it.
     revit_helpers.reset_pipe_diameter_approach()
     graph = water_graph.build_water_network(origin, doc, upstream)
 
@@ -69,12 +75,8 @@ def run(doc, uidoc, output, forms):
     # is reported and left unsized, never acted on.
     water_graph.apply_return_system_types(
         graph, detection["detected"] - detection["unconfirmed"])
-
-    settings = ui_helpers.show_water_dialog(
-        "Size Water - 2024 IPC", _project_info(doc, output), detection)
-    if settings is None:
-        output.print_md("Cancelled. Nothing was changed.")
-        return False
+    # Detected, not chosen: the same set the dialog used to carry through.
+    settings["return_system_type_ids"] = set(detection["detected"])
 
     # Completeness check, before anything is sized or written. A half-modelled
     # system should fail loudly rather than be quietly sized.
@@ -119,6 +121,7 @@ def run(doc, uidoc, output, forms):
     # Sizes first, because writing them is the job. The take-off follows in
     # its own transaction, so a project missing a drafting view family type or
     # a title block costs the user a sheet, never the sizes already committed.
+    _warn_over_table(output, forms, sizing)
     _write_sizes(doc, output, forms, graph, sizing)
 
     if settings["wsfu_calcs"]:
@@ -137,6 +140,10 @@ def run(doc, uidoc, output, forms):
 # Steps
 # ---------------------------------------------------------------------------
 
+ORIGIN_RPZ = "RPZ"
+ORIGIN_TEE = "New pipe connection (TEE)"
+
+
 def _pick_origin(uidoc, doc, output, forms):
     """Pick where the run starts.
 
@@ -144,11 +151,22 @@ def _pick_origin(uidoc, doc, output, forms):
     tie_in.resolve_new_pipe_upstream() found for a new pipe. Returns
     (None, None) when the pick is cancelled or cannot be used.
     """
+    choice = forms.alert(
+        "Where does the domestic water system start?\n\n"
+        "RPZ: pick the RPZ / backflow preventer.\n"
+        "New pipe connection (TEE): on an existing building, pick the first "
+        "new cold water pipe at the tee to the existing main.",
+        title="Size Water - Select Start Point",
+        options=[ORIGIN_RPZ, ORIGIN_TEE])
+    if not choice:
+        output.print_md("Cancelled. Nothing was changed.")
+        return None, None
+
+    prompt = ("Select the RPZ / backflow preventer" if choice == ORIGIN_RPZ
+              else "Select the first new cold water pipe at the tee to "
+                   "existing")
     try:
-        reference = uidoc.Selection.PickObject(
-            ObjectType.Element,
-            "Select the RPZ / backflow preventer, or the first new cold "
-            "water pipe on an existing building")
+        reference = uidoc.Selection.PickObject(ObjectType.Element, prompt)
     except Exception:
         output.print_md("Cancelled. Nothing was changed.")
         return None, None
@@ -161,7 +179,21 @@ def _pick_origin(uidoc, doc, output, forms):
     output.print_md("Origin: element **{}**".format(
         revit_helpers.eid_int(origin.Id)))
 
-    if revit_helpers.is_pipe(origin):
+    picked_pipe = revit_helpers.is_pipe(origin)
+    if choice == ORIGIN_TEE and not picked_pipe:
+        forms.alert("New pipe connection (TEE) was chosen, but the element "
+                    "picked is not a pipe. Pick the first new cold water "
+                    "pipe at the tee to existing.", title="Size Water")
+        output.print_md("Stopped. Nothing was changed.")
+        return None, None
+    if choice == ORIGIN_RPZ and picked_pipe:
+        forms.alert("RPZ was chosen, but a pipe was picked. Pick the RPZ / "
+                    "backflow preventer, or run again and choose New pipe "
+                    "connection (TEE).", title="Size Water")
+        output.print_md("Stopped. Nothing was changed.")
+        return None, None
+
+    if picked_pipe:
         return _new_pipe_origin(origin, doc, output, forms)
 
     # Warn but do not block. water_checks reports this properly once the
@@ -322,6 +354,32 @@ def _create_drafting_view(doc, output, graph, sizing, header, recirc=None):
         output.print_md(
             "Drafting view failed, nothing was added to the model: "
             "{}".format(str(exc)))
+
+
+def _warn_over_table(output, forms, sizing):
+    """Warn when a load is above the largest size in the firm table.
+
+    Those pipes are NOT sized and keep their drawn size, so the run carries
+    on, but the user shall know before trusting the result.
+    """
+    over = [s for s in sizing["segments"] if s.exceeds_table]
+    if not over:
+        return
+    largest = water_tables.firm_sizing_rows()[-1]
+    limits = "{}\" carries up to {} WSFU cold, {} WSFU hot, {:.1f} gpm return".format(
+        largest["nominal_size"],
+        water_tables.fmt_number(largest["max_wsfu_8fps_cold"]),
+        water_tables.fmt_number(largest["max_wsfu_5fps_hot"]),
+        float(water_tables.return_gpm_rows()[-1]["max_gpm"]))
+    lines = ["  - Pipe {}: {}".format(s.element_id, s.flag) for s in over[:8]]
+    if len(over) > 8:
+        lines.append("  ... and {} more".format(len(over) - 8))
+    message = ("{} pipe(s) carry more load than the firm sizing table "
+               "covers ({}).\n\n{}\n\nThese pipes were NOT sized and keep "
+               "their drawn size. Size them by hand.".format(
+                   len(over), limits, "\n".join(lines)))
+    output.print_md("> **WARNING:** " + message.replace("\n", "  \n"))
+    forms.alert(message, title="Size Water - Over the Table", warn_icon=True)
 
 
 def _write_sizes(doc, output, forms, graph, sizing):

@@ -312,6 +312,7 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
     # traversal found no return piping, so the dialog does not ask about a
     # system that is not there.
     detected = set((return_detection or {}).get("detected") or set())
+    use_recirc = return_detection is None or bool(detected)
 
     _section("Hot Water Recirculation")
     tb_heat_loss = _field(
@@ -322,11 +323,13 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
         "Temperature drop (F), {:.0f} maximum".format(
             float(shared_params.MAX_RECIRC_DELTA_T_F)),
         "{:.0f}".format(float(shared_params.DEFAULT_RECIRC_DELTA_T_F)))
-    if detected:
+    if use_recirc:
         _note("Sets the flow at each circuit setter: effective length / 100 "
               "x heat loss / (500 x temperature drop), {:.1f} gpm minimum. "
               "The return is sized on the flows added up toward the water "
-              "heater.".format(float(shared_params.MIN_CIRCUIT_SETTER_GPM)),
+              "heater.".format(float(shared_params.MIN_CIRCUIT_SETTER_GPM)) +
+              (" Used only if the piping picked next has hot water return "
+               "piping." if return_detection is None else ""),
               indent=2)
     else:
         tb_heat_loss.IsEnabled = False
@@ -424,7 +427,7 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
     def on_ok(sender, e):
         heat_loss = shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT
         delta_t = shared_params.DEFAULT_RECIRC_DELTA_T_F
-        if detected:
+        if use_recirc:
             heat_loss = _positive_number(tb_heat_loss)
             delta_t = _positive_number(tb_delta_t)
             if heat_loss is None:
