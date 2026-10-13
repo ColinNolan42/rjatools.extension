@@ -1713,6 +1713,15 @@ def main():
     existing = None
     is_tie_in = revit_helpers.is_pipe(selected_element)
     if is_tie_in:
+        gas_check = pipe_graph.check_gas_pipe(selected_element)
+        if not gas_check["ok"]:
+            forms.alert(
+                "This is not a gas pipe: {}.\n\nPick the gas meter, or the "
+                "first new GAS pipe at the connection to existing.".format(
+                    gas_check["reason"]),
+                title="One-Line - Invalid Selection"
+            )
+            return
         upstream = tie_in.resolve_new_pipe_upstream(selected_element, doc)
         if upstream["status"] != "ok":
             forms.alert(

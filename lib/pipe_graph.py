@@ -248,6 +248,55 @@ def _start_at_new_pipe(graph, doc, pipe, upstream):
     return visited, queue
 
 
+# System classifications that are never gas. Revit has no gas
+# classification: the RJA template's "Natural Gas" System Type classifies as
+# OtherPipe (read live 2026-10-13), so a gas pipe is recognised by NOT being
+# one of these, never by its System Type name.
+_NOT_GAS_CLASSIFICATIONS = (
+    "DomesticColdWater", "DomesticHotWater", "Sanitary", "Vent",
+    "SupplyHydronic", "ReturnHydronic", "FireProtectWet", "FireProtectDry",
+    "FireProtectPreaction", "FireProtectOther", "Storm")
+
+
+def check_gas_pipe(pipe):
+    """Is a picked pipe on a gas system? (Colin, 2026-10-13: reject a pipe
+    that is not a gas piping system.)
+
+    Returns:
+        dict with "ok" (bool), "classification" (str or None),
+        "system_type_name" (str or None) and "reason" (a sentence, when
+        not ok).
+    """
+    classifications = set()
+    for c in revit_helpers.get_connectors(pipe):
+        if c.get("system_type"):
+            classifications.add(c["system_type"])
+
+    name = None
+    try:
+        from Autodesk.Revit.DB import BuiltInParameter
+        param = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
+        if param is not None:
+            name = param.AsValueString()
+    except Exception:
+        name = None
+
+    classification = ", ".join(sorted(classifications)) or None
+    bad = sorted(classifications.intersection(_NOT_GAS_CLASSIFICATIONS))
+    if bad:
+        return {"ok": False, "classification": classification,
+                "system_type_name": name,
+                "reason": "the picked pipe is on '{}', classified as {}, "
+                          "which is not a gas piping system".format(
+                              name or "an unnamed system", ", ".join(bad))}
+    if not classifications:
+        return {"ok": False, "classification": None, "system_type_name": name,
+                "reason": "the system of the picked pipe could not be read, "
+                          "so it cannot be confirmed as gas piping"}
+    return {"ok": True, "classification": classification,
+            "system_type_name": name, "reason": ""}
+
+
 def apply_existing_conditions(graph, size_nominal, length_ft, load_mbh):
     """Add the existing system the designer entered to a tie-in graph.
 

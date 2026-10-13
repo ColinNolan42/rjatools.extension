@@ -336,6 +336,15 @@ def main():
     upstream = None
     existing = None
     if revit_helpers.is_pipe(selected_element):
+        gas_check = pipe_graph.check_gas_pipe(selected_element)
+        if not gas_check["ok"]:
+            forms.alert(
+                "This is not a gas pipe: {}.\n\nPick the gas meter, or the "
+                "first new GAS pipe at the connection to existing.".format(
+                    gas_check["reason"]),
+                title="Size Gas - Invalid Selection"
+            )
+            return
         upstream = tie_in.resolve_new_pipe_upstream(selected_element, doc)
         if upstream["status"] != "ok":
             forms.alert(
