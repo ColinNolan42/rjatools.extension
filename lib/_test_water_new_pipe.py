@@ -248,6 +248,55 @@ class TestWalkStopsAtExistingPhase(unittest.TestCase):
         self.assertEqual(made, [50])
         self.assertEqual(g.existing_connections, [])
 
+    def _walk_into_valve(self, beyond_phase, valve_is_pipe=False):
+        """Origin (phase 1) -> valve 50 (phase 2) -> element 60 (beyond_phase)."""
+        import revit_helpers
+        g = make_graph()
+        g.origin_id = 1
+        g.origin_is_new_pipe = True
+        g.origin_phase_id = 1
+        g.origin_upstream_connectors = set([0])
+        node = add_node(g, 1, water_graph.KIND_PIPE)
+        node.connectors = [connector(0, False), connector(1, True, 50)]
+        phases = {50: 2, 60: beyond_phase}
+        valve_conns = [connector(0, True, 1), connector(1, True, 60)]
+        keep = (water_graph._get_element, revit_helpers.get_created_phase_id,
+                water_graph._make_node, revit_helpers.get_connectors,
+                water_graph._is_pipe)
+        made = []
+
+        def fake_make(graph, element, element_id, system):
+            made.append(element_id)
+            return add_node(graph, element_id, water_graph.KIND_ACCESSORY)
+
+        water_graph._get_element = lambda doc, eid: eid
+        revit_helpers.get_created_phase_id = lambda el: phases.get(el)
+        revit_helpers.get_connectors = lambda el: valve_conns
+        water_graph._is_pipe = lambda el: valve_is_pipe
+        water_graph._make_node = fake_make
+        try:
+            water_graph._walk(g, None, 1, COLD, set([1]))
+        finally:
+            (water_graph._get_element, revit_helpers.get_created_phase_id,
+             water_graph._make_node, revit_helpers.get_connectors,
+             water_graph._is_pipe) = keep
+        return g, made
+
+    def test_existing_valve_with_new_work_beyond_is_walked_through(self):
+        g, made = self._walk_into_valve(beyond_phase=1)
+        self.assertIn(50, made)
+        self.assertEqual(g.existing_passthrough, [50])
+        self.assertEqual(g.existing_connections, [])
+
+    def test_existing_valve_leading_to_existing_still_stops(self):
+        g, made = self._walk_into_valve(beyond_phase=2)
+        self.assertEqual(made, [])
+        self.assertEqual(g.existing_connections, [(1, 50)])
+
+    def test_an_existing_pipe_is_never_walked_through(self):
+        g, made = self._walk_into_valve(beyond_phase=1, valve_is_pipe=True)
+        self.assertEqual(made, [])
+
     def test_report_says_what_was_not_followed(self):
         g = build_from_new_pipe()
         g.existing_connections = [(3, 77)]
@@ -257,6 +306,67 @@ class TestWalkStopsAtExistingPhase(unittest.TestCase):
         self.assertIn("1 connection(s) to EXISTING phase piping were not "
                       "followed", text)
         self.assertIn("77", text)
+
+
+class TestTeeOnTheExistingMain(unittest.TestCase):
+    """Colin, 2026-10-13: on an existing building the TEE is picked, because
+    it shows the existing main and the new branch at once. A transition on
+    the branch made picking the first new pipe fail."""
+
+    def test_the_one_new_connector_is_the_branch(self):
+        r = tie_in.pick_tee_branch(ends(EXISTING, EXISTING, NEW))
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(r["branch_connector"], 2)
+        self.assertEqual(sorted(r["upstream_connectors"]), [0, 1])
+
+    def test_unmodeled_main_open_or_capped_still_works(self):
+        r = tie_in.pick_tee_branch(ends(OPEN, NEW, CAP))
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(r["branch_connector"], 1)
+
+    def test_no_new_branch_is_refused(self):
+        self.assertEqual(tie_in.pick_tee_branch(
+            ends(EXISTING, EXISTING, EXISTING))["status"], "no_new")
+
+    def test_two_new_connectors_are_refused_not_guessed(self):
+        self.assertEqual(tie_in.pick_tee_branch(
+            ends(EXISTING, NEW, NEW))["status"], "ambiguous")
+
+    def test_resolve_reads_phases_and_finds_the_branch(self):
+        import revit_helpers
+        phases = {50: 1, 51: 1, 52: 3}       # main existing, branch new
+        tee_conns = [connector(0, True, 50), connector(1, True, 51),
+                     connector(2, True, 52)]
+        keep = (revit_helpers.get_connectors, revit_helpers.get_element_by_id,
+                revit_helpers.get_created_phase_id,
+                revit_helpers.get_last_phase_id, tie_in._is_cap)
+        revit_helpers.get_connectors = lambda el: tee_conns
+        revit_helpers.get_element_by_id = lambda doc, eid: eid
+        revit_helpers.get_created_phase_id = lambda el: phases.get(el)
+        revit_helpers.get_last_phase_id = lambda doc: 3
+        tie_in._is_cap = lambda el: False
+        try:
+            r = tie_in.resolve_tee_branch(object(), None, COLD)
+        finally:
+            (revit_helpers.get_connectors, revit_helpers.get_element_by_id,
+             revit_helpers.get_created_phase_id,
+             revit_helpers.get_last_phase_id, tie_in._is_cap) = keep
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(r["branch_connector"], 2)
+        self.assertEqual(r["new_phase_id"], 3)
+
+    def test_walk_from_a_tee_only_follows_the_branch(self):
+        g = make_graph()
+        g.origin_id = 1
+        g.origin_is_new_pipe = True
+        g.origin_is_tee = True
+        g.origin_upstream_connectors = set([0, 1])
+        node = add_node(g, 1, water_graph.KIND_ORIGIN)
+        # 0 and 1 run along the existing main, 2 is the open new branch
+        node.connectors = [connector(0, False), connector(1, False),
+                           connector(2, False)]
+        water_graph._walk(g, None, 1, COLD, set([1]))
+        self.assertEqual(g.open_ends, [(1, COLD)])     # the branch only
 
 
 def _run():

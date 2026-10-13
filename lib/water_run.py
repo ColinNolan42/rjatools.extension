@@ -148,14 +148,14 @@ def _pick_origin(uidoc, doc, output, forms):
     """Pick where the run starts.
 
     Returns (origin element, upstream). upstream is None for an RPZ, and what
-    tie_in.resolve_new_pipe_upstream() found for a new pipe. Returns
+    tie_in.resolve_tee_branch() found for a tee on an existing main. Returns
     (None, None) when the pick is cancelled or cannot be used.
     """
     choice = forms.alert(
         "Where does the domestic water system start?\n\n"
         "RPZ: pick the RPZ / backflow preventer.\n"
-        "New pipe connection (TEE): on an existing building, pick the first "
-        "new cold water pipe at the tee to the existing main.",
+        "New pipe connection (TEE): on an existing building, pick the tee on "
+        "the existing cold water main where the new piping branches off.",
         title="Size Water - Select Start Point",
         options=[ORIGIN_RPZ, ORIGIN_TEE])
     if not choice:
@@ -163,8 +163,7 @@ def _pick_origin(uidoc, doc, output, forms):
         return None, None
 
     prompt = ("Select the RPZ / backflow preventer" if choice == ORIGIN_RPZ
-              else "Select the first new cold water pipe at the tee to "
-                   "existing")
+              else "Select the tee on the existing cold water main")
     try:
         reference = uidoc.Selection.PickObject(ObjectType.Element, prompt)
     except Exception:
@@ -179,22 +178,15 @@ def _pick_origin(uidoc, doc, output, forms):
     output.print_md("Origin: element **{}**".format(
         revit_helpers.eid_int(origin.Id)))
 
-    picked_pipe = revit_helpers.is_pipe(origin)
-    if choice == ORIGIN_TEE and not picked_pipe:
-        forms.alert("New pipe connection (TEE) was chosen, but the element "
-                    "picked is not a pipe. Pick the first new cold water "
-                    "pipe at the tee to existing.", title="Size Water")
-        output.print_md("Stopped. Nothing was changed.")
-        return None, None
-    if choice == ORIGIN_RPZ and picked_pipe:
+    if choice == ORIGIN_TEE:
+        return _tee_origin(origin, doc, output, forms)
+
+    if revit_helpers.is_pipe(origin):
         forms.alert("RPZ was chosen, but a pipe was picked. Pick the RPZ / "
                     "backflow preventer, or run again and choose New pipe "
                     "connection (TEE).", title="Size Water")
         output.print_md("Stopped. Nothing was changed.")
         return None, None
-
-    if picked_pipe:
-        return _new_pipe_origin(origin, doc, output, forms)
 
     # Warn but do not block. water_checks reports this properly once the
     # traversal has run; this is just an early exit for an obvious mis-pick.
@@ -214,46 +206,47 @@ def _pick_origin(uidoc, doc, output, forms):
     return origin, None
 
 
-def _new_pipe_origin(pipe, doc, output, forms):
-    """A pipe was picked: the first new cold water pipe on an existing building.
+def _tee_origin(tee, doc, output, forms):
+    """A tee on the existing cold water main, picked on an existing building.
 
-    The RPZ is existing and not modeled, so sizing starts at the new
-    construction connection. Nothing is asked about the existing main, it is
-    assumed adequate for the added load.
+    The tee shows both sides at once: the existing main runs through it and
+    the new branch leaves it (Colin, 2026-10-13). Only the branch is walked.
+    The existing main and RPZ are assumed adequate for the added load.
     """
-    connectors = revit_helpers.get_connectors(pipe)
-    is_cold = any(
-        c.get("system_type") == shared_params.SYSTEM_DOMESTIC_COLD_WATER
-        for c in connectors)
-    if not is_cold:
-        forms.alert(
-            "The pipe you picked is not Domestic Cold Water.\n\n"
-            "On an existing building, pick the first new COLD water pipe at "
-            "the connection to existing. Connections to existing hot water "
-            "and recirculation piping are not covered by this tool.",
-            title="Size Water")
+    def _stop(message):
+        forms.alert(message, title="Size Water")
         output.print_md("Stopped. Nothing was changed.")
         return None, None
 
-    upstream = tie_in.resolve_new_pipe_upstream(
-        pipe, doc, shared_params.SYSTEM_DOMESTIC_COLD_WATER)
+    if revit_helpers.is_pipe(tee):
+        return _stop("New pipe connection (TEE) was chosen, but a pipe was "
+                     "picked. Pick the tee fitting on the existing cold water "
+                     "main where the new piping branches off.")
+
+    cold = [c for c in revit_helpers.get_connectors(tee)
+            if c.get("system_type") == shared_params.SYSTEM_DOMESTIC_COLD_WATER]
+    if len(cold) < 3:
+        return _stop("The element picked is not a cold water tee (it has {} "
+                     "cold water connector(s), a tee has 3). Pick the tee on "
+                     "the existing cold water main.".format(len(cold)))
+
+    upstream = tie_in.resolve_tee_branch(
+        tee, doc, shared_params.SYSTEM_DOMESTIC_COLD_WATER)
+    upstream["tee"] = True
     if upstream["status"] != "ok":
-        forms.alert(
-            "Could not tell which end of the picked pipe connects to the "
-            "existing piping: {}.\n\n"
-            "Pick the first new cold water pipe, the one with one end at the "
-            "existing connection (open, capped, or joined to existing phase "
-            "piping) and the other end on new construction.".format(
-                upstream["reason"]),
-            title="Size Water")
-        output.print_md("Stopped. Nothing was changed.")
-        return None, None
+        return _stop("Could not find the new branch of the picked tee: {}.\n\n"
+                     "The new branch is told from the existing main by phase: "
+                     "the pipe or fitting on the branch shall be in the "
+                     "project's last phase (New Construction), and the main on "
+                     "either side in an earlier phase, open or capped.".format(
+                         upstream["reason"]))
 
     output.print_md(
-        "Starting at a **new construction pipe**. Its upstream end was found "
-        "because {}. The existing cold water main is assumed adequate for "
-        "the added load and is not checked.".format(upstream["reason"]))
-    return pipe, upstream
+        "Starting at the **tee** on the existing main. Only its new "
+        "construction branch is sized, because {}. The existing cold water "
+        "main is assumed adequate for the added load and is not "
+        "checked.".format(upstream["reason"]))
+    return tee, upstream
 
 
 def _project_info(doc, output):

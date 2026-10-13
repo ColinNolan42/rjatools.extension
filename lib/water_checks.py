@@ -120,10 +120,11 @@ def _check_origin(graph, findings):
         # tests below would only raise false alarms on a pipe.
         findings.append(Finding(
             SEVERITY_INFO, "origin_new_pipe",
-            "Sizing starts at new construction pipe {}, not at an RPZ. Its "
-            "upstream end was taken as the one where {}. The existing cold "
+            "Sizing starts at new construction {} {}, not at an RPZ. Its "
+            "upstream side was taken as the one where {}. The existing cold "
             "water main and backflow preventer are assumed adequate for the "
             "added load and were NOT checked.".format(
+                "tee" if getattr(graph, "origin_is_tee", False) else "pipe",
                 origin.element_id,
                 graph.origin_upstream_reason or "the existing piping is")))
         if not graph.origin_upstream_connectors:

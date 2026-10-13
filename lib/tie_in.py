@@ -119,6 +119,76 @@ def resolve_new_pipe_upstream(pipe, doc, system=None):
     return result
 
 
+def pick_tee_branch(ends):
+    """Decide which connector of a picked tee leads to new construction.
+
+    Colin, 2026-10-13: on an existing building the designer picks the TEE on
+    the existing main. It shows both sides: the existing main runs through it
+    and the new branch leaves it. Exactly one connector shall lead to new
+    construction; every other one faces the existing piping.
+
+    Args:
+        ends: list of dicts with "connector_index" and "kind" (END_ constants).
+
+    Returns:
+        dict with "status" ("ok", "no_new" or "ambiguous"), "reason", and
+        when ok "branch_connector" and "upstream_connectors" (a list).
+    """
+    new = [e for e in ends if e["kind"] == END_NEW]
+    if len(new) == 1:
+        return {"status": "ok",
+                "branch_connector": new[0]["connector_index"],
+                "upstream_connectors": [e["connector_index"] for e in ends
+                                        if e is not new[0]],
+                "reason": "the tee's branch is the only connection to new "
+                          "construction, the rest of the tee is on the "
+                          "existing main"}
+    if not new:
+        return {"status": "no_new",
+                "reason": "no connector of this tee leads to new "
+                          "construction piping, so there is nothing new to "
+                          "size from it"}
+    return {"status": "ambiguous",
+            "reason": "{} connectors of this tee lead to new construction, "
+                      "so the existing main cannot be told from the new "
+                      "branch".format(len(new))}
+
+
+def resolve_tee_branch(tee, doc, system=None):
+    """Read a picked tee's connectors from the model and find its new branch.
+
+    A connector leads to new construction when the element on it was created
+    in the project's LAST phase (New Construction). Anything earlier, open or
+    capped is the existing side.
+
+    Returns:
+        what pick_tee_branch() returns, plus "ends" and "new_phase_id".
+    """
+    new_phase_id = revit_helpers.get_last_phase_id(doc)
+    ends = []
+    for c in revit_helpers.get_connectors(tee):
+        if system is not None and c.get("system_type") != system:
+            continue
+        kind = END_OPEN
+        neighbour_id = c.get("connected_element_id")
+        if c.get("is_connected") and neighbour_id is not None:
+            neighbour = revit_helpers.get_element_by_id(doc, neighbour_id)
+            if neighbour is not None:
+                phase = revit_helpers.get_created_phase_id(neighbour)
+                if _is_cap(neighbour):
+                    kind = END_CAP
+                elif new_phase_id is not None and phase == new_phase_id:
+                    kind = END_NEW
+                else:
+                    kind = END_EXISTING
+        ends.append({"connector_index": c.get("connector_index"),
+                     "kind": kind, "neighbour_id": neighbour_id})
+    result = pick_tee_branch(ends)
+    result["ends"] = ends
+    result["new_phase_id"] = new_phase_id
+    return result
+
+
 def _is_cap(element):
     """A pipe cap: a one-connector pipe fitting that is not a load.
 

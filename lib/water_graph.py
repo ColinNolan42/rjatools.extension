@@ -127,11 +127,13 @@ class WaterGraph(object):
         # Existing building: the run starts at the first NEW cold water pipe
         # instead of an RPZ (Colin, 2026-10-13). The connectors listed here
         # face the existing piping and are never walked through.
-        self.origin_is_new_pipe         = False
+        self.origin_is_new_pipe         = False   # any existing building tie-in
+        self.origin_is_tee              = False   # ... picked as the tee
         self.origin_upstream_connectors = set()   # connector_index values
         self.origin_upstream_reason     = ""
         self.origin_phase_id            = None    # created phase of the picked pipe
         self.existing_connections       = []      # (new element id, existing element id)
+        self.existing_passthrough       = []      # existing devices inside the new run
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -218,6 +220,22 @@ def build_water_network(origin_element, doc, upstream=None):
         graph.add(origin)
         graph.log("ORIGIN: element {} ({}), {} connectors".format(
             origin_id, origin.family_name, origin.connector_count))
+        if upstream is not None and upstream.get("tee"):
+            # A tee on the existing main (tie_in.resolve_tee_branch). Only its
+            # branch is walked, and the walk stops at anything from an earlier
+            # phase, exactly as for a picked new pipe.
+            if upstream.get("status") != "ok":
+                raise ValueError(
+                    "Could not find the new branch of the picked tee: "
+                    "{}.".format(upstream.get("reason", "unknown")))
+            graph.origin_is_new_pipe = True
+            graph.origin_is_tee = True
+            graph.origin_phase_id = upstream.get("new_phase_id")
+            graph.origin_upstream_reason = upstream.get("reason", "")
+            graph.origin_upstream_connectors = set(
+                upstream["upstream_connectors"])
+            graph.log("ORIGIN: tee {} on the existing main. {}".format(
+                origin_id, graph.origin_upstream_reason))
 
     # --- Phase 1: the cold tree ---
     # Each system gets its OWN visited set. Sharing one set across systems
@@ -313,6 +331,10 @@ def _walk(graph, doc, start_id, system, visited):
                 continue
 
             if not c.get("is_connected"):
+                if _unused_return_outlet(current_node, c, system):
+                    # HW Out of a fixture that is not on recirculation. Left
+                    # open by design, so it is not an open end.
+                    continue
                 graph.open_ends.append((current_id, system))
                 graph.log("OPEN END: element {} has an unconnected {} "
                           "connector.".format(current_id, system))
@@ -349,7 +371,17 @@ def _walk(graph, doc, start_id, system, visited):
             # (Colin, 2026-10-13).
             if graph.origin_is_new_pipe and graph.origin_phase_id is not None:
                 phase = revit_helpers.get_created_phase_id(next_element)
-                if phase is not None and phase != graph.origin_phase_id:
+                if (phase is not None and phase != graph.origin_phase_id and
+                        _existing_inside_new_run(graph, doc, next_element,
+                                                 current_id)):
+                    # An existing valve or fitting with new construction on
+                    # every other side is part of the new run: walk through
+                    # it and say so, rather than silently cutting the run.
+                    graph.existing_passthrough.append(next_id)
+                    graph.log("EXISTING IN NEW RUN: element {} is existing "
+                              "phase but only new construction is beyond "
+                              "it. Walked through.".format(next_id))
+                elif phase is not None and phase != graph.origin_phase_id:
                     visited.add(next_id)
                     graph.existing_connections.append((current_id, next_id))
                     graph.log("EXISTING: element {} connects to existing "
@@ -597,14 +629,13 @@ def detect_return_system_types(graph):
             # More than one hot type touches this heater. The supply is the
             # one the heater feeds outward, which is the type carried by the
             # heater's children; anything else at the heater comes back to it.
-            outgoing = set()
-            node = graph.nodes.get(heater_id)
-            if node is not None:
-                for child_id in node.children_by_system.get(
-                        shared_params.SYSTEM_DOMESTIC_HOT_WATER, []):
-                    child = graph.nodes.get(child_id)
-                    if child is not None and child.system_type_id is not None:
-                        outgoing.add(child.system_type_id)
+            # Looked up THROUGH fittings and valves: a heater outlet often
+            # connects to a union or transition first, which has no System
+            # Type, and stopping there made the supply look like it arrived.
+            # Read off the heater's own hot OUTLET connectors, so a second
+            # heater whose outlet tees into the first heater's riser (reached
+            # by the walk from the supply side) still reads as supply.
+            outgoing = _outlet_pipe_types(graph, heater_id)
             for type_id in arriving:
                 if type_id in hot and type_id not in outgoing:
                     entry = hot[type_id]
@@ -654,6 +685,54 @@ def detect_return_system_types(graph):
         "candidates": candidates,
         "certain": any(e["decisive"] for e in candidates),
     }
+
+
+def _outlet_pipe_types(graph, heater_id, max_hops=4):
+    """System Type ids of the first pipes on a heater's hot OUTLET connectors.
+
+    Starts at the element each hot connector flowing Out is joined to (a
+    connector whose direction could not be read also counts, since a hot
+    return port on a heater flows In), then steps through fittings and
+    valves, never back through the heater, to the first pipe on each path.
+    """
+    hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    heater = graph.nodes.get(heater_id)
+    if heater is None:
+        return set()
+
+    found = set()
+    seen = set([heater_id])
+    frontier = []
+    for c in heater.connectors:
+        if c.get("system_type") != hot or c.get("direction") == "In":
+            continue
+        if c.get("connected_element_id") is not None:
+            frontier.append((c["connected_element_id"], 1))
+    if not frontier:
+        # No connector data: fall back to what hangs below the heater.
+        frontier = [(child_id, 1) for child_id in
+                    heater.children_by_system.get(hot, [])]
+    while frontier:
+        current_id, depth = frontier.pop()
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        node = graph.nodes.get(current_id)
+        if node is None:
+            continue
+        if node.kind == KIND_PIPE:
+            if node.system_type_id is not None:
+                found.add(node.system_type_id)
+            continue
+        if depth >= max_hops or node.kind in (KIND_HEATER, KIND_FIXTURE,
+                                              KIND_ORIGIN):
+            continue
+        neighbours = list(node.children_by_system.get(hot, []))
+        if hot in node.parent_by_system:
+            neighbours.append(node.parent_by_system[hot])
+        for next_id in neighbours:
+            frontier.append((next_id, depth + 1))
+    return found
 
 
 def _nearby_pipe_system_types(graph, node_id, max_hops=3):
@@ -907,6 +986,47 @@ def _return_component(graph, adjacency, start_id):
             seen.add(next_id)
             queue.append(next_id)
     return sorted(seen)
+
+
+def _existing_inside_new_run(graph, doc, element, came_from_id):
+    """True for an existing phase in-line device with new work beyond it.
+
+    Only a non-pipe element qualifies (a valve or fitting): an existing pipe
+    is the existing main. Every connector other than the one the walk arrived
+    through shall be connected, and to an element of the run's phase.
+    """
+    if _is_pipe(element):
+        return False
+    try:
+        connectors = revit_helpers.get_connectors(element)
+    except Exception:
+        return False    # unreadable: stop at it, as for any existing element
+    beyond = 0
+    for c in connectors:
+        neighbour_id = c.get("connected_element_id")
+        if neighbour_id == came_from_id:
+            continue
+        if not c.get("is_connected") or neighbour_id is None:
+            return False
+        neighbour = _get_element(doc, neighbour_id)
+        if neighbour is None:
+            return False
+        if revit_helpers.get_created_phase_id(neighbour) != graph.origin_phase_id:
+            return False
+        beyond += 1
+    return beyond > 0
+
+
+def _unused_return_outlet(node, connector, system):
+    """True for the open HW Out of a fixture whose HWR_ACTIVE is No.
+
+    The family keeps an HW Out on every Type, but only a fixture on
+    recirculation pipes it, so an open one elsewhere is expected.
+    """
+    return (node.kind == KIND_FIXTURE and
+            system == shared_params.SYSTEM_DOMESTIC_HOT_WATER and
+            connector.get("direction") == "Out" and
+            not node.hwr_active)
 
 
 def _connector_is_disabled(node, system):

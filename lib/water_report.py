@@ -86,8 +86,9 @@ def origin_basis_lines(graph):
         return []
     return [
         "Existing building: sizing starts at the new construction "
-        "connection (pipe {}), not at the backflow preventer.".format(
-            graph.origin_id),
+        "connection ({} {}), not at the backflow preventer.".format(
+            "the branch of tee" if getattr(graph, "origin_is_tee", False)
+            else "pipe", graph.origin_id),
         "The existing cold water main upstream of that connection is "
         "assumed adequate for the added load and was NOT sized or checked.",
     ]
@@ -468,6 +469,15 @@ def exceptions_block(graph, sizing_result):
                          len(graph.existing_connections),
                          ", ".join(str(far) for _near, far in
                                    graph.existing_connections[:10])))
+
+    passthrough = getattr(graph, "existing_passthrough", [])
+    if passthrough:
+        lines.append("  {} EXISTING phase valve(s) or fitting(s) sit inside "
+                     "the new construction run, with new work on every other "
+                     "side, so the run was walked through them. Check their "
+                     "phase: {}".format(
+                         len(passthrough),
+                         ", ".join(str(e) for e in passthrough[:10])))
 
     if graph.loops:
         lines.append("  {} loop connection(s) detected. A recirculation loop "

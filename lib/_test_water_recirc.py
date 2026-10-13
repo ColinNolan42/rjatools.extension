@@ -203,6 +203,42 @@ class TestSupplyReturnSplit(unittest.TestCase):
         self.assertEqual(g.return_roots, [1])
 
 
+class TestFittingAtTheHeaterOutlet(unittest.TestCase):
+    """A union or transition on the heater outlet carries no System Type.
+    The supply shall still be seen leaving the heater, not arriving at it
+    (found live 2026-10-13: both hot types were called the return and the
+    whole hot side was left unsized)."""
+
+    def test_supply_through_a_fitting_is_not_a_return(self):
+        g = build_loop_and_branch()
+        add_node(g, 9, water_graph.KIND_FITTING, system=HOT)
+        heater = g.nodes[1]
+        kids = heater.children_by_system[HOT]
+        kids[kids.index(10)] = 9
+        link(g, 9, 10, HOT)
+        g.nodes[9].parent_by_system[HOT] = 1
+        det = water_graph.detect_return_system_types(g)
+        self.assertEqual(det["detected"], set([RETURN_TYPE]))
+
+    def test_second_heater_reached_from_the_supply_side(self):
+        """Dual heaters: heater 2's outlet tees into heater 1's riser, so the
+        walk reaches heater 2 FROM its supply pipe and it has no hot child.
+        Its outlet connector still says the supply leaves it."""
+        g = build_loop_and_branch()
+        hot_pipe(g, 41, 11, 2.0)                       # riser from heater 2
+        h2 = add_node(g, 40, water_graph.KIND_HEATER, parent=41, system=HOT)
+        g.heater_ids.append(40)
+        cold_feed = add_node(g, 42, water_graph.KIND_PIPE, system=COLD)
+        cold_feed.system_type_id = 300
+        link(g, 42, 40, COLD)
+        h2.connectors = [
+            {"system_type": HOT, "direction": "Out", "connected_element_id": 41},
+            {"system_type": COLD, "direction": "In", "connected_element_id": 42},
+        ]
+        det = water_graph.detect_return_system_types(g)
+        self.assertEqual(det["detected"], set([RETURN_TYPE]))
+
+
 class TestCircuitSetterFlows(unittest.TestCase):
 
     def setUp(self):

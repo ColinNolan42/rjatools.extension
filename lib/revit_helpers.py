@@ -861,6 +861,23 @@ def get_element_by_id(doc, element_id_int):
         return None
 
 
+def get_last_phase_id(doc):
+    """Id of the project's LAST phase (normally New Construction), as an int.
+
+    doc.Phases is in phase order, oldest first. Returns None if it cannot be
+    read.
+    """
+    try:
+        phases = doc.Phases
+        if phases.Size == 0:
+            return None
+        return eid_int(phases.get_Item(phases.Size - 1).Id)
+    except Exception as e:
+        _log_entry("WARNING", "get_last_phase_id", None,
+                   "Could not read the project phases: {}".format(str(e)))
+        return None
+
+
 def get_created_phase_id(element):
     """Return the id of the phase an element was created in, as an int.
 
