@@ -120,6 +120,9 @@ class NetworkGraph(object):
                                         # (more than one step down - unsupported)
         self.origin_is_tie_in   = False # True when the run starts at a new pipe
                                         # on an existing building, not at a meter
+        self.origin_phase_id    = None  # created phase of the picked new pipe
+        self.existing_connections = []  # existing phase element ids the walk
+                                        # reached and did not follow
         self.existing           = None  # the existing system the designer
                                         # entered, set by apply_existing_conditions()
         self.zone_runs          = {}    # meter/PRV element ID -> longest-run dict
@@ -198,6 +201,7 @@ def _start_at_new_pipe(graph, doc, pipe, upstream):
     origin_id = -pipe_id
     graph.origin_id = origin_id
     graph.origin_is_tie_in = True
+    graph.origin_phase_id = revit_helpers.get_created_phase_id(pipe)
 
     origin_node = NetworkNode(origin_id, pipe, "meter")
     origin_node.element = None            # there is no element to resize
@@ -325,6 +329,19 @@ def _traverse(graph, doc, visited, queue):
             continue
 
         visited.add(current_id)
+
+        # A run that started at a new pipe sizes new construction only.
+        # Anything from another phase is existing: the connection to it is
+        # assumed adequate for the new load, and the walk stops there
+        # (Colin, 2026-10-13). A run from a meter still walks existing
+        # piping, which Size Gas skips and audits.
+        if graph.origin_is_tie_in and graph.origin_phase_id is not None:
+            phase = revit_helpers.get_created_phase_id(current_element)
+            if phase is not None and phase != graph.origin_phase_id:
+                graph.existing_connections.append(current_id)
+                graph.log("EXISTING: element {} is existing phase. Not "
+                          "followed.".format(current_id))
+                continue
 
         element_type = current_element.GetType().Name
         graph.log("VISIT: Element {} type={}".format(current_id, element_type))

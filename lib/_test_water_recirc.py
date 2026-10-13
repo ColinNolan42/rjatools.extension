@@ -267,6 +267,51 @@ class TestCircuitSetterFlows(unittest.TestCase):
         self.assertAlmostEqual(legs[20]["gpm"], 0.5)
 
 
+class TestASecondLongWingIsItsOwnLoop(unittest.TestCase):
+    """Colin, 2026-10-13: a second long recirculation wing counts as its own
+    loop, and then the flows combine."""
+
+    def setUp(self):
+        self.g = build_loop_and_branch()
+        # Main loop: 300 + 90 + 10 = 400 ft back to the heater.
+        self.g.nodes[20].length_feet = 300.0
+        # Second wing: 120 ft of its own return before it joins at tee 21.
+        self.g.nodes[30].length_feet = 120.0
+        water_graph.apply_return_system_types(self.g, [RETURN_TYPE])
+        self.r = water_recirc.analyze(self.g)
+        self.legs = dict((l["start_pipe_id"], l) for l in self.r["legs"])
+
+    def test_main_loop_is_measured_back_to_the_heater(self):
+        main = self.legs[20]
+        self.assertEqual(main["method"], water_recirc.METHOD_LOOP)
+        self.assertAlmostEqual(main["effective_length_ft"], 400.0)
+        # 400/100 x 5000 / (500 x 20) = 2.00 gpm
+        self.assertAlmostEqual(main["gpm"], 2.0)
+
+    def test_wing_is_a_loop_measured_to_where_it_joins(self):
+        wing = self.legs[30]
+        self.assertEqual(wing["method"], water_recirc.METHOD_LOOP)
+        self.assertAlmostEqual(wing["effective_length_ft"], 120.0)
+        # 120/100 x 5000 / (500 x 20) = 0.60 gpm, over the 0.5 minimum
+        self.assertAlmostEqual(wing["gpm"], 0.6)
+
+    def test_flows_combine_where_the_wing_joins(self):
+        flow = self.r["pipe_gpm"]
+        self.assertAlmostEqual(flow[20], 2.0)
+        self.assertAlmostEqual(flow[30], 0.6)
+        self.assertAlmostEqual(flow[22], 2.6)
+        self.assertAlmostEqual(flow[24], 2.6)
+        self.assertAlmostEqual(self.r["total_gpm"], 2.6)
+
+    def test_a_short_leg_is_still_a_branch_at_the_minimum(self):
+        # 100 ft of own return is exactly the minimum, so it is not a loop
+        self.g.nodes[30].length_feet = 100.0
+        r = water_recirc.analyze(self.g)
+        leg = dict((l["start_pipe_id"], l) for l in r["legs"])[30]
+        self.assertEqual(leg["method"], water_recirc.METHOD_BRANCH)
+        self.assertAlmostEqual(leg["gpm"], 0.5)
+
+
 class TestReturnSizing(unittest.TestCase):
 
     def setUp(self):

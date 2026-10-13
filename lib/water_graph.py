@@ -130,6 +130,8 @@ class WaterGraph(object):
         self.origin_is_new_pipe         = False
         self.origin_upstream_connectors = set()   # connector_index values
         self.origin_upstream_reason     = ""
+        self.origin_phase_id            = None    # created phase of the picked pipe
+        self.existing_connections       = []      # (new element id, existing element id)
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -202,6 +204,8 @@ def build_water_network(origin_element, doc, upstream=None):
         origin.system = shared_params.SYSTEM_DOMESTIC_COLD_WATER
         graph.add(origin)
         graph.origin_is_new_pipe = True
+        graph.origin_phase_id = revit_helpers.get_created_phase_id(
+            origin_element)
         graph.origin_upstream_reason = upstream.get("reason", "")
         graph.origin_upstream_connectors = set([upstream["connector_index"]])
         graph.log("ORIGIN: new construction pipe {}. Upstream end: {}".format(
@@ -338,6 +342,20 @@ def _walk(graph, doc, start_id, system, visited):
                 graph.log("WARNING: could not retrieve element {} connected to "
                           "{}.".format(next_id, current_id))
                 continue
+
+            # A run that started at a new pipe sizes new construction only.
+            # Anything from another phase is existing: the connection to it
+            # is assumed adequate for the new load, and the walk stops there
+            # (Colin, 2026-10-13).
+            if graph.origin_is_new_pipe and graph.origin_phase_id is not None:
+                phase = revit_helpers.get_created_phase_id(next_element)
+                if phase is not None and phase != graph.origin_phase_id:
+                    visited.add(next_id)
+                    graph.existing_connections.append((current_id, next_id))
+                    graph.log("EXISTING: element {} connects to existing "
+                              "phase element {} on {}. Not followed.".format(
+                                  current_id, next_id, system))
+                    continue
 
             visited.add(next_id)
 

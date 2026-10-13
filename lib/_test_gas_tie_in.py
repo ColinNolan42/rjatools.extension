@@ -218,6 +218,55 @@ class TestStartAtANewPipe(unittest.TestCase):
         self.assertIsNone(g.edges[900].to_node_id)
 
 
+class TestWalkStopsAtExistingPhase(unittest.TestCase):
+    """A run that started at a new pipe does not follow existing phase
+    piping. A run from a meter still does, so Size Gas can audit it."""
+
+    def _traverse(self, tie_in_run, element_phase):
+        import revit_helpers
+        g = pipe_graph.NetworkGraph()
+        g.origin_id = ORIGIN
+        g.origin_is_tie_in = tie_in_run
+        g.origin_phase_id = 1
+        _node(g, ORIGIN, "meter")
+        processed = []
+
+        keep = (revit_helpers.get_created_phase_id, pipe_graph._is_pipe,
+                pipe_graph._process_pipe)
+        revit_helpers.get_created_phase_id = lambda el: element_phase
+        pipe_graph._is_pipe = lambda el: True
+        pipe_graph._process_pipe = (
+            lambda graph, doc, pipe, parent, visited, queue:
+            processed.append(pipe.Id.Value))
+
+        class _Typed(_Stub):
+            def GetType(self):
+                return type("T", (), {"Name": "Pipe"})()
+
+        try:
+            pipe_graph._traverse(g, None, set([ORIGIN]),
+                                 [(_Typed(700), ORIGIN)])
+        finally:
+            (revit_helpers.get_created_phase_id, pipe_graph._is_pipe,
+             pipe_graph._process_pipe) = keep
+        return g, processed
+
+    def test_existing_phase_element_is_not_followed(self):
+        g, processed = self._traverse(True, 2)
+        self.assertEqual(processed, [])
+        self.assertEqual(g.existing_connections, [700])
+
+    def test_new_phase_element_is_followed(self):
+        g, processed = self._traverse(True, 1)
+        self.assertEqual(processed, [700])
+        self.assertEqual(g.existing_connections, [])
+
+    def test_a_meter_run_still_walks_existing_piping(self):
+        g, processed = self._traverse(False, 2)
+        self.assertEqual(processed, [700])
+        self.assertEqual(g.existing_connections, [])
+
+
 class TestRememberedBetweenTools(unittest.TestCase):
 
     def test_what_size_gas_entered_comes_back_for_one_line(self):

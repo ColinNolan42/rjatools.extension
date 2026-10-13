@@ -16,6 +16,10 @@
 #           supply branch from the main to that fixture, which is short, so a
 #           branch lands on the 0.5 gpm minimum.
 #
+# A second long recirculation wing counts as its own LOOP, and its flow then
+# combines with the others where it joins (Colin, 2026-10-13). Its effective
+# length is its own return run, from its last fixture to where it joins.
+#
 # One circuit setter is assumed per return leg (a leg is each place a return
 # line starts). Walking back from the farthest leg toward the water heater the
 # flows add at every junction, the same way fixture units add on the supply.
@@ -109,12 +113,15 @@ def analyze(graph,
             "start_element_id": _start_element(graph, adjacency, start_id),
             "root_id": root_id,
             "return_run_ft": run_ft,
+            "own_return_run_ft": _own_run(graph, start_id, upstream, starts),
             "last_pipe_id": last_pipe_id,
         })
 
-    # The LOOP is the longest return run on each line into the heater: the one
-    # that starts after the last fixture. Every other leg joins it on the way
-    # back and is a BRANCH.
+    # The main LOOP is the longest return run on each line into the heater:
+    # the one that starts after the last fixture. Every other leg joins it on
+    # the way back. One whose own return run needs more than the circuit
+    # setter minimum is a second wing and is a LOOP in its own right, measured
+    # to where it joins. The rest are BRANCHES.
     longest = {}
     for leg in legs:
         best = longest.get(leg["last_pipe_id"])
@@ -125,6 +132,10 @@ def analyze(graph,
         if longest[leg["last_pipe_id"]] is leg:
             leg["method"] = METHOD_LOOP
             leg["effective_length_ft"] = leg["return_run_ft"]
+        elif heat_loss_gpm(leg["own_return_run_ft"], heat_loss_btu_per_100ft,
+                           delta_t_f) > float(min_gpm):
+            leg["method"] = METHOD_LOOP
+            leg["effective_length_ft"] = leg["own_return_run_ft"]
         else:
             leg["method"] = METHOD_BRANCH
             leg["effective_length_ft"] = _supply_branch_length(
@@ -153,6 +164,32 @@ def analyze(graph,
     result["total_gpm"] = sum(result["root_gpm"].values())
     result["legs"] = legs
     return result
+
+
+def _own_run(graph, start_pipe_id, upstream, starts):
+    """Return pipe length that belongs to one leg alone.
+
+    From the leg's start toward the heater, up to the first pipe that another
+    leg also drains through. That is where the leg joins the rest.
+    """
+    tree = water_graph.TREE_RETURN
+    start_set = set(starts)
+    length = 0.0
+    current_id = start_pipe_id
+    seen = set()
+    while current_id is not None and current_id not in seen:
+        seen.add(current_id)
+        node = graph.nodes[current_id]
+        if water_graph.is_return_pipe(graph, node):
+            through = [s for s in upstream.get(current_id, [])
+                       if s in start_set]
+            if current_id in start_set:
+                through.append(current_id)
+            if len(through) > 1:
+                break
+            length += float(node.length_feet or 0.0)
+        current_id = node.parent_by_system.get(tree)
+    return length
 
 
 def _run_to_end(graph, start_pipe_id):

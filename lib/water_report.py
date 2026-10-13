@@ -311,6 +311,8 @@ def recirc_table(recirc):
              "return leg.",
              "  LOOP length is the return from the last fixture back to the "
              "water heater.",
+             "  A second loop that joins the main return is measured to where "
+             "it joins.",
              "  BRANCH length is the hot supply from the main to the fixture.",
              "-" * 78,
              "{:<5}{:<9}{:>14}{:>12}{:>12}{:>11}{:>11}".format(
@@ -378,6 +380,14 @@ def exceptions_block(graph, sizing_result):
             lines.append("      ... and {} more".format(
                 len(graph.open_ends) - 15))
         any_flag = True
+
+    if graph.existing_connections:
+        lines.append("  {} connection(s) to EXISTING phase piping were not "
+                     "followed. The existing piping is assumed adequate and "
+                     "is not sized: {}".format(
+                         len(graph.existing_connections),
+                         ", ".join(str(far) for _near, far in
+                                   graph.existing_connections[:10])))
 
     if graph.loops:
         lines.append("  {} loop connection(s) detected. A recirculation loop "

@@ -397,6 +397,15 @@ def main():
     output.print_md(":white_check_mark: {} nodes, {} pipe segments.".format(
         len(graph.nodes), len(graph.edges)))
 
+    if graph.existing_connections:
+        output.print_md(
+            ":information_source: {} connection(s) to Existing phase piping "
+            "were not followed ({}). The existing piping is assumed adequate "
+            "and is not sized. A new pipe that ends at one carries no load in "
+            "this run.".format(
+                len(graph.existing_connections),
+                ", ".join(str(i) for i in graph.existing_connections[:10])))
+
     fixture_nodes = [n for n in graph.nodes.values() if n.is_gas_fixture]
     if len(fixture_nodes) == 0:
         forms.alert(

@@ -194,6 +194,71 @@ class TestWalkLeavesTheExistingSideAlone(unittest.TestCase):
         self.assertEqual(len(g.open_ends), 2)
 
 
+class TestWalkStopsAtExistingPhase(unittest.TestCase):
+    """A run that started at a new pipe does not follow existing phase
+    piping. The connection to existing is assumed adequate."""
+
+    def _walk_with_phase(self, neighbour_phase, origin_phase=1,
+                         new_pipe=True):
+        import revit_helpers
+        g = make_graph()
+        g.origin_id = 1
+        g.origin_is_new_pipe = new_pipe
+        g.origin_phase_id = origin_phase
+        g.origin_upstream_connectors = set([0])
+        node = add_node(g, 1, water_graph.KIND_PIPE)
+        node.connectors = [connector(0, False), connector(1, True, 50)]
+
+        keep = (water_graph._get_element, revit_helpers.get_created_phase_id,
+                water_graph._make_node)
+        made = []
+
+        def fake_make(graph, element, element_id, system):
+            made.append(element_id)
+            return add_node(graph, element_id, water_graph.KIND_PIPE)
+
+        water_graph._get_element = lambda doc, eid: object()
+        revit_helpers.get_created_phase_id = lambda el: neighbour_phase
+        water_graph._make_node = fake_make
+        try:
+            water_graph._walk(g, None, 1, COLD, set([1]))
+        finally:
+            (water_graph._get_element, revit_helpers.get_created_phase_id,
+             water_graph._make_node) = keep
+        return g, made
+
+    def test_existing_phase_neighbour_is_not_followed(self):
+        g, made = self._walk_with_phase(neighbour_phase=2)
+        self.assertEqual(made, [])
+        self.assertNotIn(50, g.nodes)
+        self.assertEqual(g.existing_connections, [(1, 50)])
+        self.assertEqual(g.open_ends, [])
+
+    def test_same_phase_neighbour_is_followed(self):
+        g, made = self._walk_with_phase(neighbour_phase=1)
+        self.assertEqual(made, [50])
+        self.assertEqual(g.existing_connections, [])
+
+    def test_unreadable_phase_is_followed_not_guessed(self):
+        g, made = self._walk_with_phase(neighbour_phase=None)
+        self.assertEqual(made, [50])
+
+    def test_an_rpz_run_still_walks_existing_piping(self):
+        g, made = self._walk_with_phase(neighbour_phase=2, new_pipe=False)
+        self.assertEqual(made, [50])
+        self.assertEqual(g.existing_connections, [])
+
+    def test_report_says_what_was_not_followed(self):
+        g = build_from_new_pipe()
+        g.existing_connections = [(3, 77)]
+        water_graph._assign_demand(g)
+        result = water_sizing_engine.size_network(g)
+        text = "\n".join(water_report.exceptions_block(g, result))
+        self.assertIn("1 connection(s) to EXISTING phase piping were not "
+                      "followed", text)
+        self.assertIn("77", text)
+
+
 def _run():
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
     result = unittest.TextTestRunner(verbosity=1).run(suite)
