@@ -417,3 +417,19 @@ def _write_sizes(doc, output, forms, graph, sizing):
         output.print_md(
             "Fitting resize failed, pipe sizes are unaffected: {}".format(
                 str(exc)))
+
+    # Fixture stubs follow the pipe sized onto them (RJA fixture family Size
+    # Override). Own transaction, same reason as the fittings.
+    try:
+        stubs = water_sizing_engine.write_fixture_connection_sizes(
+            doc, graph, sizing, lambda d, name: Transaction(d, name))
+        output.print_md(
+            "Fixture stubs: **{}** set to a larger pipe size, {} back to the "
+            "Type size, {} skipped.".format(
+                stubs["set"], stubs["cleared"], stubs["skipped"]))
+        for error in stubs["errors"][:10]:
+            output.print_md("  " + error)
+    except Exception as exc:
+        output.print_md(
+            "Fixture stub sizing failed, pipe sizes are unaffected: {}".format(
+                str(exc)))

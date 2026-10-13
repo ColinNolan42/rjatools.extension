@@ -1567,6 +1567,19 @@ def build_hwr_series(props, fixture, upstream_pt):
     poses = {}
     for label, conn in (('in', hw_in), ('out', hw_out)):
         origin, facing, conn_dia = get_connector_pose(conn)
+        # A main larger than the fixture's Type size (the hot main threads
+        # through the fixture): size the stub and connector up to the main so
+        # the run does not show an up and down size. Override 0 follows the Type.
+        if conn_dia < dia_ft - 0.002:
+            ok, name = revit_helpers.set_fixture_connection_override(
+                fixture, shared_params.SYSTEM_DOMESTIC_HOT_WATER,
+                'In' if label == 'in' else 'Out', dia_ft)
+            if ok:
+                doc.Regenerate()
+                origin, facing, conn_dia = get_connector_pose(conn)
+                logger.info(
+                    "HWR series: set '{}' to {:.3f} in to match the main."
+                    .format(name, dia_ft * 12.0))
         stub_start = XYZ(
             origin.X + facing.X * STUB_LENGTH,
             origin.Y + facing.Y * STUB_LENGTH,

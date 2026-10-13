@@ -301,9 +301,31 @@ def _apply_minimums(graph, node, result, fixture_ids):
 
 
 def _fixture_supply_size_in(fixture, system):
-    """The fixture's own supply connector size in inches, or None."""
+    """The fixture's own supply size in inches, or None.
+
+    The Type supply size parameter comes first. The connector diameter is only
+    a fallback for a family without it, because the RJA fixture family's
+    connector follows a Size Override that this tool writes, and reading that
+    back as a minimum would make an oversized connection stick on every rerun.
+    """
     if fixture is None:
         return None
+    element = getattr(fixture, "element", None)
+    if element is not None:
+        if system == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
+            name = shared_params.PARAM_CW_SUPPLY_SIZE
+        elif system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
+            name = shared_params.PARAM_HW_SUPPLY_SIZE
+        else:
+            name = None
+        if name is not None:
+            try:
+                import revit_helpers
+                feet = revit_helpers.get_type_parameter_value(element, name)
+                if feet:
+                    return feet * shared_params.INCHES_PER_FOOT
+            except Exception:
+                pass
     for connector in fixture.connectors:
         if connector.get("system_type") != system:
             continue
@@ -440,6 +462,74 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
         raise exc
 
     return {"resized": resized, "skipped": skipped, "errors": errors}
+
+
+def write_fixture_connection_sizes(doc, graph, sizing_result, transaction_factory):
+    """Make each fixture stub follow the pipe sized onto it.
+
+    The RJA fixture family's stub and connector read the Type supply size
+    unless a Size Override is set. Where the sized pipe on a fixture connector
+    is larger than the Type size (a hot main threading through a lavatory) the
+    override gets that size. Otherwise it is set to 0 so the stub follows the
+    Type. Only fixture connectors landing directly on a sized pipe are touched.
+
+    A separate transaction, so a family without the parameters cannot roll
+    back the pipe sizes that already committed.
+    """
+    import revit_helpers
+
+    size_by_pipe_id = {}
+    for segment in sizing_result["segments"]:
+        if segment.size_inches is not None:
+            size_by_pipe_id[segment.element_id] = segment.size_inches
+
+    set_count = 0
+    cleared = 0
+    skipped = 0
+    errors = []
+
+    transaction = transaction_factory(
+        doc, "RJA Tools - Size Water Fixture Connections")
+    transaction.Start()
+    try:
+        for node in graph.nodes.values():
+            if node.kind != water_graph.KIND_FIXTURE or node.element is None:
+                continue
+            for connector in node.connectors:
+                system = connector.get("system_type")
+                pipe_size = size_by_pipe_id.get(
+                    connector.get("connected_element_id"))
+                if pipe_size is None:
+                    continue
+                if revit_helpers.fixture_override_param_name(
+                        system, connector.get("direction")) is None:
+                    continue
+                type_size = _fixture_supply_size_in(node, system)
+                if type_size is None:
+                    skipped += 1
+                    continue
+                if pipe_size > type_size + 0.001:
+                    size_ft = pipe_size / shared_params.INCHES_PER_FOOT
+                else:
+                    size_ft = 0.0
+                ok, name = revit_helpers.set_fixture_connection_override(
+                    node.element, system, connector.get("direction"), size_ft)
+                if not ok:
+                    skipped += 1
+                    errors.append(
+                        "Fixture {} ('{}'): could not set {}.".format(
+                            node.element_id, node.family_name, name))
+                elif size_ft > 0.0:
+                    set_count += 1
+                else:
+                    cleared += 1
+        transaction.Commit()
+    except Exception as exc:
+        transaction.RollBack()
+        raise exc
+
+    return {"set": set_count, "cleared": cleared, "skipped": skipped,
+            "errors": errors}
 
 
 def _fmt(value):

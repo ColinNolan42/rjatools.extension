@@ -42,8 +42,17 @@ PARAM_HWR_ACTIVE         = "HWR_ACTIVE"          # Yes/No, instance, read-only f
 PARAM_HAS_CW             = "Has CW"              # Type Yes/No. False => ignore the CW connector.
 PARAM_HAS_HW             = "Has HW"              # Type Yes/No. False => ignore the HW connector.
 PARAM_IS_PUBLIC_OCCUPANCY = "Is Public Occupancy"  # Instance Yes/No. Swaps the WSFU set.
-PARAM_CW_SUPPLY_SIZE     = "CW_Supply_Size"      # Type Length. Min fixture supply.
-PARAM_HW_SUPPLY_SIZE     = "HW_Supply_Size"      # Type Length. Min fixture supply.
+PARAM_CW_SUPPLY_SIZE     = "CW Supply Size"      # Type Length. Min fixture supply.
+PARAM_HW_SUPPLY_SIZE     = "HW Supply Size"      # Type Length. Min fixture supply.
+
+# Connector size overrides on the RJA water fixture family (2026-10-13). The
+# stub and connector read `if(Override > 0, Override, Type supply size)`, so 0
+# means "follow the Type". The tools write the connected pipe size here when it
+# is larger than the Type size. The *_CONNECTION_SIZE formula parameters are
+# read only, never write them.
+PARAM_CW_SIZE_OVERRIDE     = "CW Size Override"      # Instance Length.
+PARAM_HW_IN_SIZE_OVERRIDE  = "HW In Size Override"   # Instance Length.
+PARAM_HW_OUT_SIZE_OVERRIDE = "HW Out Size Override"  # Instance Length.
 
 # Equipment / device parameters approved 2026-09-23 but NOT yet on any family.
 # Read defensively; absent means "not applicable", never an error.

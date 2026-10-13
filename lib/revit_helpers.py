@@ -331,6 +331,60 @@ def get_element_family_name(element):
     return None
 
 
+def fixture_override_param_name(system_type, direction):
+    """Size Override parameter of the RJA water fixture connector, or None.
+
+    Cold connector -> CW, hot connector flowing In -> HW In, flowing Out ->
+    HW Out. Any other connector (a third-party fixture, a heater) has none.
+    """
+    if system_type == shared_params.SYSTEM_DOMESTIC_COLD_WATER:
+        return shared_params.PARAM_CW_SIZE_OVERRIDE
+    if system_type == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
+        if direction == "In":
+            return shared_params.PARAM_HW_IN_SIZE_OVERRIDE
+        if direction == "Out":
+            return shared_params.PARAM_HW_OUT_SIZE_OVERRIDE
+    return None
+
+
+def set_fixture_connection_override(fixture, system_type, direction, size_feet):
+    """Write a fixture connector's Size Override (feet, 0 = follow the Type).
+
+    Needs an open transaction. A fixture family without the parameter is not an
+    error, it just keeps its Type size, so this logs and returns False.
+
+    Returns:
+        (success: bool, parameter name or None).
+    """
+    fn = "set_fixture_connection_override"
+    name = fixture_override_param_name(system_type, direction)
+    eid = None
+    try:
+        eid = eid_int(fixture.Id)
+    except Exception:
+        pass
+    if name is None:
+        _log_entry("INFO", fn, eid,
+                   "No override parameter for system '{}' direction '{}'."
+                   .format(system_type, direction))
+        return False, None
+    try:
+        param = fixture.LookupParameter(name)
+        if param is None or param.IsReadOnly:
+            _log_entry("WARNING", fn, eid,
+                       "Parameter '{}' NOT FOUND or read only.".format(name))
+            return False, name
+        ok = param.Set(float(size_feet))
+        _log_entry("INFO", fn, eid,
+                   "Parameter '{}' set to {:.4f} ft ({}).".format(
+                       name, float(size_feet), "ok" if ok else "REJECTED"))
+        return bool(ok), name
+    except Exception as e:
+        _log_entry("ERROR", fn, eid,
+                   "Could not set '{}': {}".format(name, str(e)))
+        return False, name
+
+
 def get_type_parameter_value(element, param_name):
     """Read a TYPE parameter from a family instance.
 
