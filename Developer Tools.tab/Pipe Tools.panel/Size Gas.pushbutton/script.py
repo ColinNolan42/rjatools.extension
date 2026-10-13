@@ -1,7 +1,8 @@
 # -*- coding: ascii -*-
 # Size Gas.pushbutton/script.py
 # Phase 2 - IFGC Longest Run Gas Pipe Sizing
-# User picks gas meter -> startup dialog -> sizing -> writes sizes to Revit
+# Startup dialog -> user picks the gas meter, or the first new pipe on an
+# existing building -> sizing -> writes sizes to Revit
 #
 # IronPython 2.7 / PyRevit
 
@@ -27,6 +28,7 @@ import revit_helpers
 import pipe_graph
 import gas_tables
 import sizing_engine
+import tie_in
 import ui_helpers
 
 
@@ -266,44 +268,7 @@ def main():
     revit_helpers.reset_pipe_diameter_approach()
 
     # ------------------------------------------------------------------
-    # STEP 1 - Pick gas meter
-    # ------------------------------------------------------------------
-    try:
-        ref = uidoc.Selection.PickObject(
-            ObjectType.Element,
-            "Select the gas meter element"
-        )
-        selected_element = doc.GetElement(ref.ElementId)
-    except Exception:
-        output.print_md("Selection cancelled. No element was picked.")
-        return
-
-    if selected_element is None:
-        forms.alert(
-            "Could not retrieve selected element.",
-            title="Size Gas - Selection Error"
-        )
-        return
-
-    output.print_md("**Selected:** Element ID {}".format(
-        revit_helpers.eid_int(selected_element.Id)))
-
-    # ------------------------------------------------------------------
-    # STEP 2 - Validate meter
-    # ------------------------------------------------------------------
-    validation = revit_helpers.validate_selected_element(selected_element)
-    if not validation["is_valid"]:
-        forms.alert(
-            "Please select the gas meter element.\n\n{}".format(
-                validation["reason"]),
-            title="Size Gas - Invalid Selection"
-        )
-        return
-
-    output.print_md(":white_check_mark: Meter validation passed.")
-
-    # ------------------------------------------------------------------
-    # STEP 3 - Startup dialog: select pipe material and IFGC table
+    # STEP 1 - Startup dialog: select pipe material and IFGC table
     # ------------------------------------------------------------------
     choice = ui_helpers.show_size_gas_dialog("Size Gas - Select IFGC Table")
     if choice is None:
@@ -337,11 +302,90 @@ def main():
     output.print_md("**Heat Content of Gas:** {:.0f} BTU/CF".format(heat_content_btu_per_cf))
 
     # ------------------------------------------------------------------
+    # STEP 2 - Pick the gas meter, or the first new pipe on an existing
+    # building (Colin, 2026-10-13). A meter runs exactly as before. A pipe
+    # starts the run at the connection to existing.
+    # ------------------------------------------------------------------
+    forms.alert(
+        "Select meter or new gas piping connection.",
+        title="Size Gas")
+    try:
+        ref = uidoc.Selection.PickObject(
+            ObjectType.Element,
+            "Select meter or new gas piping connection"
+        )
+        selected_element = doc.GetElement(ref.ElementId)
+    except Exception:
+        output.print_md("Selection cancelled. No element was picked.")
+        return
+
+    if selected_element is None:
+        forms.alert(
+            "Could not retrieve selected element.",
+            title="Size Gas - Selection Error"
+        )
+        return
+
+    output.print_md("**Selected:** Element ID {}".format(
+        revit_helpers.eid_int(selected_element.Id)))
+
+    # ------------------------------------------------------------------
+    # STEP 3 - Validate the pick. For a pipe, find its existing side and ask
+    # for the existing conditions, which are assumed not modeled.
+    # ------------------------------------------------------------------
+    upstream = None
+    existing = None
+    if revit_helpers.is_pipe(selected_element):
+        upstream = tie_in.resolve_new_pipe_upstream(selected_element, doc)
+        if upstream["status"] != "ok":
+            forms.alert(
+                "Could not tell which end of the picked pipe connects to the "
+                "existing gas piping: {}.\n\nPick the first new gas pipe, the "
+                "one with one end at the existing connection (open, capped, "
+                "or joined to existing phase piping) and the other end on "
+                "new construction.".format(upstream["reason"]),
+                title="Size Gas - Invalid Selection"
+            )
+            return
+        output.print_md(
+            ":white_check_mark: New gas piping connection. Upstream end "
+            "found because {}.".format(upstream["reason"]))
+
+        picked_id = revit_helpers.eid_int(selected_element.Id)
+        existing = ui_helpers.show_existing_gas_dialog(
+            "Size Gas - Existing Conditions",
+            gas_tables.list_pipe_sizes(table_id),
+            tie_in.recall_existing(picked_id))
+        if existing is None:
+            output.print_md(
+                "Cancelled at existing conditions. No changes were made to "
+                "the model.")
+            return
+        tie_in.remember_existing(picked_id, existing)
+        output.print_md(
+            "**Existing (entered):** {}\" pipe, {:.1f} ft from the meter to "
+            "the new connection, {:.1f} MBH existing load.".format(
+                existing["size_nominal"], float(existing["length_ft"]),
+                float(existing["load_mbh"])))
+    else:
+        validation = revit_helpers.validate_selected_element(selected_element)
+        if not validation["is_valid"]:
+            forms.alert(
+                "Please select the gas meter element, or the first new gas "
+                "pipe at the connection to existing.\n\n{}".format(
+                    validation["reason"]),
+                title="Size Gas - Invalid Selection"
+            )
+            return
+
+        output.print_md(":white_check_mark: Meter validation passed.")
+
+    # ------------------------------------------------------------------
     # STEP 4 - Traverse piping network
     # ------------------------------------------------------------------
     output.print_md("**Traversing network...**")
     try:
-        graph = pipe_graph.build_network(selected_element, doc)
+        graph = pipe_graph.build_network(selected_element, doc, upstream)
     except Exception as e:
         forms.alert(
             "Traversal failed:\n\n{}".format(str(e)),
@@ -375,6 +419,13 @@ def main():
             title="Size Gas - Sizing Error"
         )
         return
+
+    # Existing building: the existing length joins the developed length that
+    # picks the table row, before anything is sized or zoned.
+    if existing is not None:
+        pipe_graph.apply_existing_conditions(
+            graph, existing["size_nominal"], existing["length_ft"],
+            existing["load_mbh"])
 
     # ------------------------------------------------------------------
     # STEP 4b - Pressure regulating valves
@@ -452,6 +503,33 @@ def main():
     # Print sizing summary to output window
     output.print_md("---")
     diag = sizing_engine.format_sizing_output(result, graph)
+
+    # Existing pipe from the meter to the new connection: checked, never
+    # sized. A shortfall is a warning the designer has to accept below.
+    existing_check    = sizing_engine.check_existing_pipe(result, graph)
+    existing_warnings = []
+    if existing_check is not None:
+        diag += "\n\n" + "\n".join(
+            sizing_engine.format_existing_check(existing_check))
+        if not existing_check["adequate"]:
+            if existing_check["capacity_cfh"] is None:
+                existing_warnings.append(
+                    "The entered existing pipe size {}\" is not in Table {} at "
+                    "{:.0f} ft, so it could not be checked.".format(
+                        existing_check["size_nominal"],
+                        existing_check["table_id"],
+                        float(existing_check["run_ft"])))
+            else:
+                existing_warnings.append(
+                    "The existing {}\" pipe carries {:.0f} CFH at {:.0f} ft "
+                    "developed length, but existing plus new load is {:.0f} "
+                    "CFH ({:.0f} MBH). The existing pipe is NOT adequate and "
+                    "was not resized.".format(
+                        existing_check["size_nominal"],
+                        float(existing_check["capacity_cfh"]),
+                        float(existing_check["run_ft"]),
+                        float(existing_check["demand_cfh"]),
+                        float(existing_check["total_load_mbh"])))
     output.print_html(
         "<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
             diag.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
@@ -465,9 +543,13 @@ def main():
     unnamed        = [n for n in fixture_nodes
                       if n.fixture_name in ("", "UNNAMED", None)]
 
-    if no_load or unnamed or graph.disconnected or prv_warnings:
+    if (no_load or unnamed or graph.disconnected or prv_warnings
+            or existing_warnings):
         output.print_md("---")
         output.print_md("## :warning: Pre-Sizing Warnings")
+
+        for w in existing_warnings:
+            output.print_md("**Existing gas pipe:** {}".format(w))
 
         for w in prv_warnings:
             output.print_md("**PRV:** {}".format(w))
@@ -719,6 +801,14 @@ def main():
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
     output.print_md("| IFGC table | {} |".format(result["table_id"]))
+    if existing_check is not None:
+        output.print_md(
+            "| Existing pipe (entered) | {}\", {:.1f} ft, {:.1f} MBH existing "
+            "load, {} |".format(
+                existing_check["size_nominal"],
+                float(existing_check["length_ft"]),
+                float(existing_check["existing_load_mbh"]),
+                "adequate" if existing_check["adequate"] else "NOT ADEQUATE"))
     output.print_md("| Heat Content of Gas | {:.0f} BTU/CF |".format(
         result["heat_content_btu_per_cf"]))
     if result.get("downstream_table_id"):

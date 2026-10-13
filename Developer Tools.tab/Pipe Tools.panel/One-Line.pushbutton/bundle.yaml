@@ -1,5 +1,7 @@
 title: One-Line
 tooltip: >
-  Generate the gas piping one-line diagram per firm standard.
-  Optionally places the diagram on a Revit drafting view.
-  Phase 2 tool.
+  Generate the gas piping one-line diagram per firm standard on a Revit
+  drafting view. Select the gas meter, or on an existing building the first
+  new gas pipe at the connection to existing. The existing pipe is then
+  drawn from the meter to the connection, with the existing piping shown
+  continuing to the existing appliances.

@@ -30,6 +30,7 @@ from Autodesk.Revit.UI.Selection import ObjectType
 
 import shared_params
 import revit_helpers
+import tie_in
 import water_graph
 import water_checks
 import water_sizing_engine
@@ -46,7 +47,7 @@ def run(doc, uidoc, output, forms):
     """
     output.print_md("# Size Water")
 
-    origin = _pick_origin(uidoc, doc, output, forms)
+    origin, upstream = _pick_origin(uidoc, doc, output, forms)
     if origin is None:
         return False
 
@@ -55,7 +56,7 @@ def run(doc, uidoc, output, forms):
     # so the network has to exist before the dialog can say anything true
     # about it.
     revit_helpers.reset_pipe_diameter_approach()
-    graph = water_graph.build_water_network(origin, doc)
+    graph = water_graph.build_water_network(origin, doc, upstream)
 
     detection = water_graph.detect_return_system_types(graph)
     _print_return_detection(output, detection)
@@ -137,21 +138,31 @@ def run(doc, uidoc, output, forms):
 # ---------------------------------------------------------------------------
 
 def _pick_origin(uidoc, doc, output, forms):
+    """Pick where the run starts.
+
+    Returns (origin element, upstream). upstream is None for an RPZ, and what
+    tie_in.resolve_new_pipe_upstream() found for a new pipe. Returns
+    (None, None) when the pick is cancelled or cannot be used.
+    """
     try:
         reference = uidoc.Selection.PickObject(
             ObjectType.Element,
-            "Select the RPZ / backflow preventer to start from")
+            "Select the RPZ / backflow preventer, or the first new cold "
+            "water pipe on an existing building")
     except Exception:
         output.print_md("Cancelled. Nothing was changed.")
-        return None
+        return None, None
 
     origin = doc.GetElement(reference.ElementId)
     if origin is None:
         forms.alert("Could not read the selected element.", title="Water")
-        return None
+        return None, None
 
     output.print_md("Origin: element **{}**".format(
         revit_helpers.eid_int(origin.Id)))
+
+    if revit_helpers.is_pipe(origin):
+        return _new_pipe_origin(origin, doc, output, forms)
 
     # Warn but do not block. water_checks reports this properly once the
     # traversal has run; this is just an early exit for an obvious mis-pick.
@@ -167,8 +178,50 @@ def _pick_origin(uidoc, doc, output, forms):
             "Continue anyway?",
             title="Water", yes=True, no=True)
         if not proceed:
-            return None
-    return origin
+            return None, None
+    return origin, None
+
+
+def _new_pipe_origin(pipe, doc, output, forms):
+    """A pipe was picked: the first new cold water pipe on an existing building.
+
+    The RPZ is existing and not modeled, so sizing starts at the new
+    construction connection. Nothing is asked about the existing main, it is
+    assumed adequate for the added load.
+    """
+    connectors = revit_helpers.get_connectors(pipe)
+    is_cold = any(
+        c.get("system_type") == shared_params.SYSTEM_DOMESTIC_COLD_WATER
+        for c in connectors)
+    if not is_cold:
+        forms.alert(
+            "The pipe you picked is not Domestic Cold Water.\n\n"
+            "On an existing building, pick the first new COLD water pipe at "
+            "the connection to existing. Connections to existing hot water "
+            "and recirculation piping are not covered by this tool.",
+            title="Size Water")
+        output.print_md("Stopped. Nothing was changed.")
+        return None, None
+
+    upstream = tie_in.resolve_new_pipe_upstream(
+        pipe, doc, shared_params.SYSTEM_DOMESTIC_COLD_WATER)
+    if upstream["status"] != "ok":
+        forms.alert(
+            "Could not tell which end of the picked pipe connects to the "
+            "existing piping: {}.\n\n"
+            "Pick the first new cold water pipe, the one with one end at the "
+            "existing connection (open, capped, or joined to existing phase "
+            "piping) and the other end on new construction.".format(
+                upstream["reason"]),
+            title="Size Water")
+        output.print_md("Stopped. Nothing was changed.")
+        return None, None
+
+    output.print_md(
+        "Starting at a **new construction pipe**. Its upstream end was found "
+        "because {}. The existing cold water main is assumed adequate for "
+        "the added load and is not checked.".format(upstream["reason"]))
+    return pipe, upstream
 
 
 def _project_info(doc, output):

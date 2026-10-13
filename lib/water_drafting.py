@@ -89,7 +89,9 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None):
     # differs from the one the sizing actually used.
     _text(doc, view, ox, y - PAD, "BASIS OF DESIGN", opts)
     y -= TEXT_H
-    for line in water_tables.basis_of_design_lines():
+    basis_lines = (water_tables.basis_of_design_lines() +
+                   water_report.origin_basis_lines(graph))
+    for line in basis_lines:
         for wrapped in _wrap(line, 110):
             _text(doc, view, ox, y - PAD, wrapped, opts)
             y -= TEXT_H

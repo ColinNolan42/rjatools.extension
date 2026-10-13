@@ -11,6 +11,7 @@ from Autodesk.Revit.DB import ElementId
 
 import shared_params
 import revit_helpers
+import tie_in
 
 
 # =============================================================================
@@ -117,6 +118,10 @@ class NetworkGraph(object):
                                         # the rest are equipment PRVs, ignored
         self.nested_prv_ids     = []    # mid-stream PRVs downstream of another
                                         # (more than one step down - unsupported)
+        self.origin_is_tie_in   = False # True when the run starts at a new pipe
+                                        # on an existing building, not at a meter
+        self.existing           = None  # the existing system the designer
+                                        # entered, set by apply_existing_conditions()
         self.zone_runs          = {}    # meter/PRV element ID -> longest-run dict
                                         # for the system that node feeds. Only
                                         # filled when the graph has a mid-stream
@@ -136,7 +141,7 @@ class NetworkGraph(object):
 # MAIN ENTRY POINT
 # =============================================================================
 
-def build_network(origin_element, doc):
+def build_network(origin_element, doc, upstream=None):
     """Walk the connector graph from the meter and build the network.
 
     Starting from origin_element (the gas meter), follows every connected
@@ -144,15 +149,135 @@ def build_network(origin_element, doc):
     fixtures by IS_GAS_FIXTURE parameter. Calculates cumulative loads and
     longest run.
 
+    On an existing building origin_element may instead be the first NEW pipe
+    at the connection to existing (Colin, 2026-10-13). The graph then starts
+    at that connection, and the caller adds the existing system with
+    apply_existing_conditions().
+
     Args:
-        origin_element: The user-selected gas meter Revit element.
+        origin_element: The user-selected gas meter, or the first new pipe.
         doc: The active Revit Document (needed for GetElement calls).
+        upstream: for a picked pipe, what tie_in.resolve_new_pipe_upstream()
+            returned. Worked out here when not given.
 
     Returns:
         NetworkGraph  -  fully populated graph ready for report generation.
+
+    Raises:
+        ValueError: a pipe was picked and its upstream end cannot be told.
     """
     graph = NetworkGraph()
 
+    if _is_pipe(origin_element):
+        visited, queue = _start_at_new_pipe(graph, doc, origin_element,
+                                            upstream)
+    else:
+        visited, queue = _start_at_meter(graph, doc, origin_element)
+
+    _traverse(graph, doc, visited, queue)
+    return graph
+
+
+def _start_at_new_pipe(graph, doc, pipe, upstream):
+    """Start the graph at the first new pipe on an existing building.
+
+    The graph needs a node to start from, and there is no meter element. A
+    stand-in origin node is placed at the upstream end of the picked pipe,
+    which is the connection to existing. It carries the NEGATIVE of the pipe
+    id so it can never collide with a real element. The picked pipe becomes
+    the first edge, and the walk goes out of its downstream end only.
+    """
+    if upstream is None:
+        upstream = tie_in.resolve_new_pipe_upstream(pipe, doc)
+    if upstream.get("status") != "ok":
+        raise ValueError(
+            "Could not tell which end of the picked pipe connects to "
+            "existing: {}.".format(upstream.get("reason", "unknown")))
+
+    pipe_id = revit_helpers.eid_int(pipe.Id)
+    origin_id = -pipe_id
+    graph.origin_id = origin_id
+    graph.origin_is_tie_in = True
+
+    origin_node = NetworkNode(origin_id, pipe, "meter")
+    origin_node.element = None            # there is no element to resize
+    origin_node.family_name = "EXISTING GAS CONNECTION"
+    origin_node.is_elbow = False
+    if upstream.get("upstream_xyz"):
+        origin_node.location_xyz = list(upstream["upstream_xyz"])
+    graph.add_node(origin_node)
+    graph.log("START: existing connection at new pipe {}. Upstream end: "
+              "{}".format(pipe_id, upstream.get("reason", "")))
+
+    visited = set([origin_id, pipe_id])
+    if upstream.get("upstream_neighbour_id") is not None:
+        # Never walk back into the existing piping.
+        visited.add(upstream["upstream_neighbour_id"])
+
+    queue = []
+    downstream = list(upstream.get("downstream_neighbour_ids") or [])
+    if not downstream:
+        graph.log("WARNING: Pipe {} has no new construction connected "
+                  "downstream of the existing connection.".format(pipe_id))
+        graph.disconnected.append(pipe_id)
+        graph.add_edge(NetworkEdge(pipe_id, pipe, origin_id, None))
+        return visited, queue
+
+    far_id = downstream[0]
+    graph.add_edge(NetworkEdge(pipe_id, pipe, origin_id, far_id))
+    far_element = _get_element(doc, far_id)
+    if far_element is not None:
+        queue.append((far_element, pipe_id))
+    else:
+        graph.log("WARNING: Could not retrieve far end element {} from pipe "
+                  "{}.".format(far_id, pipe_id))
+        graph.disconnected.append(far_id)
+
+    for extra_id in downstream[1:]:
+        # A tap on the picked pipe. An edge has one far end, so this branch
+        # cannot be carried, and it is reported instead of silently dropped.
+        graph.log("WARNING: Pipe {} has a second new connection ({}) that is "
+                  "NOT included in sizing. Pick a pipe with no taps on "
+                  "it.".format(pipe_id, extra_id))
+        graph.disconnected.append(extra_id)
+        visited.add(extra_id)
+    return visited, queue
+
+
+def apply_existing_conditions(graph, size_nominal, length_ft, load_mbh):
+    """Add the existing system the designer entered to a tie-in graph.
+
+    Colin, 2026-10-13: the existing piping is assumed not modeled, so the
+    designer enters its size, its length from the meter to the new connection
+    and its total load. The new piping is assumed to be the longest run, so
+    the existing length is added to the developed length that picks the table
+    row. Whether existing appliances farther away still get adequate gas is
+    the engineer's check, not this tool's.
+
+    The existing pipe is never sized. sizing_engine.check_existing_pipe()
+    checks it and the caller warns.
+    """
+    length_ft = float(length_ft)
+    graph.existing = {
+        "size_nominal": size_nominal,
+        "length_ft":    length_ft,
+        "load_mbh":     float(load_mbh),
+    }
+    runs = [graph.longest_run, graph.zone_runs.get(graph.origin_id)]
+    for run in runs:
+        if run is None or run.get("existing_length_feet") is not None:
+            continue
+        if run["total_length_feet"] <= 0:
+            continue    # no fixture reached: leave it at zero so sizing stops
+        run["existing_length_feet"] = length_ft
+        run["total_length_feet"] += length_ft
+    graph.log("EXISTING: {} in. pipe, {:.1f} ft from the meter to the new "
+              "connection, {:.1f} MBH existing load.".format(
+                  size_nominal, length_ft, float(load_mbh)))
+
+
+def _start_at_meter(graph, doc, origin_element):
+    """Build the meter node and queue what its Out connector feeds."""
     # --- Build origin node (meter) ---
     origin_id = revit_helpers.eid_int(origin_element.Id)
     graph.origin_id = origin_id
@@ -186,7 +311,11 @@ def build_network(origin_element, doc):
             graph.log(
                 "METER In connector (street side)  -  skipping direction.")
 
-    # Breadth-first traversal
+    return visited, queue
+
+
+def _traverse(graph, doc, visited, queue):
+    """Breadth-first walk of everything queued, then the post-calculations."""
     while queue:
         current_element, parent_node_id = queue.pop(0)
         current_id = revit_helpers.eid_int(current_element.Id)
@@ -224,8 +353,6 @@ def build_network(origin_element, doc):
 
     graph.log("TRAVERSAL COMPLETE: {} nodes, {} edges.".format(
         len(graph.nodes), len(graph.edges)))
-
-    return graph
 
 
 # =============================================================================

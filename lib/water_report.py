@@ -31,6 +31,8 @@ def build_report(graph, sizing_result, header, recirc=None):
     """
     lines = []
     lines.extend(basis_block(header))
+    for line in origin_basis_lines(graph):
+        lines.append("  " + line)
     lines.append("")
     lines.extend(wsfu_table(graph))
     lines.append("")
@@ -60,6 +62,23 @@ def basis_block(header):
     for line in water_tables.basis_of_design_lines():
         lines.append("  " + line)
     return lines
+
+
+def origin_basis_lines(graph):
+    """Basis lines that depend on where the run started.
+
+    Shared by the printed report and the drafting view, so the sheet says the
+    same thing the window does. Empty for a run that started at the RPZ.
+    """
+    if not graph.origin_is_new_pipe:
+        return []
+    return [
+        "Existing building: sizing starts at the new construction "
+        "connection (pipe {}), not at the backflow preventer.".format(
+            graph.origin_id),
+        "The existing cold water main upstream of that connection is "
+        "assumed adequate for the added load and was NOT sized or checked.",
+    ]
 
 
 # ---------------------------------------------------------------------------

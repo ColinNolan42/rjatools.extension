@@ -1,5 +1,8 @@
 title: Size Gas
 tooltip: >
-  Select the gas meter element, then click to size all gas piping per
-  IFGC Appendix A Longest Run Method.
-  Phase 2 tool — requires pipe material, inlet pressure, and pressure drop.
+  Click, choose the pipe material and IFGC table, then select the gas meter
+  to size all gas piping per IFGC Appendix A Longest Run Method.
+  On an existing building, select the first new gas pipe at the connection
+  to existing instead of a meter. A box then asks for the existing pipe
+  size, the length from the meter to the connection and the existing load.
+  The existing pipe is checked, not resized.

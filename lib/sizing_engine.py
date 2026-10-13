@@ -525,6 +525,141 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
 
 
 # ---------------------------------------------------------------------------
+# Calculation basis
+# ---------------------------------------------------------------------------
+
+def basis_of_design_rows():
+    """The gas sizing basis as (label, value) pairs for the dialog.
+
+    Built from the constants the engine actually uses, so the dialog cannot
+    state a basis different from the one the sizing ran on.
+
+    Returns:
+        List of (label, value) ASCII string pairs.
+    """
+    return [
+        ("Code", gas_tables.code_edition() + ", Table 402.4 for the pipe "
+                 "material, pressure and pressure drop selected above."),
+        ("Method", "Longest Run Method, IFGC Appendix A (A103.1). One "
+                   "developed length, from the meter to the farthest outlet, "
+                   "sizes every pipe in the system."),
+        ("Developed length", "Pipe length plus 5 ft per elbow along the "
+                             "longest run. Where the length falls between "
+                             "table rows the next longer row is used."),
+        ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
+                   "the total load of every appliance downstream of it."),
+        ("Specific gravity", "{:g}, matching the IFGC tables.".format(
+            float(shared_params.SPECIFIC_GRAVITY))),
+        ("Pipe size", "Smallest size in the table whose capacity covers the "
+                      "demand, not smaller than {} in. (firm "
+                      "minimum).".format(_min_size_label())),
+        ("Regulators", "A pressure regulating valve with more than {:g} ft "
+                       "of pipe after it is mid-stream. With Mid Stream PRV "
+                       "ticked, the piping after it is sized on its own "
+                       "table and its own longest run.".format(
+                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
+        ("Existing building", "Picking a new pipe instead of a meter starts "
+                              "the run at the connection to existing. The "
+                              "entered existing length is added to the "
+                              "developed length. The existing pipe is "
+                              "checked, never resized."),
+    ]
+
+
+def _min_size_label():
+    """Nominal label of the firm minimum pipe size, e.g. '3/4'."""
+    for nominal in ("1/2", "3/4", "1", "1-1/4", "1-1/2", "2"):
+        if NOMINAL_TO_INCHES.get(nominal) == MIN_PIPE_INCHES:
+            return nominal
+    return "{:g}".format(float(MIN_PIPE_INCHES))
+
+
+# ---------------------------------------------------------------------------
+# Existing pipe check (existing building tie-in)
+# ---------------------------------------------------------------------------
+
+def check_existing_pipe(sizing_result, graph):
+    """Check the existing pipe between the meter and the new connection.
+
+    Colin, 2026-10-13: the entered existing size passes if its table capacity,
+    at the existing length plus the new longest run, covers the existing load
+    plus the new load. The existing pipe is never sized or resized, the
+    caller only warns.
+
+    Returns:
+        None when the run did not start at an existing connection, else a
+        dict: size_nominal, length_ft, existing_load_mbh, new_load_mbh,
+        total_load_mbh, demand_cfh, capacity_cfh (None when the size is not
+        in the table), run_ft, table_id, adequate (bool).
+    """
+    existing = graph.existing
+    if existing is None:
+        return None
+
+    origin = graph.nodes.get(graph.origin_id)
+    new_load = origin.cumulative_load_mbh if origin is not None else 0.0
+    total_load = existing["load_mbh"] + new_load
+    heat = sizing_result.get("heat_content_btu_per_cf",
+                             shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)
+    demand_cfh = mbh_to_cfh(total_load, heat)
+    run_ft = sizing_result["longest_run_ft"]
+    table_id = sizing_result["table_id"]
+
+    try:
+        capacity = gas_tables.get_capacity(
+            table_id, run_ft, existing["size_nominal"])
+    except ValueError:
+        capacity = None     # size not in this table, or not at this length
+
+    return {
+        "size_nominal":      existing["size_nominal"],
+        "length_ft":         existing["length_ft"],
+        "existing_load_mbh": existing["load_mbh"],
+        "new_load_mbh":      new_load,
+        "total_load_mbh":    total_load,
+        "demand_cfh":        demand_cfh,
+        "capacity_cfh":      capacity,
+        "run_ft":            run_ft,
+        "table_id":          table_id,
+        "adequate":          capacity is not None and capacity >= demand_cfh,
+    }
+
+
+def format_existing_check(check):
+    """The existing pipe check as plain lines for the output window."""
+    if check is None:
+        return []
+    lines = [
+        "=== EXISTING PIPE, METER TO NEW CONNECTION (entered, not modeled) ===",
+        "Existing size:   {}\"".format(check["size_nominal"]),
+        "Existing length: {:.1f} ft, added to the new longest run".format(
+            float(check["length_ft"])),
+        "Load carried:    {:.1f} MBH existing + {:.1f} MBH new = {:.1f} MBH "
+        "({:.1f} CFH)".format(
+            float(check["existing_load_mbh"]), float(check["new_load_mbh"]),
+            float(check["total_load_mbh"]), float(check["demand_cfh"])),
+    ]
+    if check["capacity_cfh"] is None:
+        lines.append(
+            "Capacity:        size {}\" is not in Table {} at {:.1f} ft. NOT "
+            "CHECKED.".format(check["size_nominal"], check["table_id"],
+                              float(check["run_ft"])))
+    else:
+        lines.append(
+            "Capacity:        {:.0f} CFH at {:.1f} ft developed length, Table "
+            "{}".format(float(check["capacity_cfh"]), float(check["run_ft"]),
+                        check["table_id"]))
+    lines.append("Result:          {}".format(
+        "ADEQUATE" if check["adequate"]
+        else "NOT ADEQUATE - EXISTING PIPE WAS NOT RESIZED"))
+    lines.append(
+        "Basis: the new piping is assumed to be the longest run. The "
+        "engineer shall verify that existing appliances farther from the "
+        "meter still receive adequate gas.")
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Downstream fixture helper
 # ---------------------------------------------------------------------------
 

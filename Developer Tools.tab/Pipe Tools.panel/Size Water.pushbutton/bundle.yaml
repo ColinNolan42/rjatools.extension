@@ -2,6 +2,9 @@ title: Size Water
 tooltip: >
   Select the RPZ / backflow preventer, then click to size the domestic water
   piping per the 2024 IPC and WRITE the sizes into the model.
+  On an existing building where the RPZ is not modeled, pick the first new
+  cold water pipe at the connection to existing instead. The existing main
+  is assumed adequate and is not checked.
   Sizes BOTH domestic cold water (on TOTAL fixture units) and domestic hot
   water (on HOT fixture units), overwrites the drawn sizes, and resizes the
   fittings to match.

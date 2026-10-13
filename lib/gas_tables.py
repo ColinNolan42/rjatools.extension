@@ -69,6 +69,11 @@ def _tables():
     return _load()["tables"]
 
 
+def code_edition():
+    """The code edition the tables were taken from, e.g. '2024 IFGC'."""
+    return str(_load().get("code", "IFGC"))
+
+
 # ---------------------------------------------------------------------------
 # Material support
 # ---------------------------------------------------------------------------

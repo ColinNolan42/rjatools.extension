@@ -28,6 +28,7 @@
 
 import shared_params
 import revit_helpers
+import tie_in
 
 
 # Node kinds
@@ -123,6 +124,13 @@ class WaterGraph(object):
         self.return_unrooted = []  # return pipe ids whose end could not be found
         self.hot_joints      = {}  # every hot water joint, kept from before the split
 
+        # Existing building: the run starts at the first NEW cold water pipe
+        # instead of an RPZ (Colin, 2026-10-13). The connectors listed here
+        # face the existing piping and are never walked through.
+        self.origin_is_new_pipe         = False
+        self.origin_upstream_connectors = set()   # connector_index values
+        self.origin_upstream_reason     = ""
+
     def add(self, node):
         self.nodes[node.element_id] = node
 
@@ -151,31 +159,61 @@ class WaterGraph(object):
 # ENTRY POINT
 # =============================================================================
 
-def build_water_network(origin_element, doc):
-    """Traverse the domestic water network from the RPZ.
+def build_water_network(origin_element, doc, upstream=None):
+    """Traverse the domestic water network from the RPZ, or from the first
+    new cold water pipe on an existing building.
 
     Walks the cold tree from origin_element, finds the water heaters on it,
     then walks each heater's hot tree. Assigns WSFU demand to every pipe.
 
     Args:
-        origin_element: the user-picked RPZ / backflow preventer.
+        origin_element: the user-picked RPZ / backflow preventer, or the first
+            new construction cold water pipe.
         doc: the active Revit Document.
+        upstream: for a picked pipe, what tie_in.resolve_new_pipe_upstream()
+            returned for its cold water connectors.
+            Worked out here when not given.
 
     Returns:
         WaterGraph
+
+    Raises:
+        ValueError: a pipe was picked and its upstream end cannot be told.
     """
     graph = WaterGraph()
 
     origin_id = revit_helpers.eid_int(origin_element.Id)
     graph.origin_id = origin_id
 
-    origin = WaterNode(origin_id, origin_element, KIND_ORIGIN)
-    origin.connectors = revit_helpers.get_connectors(origin_element)
-    origin.connector_count = len(origin.connectors)
-    origin.system = shared_params.SYSTEM_DOMESTIC_COLD_WATER
-    graph.add(origin)
-    graph.log("ORIGIN: element {} ({}), {} connectors".format(
-        origin_id, origin.family_name, origin.connector_count))
+    if _is_pipe(origin_element):
+        # The picked pipe is new construction and has to be sized like any
+        # other, so it goes in as a PIPE. Everything it feeds hangs below it,
+        # and the end facing the existing piping is closed to the walk.
+        if upstream is None:
+            upstream = tie_in.resolve_new_pipe_upstream(
+                origin_element, doc,
+                shared_params.SYSTEM_DOMESTIC_COLD_WATER)
+        if upstream.get("status") != "ok":
+            raise ValueError(
+                "Could not tell which end of the picked pipe connects to "
+                "existing: {}.".format(upstream.get("reason", "unknown")))
+        origin = _make_node(graph, origin_element, origin_id,
+                            shared_params.SYSTEM_DOMESTIC_COLD_WATER)
+        origin.system = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+        graph.add(origin)
+        graph.origin_is_new_pipe = True
+        graph.origin_upstream_reason = upstream.get("reason", "")
+        graph.origin_upstream_connectors = set([upstream["connector_index"]])
+        graph.log("ORIGIN: new construction pipe {}. Upstream end: {}".format(
+            origin_id, graph.origin_upstream_reason or "NOT RESOLVED"))
+    else:
+        origin = WaterNode(origin_id, origin_element, KIND_ORIGIN)
+        origin.connectors = revit_helpers.get_connectors(origin_element)
+        origin.connector_count = len(origin.connectors)
+        origin.system = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+        graph.add(origin)
+        graph.log("ORIGIN: element {} ({}), {} connectors".format(
+            origin_id, origin.family_name, origin.connector_count))
 
     # --- Phase 1: the cold tree ---
     # Each system gets its OWN visited set. Sharing one set across systems
@@ -260,6 +298,14 @@ def _walk(graph, doc, start_id, system, visited):
             # hidden) still exists in the family. Ignore it, and never call it
             # an open end.
             if _connector_is_disabled(current_node, c_system):
+                continue
+
+            # The end of the picked new pipe that faces the existing piping.
+            # Not an open end, and never walked: the existing main is assumed
+            # adequate and is none of this run's business.
+            if (current_id == graph.origin_id and
+                    c.get("connector_index") in
+                    graph.origin_upstream_connectors):
                 continue
 
             if not c.get("is_connected"):

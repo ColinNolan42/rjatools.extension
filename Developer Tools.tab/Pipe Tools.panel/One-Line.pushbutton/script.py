@@ -56,6 +56,7 @@ import revit_helpers
 import pipe_graph
 import gas_tables
 import sizing_engine
+import tie_in
 import ui_helpers
 
 
@@ -78,6 +79,7 @@ LABEL_ABOVE      = 1.2     # ft  above a horizontal pipe (must clear text height
 LABEL_RIGHT      = 0.6     # ft  right of a vertical pipe
 UPSTREAM_H       = 6.0     # ft  horizontal stub left of meter
 UPSTREAM_V       = 4.0     # ft  vertical drop of upstream stub
+EXISTING_RUN     = 16.0    # ft  drawn length of the existing pipe, meter to new connection
 TEXT_HEIGHT_FT   = 0.78    # ft  3/32" x (100/12) at 1:100
 TEXT_GAP         = TEXT_HEIGHT_FT * 2.0  # ft  between note lines
 TEXT_CHAR_WIDTH_FT = TEXT_HEIGHT_FT * 0.6  # ft  approx glyph width for centering
@@ -1451,6 +1453,46 @@ def _draw_upstream_stub(doc, view, cx, cy, squiggle_sym, tt_id, line_style=None)
     _note(doc, view, tip_x - 0.5, cy - UPSTREAM_V - 1.6, "GAS FROM\nUTILITY", tt_id)
 
 
+def _draw_existing_run(doc, view, cx, cy, existing, total_mbh, going_up,
+                       squiggle_sym, meter_sym, tt_id):
+    """Draw the existing system ahead of a new gas piping connection.
+
+    Colin, 2026-10-13: the diagram still starts at the meter. The existing
+    pipe carries its size, length and load up to the new connection. Past the
+    connection the existing piping carries on to a squiggle, to show it
+    continues to the existing appliances. Drawn in the default line style, so
+    it reads as existing next to the wide new construction lines.
+
+    (cx, cy) is the new connection, which is where the new piping starts.
+    Returns the x of the existing meter.
+    """
+    meter_x = cx - EXISTING_RUN
+
+    # Existing meter and its service, to the left of the connection.
+    _draw_upstream_stub(doc, view, meter_x, cy, squiggle_sym, tt_id)
+    _draw_meter_symbol(doc, view, meter_x, cy, tt_id, meter_sym)
+
+    # Existing pipe, meter to the new connection, labelled like any segment.
+    _line(doc, view, meter_x, cy, cx, cy)
+    label = '{}"G, {} FT'.format(
+        existing["size_nominal"], int(round(existing["length_ft"])))
+    label += "\n" + "{} MBH".format(int(round(total_mbh)))
+    _note(doc, view, (meter_x + cx) / 2.0, cy + LABEL_ABOVE, label, tt_id,
+          width=True)
+
+    # Existing piping continuing past the connection.
+    sign = 1.0 if going_up else -1.0
+    tip_y = cy + sign * UPSTREAM_V
+    _line(doc, view, cx, cy, cx, tip_y)
+    _place_sym(doc, view, squiggle_sym, cx, tip_y, rotate_90=True)
+    if going_up:
+        note_y = tip_y + 1.0 + 2 * TEXT_HEIGHT_FT
+    else:
+        note_y = tip_y - 1.6
+    _note(doc, view, cx - 0.5, note_y, "TO EXISTING\nAPPLIANCES", tt_id)
+    return meter_x
+
+
 def _draw_pipe_segment(doc, view, x0, y0, x1, y1, edge, pipe_sizes, tt_id,
                         force_label=False):
     _line(doc, view, x0, y0, x1, y1)
@@ -1590,14 +1632,35 @@ def _parse_pressure_drop(table_label):
 
 def _draw_notes_block(doc, view, table_id, inlet_psi,
                       total_mbh, total_developed_ft, tt_id, notes_x, notes_y,
-                      table_label=""):
-    """Draw the 5-line notes block as a SINGLE multi-line TextNote."""
+                      table_label="", existing=None):
+    """Draw the 5-line notes block as a SINGLE multi-line TextNote.
+
+    existing: the entered existing system when the run starts at a new
+    connection to existing gas piping. total_mbh is then the NEW load, and
+    the block states existing, new and total. The new meter note is left
+    out, because the meter is existing.
+    """
     pressure_drop = _parse_pressure_drop(table_label)
     if pressure_drop:
         loss_line = "MAX PRESSURE LOSS OF {} PER IFGC TABLE {}".format(
             pressure_drop, table_id)
     else:
         loss_line = "MAX PRESSURE LOSS PER IFGC TABLE {}".format(table_id)
+    if existing is not None:
+        text = "\n".join([
+            "CONTRACTOR SHALL FIELD VERIFY EXISTING GAS PIPE SIZE, LENGTH"
+            " AND CONNECTED LOAD PRIOR TO CONNECTION OF NEW GAS PIPING",
+            "GAS PIPING SIZED FOR {} PSI".format(inlet_psi),
+            loss_line,
+            "EXISTING CONNECTED LOAD: {} MBH".format(
+                int(round(existing["load_mbh"]))),
+            "NEW CONNECTED LOAD: {} MBH".format(int(round(total_mbh))),
+            "TOTAL CONNECTED LOAD: {} MBH".format(
+                int(round(existing["load_mbh"])) + int(round(total_mbh))),
+            "TOTAL DEVELOPED LENGTH: {}'".format(int(round(total_developed_ft))),
+        ])
+        _note(doc, view, notes_x, notes_y, text, tt_id)
+        return
     text = "\n".join([
         "CONTRACTOR SHALL SUBMIT APPLICATIONS TO UTILITY"
         " AND COORDINATE NEW METER SERVICE",
@@ -1625,7 +1688,7 @@ def main():
     try:
         ref = uidoc.Selection.PickObject(
             ObjectType.Element,
-            "Select the gas meter element"
+            "Select meter or new gas piping connection"
         )
         selected_element = doc.GetElement(ref.ElementId)
     except Exception:
@@ -1643,16 +1706,39 @@ def main():
     # ------------------------------------------------------------------
     # STEP 2 - Validate meter
     # ------------------------------------------------------------------
-    validation = revit_helpers.validate_selected_element(selected_element)
-    if not validation["is_valid"]:
-        forms.alert(
-            "Please select the gas meter element.\n\n{}".format(
-                validation["reason"]),
-            title="One-Line - Invalid Selection"
-        )
-        return
+    # A pipe means an existing building: the run starts at the first new
+    # pipe at the connection to existing (Colin, 2026-10-13). A meter runs
+    # exactly as before.
+    upstream = None
+    existing = None
+    is_tie_in = revit_helpers.is_pipe(selected_element)
+    if is_tie_in:
+        upstream = tie_in.resolve_new_pipe_upstream(selected_element, doc)
+        if upstream["status"] != "ok":
+            forms.alert(
+                "Could not tell which end of the picked pipe connects to the "
+                "existing gas piping: {}.\n\nPick the first new gas pipe, the "
+                "one with one end at the existing connection (open, capped, "
+                "or joined to existing phase piping) and the other end on "
+                "new construction.".format(upstream["reason"]),
+                title="One-Line - Invalid Selection"
+            )
+            return
+        output.print_md(
+            ":white_check_mark: New gas piping connection. Upstream end "
+            "found because {}.".format(upstream["reason"]))
+    else:
+        validation = revit_helpers.validate_selected_element(selected_element)
+        if not validation["is_valid"]:
+            forms.alert(
+                "Please select the gas meter element, or the first new gas "
+                "pipe at the connection to existing.\n\n{}".format(
+                    validation["reason"]),
+                title="One-Line - Invalid Selection"
+            )
+            return
 
-    output.print_md(":white_check_mark: Meter validation passed.")
+        output.print_md(":white_check_mark: Meter validation passed.")
 
     # ------------------------------------------------------------------
     # STEP 3 - Select pipe material and IFGC table (populates notes block)
@@ -1670,12 +1756,25 @@ def main():
     output.print_md("**Material:** {}  |  **Table:** {}  |  **Heat Content:** {:.0f} BTU/CF".format(
         pipe_material, table_id, heat_content_btu_per_cf))
 
+    # Existing conditions, assumed not modeled. Prefilled with what was
+    # entered in Size Gas for this pipe when that is still in memory.
+    if is_tie_in:
+        picked_id = revit_helpers.eid_int(selected_element.Id)
+        existing = ui_helpers.show_existing_gas_dialog(
+            "One-Line - Existing Conditions",
+            gas_tables.list_pipe_sizes(table_id),
+            tie_in.recall_existing(picked_id))
+        if existing is None:
+            output.print_md("Cancelled at existing conditions. No changes made.")
+            return
+        tie_in.remember_existing(picked_id, existing)
+
     # ------------------------------------------------------------------
     # STEP 4 - Traverse network
     # ------------------------------------------------------------------
     output.print_md("**Traversing network...**")
     try:
-        graph = pipe_graph.build_network(selected_element, doc)
+        graph = pipe_graph.build_network(selected_element, doc, upstream)
     except Exception as ex:
         forms.alert("Traversal failed:\n\n{}".format(str(ex)),
                     title="One-Line - Traversal Error")
@@ -1695,6 +1794,13 @@ def main():
         forms.alert("No gas fixtures found. Cannot generate one-line diagram.",
                     title="One-Line - Error")
         return
+
+    # Existing building: the entered existing length joins the developed
+    # length, so the notes block and the segment labels still add up.
+    if existing is not None:
+        pipe_graph.apply_existing_conditions(
+            graph, existing["size_nominal"], existing["length_ft"],
+            existing["load_mbh"])
 
     total_mbh          = sum(n.gas_load_mbh for n in fixture_nodes)
     longest_ft         = graph.longest_run["total_length_feet"]  # used for IFGC sizing
@@ -1721,6 +1827,8 @@ def main():
 
     # Notes: left of upstream stub, above all diagram content
     notes_x = -(UPSTREAM_H + SYMBOL_RADIUS + 4.0)
+    if existing is not None:
+        notes_x -= EXISTING_RUN   # the existing meter sits that far left
     notes_y = max_y_d + 6.0
 
     # ------------------------------------------------------------------
@@ -1942,11 +2050,26 @@ def main():
         #    Drawn at the distribution main level; stub goes left then DOWN
         #    to represent the underground utility service entry.
         #    Always New Construction (new meter connection).
-        _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id,
-                            line_style=wide_line_style)
+        if existing is None:
+            _draw_upstream_stub(doc, view, mx, my, squiggle_sym, tt_id,
+                                line_style=wide_line_style)
 
-        # b. Meter symbol (uses RJA - P Symbols - Meter when available)
-        _draw_meter_symbol(doc, view, mx, my, tt_id, meter_sym)
+            # b. Meter symbol (uses RJA - P Symbols - Meter when available)
+            _draw_meter_symbol(doc, view, mx, my, tt_id, meter_sym)
+        else:
+            # Existing building. (mx, my) is the new connection, not a
+            # meter. The existing continuation goes up, unless the new piping
+            # itself rises from the connection, in which case it goes down.
+            going_up = True
+            if trunk_edge_ids_ord:
+                first_to = positions.get(
+                    graph.edges[trunk_edge_ids_ord[0]].to_node_id)
+                if (first_to is not None and abs(first_to[0] - mx) < 0.01
+                        and first_to[1] > my):
+                    going_up = False
+            _draw_existing_run(doc, view, mx, my, existing,
+                               existing["load_mbh"] + total_mbh, going_up,
+                               squiggle_sym, meter_sym, tt_id)
 
         # c. Trunk pipe edges only.
         #    Branch edges are NOT drawn here -- they are replaced by the
@@ -2202,7 +2325,8 @@ def main():
                           tt_id              = tt_id,
                           notes_x            = notes_x,
                           notes_y            = notes_y,
-                          table_label        = selected_opt.get("label", ""))
+                          table_label        = selected_opt.get("label", ""),
+                          existing           = existing)
 
         t.Commit()
 

@@ -831,6 +831,54 @@ INCHES_PER_FOOT = 12.0
 # ELEMENT LOCATION
 # =============================================================================
 
+def is_pipe(element):
+    """Return True if the element is a Revit pipe."""
+    try:
+        return element.GetType().Name == "Pipe"
+    except Exception:
+        return False
+
+
+def get_element_by_id(doc, element_id_int):
+    """Retrieve a Revit element by integer id. Returns None on failure."""
+    try:
+        return doc.GetElement(ElementId(element_id_int))
+    except Exception as e:
+        _log_entry("ERROR", "get_element_by_id", element_id_int,
+                   "doc.GetElement failed: {}".format(str(e)))
+        return None
+
+
+def get_created_phase_id(element):
+    """Return the id of the phase an element was created in, as an int.
+
+    Used to tell new construction from existing: two connected elements whose
+    created phases differ sit on opposite sides of an existing tie-in.
+
+    Returns:
+        int phase id, or None if the element has no phase or it cannot be read.
+    """
+    fn = "get_created_phase_id"
+
+    if element is None:
+        _log_entry("ERROR", fn, None, "Element is None.")
+        return None
+
+    eid = eid_int(element.Id)
+    try:
+        phase_id = eid_int(element.CreatedPhaseId)
+    except Exception as e:
+        _log_entry("INFO", fn, eid,
+                   "No readable CreatedPhaseId ({}).".format(str(e)))
+        return None
+
+    if phase_id is None or phase_id < 0:
+        _log_entry("INFO", fn, eid, "Element has no created phase.")
+        return None
+    _log_entry("INFO", fn, eid, "Created phase id {}.".format(phase_id))
+    return phase_id
+
+
 def get_element_location(element):
     """Return the XYZ location of an element as a [x, y, z] list in decimal feet.
     

@@ -52,8 +52,140 @@ _PICKER_XAML = (
 )
 
 
+_EXISTING_GAS_XAML = (
+    '<Window'
+    ' xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"'
+    ' Width="460" SizeToContent="Height"'
+    ' ResizeMode="NoResize"'
+    ' WindowStartupLocation="CenterScreen">'
+    '<StackPanel Margin="15">'
+    '<TextBlock Text="A pipe was picked, so the run starts at the connection to existing gas'
+    ' piping. The existing piping is assumed not modeled. Enter it below."'
+    ' TextWrapping="Wrap" Margin="0,0,0,12"/>'
+    '<TextBlock Text="Existing Pipe Size at the Connection" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<ComboBox Name="cbSize" Margin="0,0,0,12"/>'
+    '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBox Name="tbLength" Margin="0,0,0,12"/>'
+    '<TextBlock Text="Total Existing Load (MBH)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBox Name="tbLoad" Margin="0,0,0,4"/>'
+    '<TextBlock Text="The existing pipe is checked for the existing plus new load and is never'
+    ' resized. The length is added to the new longest run, which is assumed to be the longest'
+    ' run in the system. The engineer shall verify the existing appliances."'
+    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,16"/>'
+    '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right">'
+    '<Button Name="btnCancel" Content="Cancel" Width="70" Margin="0,0,8,0"/>'
+    '<Button Name="btnOK" Content="OK" Width="70"/>'
+    '</StackPanel>'
+    '</StackPanel>'
+    '</Window>'
+)
+
+
+def show_existing_gas_dialog(title, pipe_sizes, defaults=None):
+    """Existing Conditions box, shown when a pipe was picked instead of a meter.
+
+    Opens the RJA themed dialog (sizer_dialogs), and falls back to the plain
+    one below if that cannot be built. See _show_existing_gas_dialog_legacy
+    for the arguments and the return value.
+    """
+    import sizer_dialogs
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_existing_gas_dialog(
+            title, pipe_sizes, defaults, use_theme),
+        lambda: _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults))
+
+
+def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
+    """FALLBACK ONLY. Plain Existing Conditions box.
+
+    Colin, 2026-10-13: the existing gas piping is assumed not modeled, so the
+    designer enters its size, its length from the meter to the new connection
+    and its total load. Shown AFTER the pick, and only for a pipe.
+
+    Args:
+        title: window title string.
+        pipe_sizes: nominal size strings of the selected IFGC table, smallest
+            first (gas_tables.list_pipe_sizes).
+        defaults: optional dict with "size_nominal", "length_ft", "load_mbh"
+            to prefill, for example what was entered in Size Gas.
+
+    Returns:
+        dict with "size_nominal" (str), "length_ft" and "load_mbh" (floats),
+        or None if cancelled.
+    """
+    window     = XamlReader.Parse(_EXISTING_GAS_XAML)
+    window.Title = title
+    cb_size    = window.FindName('cbSize')
+    tb_length  = window.FindName('tbLength')
+    tb_load    = window.FindName('tbLoad')
+    btn_ok     = window.FindName('btnOK')
+    btn_cancel = window.FindName('btnCancel')
+
+    defaults = defaults or {}
+    pick = 0
+    for i, size in enumerate(pipe_sizes):
+        cb_size.Items.Add(size)
+        if size == defaults.get("size_nominal"):
+            pick = i
+    if cb_size.Items.Count > 0:
+        cb_size.SelectedIndex = pick
+    if defaults.get("length_ft") is not None:
+        tb_length.Text = "{:g}".format(float(defaults["length_ft"]))
+    if defaults.get("load_mbh") is not None:
+        tb_load.Text = "{:g}".format(float(defaults["load_mbh"]))
+
+    result = [None]
+
+    def _number(box):
+        """A number of zero or more, or None. Marks the box when it is bad."""
+        try:
+            value = float(box.Text.strip())
+            if value < 0 or value != value or value == float("inf"):
+                raise ValueError
+        except ValueError:
+            box.Background = Brushes.LightPink
+            return None
+        box.Background = Brushes.White
+        return value
+
+    def on_ok(sender, e):
+        length = _number(tb_length)
+        load = _number(tb_load)
+        if length is None or load is None or cb_size.SelectedItem is None:
+            return
+        result[0] = {
+            "size_nominal": cb_size.SelectedItem,
+            "length_ft":    length,
+            "load_mbh":     load,
+        }
+        window.Close()
+
+    def on_cancel(sender, e):
+        window.Close()
+
+    btn_ok.Click     += on_ok
+    btn_cancel.Click += on_cancel
+    window.ShowDialog()
+    return result[0]
+
+
 def show_water_dialog(title, project_info, return_detection):
-    """The one Size Water dialog, laid out like the Duct Velocity dialog.
+    """The one Size Water dialog.
+
+    Opens the RJA themed dialog (sizer_dialogs), and falls back to the plain
+    one below if that cannot be built. See _show_water_dialog_legacy for the
+    arguments and the return value.
+    """
+    import sizer_dialogs
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_water_dialog(
+            title, project_info, return_detection, use_theme),
+        lambda: _show_water_dialog_legacy(
+            title, project_info, return_detection))
+
+
+def _show_water_dialog_legacy(title, project_info, return_detection):
+    """FALLBACK ONLY. The code-built Size Water dialog.
 
     Same idiom as show_velocity_settings_dialog(): options first, bold grey
     section headers, separators between sections, and the basis of design as
@@ -356,7 +488,20 @@ def show_size_gas_dialog(title):
 
 
 def _show_picker(title, prv_option):
-    """Shared implementation behind the two public dialogs."""
+    """Shared implementation behind the two public dialogs.
+
+    Opens the RJA themed dialog (sizer_dialogs), and falls back to the plain
+    one below if that cannot be built.
+    """
+    import sizer_dialogs
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_gas_picker(
+            title, prv_option, use_theme),
+        lambda: _show_picker_legacy(title, prv_option))
+
+
+def _show_picker_legacy(title, prv_option):
+    """FALLBACK ONLY. The plain material / table picker."""
     from System.Windows import Visibility
 
     window          = XamlReader.Parse(_PICKER_XAML)

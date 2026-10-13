@@ -115,6 +115,25 @@ def _check_origin(graph, findings):
             "The picked element is not in the graph. Nothing was traversed."))
         return
 
+    if graph.origin_is_new_pipe:
+        # Existing building. There is no RPZ to check, and the inline-device
+        # tests below would only raise false alarms on a pipe.
+        findings.append(Finding(
+            SEVERITY_INFO, "origin_new_pipe",
+            "Sizing starts at new construction pipe {}, not at an RPZ. Its "
+            "upstream end was taken as the one where {}. The existing cold "
+            "water main and backflow preventer are assumed adequate for the "
+            "added load and were NOT checked.".format(
+                origin.element_id,
+                graph.origin_upstream_reason or "the existing piping is")))
+        if not graph.origin_upstream_connectors:
+            findings.append(Finding(
+                SEVERITY_ERROR, "origin_new_pipe_no_upstream",
+                "The upstream end of the picked pipe {} could not be "
+                "identified, so the traversal may have walked into the "
+                "existing piping.".format(origin.element_id)))
+        return
+
     cold = [c for c in origin.connectors
             if c.get("system_type") == shared_params.SYSTEM_DOMESTIC_COLD_WATER]
 

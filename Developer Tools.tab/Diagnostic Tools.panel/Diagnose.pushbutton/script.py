@@ -190,6 +190,12 @@ def _gas_accessory_kind(node):
 
 def diagnose_gas(element):
     output.print_md('Discipline: **GAS PIPING**')
+    if revit_helpers.is_pipe(element):
+        output.print_md(
+            ':warning: A pipe was picked, not a meter. This is diagnosed as '
+            'an existing building connection starting at that pipe. The '
+            'existing piping, its length and its load are NOT included, and '
+            'the SYSTEM ORIGIN section below describes the pipe, not a meter.')
 
     try:
         graph = pipe_graph.build_network(element, doc)
@@ -293,6 +299,11 @@ def diagnose_gas(element):
 # ============================================================================
 def diagnose_water(element):
     output.print_md('Discipline: **DOMESTIC WATER**')
+    if revit_helpers.is_pipe(element):
+        output.print_md(
+            ':warning: A pipe was picked, not an RPZ. This is diagnosed as an '
+            'existing building connection starting at that pipe. The existing '
+            'main upstream is NOT included.')
 
     try:
         graph = water_graph.build_water_network(element, doc)
