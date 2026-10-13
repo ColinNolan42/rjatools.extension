@@ -211,6 +211,35 @@ class TestCircuitSetterFlows(unittest.TestCase):
         self.r = water_recirc.analyze(self.g)
         self.legs = dict((l["start_pipe_id"], l) for l in self.r["legs"])
 
+    def test_actual_drop_is_at_the_set_flow(self):
+        """Loop: 160 ft x 50 BTU/h/ft = 8000 BTU/h, calc 0.80 gpm at 20 F,
+        so the calculation governs and the actual drop is the design 20 F.
+        Branch: 8 ft = 400 BTU/h, calc 0.04 gpm, set to the 0.5 gpm minimum,
+        so the actual drop is 400 / (500 x 0.5) = 1.6 F."""
+        for leg in self.r["legs"]:
+            self.assertAlmostEqual(
+                leg["heat_loss_btuh"],
+                leg["effective_length_ft"] / 100.0 * self.r["heat_loss_btu_per_100ft"])
+            self.assertAlmostEqual(
+                leg["actual_delta_t_f"],
+                leg["heat_loss_btuh"] / (500.0 * leg["gpm"]))
+            if leg["gpm"] > leg["calc_gpm"]:
+                self.assertLess(leg["actual_delta_t_f"], self.r["delta_t_f"])
+            else:
+                self.assertAlmostEqual(leg["actual_delta_t_f"], self.r["delta_t_f"])
+
+    def test_total_return_length_is_every_return_pipe(self):
+        # 60 + 90 + 10 + 12, the four return pipes in build_loop_and_branch.
+        self.assertAlmostEqual(self.r["return_length_ft"], 172.0)
+
+    def test_drafting_rows_carry_the_drops_and_the_total(self):
+        data = water_report.recirc_data(self.r)
+        self.assertEqual(len(data["rows"]), len(self.r["legs"]))
+        for row in data["rows"]:
+            for key, _header, _w in water_report.RECIRC_COLUMNS:
+                self.assertTrue(row[key])
+        self.assertIn("172.0 ft", " ".join(data["summary"]))
+
     def test_one_circuit_setter_per_return_leg(self):
         self.assertEqual(sorted(self.legs.keys()), [20, 30])
 

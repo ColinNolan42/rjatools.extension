@@ -122,7 +122,7 @@ def run(doc, uidoc, output, forms):
     _write_sizes(doc, output, forms, graph, sizing)
 
     if settings["wsfu_calcs"]:
-        _create_drafting_view(doc, output, graph, sizing, header)
+        _create_drafting_view(doc, output, graph, sizing, header, recirc)
         output.print_md(
             "Check the take-off against the fixtures in the model. The "
             "fixture unit totals on it are what drove every pipe size.")
@@ -281,7 +281,7 @@ def _print_return_detection(output, detection):
             "using these sizes.")
 
 
-def _create_drafting_view(doc, output, graph, sizing, header):
+def _create_drafting_view(doc, output, graph, sizing, header, recirc=None):
     """The take-off on a drafting view and a new sheet, per firm standard.
 
     Its own transaction so a failure here cannot roll anything else back.
@@ -290,7 +290,7 @@ def _create_drafting_view(doc, output, graph, sizing, header):
     transaction.Start()
     try:
         view, content_h, content_w = water_drafting.build_wsfu_view(
-            doc, graph, header, sizing)
+            doc, graph, header, sizing, recirc=recirc)
         if view is None:
             transaction.RollBack()
             output.print_md(

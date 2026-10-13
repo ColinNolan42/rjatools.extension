@@ -313,6 +313,52 @@ _WATER_BODY = (
 )
 
 
+def _fill_chart(win, title, chart):
+    """A small table under the Calculation basis rows, spanning both columns.
+
+    chart is {"headers": [...], "rows": [[...]]}, e.g. water_tables.sizing_chart().
+    """
+    from System.Windows import FontWeights, GridLength, Thickness
+    from System.Windows.Controls import (ColumnDefinition, Grid, RowDefinition,
+                                         TextBlock)
+
+    grid = _named(win, 'grid_ref')
+
+    def _span(element):
+        rd = RowDefinition()
+        rd.Height = GridLength.Auto
+        grid.RowDefinitions.Add(rd)
+        Grid.SetRow(element, grid.RowDefinitions.Count - 1)
+        Grid.SetColumn(element, 0)
+        Grid.SetColumnSpan(element, 2)
+        grid.Children.Add(element)
+
+    heading = TextBlock()
+    heading.Text = title
+    heading.FontWeight = FontWeights.SemiBold
+    heading.Margin = Thickness(0, 8, 0, 2)
+    _span(heading)
+
+    table = Grid()
+    for _ in chart["headers"]:
+        cd = ColumnDefinition()
+        cd.Width = GridLength.Auto
+        table.ColumnDefinitions.Add(cd)
+    for r, cells in enumerate([chart["headers"]] + chart["rows"]):
+        rd = RowDefinition()
+        rd.Height = GridLength.Auto
+        table.RowDefinitions.Add(rd)
+        for c, value in enumerate(cells):
+            cell = ui_helpers.rja_hint_block(win, value)
+            if r == 0:
+                cell.FontWeight = FontWeights.SemiBold
+            cell.Margin = Thickness(0, 1, 18, 1)
+            Grid.SetRow(cell, r)
+            Grid.SetColumn(cell, c)
+            table.Children.Add(cell)
+    _span(table)
+
+
 def show_water_dialog(title, project_info, return_detection, use_theme=True):
     """Themed Size Water dialog. Same arguments and return value as
     ui_helpers.show_water_dialog."""
@@ -358,6 +404,7 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
                                "network, so these are not used.")
 
     _fill_basis(win, water_tables.basis_of_design_rows())
+    _fill_chart(win, "Firm pipe sizing chart", water_tables.sizing_chart())
 
     def collect(errors):
         heat_loss = shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT

@@ -220,7 +220,7 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
         HorizontalAlignment, FontWeights, Window, Visibility)
     from System.Windows.Controls import (
         StackPanel, TextBlock, TextBox, CheckBox, Button, Label, Separator,
-        Orientation)
+        Orientation, Grid, ColumnDefinition, RowDefinition)
     from System.Windows.Media import SolidColorBrush, Colors
 
     WIN_WIDTH = 520
@@ -371,6 +371,25 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
     # different from the one the sizing actually used.
     for label_text, value_text in water_tables.basis_of_design_rows():
         _info_row(label_text, value_text)
+
+    # The firm WSFU-to-pipe-size chart, the rows the sizing looks up.
+    chart = water_tables.sizing_chart()
+    chart_grid = Grid()
+    chart_grid.Margin = Thickness(0, 6, 0, 0)
+    for _ in chart["headers"]:
+        chart_grid.ColumnDefinitions.Add(ColumnDefinition())
+    for r, cells in enumerate([chart["headers"]] + chart["rows"]):
+        chart_grid.RowDefinitions.Add(RowDefinition())
+        for c, value in enumerate(cells):
+            cell = TextBlock()
+            cell.Text = value
+            cell.Foreground = SolidColorBrush(Colors.DimGray)
+            if r == 0:
+                cell.FontWeight = FontWeights.Bold
+            Grid.SetRow(cell, r)
+            Grid.SetColumn(cell, c)
+            chart_grid.Children.Add(cell)
+    outer.Children.Add(chart_grid)
 
     # The detected return system is NOT shown here. The pyRevit window prints
     # which System Type was identified and why. It is carried through to the

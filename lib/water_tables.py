@@ -616,6 +616,50 @@ def basis_of_design_rows():
     ]
 
 
+def sizing_chart():
+    """The firm WSFU-to-pipe-size chart, as it is shown to the user.
+
+    Built from the same rows select_size() and select_return_size() read, so
+    the chart in the dialog and on the drafting view is the table the sizing
+    actually used. One row per pipe size: the largest cold and hot fixture
+    unit load that size carries, and the largest circulation flow it carries
+    as a return.
+
+    Returns:
+        Dict with "headers" (4 strings) and "rows" (lists of 4 strings).
+    """
+    firm_rows = _load()["firm_sizing_table"]
+    cold_field = _SYSTEM_LIMIT_FIELDS[SYSTEM_COLD]
+    hot_field = _SYSTEM_LIMIT_FIELDS[SYSTEM_HOT]
+    returns = return_gpm_rows()
+
+    headers = [
+        "PIPE SIZE",
+        "COLD WSFU (" + _fmt_fps(_fps_from_limit_field(cold_field)) + " FPS)",
+        "HOT WSFU (" + _fmt_fps(_fps_from_limit_field(hot_field)) + " FPS)",
+        "RETURN GPM",
+    ]
+    rows = []
+    for row, ret in zip(firm_rows, returns):
+        rows.append([
+            str(row["nominal_size"]) + "\"",
+            "up to " + _fmt_number(row[cold_field]),
+            "up to " + _fmt_number(row[hot_field]),
+            ("-" if ret["max_gpm"] is None
+             else "up to " + "{:.1f}".format(float(ret["max_gpm"]))),
+        ])
+    return {"headers": headers, "rows": rows}
+
+
+def _fmt_number(value):
+    """A table limit without a trailing .0 for whole numbers. Cast to float
+    first: IronPython 2.7 rejects '{:.0f}'.format(an_int)."""
+    number = float(value)
+    if abs(number - round(number)) < 1e-9:
+        return "{:.0f}".format(number)
+    return "{:g}".format(number)
+
+
 # ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------

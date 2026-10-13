@@ -359,6 +359,32 @@ class TestBasisOfDesignRows(unittest.TestCase):
             self.assertIn(token, joined_lines)
 
 
+class TestSizingChart(unittest.TestCase):
+    """The chart shown to the user is the table the sizing reads."""
+
+    def test_one_row_per_firm_size_in_order(self):
+        chart = wt.sizing_chart()
+        firm = wt.firm_sizing_rows()
+        self.assertEqual(len(chart["rows"]), len(firm))
+        for row, size in zip(chart["rows"], firm):
+            self.assertEqual(row[0], size["nominal_size"] + "\"")
+            self.assertEqual(len(row), len(chart["headers"]))
+
+    def test_limits_match_select_size(self):
+        for row, size in zip(wt.sizing_chart()["rows"], wt.firm_sizing_rows()):
+            cold = float(row[1].replace("up to ", ""))
+            hot = float(row[2].replace("up to ", ""))
+            self.assertEqual(wt.select_size(cold, "cold")["nominal_size"],
+                             size["nominal_size"])
+            self.assertEqual(wt.select_size(hot, "hot")["nominal_size"],
+                             size["nominal_size"])
+
+    def test_headers_state_the_velocities(self):
+        headers = " ".join(wt.sizing_chart()["headers"])
+        self.assertIn("8 FPS", headers)
+        self.assertIn("5 FPS", headers)
+
+
 class TestDataIntegrity(unittest.TestCase):
 
     def test_firm_table_ascending_both_limit_columns(self):

@@ -61,6 +61,18 @@ def basis_block(header):
              "BASIS OF DESIGN"]
     for line in water_tables.basis_of_design_lines():
         lines.append("  " + line)
+    lines.append("")
+    lines.extend(sizing_chart_lines())
+    return lines
+
+
+def sizing_chart_lines():
+    """The firm WSFU-to-pipe-size chart as fixed-width console lines."""
+    chart = water_tables.sizing_chart()
+    fmt = "  {:<11}{:<20}{:<19}{:<14}"
+    lines = ["FIRM PIPE SIZING CHART", fmt.format(*chart["headers"])]
+    for row in chart["rows"]:
+        lines.append(fmt.format(*row))
     return lines
 
 
@@ -101,9 +113,11 @@ WSFU_COLUMNS = [
     ("cold_ea",   "COLD",            0.070,    7),
     ("hot_ea",    "HOT",             0.070,    6),
     ("total_ea",  "TOTAL",           0.070,    7),
-    ("cold_ext",  "COLD",            0.070,    7),
-    ("hot_ext",   "HOT",             0.070,    6),
-    ("total_ext", "TOTAL",           0.070,    7),
+    # The extended columns are quantity x per fixture, so they are named as
+    # totals. Plain COLD / HOT / TOTAL twice read as the same numbers (Colin).
+    ("cold_ext",  "TOTAL COLD",      0.100,   11),
+    ("hot_ext",   "TOTAL HOT",       0.095,   10),
+    ("total_ext", "TOTAL WSFU",      0.100,   11),
 ]
 
 WSFU_TITLE = "WATER SUPPLY FIXTURE UNIT TAKE-OFF"
@@ -218,13 +232,14 @@ def wsfu_table(graph):
     """Console rendering of the take-off table."""
     data = wsfu_data(graph)
 
-    fmt = "{:<34}{:>4}{:>7}{:>6}{:>7}{:>7}{:>6}{:>7}"
+    fmt = "".join(["{:<%d}" % c[3] if i == 0 else "{:>%d}" % c[3]
+                   for i, c in enumerate(WSFU_COLUMNS)])
     lines = [WSFU_TITLE,
-             "-" * 78,
+             "-" * 86,
+             "{:<38}{:>20}{:>28}".format(
+                 "", "--- PER FIXTURE ---", "--- QTY x PER FIXTURE ---"),
              fmt.format(*[c[1] for c in WSFU_COLUMNS]),
-             "{:<34}{:>4}{:>20}{:>20}".format(
-                 "", "", "--- PER FIXTURE ---", "---- EXTENDED ----"),
-             "-" * 78]
+             "-" * 86]
 
     if not data["rows"]:
         lines.append("  (no water fixtures found on the traversed network)")
@@ -298,6 +313,68 @@ def segment_table(graph, sizing_result):
 # 4. Hot water recirculation: the circuit setter settings
 # ---------------------------------------------------------------------------
 
+RECIRC_TITLE = "HOT WATER RECIRCULATION SIZING"
+
+RECIRC_COLUMNS = [
+    # key          header             view_w
+    ("number",    "NO.",              0.045),
+    ("method",    "METHOD",           0.075),
+    ("element",   "AT ELEMENT",       0.095),
+    ("length",    "EFF LENGTH FT",    0.105),
+    ("btuh",      "HEAT LOSS BTU/H",  0.120),
+    ("design_dt", "DESIGN DROP F",    0.105),
+    ("calc_gpm",  "CALC GPM",         0.080),
+    ("gpm",       "SET GPM",          0.075),
+    ("actual_dt", "ACTUAL DROP F",    0.105),
+]
+
+
+def recirc_data(recirc):
+    """Rows for the recirculation sizing table, keyed by RECIRC_COLUMNS.
+
+    ACTUAL DROP is the temperature drop at the flow the circuit setter is set
+    to: heat loss / (500 x set gpm). It equals the design drop where the
+    calculated flow governs, and is smaller where the minimum flow governs.
+
+    Returns dict with "rows", "summary" (lines printed under the table) and
+    "basis" (lines printed above it).
+    """
+    design_dt = float(recirc["delta_t_f"])
+    rows = []
+    for leg in recirc["legs"]:
+        rows.append({
+            "number": str(leg["number"]),
+            "method": leg["method"],
+            "element": ("-" if leg["start_element_id"] is None
+                        else str(leg["start_element_id"])),
+            "length": "{:.1f}".format(float(leg["effective_length_ft"])),
+            "btuh": "{:.0f}".format(float(leg.get("heat_loss_btuh", 0.0))),
+            "design_dt": _num(design_dt),
+            "calc_gpm": "{:.2f}".format(float(leg["calc_gpm"])),
+            "gpm": "{:.2f}".format(float(leg["gpm"])),
+            "actual_dt": "{:.1f}".format(float(leg.get("actual_delta_t_f", 0.0))),
+        })
+
+    basis = [
+        "Heat loss {} BTU/h per 100 ft, design temperature drop {} F, {} gpm "
+        "minimum per circuit setter.".format(
+            _num(recirc["heat_loss_btu_per_100ft"]), _num(design_dt),
+            "{:.1f}".format(float(recirc["min_gpm"]))),
+        "gpm = (effective length / 100 x heat loss) / (500 x temperature "
+        "drop). Actual drop = heat loss / (500 x set gpm).",
+        "LOOP length is the return from the last fixture back to the water "
+        "heater, or to where a second loop joins the main return. BRANCH "
+        "length is the hot supply from the main to the fixture.",
+    ]
+    summary = [
+        "Total hot water return piping: {:.1f} ft.".format(
+            float(recirc.get("return_length_ft", 0.0))),
+        "Total circulation flow, {} circuit setter(s): {:.2f} gpm.".format(
+            len(recirc["legs"]), float(recirc["total_gpm"])),
+    ]
+    return {"rows": rows, "summary": summary, "basis": basis}
+
+
 def recirc_table(recirc):
     """One row per circuit setter, with the flow to set it to."""
     lines = ["HOT WATER RECIRCULATION - CIRCUIT SETTER FLOWS",
@@ -315,20 +392,21 @@ def recirc_table(recirc):
              "it joins.",
              "  BRANCH length is the hot supply from the main to the fixture.",
              "-" * 78,
-             "{:<5}{:<9}{:>14}{:>12}{:>12}{:>11}{:>11}".format(
-                 "NO.", "METHOD", "STARTS PIPE", "AT ELEMENT", "EFF LEN FT",
-                 "CALC GPM", "SET GPM"),
+             "{:<5}{:<9}{:>12}{:>11}{:>10}{:>10}{:>9}{:>12}".format(
+                 "NO.", "METHOD", "AT ELEMENT", "EFF LEN FT", "BTU/H",
+                 "CALC GPM", "SET GPM", "ACT DROP F"),
              "-" * 78]
 
     for leg in recirc["legs"]:
-        lines.append("{:<5}{:<9}{:>14}{:>12}{:>12}{:>11}{:>11}".format(
+        lines.append("{:<5}{:<9}{:>12}{:>11}{:>10}{:>10}{:>9}{:>12}".format(
             leg["number"],
             leg["method"],
-            leg["start_pipe_id"],
             "-" if leg["start_element_id"] is None else leg["start_element_id"],
             "{:.1f}".format(float(leg["effective_length_ft"])),
+            "{:.0f}".format(float(leg.get("heat_loss_btuh", 0.0))),
             "{:.2f}".format(float(leg["calc_gpm"])),
-            "{:.2f}".format(float(leg["gpm"]))))
+            "{:.2f}".format(float(leg["gpm"])),
+            "{:.1f}".format(float(leg.get("actual_delta_t_f", 0.0)))))
     if not recirc["legs"]:
         lines.append("  (no return leg could be laid out)")
 
@@ -338,6 +416,8 @@ def recirc_table(recirc):
                      "gpm".format(root_id, float(recirc["root_gpm"][root_id])))
     lines.append("  TOTAL CIRCULATION FLOW, {} circuit setter(s): {:.2f} "
                  "gpm".format(len(recirc["legs"]), float(recirc["total_gpm"])))
+    lines.append("  TOTAL HOT WATER RETURN PIPING: {:.1f} ft".format(
+        float(recirc.get("return_length_ft", 0.0))))
     if recirc["unrooted_pipe_ids"]:
         lines.append("  {} return pipe(s) NOT SIZED, the end of their return "
                      "line was not found: {}".format(

@@ -81,6 +81,7 @@ def analyze(graph,
         "pipe_gpm": {},
         "root_gpm": {},
         "total_gpm": 0.0,
+        "return_length_ft": 0.0,
         "unrooted_pipe_ids": list(graph.return_unrooted),
         "heat_loss_btu_per_100ft": float(heat_loss_btu_per_100ft),
         "delta_t_f": float(delta_t_f),
@@ -143,6 +144,14 @@ def analyze(graph,
         leg["calc_gpm"] = heat_loss_gpm(
             leg["effective_length_ft"], heat_loss_btu_per_100ft, delta_t_f)
         leg["gpm"] = max(float(min_gpm), leg["calc_gpm"])
+        # The drop the water really sees at the flow the setter is set to.
+        # Equal to the design drop when the calculation governs, smaller when
+        # the minimum flow governs.
+        leg["heat_loss_btuh"] = (float(leg["effective_length_ft"]) / 100.0 *
+                                 float(heat_loss_btu_per_100ft))
+        leg["actual_delta_t_f"] = (
+            leg["heat_loss_btuh"] / (BTUH_PER_GPM_PER_DEGF * leg["gpm"])
+            if leg["gpm"] > 0 else 0.0)
 
     legs.sort(key=lambda l: (l["method"] != METHOD_LOOP,
                              -l["return_run_ft"], l["start_pipe_id"]))
@@ -162,6 +171,8 @@ def analyze(graph,
         result["root_gpm"][leg["root_id"]] = (
             result["root_gpm"].get(leg["root_id"], 0.0) + leg["gpm"])
     result["total_gpm"] = sum(result["root_gpm"].values())
+    result["return_length_ft"] = sum(
+        float(pipe.length_feet or 0.0) for pipe in pipes)
     result["legs"] = legs
     return result
 

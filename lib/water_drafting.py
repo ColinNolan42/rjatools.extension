@@ -33,9 +33,14 @@ TEXT_H = 0.018     # plain text line height, about 1/5 in
 GAP = 0.020        # gap between blocks
 
 
-def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None):
-    """Create a Drafting View holding the header, basis of design and the
-    WSFU take-off table.
+CHART_WIDTHS = (0.090, 0.160, 0.150, 0.120)   # firm pipe sizing chart
+
+
+def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
+                    recirc=None):
+    """Create a Drafting View holding the header, basis of design, the firm
+    pipe sizing chart, the WSFU take-off table and, when the system has a
+    return, the hot water recirculation sizing.
 
     Args:
         doc: the Revit Document. Must already be inside a Transaction.
@@ -43,6 +48,8 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None):
         header: dict with "date", "job", "job_number", "by".
         sizing_result: optional, adds a one-line sizing summary.
         view_name: optional explicit name.
+        recirc: optional, what water_recirc.analyze returned. Adds the
+            circuit setter table, total return length and temperature drops.
 
     Returns:
         (ViewDrafting, content_height_ft, content_width_ft), or (None, 0, 0)
@@ -95,6 +102,15 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None):
         for wrapped in _wrap(line, 110):
             _text(doc, view, ox, y - PAD, wrapped, opts)
             y -= TEXT_H
+    y -= GAP / 2.0
+
+    # --- Firm pipe sizing chart --------------------------------------------
+    # The same rows the sizing looked each pipe up in.
+    chart = water_tables.sizing_chart()
+    _text(doc, view, ox, y - PAD, "FIRM PIPE SIZING CHART", opts)
+    y -= TEXT_H
+    y = _draw_table(doc, view, ox, y, list(zip(chart["headers"], CHART_WIDTHS)),
+                    chart["rows"], opts)
     y -= GAP
 
     # --- The table ---------------------------------------------------------
@@ -158,7 +174,59 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None):
                   "reason on each.".format(totals["unsized_count"]), opts)
             y -= TEXT_H
 
+    # --- Hot water recirculation sizing ------------------------------------
+    if recirc is not None and recirc["legs"]:
+        y -= GAP
+        data = water_report.recirc_data(recirc)
+        _text(doc, view, ox, y - PAD, water_report.RECIRC_TITLE, opts)
+        y -= TEXT_H
+        for line in data["basis"]:
+            for wrapped in _wrap(line, 110):
+                _text(doc, view, ox, y - PAD, wrapped, opts)
+                y -= TEXT_H
+        y -= GAP / 2.0
+        columns = water_report.RECIRC_COLUMNS
+        y = _draw_table(doc, view, ox, y, [(c[1], c[2]) for c in columns],
+                        [[row[c[0]] for c in columns] for row in data["rows"]],
+                        opts)
+        y -= GAP / 2.0
+        for line in data["summary"]:
+            _text(doc, view, ox, y - PAD, line, opts)
+            y -= TEXT_H
+        total_w = max(total_w, sum([c[2] for c in columns], 0.0))
+
     return view, (0.0 - y), total_w
+
+
+def _draw_table(doc, view, ox, top, columns, rows, opts):
+    """A gridded table: columns is [(header, width)], rows is [[cell, ...]].
+
+    Returns the y of the table's bottom edge.
+    """
+    widths = [c[1] for c in columns]
+    total_w = sum(widths, 0.0)
+    col_xs = [ox]
+    for w in widths:
+        col_xs.append(col_xs[-1] + w)
+
+    row_tops = [top, top - HEAD_H]
+    for _ in rows:
+        row_tops.append(row_tops[-1] - ROW_H)
+    bottom = row_tops[-1]
+
+    for line_y in row_tops:
+        _hline(doc, view, ox, ox + total_w, line_y)
+    for x in col_xs:
+        _vline(doc, view, x, top, bottom)
+
+    for index, column in enumerate(columns):
+        _text(doc, view, col_xs[index], top - PAD, column[0], opts)
+    for row_index, row in enumerate(rows):
+        for col_index, value in enumerate(row):
+            if value:   # TextNote.Create rejects an empty string
+                _text(doc, view, col_xs[col_index],
+                      row_tops[row_index + 1] - PAD, value, opts)
+    return bottom
 
 
 def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
