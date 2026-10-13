@@ -385,9 +385,9 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
     A separate transaction from the pipe write, so a fitting family that
     refuses to resize cannot roll back the pipe sizes that already succeeded.
 
-    Each fitting is given the size of the LARGEST pipe touching it, and a map
-    of neighbour to size so a reducing tee can take a different size on each
-    connector where the family allows it.
+    Each fitting is given the size of the LARGEST pipe touching it: a tee is
+    sized on the greater pipe size (Colin, 2026-10-13). The neighbour-to-size
+    map is only a fallback for a family with no 'Nominal Radius' parameter.
     """
     import revit_helpers
 

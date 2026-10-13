@@ -745,21 +745,30 @@ def set_pipe_diameter(pipe, nominal_inches):
 def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
     """Resize a fitting (elbow, tee, coupling) or accessory.
 
-    Revit fittings do not follow their pipes automatically, so an elbow keeps
-    whatever size it was drawn at until it is set explicitly.
+    Revit fittings do not follow their pipes automatically, so an elbow or a
+    tee keeps whatever size it was drawn at until it is set explicitly.
 
     Two approaches, in order:
-      1. Per-connector radius, when size_by_neighbour_id maps a connected
-         element id to its nominal inches. This is the only way a reducing
-         tee comes out right, because its three connectors differ.
-      2. The 'Nominal Radius' instance parameter, which drives the whole
-         fitting uniformly. Correct for elbows and couplings, and the approach
-         the gas tool has been using in real projects.
+      1. The 'Nominal Radius' instance parameter, set to nominal_inches, which
+         the caller passes as the LARGEST pipe touching the fitting. A tee is
+         sized on the greater pipe size (Colin, 2026-10-13). This is the
+         approach the gas tool has been using in real projects.
+      2. Per-connector radius, only when the family has no usable 'Nominal
+         Radius'. Each connector takes the size of the pipe on it, from
+         size_by_neighbour_id.
+
+    The order matters. Per-connector used to run first, to let a reducing tee
+    keep three sizes. On a standard tee, which is one size driven by one
+    parameter, those connector writes raised nothing and changed nothing, so
+    the function reported success and never reached the parameter that
+    works. Tees were left at their drawn size.
 
     Args:
         element: the fitting or accessory.
-        nominal_inches: the size to use when one uniform size is applied.
-        size_by_neighbour_id: optional {connected element id: nominal inches}.
+        nominal_inches: the size for the whole fitting, the largest connected
+            pipe.
+        size_by_neighbour_id: optional {connected element id: nominal inches},
+            used only by the fallback.
 
     Returns:
         (success: bool, approach: str)
@@ -770,7 +779,23 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
     except Exception:
         eid = None
 
-    # --- 1. Per-connector, so a reducing tee keeps its different sizes ---
+    # --- 1. One size for the whole fitting: the greater pipe size ---
+    try:
+        param = element.LookupParameter("Nominal Radius")
+        if param is not None and not param.IsReadOnly:
+            param.Set((nominal_inches / 2.0) / INCHES_PER_FOOT)
+            _log_entry("INFO", fn, eid,
+                       "Resized via Nominal Radius to {} in.".format(
+                           nominal_inches))
+            return True, "Nominal Radius"
+        _log_entry("INFO", fn, eid,
+                   "No writable 'Nominal Radius' parameter, trying the "
+                   "connectors.")
+    except Exception as exc:
+        _log_entry("WARNING", fn, eid,
+                   "Nominal Radius resize failed: {}".format(str(exc)))
+
+    # --- 2. Fallback: per connector, for a family with no Nominal Radius ---
     if size_by_neighbour_id:
         set_any = False
         try:
@@ -804,19 +829,6 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
         if set_any:
             _log_entry("INFO", fn, eid, "Resized per connector.")
             return True, "connector.Radius"
-
-    # --- 2. One uniform size for the whole fitting ---
-    try:
-        param = element.LookupParameter("Nominal Radius")
-        if param is not None and not param.IsReadOnly:
-            param.Set((nominal_inches / 2.0) / INCHES_PER_FOOT)
-            _log_entry("INFO", fn, eid,
-                       "Resized via Nominal Radius to {} in.".format(
-                           nominal_inches))
-            return True, "Nominal Radius"
-    except Exception as exc:
-        _log_entry("WARNING", fn, eid,
-                   "Nominal Radius resize failed: {}".format(str(exc)))
 
     _log_entry("WARNING", fn, eid, "Could not resize by any approach.")
     return False, "FAILED"
