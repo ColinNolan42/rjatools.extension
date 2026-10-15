@@ -451,6 +451,15 @@ def _fps_from_limit_field(field_name):
     return float(m.group(1))
 
 
+def velocity_limit_fps(system):
+    """The firm velocity limit for 'cold' or 'hot', in fps.
+
+    Parsed from the same limit column the sizing uses, so the number cannot
+    drift from the table in use. Hot water return uses the hot limit.
+    """
+    return _fps_from_limit_field(_SYSTEM_LIMIT_FIELDS[_system_key(system)])
+
+
 def _fmt_fps(value):
     """Format a fps float with no trailing .0 (IronPython 2.7 safe: cast
     to float before '{:.0f}'.format(), since formatting a bare int with

@@ -1,0 +1,8 @@
+title: Water Performance
+tooltip: >
+  Open a floor plan, then pick the RPZ (or the tee on an existing main).
+  Makes a colored COPY of the view and writes nothing to the pipes.
+  Green: drawn size equals the firm table size. Yellow: at table size but the
+  computed speed is over the limit (8 fps cold, 5 fps hot and return).
+  Red: drawn smaller than the table. Purple: drawn larger. Gray: not judged.
+  Flagged pipes and the basis of design print to the pyRevit window.
