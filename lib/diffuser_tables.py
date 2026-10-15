@@ -74,6 +74,31 @@ CEILING_SUPPLY_NECK_TABLE = [
     (14, 750),
 ]
 
+# Basis of design: Price RSG round supply grille, 1 in. blade spacing, SM
+# frame. Neck sized on the smaller of 800 fpm neck velocity and 0.08 in. wc per
+# 100 ft friction (standard air), rounded to the nearest 5 CFM. Even sizes 6 to
+# 24 in. Source: Price RSG performance data and submittal 255291.
+#
+# NOT WIRED INTO hvac_graph. A round connector is classified as a ceiling
+# round-neck diffuser by shape, which uses CEILING_SUPPLY_NECK_TABLE above, so
+# an RSG branch is currently judged against the stricter ceiling values (for
+# example 8 in. 200 vs 210 here). Using this table needs a discriminator that
+# is not a family or Type name, which has not been decided. Kept here so the
+# three places that carry these numbers (design standards doc, the RSG family,
+# this module) stay in sync.
+ROUND_GRILLE_SUPPLY_NECK_TABLE = [
+    (6,    95),
+    (8,   210),
+    (10,  385),
+    (12,  630),
+    (14,  855),
+    (16, 1115),
+    (18, 1415),
+    (20, 1745),
+    (22, 2110),
+    (24, 2510),
+]
+
 # Basis of design: Titus PAR perforated face grate. Return and Exhaust share
 # identical published data, hence one table for both.
 CEILING_RETURN_EXHAUST_NECK_TABLE = [
