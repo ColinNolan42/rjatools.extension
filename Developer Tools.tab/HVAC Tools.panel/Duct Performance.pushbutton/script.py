@@ -48,6 +48,7 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, Transaction,
     BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
     Viewport, ViewDuplicateOption, ElementId, XYZ, ViewPlan, BrowserOrganization,
+    PlanViewPlane, PlanViewRange, Category,
     OverrideGraphicSettings, Color,
     TextNote, TextNoteOptions, TextNoteType,
     Line, ViewDrafting, ViewFamilyType, ViewFamily,
@@ -1931,7 +1932,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         while stack:
             steps = steps + 1
             if steps > MAX_PATH_STEPS:
-                log.warning('_critical_path_loss: path search truncated at %d '
+                hvac_graph.log.warning('_critical_path_loss: path search truncated at %d '
                             'steps from root %s', MAX_PATH_STEPS, root_id)
                 truncated_roots.add(root_id)
                 break
@@ -2172,6 +2173,7 @@ _ROLE_LABELS = {
     'ceiling':  'Branch (Ceiling)',
     'sidewall': 'Branch (Sidewall)',
     'slot':     'Branch (Slot)',
+    'round_sidewall': 'Branch (Round Sidewall)',
 }
 
 
@@ -2252,11 +2254,13 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
 
     kind, terminal_elem, terminal_cfm = branch_ctx
 
-    if kind == 'slot':
+    if kind in ('slot', 'round_sidewall'):
         # No published duct/neck size breakpoints exist for slot diffusers
         # (the standard gives capacity per slot length and open-slot count
         # instead), so there is nothing to size-match against. Fall back to
         # the main check rather than report the branch as unverifiable.
+        # Round sidewall diffusers have no table yet either; Colin plans to
+        # add round diffuser data later (2026-10-16).
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
         return label, cap, reason, None
 
@@ -2856,6 +2860,38 @@ def _target_plan_views(active_view, level_ids, sheets_by_view):
     return targets, missing
 
 
+def _open_view_range(view, base_lvl_id, low_lvl_id, top_z):
+    """Make one copied plan show a system that spans several levels.
+
+    The view's template is removed (the view keeps its current graphics; only
+    the copy is touched), the cut plane goes 1 ft above the highest element in
+    the system, the top is unlimited, and bottom and view depth go to the
+    lowest level the system reaches. Roofs, floors and ceilings are hidden in
+    the copy so the slabs between levels do not cover the ductwork below.
+    Tested live on OLMC 2026-10-16: 186 ducts from the RTU on the roof down
+    to the main level diffusers in one view.
+    """
+    base_lvl = doc.GetElement(base_lvl_id)
+    view.ViewTemplateId = ElementId.InvalidElementId
+    vr = view.GetViewRange()
+    vr.SetLevelId(PlanViewPlane.TopClipPlane, PlanViewRange.Unlimited)
+    vr.SetLevelId(PlanViewPlane.CutPlane, base_lvl_id)
+    vr.SetOffset(PlanViewPlane.CutPlane, top_z - base_lvl.Elevation + 1.0)
+    vr.SetLevelId(PlanViewPlane.BottomClipPlane, low_lvl_id)
+    vr.SetOffset(PlanViewPlane.BottomClipPlane, 0.0)
+    vr.SetLevelId(PlanViewPlane.ViewDepthPlane, low_lvl_id)
+    vr.SetOffset(PlanViewPlane.ViewDepthPlane, 0.0)
+    view.SetViewRange(vr)
+    for bic in (BuiltInCategory.OST_Roofs, BuiltInCategory.OST_Floors,
+                BuiltInCategory.OST_Ceilings):
+        try:
+            cat = Category.GetCategory(doc, bic)
+            if cat is not None and view.CanCategoryBeHidden(cat.Id):
+                view.SetCategoryHidden(cat.Id, True)
+        except Exception as ex:
+            output.print_md(':warning: Could not hide {} in the copied plan: {}'.format(bic, ex))
+
+
 def _file_like_source_sheet(new_sheet, source_sheet):
     """Put a new sheet in the same Project Browser folder as its source sheet
     by copying each parameter the sheet browser organization groups by
@@ -3353,17 +3389,47 @@ def main():
         lid = _elem_level_id(dr.elem)
         if lid is not None:
             level_ids[eid_int(lid)] = lid
-    targets, missing_levels = _target_plan_views(active_view, level_ids, sheets_by_view)
-    for lvl_eid, view, src_sheet in targets:
-        output.print_md('Plan for level **{}**: {} (source sheet **{}**)'.format(
-            _level_name(doc.GetElement(lvl_eid)) if lvl_eid is not None else '?',
-            _view_name(view),
-            src_sheet.SheetNumber if src_sheet is not None else 'none'))
-    for lvl_eid in missing_levels:
-        output.print_md(
-            ':warning: No mechanical plan on a sheet for level **{}**. Its ducts '
-            'are in the table but not colored on any plan.'.format(
-                _level_name(doc.GetElement(lvl_eid))))
+    level_targets, missing_levels = _target_plan_views(active_view, level_ids, sheets_by_view)
+
+    # The whole system goes on ONE plan (Colin, 2026-10-16): the lowest
+    # level's mechanical plan, with its view range raised over every element
+    # in the system when more than one level is involved, so the RTU on the
+    # roof and the diffusers below are colored in the same view.
+    def _lvl_elev(item):
+        try:
+            return doc.GetElement(item[0]).Elevation
+        except Exception:
+            return float('inf')
+    level_targets.sort(key=_lvl_elev)
+    base_lvl, base_view, base_sheet = level_targets[0]
+    multi_level = len(level_targets) > 1
+    targets = [(None, base_view, base_sheet)]
+
+    system_top_z = None
+    for _nid, _el in all_nodes.items():
+        try:
+            bb = _el.get_BoundingBox(None)
+        except Exception:
+            bb = None
+        if bb is not None and (system_top_z is None or bb.Max.Z > system_top_z):
+            system_top_z = bb.Max.Z
+
+    # Lowest level any duct sits on: the view range bottom goes there, so a
+    # level with no mechanical plan of its own is still drawn in this one.
+    system_low_lvl = None
+    for _lid in level_ids.values():
+        lv = doc.GetElement(_lid)
+        if lv is not None and (system_low_lvl is None or
+                               lv.Elevation < doc.GetElement(system_low_lvl).Elevation):
+            system_low_lvl = _lid
+    if system_low_lvl is not None and base_lvl is not None and \
+            doc.GetElement(system_low_lvl).Elevation < doc.GetElement(base_lvl).Elevation:
+        multi_level = True
+
+    output.print_md('Plan: **{}** (source sheet **{}**){}'.format(
+        _view_name(base_view),
+        base_sheet.SheetNumber if base_sheet is not None else 'none',
+        ', view range opened to show every level of the system' if multi_level else ''))
 
     # 6. Title block and solid fill
     tb_list = list(FilteredElementCollector(doc)
@@ -3424,8 +3490,11 @@ def main():
         fitting_counts = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0, 'GRAY': 0}
 
         for nid, elem in all_nodes.items():
+            # Equipment too (Colin, 2026-10-16: color every connected piece,
+            # duct, fitting, damper, diffuser, unit).
             if not (hvac_graph.is_fitting_or_accessory(elem)
-                    or hvac_graph.is_terminal(elem)):
+                    or hvac_graph.is_terminal(elem)
+                    or hvac_graph.is_equipment(elem)):
                 continue
             # Worst color among the nearest ducts, walking through any
             # fittings/accessories in between (a takeoff next to an elbow has
@@ -3562,6 +3631,10 @@ def main():
                 new_view.Name = base_name
             except Exception:
                 new_view.Name = base_name + ' (2)'
+
+            if multi_level and system_top_z is not None and base_lvl is not None:
+                _open_view_range(new_view, base_lvl, system_low_lvl or base_lvl,
+                                 system_top_z)
 
             for oid, lbl_key in elem_labels.items():
                 new_view.SetElementOverrides(oid, ogs_by_label[lbl_key])

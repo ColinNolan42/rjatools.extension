@@ -280,7 +280,7 @@ def terminal_connector_geometry(elem):
         log.info('terminal_connector_geometry: id=%s NOT FOUND (no ConnectorManager)', eid)
         return None, None
     try:
-        for c in cm.Connectors:
+        for c in _terminal_connectors_neck_first(cm):
             try:
                 shape = c.Shape
             except Exception as ex:
@@ -305,6 +305,64 @@ def terminal_connector_geometry(elem):
     return None, None
 
 
+def _terminal_connectors_neck_first(cm):
+    """A terminal's HVAC connectors, the connected ones first.
+
+    The RJA slot family carries a leftover rectangular connector that is never
+    connected and reports UndefinedSystemType. Reading connectors in
+    collection order picked it about half the time, so the same slot was
+    judged as a ceiling diffuser on one run and a sidewall grille on the next
+    (OLMC, 2026-10-16). The connector a duct is actually attached to is the
+    neck; anything unconnected is only a fallback.
+    """
+    connected, loose = [], []
+    for c in cm.Connectors:
+        try:
+            if c.Domain != Domain.DomainHvac:
+                continue
+            (connected if c.IsConnected else loose).append(c)
+        except Exception:
+            continue
+    return connected + loose
+
+
+def _terminal_neck_is_horizontal(elem):
+    """True when the terminal's neck connector points sideways (a sidewall
+    unit), False when it points up or down (a ceiling unit), None if unknown.
+    Read from Connector.CoordinateSystem.BasisZ, the connector's flow axis.
+    Confirmed on OLMC 2026-10-16: sidewall families read Z = 0."""
+    cm = _connector_manager(elem)
+    if cm is None:
+        return None
+    for c in _terminal_connectors_neck_first(cm):
+        try:
+            return abs(c.CoordinateSystem.BasisZ.Z) < 0.5
+        except Exception:
+            continue
+    return None
+
+
+# Parameters only the slot diffuser family carries (Titus ML/MLR content).
+# Parameter names, not family or Type names, which have been renamed many
+# times. The slot's neck used to be Oval and was converted to Round on
+# 2026-09-14, so connector shape alone no longer identifies a slot (Colin
+# chose the parameter route, 2026-10-16).
+_SLOT_MARKER_PARAMS = ('Selected Number of Slots', "Select Diffuser's Number of Slots")
+
+
+def _is_slot_diffuser(elem):
+    for name in _SLOT_MARKER_PARAMS:
+        for holder in (elem, getattr(elem, 'Symbol', None)):
+            if holder is None:
+                continue
+            try:
+                if holder.LookupParameter(name) is not None:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 _SHAPE_TO_CATEGORY = {
     'round': 'ceiling',
     'oval':  'slot',
@@ -314,22 +372,31 @@ _SHAPE_TO_CATEGORY = {
 
 def classify_diffuser_branch(elem):
     """Which diffuser sizing table applies to this terminal: 'ceiling',
-    'sidewall', 'slot', or None.
+    'sidewall', 'slot', 'round_sidewall', or None.
 
-    A thin mapping over terminal_connector_geometry()'s shape — round neck is
-    a ceiling diffuser/grate, oval neck is a slot diffuser, rectangular face
-    is a sidewall grille. No name matching and no aspect-ratio heuristic: a
-    rectangular face is a sidewall grille whatever its proportions, and the
-    oval/round distinction is what separates slot from ceiling.
+    - A slot is recognised by a slot-only parameter first (its neck is now
+      round), then by an oval neck.
+    - Otherwise the connected neck's shape decides: rectangular face is a
+      sidewall grille, round neck is a ceiling diffuser, unless that round
+      neck points sideways, which is a round sidewall diffuser
+      ('round_sidewall'). The standard has no round sidewall table yet, so
+      callers send it to the main velocity/friction check (Colin, 2026-10-16;
+      round diffuser data is to be added later).
 
     None means the terminal has no readable connection geometry, so no table
     can be chosen. Callers must treat that as "cannot check", not as a pass.
     """
+    eid = eid_int(elem.Id)
+    if _is_slot_diffuser(elem):
+        log.info('classify_diffuser_branch: id=%s slot (slot-only parameter)', eid)
+        return 'slot'
     kind = terminal_connector_geometry(elem)[0]
     cat  = _SHAPE_TO_CATEGORY.get(kind)
+    if cat == 'ceiling' and _terminal_neck_is_horizontal(elem):
+        log.info('classify_diffuser_branch: id=%s round neck, horizontal -> round_sidewall', eid)
+        return 'round_sidewall'
     if cat is None:
-        log.info('classify_diffuser_branch: id=%s NOT CLASSIFIED (no connector geometry)',
-                 eid_int(elem.Id))
+        log.info('classify_diffuser_branch: id=%s NOT CLASSIFIED (no connector geometry)', eid)
     return cat
 
 
@@ -438,11 +505,23 @@ def terminal_family_name(elem):
         return 'Unknown'
 
 def terminal_sys_class(elem):
+    """The terminal's System Classification, without 'Undefined'.
+
+    Revit lists one entry per connector, so a terminal with a spare,
+    unconnected connector reads e.g. 'Supply Air,Undefined', which matches no
+    diffuser table and turned whole slot branches gray (OLMC, 2026-10-16).
+    """
     p = elem.LookupParameter('System Classification')
     if p is not None:
         v = p.AsString()
         if v:
-            return v
+            parts = []
+            for s in v.split(','):
+                s = s.strip()
+                if s and s.lower() != 'undefined' and s not in parts:
+                    parts.append(s)
+            if parts:
+                return ','.join(parts)
     return 'Unknown'
 
 def elem_sys_class(elem):
@@ -856,7 +935,9 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
 
     geom         = terminal_connector_geometry(terminal_elem)
     kind         = geom[0]
-    res.category = _SHAPE_TO_CATEGORY.get(kind)
+    # Same classifier the caller used, so a slot or round sidewall can never
+    # be re-read here as a ceiling diffuser from its round neck.
+    res.category = classify_diffuser_branch(terminal_elem)
 
     if res.category not in ('ceiling', 'sidewall'):
         res.status = 'GRAY'
