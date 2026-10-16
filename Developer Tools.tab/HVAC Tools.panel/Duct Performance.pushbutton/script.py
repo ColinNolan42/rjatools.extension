@@ -47,7 +47,7 @@ from pyrevit import script, forms
 from Autodesk.Revit.DB import (
     FilteredElementCollector, Transaction,
     BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
-    Viewport, ViewDuplicateOption, ElementId, XYZ,
+    Viewport, ViewDuplicateOption, ElementId, XYZ, ViewPlan, BrowserOrganization,
     OverrideGraphicSettings, Color,
     TextNote, TextNoteOptions, TextNoteType,
     Line, ViewDrafting, ViewFamilyType, ViewFamily,
@@ -2736,6 +2736,165 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
+def _view_name(view):
+    """View name via its built-in parameter (never .Name in IronPython)."""
+    try:
+        p = view.get_Parameter(BuiltInParameter.VIEW_NAME)
+        return (p.AsString() or '') if p is not None else ''
+    except Exception:
+        return ''
+
+
+def _level_name(level):
+    try:
+        p = level.get_Parameter(BuiltInParameter.DATUM_TEXT)
+        return (p.AsString() or '') if p is not None else ''
+    except Exception:
+        return ''
+
+
+def _elem_level_id(elem):
+    """Level an element is drawn on: a duct's Reference Level, else LevelId."""
+    try:
+        lvl = elem.ReferenceLevel
+        if lvl is not None:
+            return lvl.Id
+    except Exception:
+        pass
+    try:
+        lid = elem.LevelId
+        if lid is not None and lid != ElementId.InvalidElementId:
+            return lid
+    except Exception:
+        pass
+    return None
+
+
+def _sheets_by_view():
+    """int view id -> the ViewSheet it is placed on."""
+    out = {}
+    for sheet in FilteredElementCollector(doc).OfClass(ViewSheet):
+        for vpid in sheet.GetAllViewports():
+            vp = doc.GetElement(vpid)
+            if vp is not None:
+                out[eid_int(vp.ViewId)] = sheet
+    return out
+
+
+def _target_plan_views(active_view, level_ids, sheets_by_view):
+    """One floor plan per level the traversed ductwork sits on.
+
+    The view the tool was run from always covers its own level. Every other
+    level gets the floor plan on that level that is placed on a sheet, ranked:
+    same view template as the active view, then any 'RJA Mechanical' template,
+    then anything else on a sheet. Demolition plans and earlier Duct
+    Performance outputs are never picked (Colin, 2026-10-16: a roof plan run
+    stopped at the RTU boot because the main level was never drawn).
+
+    level_ids: int level id -> ElementId.
+    Returns ([(level ElementId, view, source sheet or None)], [missing level ElementIds]).
+    """
+    targets = []
+    active_lvl = None
+    try:
+        active_lvl = active_view.GenLevel.Id
+    except Exception:
+        pass
+    sheet = sheets_by_view.get(eid_int(active_view.Id))
+    targets.append((active_lvl, active_view, sheet))
+
+    candidates = {}
+    for v in FilteredElementCollector(doc).OfClass(ViewPlan):
+        try:
+            if v.IsTemplate or v.ViewType != ViewType.FloorPlan or v.GenLevel is None:
+                continue
+        except Exception:
+            continue
+        sh = sheets_by_view.get(eid_int(v.Id))
+        if sh is None:
+            continue
+        name = _view_name(v).upper()
+        if 'DEMO' in name or name.startswith('DUCT PERFORMANCE'):
+            continue
+        # Dependent views and anything Revit will not duplicate would throw
+        # inside the transaction and roll back the whole run.
+        try:
+            if v.GetPrimaryViewId() != ElementId.InvalidElementId:
+                continue
+            if not v.CanViewBeDuplicated(ViewDuplicateOption.Duplicate):
+                continue
+        except Exception:
+            continue
+        # Mechanical plans only: a level with nothing but a plumbing or
+        # lighting plan is reported as missing, never colored on that plan.
+        rank = 0
+        try:
+            tid = v.ViewTemplateId
+            if tid == active_view.ViewTemplateId and tid != ElementId.InvalidElementId:
+                rank = 2
+            elif tid != ElementId.InvalidElementId and \
+                    _view_name(doc.GetElement(tid)).upper().startswith('RJA MECHANICAL'):
+                rank = 1
+        except Exception:
+            pass
+        if rank == 0:
+            continue
+        lid = eid_int(v.GenLevel.Id)
+        best = candidates.get(lid)
+        if best is None or rank > best[0]:
+            candidates[lid] = (rank, v, sh)
+
+    missing = []
+    for lid, lvl_eid in sorted(level_ids.items()):
+        if active_lvl is not None and lid == eid_int(active_lvl):
+            continue
+        found = candidates.get(lid)
+        if found is None:
+            missing.append(lvl_eid)
+        else:
+            targets.append((lvl_eid, found[1], found[2]))
+    return targets, missing
+
+
+def _file_like_source_sheet(new_sheet, source_sheet):
+    """Put a new sheet in the same Project Browser folder as its source sheet
+    by copying each parameter the sheet browser organization groups by
+    (Colin, 2026-10-16: every new sheet goes into the sheet organization).
+    Best effort: a failure here never stops the run."""
+    if source_sheet is None:
+        return
+    try:
+        bo = BrowserOrganization.GetCurrentBrowserOrganizationForSheets(doc)
+        for info in bo.GetFolderItems(source_sheet.Id):
+            # FolderItemInfo.ElementId is the grouping parameter's id
+            # (confirmed via Revit MCP 2026-10-16: 'Category' on OLMC).
+            pid = info.ElementId
+            if eid_int(pid) in (int(BuiltInParameter.SHEET_NUMBER),
+                                int(BuiltInParameter.SHEET_NAME)):
+                continue
+            src = None
+            for p in source_sheet.Parameters:
+                if p.Id == pid:
+                    src = p
+                    break
+            if src is None:
+                continue
+            for p in new_sheet.Parameters:
+                if p.Id == pid and not p.IsReadOnly:
+                    if src.StorageType == StorageType.String:
+                        p.Set(src.AsString() or '')
+                    elif src.StorageType == StorageType.Integer:
+                        p.Set(src.AsInteger())
+                    elif src.StorageType == StorageType.Double:
+                        p.Set(src.AsDouble())
+                    elif src.StorageType == StorageType.ElementId:
+                        p.Set(src.AsElementId())
+                    break
+    except Exception as ex:
+        output.print_md(':warning: Could not file sheet {} in the sheet browser: {}'.format(
+            new_sheet.SheetNumber, ex))
+
+
 def main():
     output.print_md('## Duct Performance')
     output.print_md('_Tip: run HVAC Diagnose first to verify CFM values and network._')
@@ -3184,16 +3343,27 @@ def main():
     output.print_md('### System Summary')
     output.print_code('\n'.join(summary_lines[1:]))
 
-    # 5. Find source sheet number
-    source_sheet_num = 'NoSheet'
-    for sheet in FilteredElementCollector(doc).OfClass(ViewSheet):
-        for vpid in sheet.GetAllViewports():
-            vp = doc.GetElement(vpid)
-            if vp is not None and vp.ViewId == active_view.Id:
-                source_sheet_num = sheet.SheetNumber
-                break
-
-    output.print_md('Source sheet: **{}**'.format(source_sheet_num))
+    # 5. One plan per level the ductwork reaches, each with its source sheet.
+    # The view the tool was run from covers its own level; a roof plan run
+    # otherwise stopped at the RTU boot, because the main level ductwork was
+    # checked but never drawn.
+    sheets_by_view = _sheets_by_view()
+    level_ids = {}
+    for eid, dr in all_duct_results.items():
+        lid = _elem_level_id(dr.elem)
+        if lid is not None:
+            level_ids[eid_int(lid)] = lid
+    targets, missing_levels = _target_plan_views(active_view, level_ids, sheets_by_view)
+    for lvl_eid, view, src_sheet in targets:
+        output.print_md('Plan for level **{}**: {} (source sheet **{}**)'.format(
+            _level_name(doc.GetElement(lvl_eid)) if lvl_eid is not None else '?',
+            _view_name(view),
+            src_sheet.SheetNumber if src_sheet is not None else 'none'))
+    for lvl_eid in missing_levels:
+        output.print_md(
+            ':warning: No mechanical plan on a sheet for level **{}**. Its ducts '
+            'are in the table but not colored on any plan.'.format(
+                _level_name(doc.GetElement(lvl_eid))))
 
     # 6. Title block and solid fill
     tb_list = list(FilteredElementCollector(doc)
@@ -3202,9 +3372,8 @@ def main():
     tb_id   = tb_list[0].Id if len(tb_list) > 0 else ElementId.InvalidElementId
     fill_id = hvac_graph.solid_fill_pattern_id(doc)
 
-    # 7. Text height: aim for 5/64" printed size at the view's print scale
-    view_scale = getattr(active_view, 'Scale', 48)
-    text_h_ft  = (5.0 / (64.0 * 12.0)) * float(view_scale)
+    # 7. Marker offset (5/64" printed, x2) is worked out per copied plan from
+    # that plan's own scale, inside the transaction below.
 
     # 8. Transaction: copy view → color overrides → FPM annotations → sheet
     t = Transaction(doc, 'Duct Performance')
@@ -3212,14 +3381,9 @@ def main():
     ts = datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')
 
     try:
-        # Copy floor plan
-        new_vid  = active_view.Duplicate(ViewDuplicateOption.Duplicate)
-        new_view = doc.GetElement(new_vid)
-        base_name = 'Duct Performance - {} - {}'.format(source_sheet_num, ts)
-        try:
-            new_view.Name = base_name
-        except Exception:
-            new_view.Name = base_name + ' (2)'
+        # ElementId -> color label for every duct, fitting, accessory and
+        # diffuser. Worked out once, then applied to every copied plan below.
+        elem_labels = {}
 
         # Color overrides — worst of velocity check and friction check
         counts         = {'GREEN': 0, 'YELLOW': 0, 'RED': 0, 'PURPLE': 0, 'GRAY': 0}
@@ -3244,13 +3408,7 @@ def main():
             if reason == 'Diffuser/Duct Clearance':
                 clearance_count += 1
             counts[label] = counts.get(label, 0) + 1
-            color = _COLOR_MAP[label]
-            ogs   = OverrideGraphicSettings()
-            ogs.SetSurfaceForegroundPatternColor(color)
-            if fill_id != ElementId.InvalidElementId:
-                ogs.SetSurfaceForegroundPatternId(fill_id)
-            ogs.SetProjectionLineColor(color)
-            new_view.SetElementOverrides(eid, ogs)
+            elem_labels[eid] = label
 
         # Color fittings, accessories and diffusers by worst nearby duct color
         adj = {}
@@ -3299,13 +3457,7 @@ def main():
                 frontier = nxt
             if worst is None:
                 worst = 'GRAY'
-            color = _COLOR_MAP[worst]
-            ogs   = OverrideGraphicSettings()
-            ogs.SetSurfaceForegroundPatternColor(color)
-            if fill_id != ElementId.InvalidElementId:
-                ogs.SetSurfaceForegroundPatternId(fill_id)
-            ogs.SetProjectionLineColor(color)
-            new_view.SetElementOverrides(elem.Id, ogs)
+            elem_labels[elem.Id] = worst
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
 
         # Numbered callout markers on yellow/red ducts (placed in view)
@@ -3349,127 +3501,187 @@ def main():
             keynote_sym.Activate()
             doc.Regenerate()
 
-        for idx, (lbl, dr, _cells) in enumerate(flagged_items, 1):
+        ogs_by_label = {}
+        for lbl_key, color in _COLOR_MAP.items():
+            ogs = OverrideGraphicSettings()
+            ogs.SetSurfaceForegroundPatternColor(color)
+            if fill_id != ElementId.InvalidElementId:
+                ogs.SetSurfaceForegroundPatternId(fill_id)
+            ogs.SetProjectionLineColor(color)
+            ogs_by_label[lbl_key] = ogs
+
+        # A marker is only placed in the plan for the level its element is
+        # on, so a main level duct never gets a circle drawn on the roof plan.
+        def _on_level(elem, lvl_eid):
+            if lvl_eid is None:
+                return True
+            lid = _elem_level_id(elem)
+            return lid is None or lid == lvl_eid
+
+        # Viewport type "None" for the schedule, found once. Best-effort only:
+        # cosmetic, must never break the whole tool if this lookup misbehaves
+        # (confirmed AttributeError on vp_type.Name here even though the
+        # identical query works fine outside pyRevit's IronPython).
+        # FilteredElementCollector on OST_Viewports + WhereElementIsElementType
+        # misses this system-family type entirely (confirmed via MCP inspection).
+        none_vp_type_id = None
+        try:
+            for vp in FilteredElementCollector(doc).OfClass(Viewport):
+                vp_type = doc.GetElement(vp.GetTypeId())
+                if vp_type is None:
+                    continue
+                vp_type_name = vp_type.Name
+                if vp_type_name is not None and vp_type_name.strip().lower() == 'none':
+                    none_vp_type_id = vp_type.Id
+                    break
+        except Exception:
+            pass
+
+        new_sheets = []
+        used_keys  = set()
+        for lvl_eid, src_view, src_sheet in targets:
+            source_sheet_num = src_sheet.SheetNumber if src_sheet is not None else 'NoSheet'
+            # Two plans off the same sheet would give a duplicate sheet number
+            # and roll the whole run back, so the second one gets its level.
+            if source_sheet_num in used_keys and lvl_eid is not None:
+                source_sheet_num = '{}-{}'.format(
+                    source_sheet_num, _level_name(doc.GetElement(lvl_eid)))
+            n = 2
+            base_key = source_sheet_num
+            while source_sheet_num in used_keys:
+                source_sheet_num = '{}-{}'.format(base_key, n)
+                n += 1
+            used_keys.add(source_sheet_num)
+            mark_off_ft = (5.0 / (64.0 * 12.0)) * float(getattr(src_view, 'Scale', 48)) * 2.0
+
+            # Copy floor plan
+            new_vid  = src_view.Duplicate(ViewDuplicateOption.Duplicate)
+            new_view = doc.GetElement(new_vid)
+            base_name = 'Duct Performance - {} - {}'.format(source_sheet_num, ts)
             try:
-                mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
-                if keynote_sym is not None:
-                    inst      = doc.Create.NewFamilyInstance(mid_pt, keynote_sym, new_view)
-                    num_param = inst.LookupParameter('Label')
-                    if num_param and not num_param.IsReadOnly:
-                        if num_param.StorageType == StorageType.String:
-                            num_param.Set(str(idx))
-                        elif num_param.StorageType == StorageType.Integer:
-                            num_param.Set(idx)
-                elif tn_type_id is not None:
-                    opts = TextNoteOptions(tn_type_id)
-                    TextNote.Create(doc, new_vid, mid_pt, '({})'.format(idx), opts)
+                new_view.Name = base_name
             except Exception:
-                pass
+                new_view.Name = base_name + ' (2)'
 
-        # Most-restrictive-diffuser markers — circled "R" next to the
-        # terminal each equipment/system's index run ends at (see
-        # restrictive_terminal_ids above). Placed on top of the diffuser's
-        # real pass/fail color, never in place of it: a restrictive diffuser
-        # that also fails its own check still shows red, with an R beside it.
-        # Reuses the same keynote-circle family as the numbered callouts
-        # above (falls back to plain '(R)' text the same way, including
-        # where the family's Label param is an integer and can't hold a
-        # letter).
-        for tid in sorted(restrictive_terminal_ids):
-            term_elem = all_nodes.get(tid)
-            if term_elem is None:
-                continue
-            try:
-                r_pt = term_elem.Location.Point
-            except Exception:
-                continue
-            if r_pt is None:
-                continue
-            # Offset off the diffuser symbol itself so the marker doesn't
-            # sit directly on top of it.
-            mark_pt = XYZ(r_pt.X + text_h_ft * 2.0, r_pt.Y + text_h_ft * 2.0, r_pt.Z)
-            try:
-                placed = False
-                if keynote_sym is not None:
-                    inst      = doc.Create.NewFamilyInstance(mark_pt, keynote_sym, new_view)
-                    num_param = inst.LookupParameter('Label')
-                    if num_param and not num_param.IsReadOnly and num_param.StorageType == StorageType.String:
-                        num_param.Set('R')
-                        placed = True
-                    else:
-                        doc.Delete(inst.Id)
-                if not placed and tn_type_id is not None:
-                    opts = TextNoteOptions(tn_type_id)
-                    TextNote.Create(doc, new_vid, mark_pt, '(R)', opts)
-            except Exception:
-                pass
+            for oid, lbl_key in elem_labels.items():
+                new_view.SetElementOverrides(oid, ogs_by_label[lbl_key])
 
-        # Output sheet
-        new_sheet             = ViewSheet.Create(doc, tb_id)
-        new_sheet.SheetNumber = 'DV-{}-{}'.format(source_sheet_num, ts)
-        # Sheet/View names share one uniqueness pool in Revit — new_view above
-        # already claimed base_name verbatim, so reusing it here always collides.
-        new_sheet.Name = base_name + ' (Sheet)'
-
-        # Place viewport
-        # Fixed center, positioned by hand in Revit on the Elevation Volleyball
-        # DV-M101 sheet, then read back and hardcoded here via Revit MCP.
-        #
-        # Both Viewport.Create's placement point AND an immediate SetBoxCenter
-        # right after Create landed (2.282, 1.55) off the intended center,
-        # same exact offset both times, confirmed via MCP across three
-        # separate generated sheets. Root cause: the diagram view's crop
-        # region isn't settled yet at that point in the transaction, so any
-        # box-center call made before a Regenerate() computes against a
-        # stale/uncommitted crop extent. Regenerate() first, then
-        # SetBoxCenter, to get the box center actually applied.
-        diagram_vp = Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0, 0, 0))
-        doc.Regenerate()
-        diagram_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
-
-        # System Summary + flagged-duct table + legend, placed as second viewport on sheet
-        if tn_type_id is not None:
-            sched_view, content_h, total_w = _build_summary_view(
-                doc, summary_lines, [item[2] for item in flagged_items],
-                selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
-                show_r_marker_note=bool(restrictive_terminal_ids))
-            if sched_view is not None:
-                # X fixed by hand in Revit (see diagram note above) and read
-                # back via Revit MCP. Y keeps the original bottom-anchored,
-                # grows-upward-with-content_h behavior, just re-anchored to
-                # match the hand-placed bottom edge on that same sheet.
-                #
-                # Viewport.Create positions by CENTER, so the table's left edge
-                # is what has to be pinned — a table of a different width
-                # centered on the old point would drift sideways off the
-                # anchor. The table width is no longer fixed (the column picker
-                # changes it every run), so the left edge is stored instead and
-                # the center derived from it. The literal below is the original
-                # hand-placed center of -1.014 minus half the then-fixed table
-                # width of 1.360, i.e. the same left edge as before.
-                _SCHED_LEFT_EDGE_X = -1.014 - 1.360 / 2.0
-                sched_x         = _SCHED_LEFT_EDGE_X + total_w / 2.0
-                bottom_margin_y = 1.546
-                sched_y  = bottom_margin_y + content_h / 2.0
-                sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
-                                           XYZ(sched_x, sched_y, 0))
-                # No title/border on this viewport — use the "None" Viewport Type if
-                # present. FilteredElementCollector on OST_Viewports + WhereElementIsElementType
-                # misses this system-family type entirely (confirmed via MCP inspection).
-                # Best-effort only: cosmetic, must never break the whole tool if this
-                # lookup misbehaves (confirmed AttributeError on vp_type.Name here even
-                # though the identical query works fine outside pyRevit's IronPython).
+            # Numbered callouts, one sequence across every level so circle 3
+            # is row 3 of the schedule whichever sheet it is on.
+            for idx, (lbl, dr, _cells) in enumerate(flagged_items, 1):
+                if not _on_level(dr.elem, lvl_eid):
+                    continue
                 try:
-                    for vp in FilteredElementCollector(doc).OfClass(Viewport):
-                        vp_type = doc.GetElement(vp.GetTypeId())
-                        if vp_type is None:
-                            continue
-                        vp_type_name = vp_type.Name
-                        if vp_type_name is not None and vp_type_name.strip().lower() == 'none':
-                            sched_vp.ChangeTypeId(vp_type.Id)
-                            break
+                    mid_pt = dr.elem.Location.Curve.Evaluate(0.5, True)
+                    if keynote_sym is not None:
+                        inst      = doc.Create.NewFamilyInstance(mid_pt, keynote_sym, new_view)
+                        num_param = inst.LookupParameter('Label')
+                        if num_param and not num_param.IsReadOnly:
+                            if num_param.StorageType == StorageType.String:
+                                num_param.Set(str(idx))
+                            elif num_param.StorageType == StorageType.Integer:
+                                num_param.Set(idx)
+                    elif tn_type_id is not None:
+                        opts = TextNoteOptions(tn_type_id)
+                        TextNote.Create(doc, new_vid, mid_pt, '({})'.format(idx), opts)
                 except Exception:
                     pass
+
+            # Most-restrictive-diffuser markers — circled "R" next to the
+            # terminal each equipment/system's index run ends at (see
+            # restrictive_terminal_ids above). Placed on top of the diffuser's
+            # real pass/fail color, never in place of it: a restrictive diffuser
+            # that also fails its own check still shows red, with an R beside it.
+            # Reuses the same keynote-circle family as the numbered callouts
+            # above (falls back to plain '(R)' text the same way, including
+            # where the family's Label param is an integer and can't hold a
+            # letter).
+            for tid in sorted(restrictive_terminal_ids):
+                term_elem = all_nodes.get(tid)
+                if term_elem is None or not _on_level(term_elem, lvl_eid):
+                    continue
+                try:
+                    r_pt = term_elem.Location.Point
+                except Exception:
+                    continue
+                if r_pt is None:
+                    continue
+                # Offset off the diffuser symbol itself so the marker doesn't
+                # sit directly on top of it.
+                mark_pt = XYZ(r_pt.X + mark_off_ft, r_pt.Y + mark_off_ft, r_pt.Z)
+                try:
+                    placed = False
+                    if keynote_sym is not None:
+                        inst      = doc.Create.NewFamilyInstance(mark_pt, keynote_sym, new_view)
+                        num_param = inst.LookupParameter('Label')
+                        if num_param and not num_param.IsReadOnly and num_param.StorageType == StorageType.String:
+                            num_param.Set('R')
+                            placed = True
+                        else:
+                            doc.Delete(inst.Id)
+                    if not placed and tn_type_id is not None:
+                        opts = TextNoteOptions(tn_type_id)
+                        TextNote.Create(doc, new_vid, mark_pt, '(R)', opts)
+                except Exception:
+                    pass
+
+            # Output sheet
+            new_sheet             = ViewSheet.Create(doc, tb_id)
+            new_sheet.SheetNumber = 'DV-{}-{}'.format(source_sheet_num, ts)
+            # Sheet/View names share one uniqueness pool in Revit — new_view above
+            # already claimed base_name verbatim, so reusing it here always collides.
+            new_sheet.Name = base_name + ' (Sheet)'
+            _file_like_source_sheet(new_sheet, src_sheet)
+            new_sheets.append(new_sheet)
+
+            # Place viewport
+            # Fixed center, positioned by hand in Revit on the Elevation Volleyball
+            # DV-M101 sheet, then read back and hardcoded here via Revit MCP.
+            #
+            # Both Viewport.Create's placement point AND an immediate SetBoxCenter
+            # right after Create landed (2.282, 1.55) off the intended center,
+            # same exact offset both times, confirmed via MCP across three
+            # separate generated sheets. Root cause: the diagram view's crop
+            # region isn't settled yet at that point in the transaction, so any
+            # box-center call made before a Regenerate() computes against a
+            # stale/uncommitted crop extent. Regenerate() first, then
+            # SetBoxCenter, to get the box center actually applied.
+            diagram_vp = Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0, 0, 0))
+            doc.Regenerate()
+            diagram_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
+
+            # System Summary + flagged-duct table + legend, placed as second
+            # viewport on every sheet (the table covers all levels).
+            if tn_type_id is not None:
+                sched_view, content_h, total_w = _build_summary_view(
+                    doc, summary_lines, [item[2] for item in flagged_items],
+                    selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
+                    show_r_marker_note=bool(restrictive_terminal_ids))
+                if sched_view is not None:
+                    # X fixed by hand in Revit (see diagram note above) and read
+                    # back via Revit MCP. Y keeps the original bottom-anchored,
+                    # grows-upward-with-content_h behavior, just re-anchored to
+                    # match the hand-placed bottom edge on that same sheet.
+                    #
+                    # Viewport.Create positions by CENTER, so the table's left edge
+                    # is what has to be pinned — a table of a different width
+                    # centered on the old point would drift sideways off the
+                    # anchor. The table width is no longer fixed (the column picker
+                    # changes it every run), so the left edge is stored instead and
+                    # the center derived from it. The literal below is the original
+                    # hand-placed center of -1.014 minus half the then-fixed table
+                    # width of 1.360, i.e. the same left edge as before.
+                    _SCHED_LEFT_EDGE_X = -1.014 - 1.360 / 2.0
+                    sched_x         = _SCHED_LEFT_EDGE_X + total_w / 2.0
+                    bottom_margin_y = 1.546
+                    sched_y  = bottom_margin_y + content_h / 2.0
+                    sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
+                                               XYZ(sched_x, sched_y, 0))
+                    if none_vp_type_id is not None:
+                        try:
+                            sched_vp.ChangeTypeId(none_vp_type_id)
+                        except Exception:
+                            pass
 
         t.Commit()
     except Exception as ex:
@@ -3482,7 +3694,8 @@ def main():
     # 9. Summary
     output.print_md('---')
     output.print_md('## Done')
-    output.print_md('Sheet **{}** created.'.format(new_sheet.SheetNumber))
+    for s in new_sheets:
+        output.print_md('Sheet **{}** created.'.format(s.SheetNumber))
     output.print_md('')
     output.print_md('**Mains and branches were checked by different methods.** '
                     'A duct is a branch when exactly one terminal is reachable '
@@ -3579,7 +3792,8 @@ def main():
         output.print_md('### All Ducts' if full_diag else '### Flagged Ducts')
         output.print_code('\n'.join(rows))
 
-    uidoc.ActiveView = new_sheet
+    if new_sheets:
+        uidoc.ActiveView = new_sheets[0]
 
 
 main()
