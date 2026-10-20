@@ -467,17 +467,11 @@ def _init_recirc(win, return_detection):
 # ---------------------------------------------------------------------------
 
 _PERF_BODY = (
-    _section('Outputs', 10) +
-    _hint('Read only: nothing is written to the pipes. The results go on a new '
-          'sheet; with Pipe size and velocity ticked, that sheet carries a '
-          'colored copy of the active plan and the color legend.', '0,0,0,6') +
-    '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
-    ' ToolTip="The take-off prints in the pyRevit window either way."/>' +
-    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
-          'sheet.', '20,0,0,0') +
-
-    _section('Checks') +
-    _hint('Tick at least one check.', '0,0,0,4') +
+    _section('Checks', 10) +
+    _hint('Read only: nothing is written to the pipes. Tick at least one. The '
+          'results go on a new sheet; with Pipe size and velocity ticked, that '
+          'sheet carries a colored copy of the active plan and the color '
+          'legend.', '0,0,0,6') +
     '<CheckBox x:Name="cb_velocity" IsChecked="True"'
     ' Content="Pipe size and velocity"/>'
     '<StackPanel Orientation="Horizontal" Margin="20,4,0,0">'
@@ -523,6 +517,10 @@ _PERF_BODY = (
           'setter and devices. Used only if the piping picked has a return.',
           '0,4,0,0') +
     '</StackPanel>' +
+    '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
+    ' Margin="0,6,0,0" ToolTip="The take-off prints in the pyRevit window either way."/>' +
+    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
+          'sheet.', '20,0,0,0') +
 
     _PROJECT_XAML +
     _RECIRC_XAML +
@@ -593,10 +591,10 @@ def show_water_performance_dialog(title, project_info, use_theme=True):
     def collect(errors):
         cb_velocity = _named(win, 'cb_velocity')
         if not (cb_velocity.IsChecked or cb_pressure.IsChecked or
-                cb_pump.IsChecked):
+                cb_pump.IsChecked or cb_wsfu.IsChecked):
             errors.append((None, 'Tick at least one check: pipe size and '
-                                 'velocity, pressure loss or the pump duty '
-                                 'point.'))
+                                 'velocity, pressure loss, the pump duty '
+                                 'point or WSFU Calculations.'))
             return None
         tolerance = _number(tb_tolerance, 'Yellow tolerance', errors,
                             kind='nonneg', maximum=100)
