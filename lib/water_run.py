@@ -52,12 +52,12 @@ def run(doc, uidoc, output, forms):
     output.print_md("# Size Water")
 
     settings = ui_helpers.show_water_dialog(
-        "Size Water - 2024 IPC", _project_info(doc, output), None)
+        "Size Water - 2024 IPC", project_info(doc, output), None)
     if settings is None:
         output.print_md("Cancelled. Nothing was changed.")
         return False
 
-    origin, upstream = _pick_origin(uidoc, doc, output, forms)
+    origin, upstream = pick_origin(uidoc, doc, output, forms)
     if origin is None:
         return False
 
@@ -144,7 +144,7 @@ ORIGIN_RPZ = "RPZ"
 ORIGIN_TEE = "New pipe connection (TEE)"
 
 
-def _pick_origin(uidoc, doc, output, forms):
+def pick_origin(uidoc, doc, output, forms):
     """Pick where the run starts.
 
     Returns (origin element, upstream). upstream is None for an RPZ, and what
@@ -249,7 +249,7 @@ def _tee_origin(tee, doc, output, forms):
     return tee, upstream
 
 
-def _project_info(doc, output):
+def project_info(doc, output):
     """Prefill the report header from Revit Project Information."""
     info = {"job": "", "job_number": "", "by": ""}
     try:
