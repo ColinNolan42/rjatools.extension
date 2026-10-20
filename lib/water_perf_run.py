@@ -26,6 +26,8 @@ import water_tables
 import water_performance
 import water_run
 import water_drafting
+import water_pressure
+import water_pump
 import hvac_graph
 import ui_helpers
 
@@ -97,14 +99,45 @@ def run(doc, uidoc, output, forms):
                         "changed.")
         return False
 
+    if settings.get("pressure_loss") or settings.get("pump_duty"):
+        _read_device_drops(graph)
+    # Each extra check fails on its own: an error here is printed and the
+    # colored view and report the user asked for still get made.
+    pressure = None
+    if settings.get("pressure_loss"):
+        try:
+            pressure = water_pressure.analyze(graph, sizing,
+                                              settings["start_psi"])
+        except Exception as exc:
+            output.print_md(":warning: Pressure loss failed, not reported: "
+                            "{}".format(str(exc)))
+    pumps = None
+    if settings.get("pump_duty") and recirc is not None:
+        try:
+            pumps = water_pump.duty_points(
+                graph, recirc, settings["circuit_setter_psi"],
+                settings["pump_safety_factor"])
+        except Exception as exc:
+            output.print_md(":warning: Pump duty point failed, not reported: "
+                            "{}".format(str(exc)))
+
     fitting_labels = _fitting_labels(graph, results)
     stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
     new_view = _make_colored_view(doc, output, view, graph, results,
                                   fitting_labels, stamp)
     _print_report(output, results, sizing, settings["speed_tolerance"])
+    if pressure is not None:
+        _print_pressure(output, pressure, settings["start_psi"])
+    if pumps:
+        _print_pumps(output, pumps, settings)
+    elif settings.get("pump_duty"):
+        output.print_md("No hot water return was found, so there is no "
+                        "recirculation pump duty point.")
+    extra = [t for t in (_pressure_table(pressure, settings["start_psi"]),
+                         _pump_table(pumps, settings)) if t]
     if new_view is not None:
         _make_sheet(doc, output, view, new_view, results, stamp,
-                    settings["speed_tolerance"])
+                    settings["speed_tolerance"], extra)
 
     if settings["wsfu_calcs"]:
         header = {
@@ -236,8 +269,99 @@ _TABLE_COLUMNS = [("STATUS", 0.075), ("PIPE", 0.075), ("SYSTEM", 0.065),
                   ("FPS", 0.045), ("REASON", 0.560)]
 
 
+def _read_device_drops(graph):
+    """Device_Pressure_Drop_PSI from every non-pipe element, instance first,
+    then Type, onto node.device_drop_psi for water_pressure."""
+    for node in graph.nodes.values():
+        if node.kind in (water_graph.KIND_PIPE, water_graph.KIND_FIXTURE,
+                         water_graph.KIND_ORIGIN) or node.element is None:
+            continue
+        value = revit_helpers.get_parameter_value(
+            node.element, shared_params.PARAM_DEVICE_PRESSURE_DROP)
+        if value is None:
+            value = revit_helpers.get_type_parameter_value(
+                node.element, shared_params.PARAM_DEVICE_PRESSURE_DROP)
+        try:
+            node.device_drop_psi = float(value) if value else None
+        except (TypeError, ValueError):
+            node.device_drop_psi = None
+
+
+def _print_pressure(output, pressure, start_psi):
+    output.print_md("## Pressure loss")
+    critical = pressure["critical"]
+    if critical is not None:
+        output.print_md(
+            "Critical outlet: **{}** ({}), {:.1f} psi left against {:.0f} psi "
+            "required, margin **{:+.1f} psi**.".format(
+                critical.fixture_name,
+                "hot" if critical.system == water_pressure.HOT else "cold",
+                critical.residual_psi, critical.required_psi,
+                critical.margin_psi))
+    for warning in pressure["warnings"]:
+        output.print_md(":warning: " + warning)
+    output.print_table(
+        table_data=water_pressure.table_rows(pressure),
+        title="Pressure at each fixture outlet, worst first (psi)",
+        columns=[c[0].title() for c in water_pressure.TABLE_COLUMNS])
+    notes = sorted(set(n for o in pressure["outlets"] for n in o.notes))
+    if notes:
+        output.print_md("Not counted or assumed:\n" +
+                        "\n".join("- " + n for n in notes[:40]))
+    output.print_md("\n".join(
+        "    " + line for line in water_pressure.basis_lines(start_psi)))
+
+
+def _pressure_table(pressure, start_psi):
+    """The pressure section for the sheet, or None."""
+    if pressure is None:
+        return None
+    notes = list(pressure["warnings"])
+    critical = pressure["critical"]
+    if critical is not None:
+        notes.insert(0, "CRITICAL OUTLET: {} {}, MARGIN {:+.1f} PSI".format(
+            critical.fixture_name,
+            "HW" if critical.system == water_pressure.HOT else "CW",
+            critical.margin_psi))
+    notes.extend(water_pressure.basis_lines(start_psi))
+    return ("PRESSURE LOSS - 2024 IPC E103.3, TABLE 604.3 (PSI)",
+            water_pressure.TABLE_COLUMNS, water_pressure.table_rows(pressure),
+            notes)
+
+
+def _print_pumps(output, pumps, settings):
+    output.print_md("## Recirculation pump duty point")
+    for p in pumps:
+        output.print_md(
+            "Heater **{}**: **{:.1f} gpm at {:.1f} ft head** (index circuit "
+            "leg {}).".format(p["root_id"], p["gpm"], p["head_ft"],
+                              p["index_leg"]))
+    output.print_table(
+        table_data=water_pump.table_rows(pumps),
+        title="Pump duty point, index circuit breakdown",
+        columns=[c[0].title() for c in water_pump.TABLE_COLUMNS])
+    notes = sorted(set(n for p in pumps for c in p["circuits"]
+                       for n in c["notes"]))
+    if notes:
+        output.print_md("Not counted:\n" + "\n".join("- " + n for n in notes))
+    output.print_md("\n".join("    " + line for line in water_pump.basis_lines(
+        settings["circuit_setter_psi"], settings["pump_safety_factor"])))
+
+
+def _pump_table(pumps, settings):
+    """The pump section for the sheet, or None."""
+    if not pumps:
+        return None
+    notes = ["HEATER {}: {:.1f} GPM AT {:.1f} FT HEAD".format(
+        p["root_id"], p["gpm"], p["head_ft"]) for p in pumps]
+    notes.extend(water_pump.basis_lines(settings["circuit_setter_psi"],
+                                        settings["pump_safety_factor"]))
+    return ("RECIRCULATION PUMP DUTY POINT", water_pump.TABLE_COLUMNS,
+            water_pump.table_rows(pumps), notes)
+
+
 def _make_sheet(doc, output, source_view, plan_view, results, stamp,
-                tolerance):
+                tolerance, extra_tables=None):
     """Put the colored plan, the flagged table and the legend on a new sheet.
 
     Its own transaction, so a missing title block or text type costs the
@@ -263,7 +387,7 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
         fill_id = hvac_graph.solid_fill_pattern_id(doc)
         table_view, table_h, table_w = water_drafting.build_performance_view(
             doc, "Water Performance Table - {}".format(stamp), summary,
-            _TABLE_COLUMNS, rows, legend, fill_id)
+            _TABLE_COLUMNS, rows, legend, fill_id, extra_tables or None)
         sheet = water_drafting.place_plan_and_table(
             doc, plan_view, table_view, table_h, table_w,
             "WP-{}-{}".format(source_number, stamp),

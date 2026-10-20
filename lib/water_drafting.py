@@ -18,7 +18,8 @@ from Autodesk.Revit.DB import (
     XYZ, Line, TextNote, TextNoteOptions, TextNoteType,
     ViewDrafting, ViewFamily, ViewFamilyType, ViewSheet, Viewport,
     FilteredElementCollector, BuiltInCategory, CurveLoop, FilledRegion,
-    FilledRegionType, OverrideGraphicSettings, ElementId)
+    FilledRegionType, OverrideGraphicSettings, ElementId, Color,
+    FillPatternElement, BuiltInParameter, HorizontalTextAlignment)
 
 import water_report
 import water_tables
@@ -36,12 +37,43 @@ GAP = 0.020        # gap between blocks
 
 CHART_WIDTHS = (0.090, 0.160, 0.150, 0.120)   # firm pipe sizing chart
 
+# RJA table look (Colin, 2026-10-20: "a little bit more flair"). RJA blue is
+# the theme colour sampled from the logo (#0070C0), the same one the dialogs
+# use, so the sheets and the dialogs read as one product.
+RJA_BLUE = (0, 112, 192)
+HEAD_FILL = (221, 235, 247)     # header rows, label cells
+ZEBRA_FILL = (244, 247, 251)    # every other body row
+TOTALS_FILL = (189, 215, 238)   # totals row
+WHITE = (255, 255, 255)
+BAND_H = 0.036                  # title band, about 7/16 in
+SUB_BAND_H = 0.028              # section band, about 11/32 in
+OUTER_WEIGHT = 5                # outer border line weight
+
+# Drafting view versions of the take-off headers, two rows like the firm
+# WFUTO template: a group row over the per fixture and extended columns.
+_WSFU_GROUPS = [("", 2), ("PER FIXTURE (WSFU)", 3), ("EXTENDED (WSFU)", 3)]
+_WSFU_HEADERS = {"fixture": "FIXTURE TYPE**", "qty": "QUANTITY",
+                 "cold_ea": "COLD", "hot_ea": "HOT", "total_ea": "TOTAL",
+                 "cold_ext": "COLD", "hot_ext": "HOT", "total_ext": "TOTAL"}
+
+# Footnotes from the firm template (Template_WSFU CALCS.xlsx, WFUTO C60:C61).
+WSFU_FOOTNOTES = [
+    "* For fixtures not listed, loads should be assumed by comparing the "
+    "fixture to one listed using similar quantities of water and similar "
+    "rates. The assigned loads for fixtures with both hot and cold water "
+    "supplies are given for separate hot and cold water loads and for total "
+    "load, the separate hot and cold water loads being three-fourths of the "
+    "total load for the fixture in each case.",
+    "** PUBLIC = COMMERCIAL BUILDINGS.  PRIVATE = RESIDENTIAL BUILDINGS.",
+]
+
 
 def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
                     recirc=None):
-    """Create a Drafting View holding the header, the firm
-    pipe sizing chart, the WSFU take-off table and, when the system has a
-    return, the hot water recirculation sizing.
+    """Create a Drafting View holding the WSFU take-off in the firm WFUTO
+    layout: title band, job block, the two row header take-off table with
+    totals and footnotes, the design loads, the firm pipe sizing chart and,
+    when the system has a return, the hot water recirculation sizing.
 
     Args:
         doc: the Revit Document. Must already be inside a Transaction.
@@ -49,176 +81,383 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
         header: dict with "date", "job", "job_number", "by".
         sizing_result: optional, adds a one-line sizing summary.
         view_name: optional explicit name.
-        recirc: optional, what water_recirc.analyze returned. Adds the
-            circuit setter table, total return length and temperature drops.
+        recirc: optional, what water_recirc.analyze returned.
 
     Returns:
         (ViewDrafting, content_height_ft, content_width_ft), or (None, 0, 0)
         if the view could not be created.
     """
-    drafting_type_id = _drafting_view_type_id(doc)
-    if drafting_type_id is None:
+    view = _new_drafting_view(doc, view_name or _default_view_name(header))
+    if view is None:
         return None, 0.0, 0.0
+    st = _Style(doc)
 
-    text_type_id = _text_note_type_id(doc)
-    if text_type_id is None:
-        return None, 0.0, 0.0
-
-    try:
-        view = ViewDrafting.Create(doc, drafting_type_id)
-        view.Scale = 1
-    except Exception:
-        return None, 0.0, 0.0
-
-    _name_view(view, view_name or _default_view_name(header))
-
-    opts = TextNoteOptions(text_type_id)
     columns = water_report.WSFU_COLUMNS
-    widths = [c[2] for c in columns]
-    total_w = sum(widths, 0.0)
-
+    width = sum([c[2] for c in columns], 0.0)
     ox = 0.0
     y = 0.0
 
-    # --- Title -------------------------------------------------------------
-    _text(doc, view, ox, y - PAD, water_report.WSFU_TITLE, opts)
-    y -= TEXT_H + GAP / 2.0
+    # --- Title band and job block ------------------------------------------
+    y = _band(st, view, ox, y, width, "WATER FIXTURE UNIT (WFU) TAKE OFF",
+              "2024 INTERNATIONAL PLUMBING CODE", BAND_H)
+    label_w = 0.090
+    value_w = (width - 2.0 * label_w) / 2.0
+    y = _info_grid(st, view, ox, y, [label_w, value_w, label_w, value_w], [
+        ["DATE", header.get("date", ""), "JOB NO.", header.get("job_number", "")],
+        ["JOB", header.get("job", ""), "BY", header.get("by", "")],
+    ])
+    y -= GAP
 
-    # --- Header block ------------------------------------------------------
-    for label, key in (("DATE:", "date"), ("JOB:", "job"),
-                       ("JOB NO.:", "job_number"), ("BY:", "by")):
-        value = header.get(key, "") or ""
-        _text(doc, view, ox, y - PAD, "{}  {}".format(label, value), opts)
-        y -= TEXT_H
+    # --- The take-off ------------------------------------------------------
+    y = _band(st, view, ox, y, width, "WATER SUPPLY FIXTURE UNITS*",
+              "BASIS 2024 IPC TABLE E103.3(2)", SUB_BAND_H)
+    data = water_report.wsfu_data(graph)
+    rows = [[row.get(c[0], "") for c in columns] for row in data["rows"]]
+    if rows:
+        totals = [data["totals"].get(c[0], "") for c in columns]
+        y = _styled_table(st, view, ox, y,
+                          [(_WSFU_HEADERS[c[0]], c[2]) for c in columns],
+                          rows + [totals], groups=_WSFU_GROUPS,
+                          totals_row=True)
+    else:
+        y = _styled_table(st, view, ox, y,
+                          [(_WSFU_HEADERS[c[0]], c[2]) for c in columns],
+                          [["No water fixtures found on the traversed "
+                            "network."] + [""] * (len(columns) - 1)],
+                          groups=_WSFU_GROUPS)
+    y -= PAD
+    for note in WSFU_FOOTNOTES:
+        for wrapped in _wrap(note, 125):
+            _t(st, view, ox, y, wrapped)
+            y -= TEXT_H
+
+    # --- Design loads ------------------------------------------------------
     y -= GAP / 2.0
-
-    # The basis of design is not printed on the drafting view (Colin,
-    # 2026-10-13): the sheet already states it. The pyRevit window report and
-    # the dialog still carry it.
+    load_lines = list(water_report.wsfu_load_lines(data))
+    if sizing_result is not None:
+        totals = sizing_result["totals"]
+        load_lines.append("Pipes sized: {} of {}.  Total length {:.1f} ft.".format(
+            totals["sized_count"], totals["pipe_count"],
+            float(totals["total_length_ft"])))
+        if totals["unsized_count"]:
+            load_lines.append("{} pipe(s) NOT sized - see the pyRevit window "
+                              "for the reason on each.".format(
+                                  totals["unsized_count"]))
+    if load_lines:
+        y = _band(st, view, ox, y, width, "DESIGN LOAD", None, SUB_BAND_H)
+        y = _note_panel(st, view, ox, y, width, load_lines)
 
     # --- Firm pipe sizing chart --------------------------------------------
     # The same rows the sizing looked each pipe up in.
     chart = water_tables.sizing_chart()
-    _text(doc, view, ox, y - PAD, "FIRM PIPE SIZING CHART", opts)
-    y -= TEXT_H
-    y = _draw_table(doc, view, ox, y, list(zip(chart["headers"], CHART_WIDTHS)),
-                    chart["rows"], opts)
+    chart_w = sum(CHART_WIDTHS, 0.0)
     y -= GAP
-
-    # --- The table ---------------------------------------------------------
-    data = water_report.wsfu_data(graph)
-    rows = data["rows"]
-
-    col_xs = [ox]
-    for w in widths:
-        col_xs.append(col_xs[-1] + w)
-
-    table_top = y
-    row_count = len(rows) + (1 if rows else 0)   # data rows plus the totals row
-    total_h = HEAD_H + ROW_H * max(row_count, 1)
-
-    row_tops = [table_top, table_top - HEAD_H]
-    for _ in range(max(row_count, 1)):
-        row_tops.append(row_tops[-1] - ROW_H)
-
-    for line_y in row_tops:
-        _hline(doc, view, ox, ox + total_w, line_y)
-    for x in col_xs:
-        _vline(doc, view, x, table_top, table_top - total_h)
-
-    for index, column in enumerate(columns):
-        _text(doc, view, col_xs[index], table_top - PAD, column[1], opts)
-
-    if rows:
-        body = rows + [data["totals"]]
-        for row_index, row in enumerate(body):
-            cell_y = row_tops[row_index + 1] - PAD
-            for col_index, column in enumerate(columns):
-                value = row.get(column[0], "")
-                # TextNote.Create rejects an empty string, and a blank cell is
-                # a real outcome here (a water closet has no hot column), so
-                # the cell is left genuinely empty.
-                if not value:
-                    continue
-                _text(doc, view, col_xs[col_index], cell_y, value, opts)
-    else:
-        _text(doc, view, ox, row_tops[1] - PAD,
-              "No water fixtures found on the traversed network.", opts)
-
-    y = table_top - total_h - GAP / 2.0
-
-    # --- Sizing loads ------------------------------------------------------
-    for line in water_report.wsfu_load_lines(data):
-        _text(doc, view, ox, y - PAD, line, opts)
-        y -= TEXT_H
-
-    if sizing_result is not None:
-        totals = sizing_result["totals"]
-        y -= GAP / 2.0
-        _text(doc, view, ox, y - PAD,
-              "Pipes sized: {} of {}.  Total length {:.1f} ft.".format(
-                  totals["sized_count"], totals["pipe_count"],
-                  float(totals["total_length_ft"])), opts)
-        y -= TEXT_H
-        if totals["unsized_count"]:
-            _text(doc, view, ox, y - PAD,
-                  "{} pipe(s) NOT sized - see the pyRevit window for the "
-                  "reason on each.".format(totals["unsized_count"]), opts)
-            y -= TEXT_H
+    y = _band(st, view, ox, y, chart_w, "FIRM PIPE SIZING CHART", None,
+              SUB_BAND_H)
+    y = _styled_table(st, view, ox, y,
+                      list(zip(chart["headers"], CHART_WIDTHS)),
+                      chart["rows"])
 
     # --- Hot water recirculation sizing ------------------------------------
     if recirc is not None and recirc["legs"]:
+        rdata = water_report.recirc_data(recirc)
+        rcols = water_report.RECIRC_COLUMNS
+        rwidth = sum([c[2] for c in rcols], 0.0)
+        width = max(width, rwidth)
         y -= GAP
-        data = water_report.recirc_data(recirc)
-        _text(doc, view, ox, y - PAD, water_report.RECIRC_TITLE, opts)
-        y -= TEXT_H
-        for line in data["basis"]:
-            for wrapped in _wrap(line, 110):
-                _text(doc, view, ox, y - PAD, wrapped, opts)
-                y -= TEXT_H
-        y -= GAP / 2.0
-        columns = water_report.RECIRC_COLUMNS
-        y = _draw_table(doc, view, ox, y, [(c[1], c[2]) for c in columns],
-                        [[row[c[0]] for c in columns] for row in data["rows"]],
-                        opts)
-        y -= GAP / 2.0
-        for line in data["summary"]:
-            _text(doc, view, ox, y - PAD, line, opts)
+        y = _band(st, view, ox, y, rwidth, water_report.RECIRC_TITLE, None,
+                  SUB_BAND_H)
+        y = _note_panel(st, view, ox, y, rwidth, rdata["basis"])
+        y = _styled_table(st, view, ox, y, [(c[1], c[2]) for c in rcols],
+                          [[row[c[0]] for c in rcols] for row in rdata["rows"]])
+        y -= PAD
+        for line in rdata["summary"]:
+            _t(st, view, ox, y, line, "bold")
             y -= TEXT_H
-        total_w = max(total_w, sum([c[2] for c in columns], 0.0))
 
-    return view, (0.0 - y), total_w
+    return view, (0.0 - y), max(width, chart_w)
 
 
-def _draw_table(doc, view, ox, top, columns, rows, opts):
-    """A gridded table: columns is [(header, width)], rows is [[cell, ...]].
+# ---------------------------------------------------------------------------
+# Styled drawing
+# ---------------------------------------------------------------------------
 
-    Returns the y of the table's bottom edge.
+class _Style(object):
+    """Text types, solid fill and filled region type for one drafting view.
+
+    Three RJA text types are made once per project by duplicating the
+    project's first text type: "RJA Table Text", "RJA Table Bold" and "RJA
+    Table Title" (bold, white, 1/8 in). All have a transparent background so
+    the shaded rows show through. If a type cannot be made the project's
+    first text type is used instead, so the table still draws.
+    """
+
+    def __init__(self, doc):
+        self.doc = doc
+        base = _text_note_type_id(doc)
+        self.types = {
+            "text": _ensure_text_type(doc, base, "RJA Table Text"),
+            "bold": _ensure_text_type(doc, base, "RJA Table Bold", bold=True),
+            "title": _ensure_text_type(doc, base, "RJA Table Title",
+                                       bold=True, rgb=WHITE,
+                                       size_ft=1.0 / 8.0 / 12.0),
+        }
+        self.fill_id = _solid_fill_id(doc)
+        self.region_type_id = None
+        for frt in FilteredElementCollector(doc).OfClass(FilledRegionType):
+            self.region_type_id = frt.Id
+            break
+
+
+def _t(st, view, x, y, value, kind="text", align="left"):
+    """A TextNote whose origin is the TOP of the text box, flowing down.
+    align "center" or "right" puts x at the middle or right of the text."""
+    if not value:
+        return None
+    try:
+        opts = TextNoteOptions(st.types[kind])
+        if align == "center":
+            opts.HorizontalAlignment = HorizontalTextAlignment.Center
+        elif align == "right":
+            opts.HorizontalAlignment = HorizontalTextAlignment.Right
+        pad = PAD if align == "left" else (-PAD if align == "right" else 0.0)
+        return TextNote.Create(st.doc, view.Id, XYZ(x + pad, y - PAD, 0.0),
+                               str(value), opts)
+    except Exception:
+        return None
+
+
+def _fill(st, view, x0, top, x1, bottom, rgb):
+    """A solid filled rectangle drawn in rgb, edges in the same colour."""
+    if st.region_type_id is None or x1 <= x0 or top <= bottom:
+        return
+    pts = [XYZ(x0, bottom, 0.0), XYZ(x1, bottom, 0.0),
+           XYZ(x1, top, 0.0), XYZ(x0, top, 0.0)]
+    loop = CurveLoop()
+    for i in range(4):
+        loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+    try:
+        region = FilledRegion.Create(st.doc, st.region_type_id, view.Id, [loop])
+        color = Color(rgb[0], rgb[1], rgb[2])
+        ogs = OverrideGraphicSettings()
+        ogs.SetSurfaceForegroundPatternColor(color)
+        ogs.SetProjectionLineColor(color)
+        if st.fill_id != ElementId.InvalidElementId:
+            ogs.SetSurfaceForegroundPatternId(st.fill_id)
+        view.SetElementOverrides(region.Id, ogs)
+    except Exception:
+        pass
+
+
+def _line(st, view, x0, y0, x1, y1, weight=None):
+    try:
+        curve = st.doc.Create.NewDetailCurve(
+            view, Line.CreateBound(XYZ(x0, y0, 0.0), XYZ(x1, y1, 0.0)))
+        if weight:
+            ogs = OverrideGraphicSettings()
+            ogs.SetProjectionLineWeight(weight)
+            view.SetElementOverrides(curve.Id, ogs)
+    except Exception:
+        pass
+
+
+def _band(st, view, ox, top, width, title, right_text, height):
+    """RJA blue band with a white title, optional text at its right end.
+    Returns the y of its bottom edge."""
+    bottom = top - height
+    _fill(st, view, ox, top, ox + width, bottom, RJA_BLUE)
+    inset = (height - TEXT_H) / 2.0
+    _t(st, view, ox, top - inset + PAD, title, "title")
+    if right_text:
+        _t(st, view, ox + width, top - inset + PAD, right_text, "title",
+           "right")
+    return bottom
+
+
+def _info_grid(st, view, ox, top, widths, rows):
+    """Label / value grid: even columns are shaded bold labels."""
+    xs = [ox]
+    for w in widths:
+        xs.append(xs[-1] + w)
+    bottom = top - ROW_H * len(rows)
+    for r, row in enumerate(rows):
+        row_top = top - ROW_H * r
+        for c, value in enumerate(row):
+            label = (c % 2 == 0)
+            if label:
+                _fill(st, view, xs[c], row_top, xs[c + 1], row_top - ROW_H,
+                      HEAD_FILL)
+            _t(st, view, xs[c], row_top, value, "bold" if label else "text")
+    for r in range(len(rows) + 1):
+        _line(st, view, ox, top - ROW_H * r, xs[-1], top - ROW_H * r)
+    for x in xs:
+        _line(st, view, x, top, x, bottom)
+    _outline(st, view, ox, top, xs[-1], bottom)
+    return bottom
+
+
+def _note_panel(st, view, ox, top, width, lines, chars=None):
+    """Plain lines in a lightly shaded, outlined panel. Returns its bottom."""
+    wrapped = []
+    for line in lines:
+        wrapped.extend(_wrap(line, chars or int(width / 0.0062)))
+    bottom = top - TEXT_H * len(wrapped) - 2.0 * PAD
+    _fill(st, view, ox, top, ox + width, bottom, ZEBRA_FILL)
+    y = top - PAD
+    for line in wrapped:
+        _t(st, view, ox, y, line)
+        y -= TEXT_H
+    _outline(st, view, ox, top, ox + width, bottom)
+    return bottom
+
+
+def _outline(st, view, x0, top, x1, bottom):
+    for a, b in (((x0, top), (x1, top)), ((x1, top), (x1, bottom)),
+                 ((x1, bottom), (x0, bottom)), ((x0, bottom), (x0, top))):
+        _line(st, view, a[0], a[1], b[0], b[1], OUTER_WEIGHT)
+
+
+def _styled_table(st, view, ox, top, columns, rows, groups=None,
+                  totals_row=False, left_cols=(0,)):
+    """A gridded table in the RJA look.
+
+    columns: [(header, width)]. rows: [[cell, ...]]. groups: optional
+    [(label, column span)] drawn as a row above the headers. With totals_row
+    the last row is shaded and bold. Columns in left_cols are left aligned,
+    the rest centred. Returns the y of the bottom edge.
     """
     widths = [c[1] for c in columns]
-    total_w = sum(widths, 0.0)
-    col_xs = [ox]
+    xs = [ox]
     for w in widths:
-        col_xs.append(col_xs[-1] + w)
+        xs.append(xs[-1] + w)
+    right = xs[-1]
 
-    row_tops = [top, top - HEAD_H]
+    head_top = top
+    if groups:
+        group_bottom = top - ROW_H
+        _fill(st, view, ox, top, right, group_bottom, HEAD_FILL)
+        col = 0
+        for label, span in groups:
+            x0, x1 = xs[col], xs[col + span]
+            if label:
+                _t(st, view, (x0 + x1) / 2.0, top, label, "bold", "center")
+                _line(st, view, x0, group_bottom, x1, group_bottom)
+            _line(st, view, x0, top, x0, group_bottom)
+            col += span
+        head_top = group_bottom
+
+    head_bottom = head_top - HEAD_H
+    _fill(st, view, ox, head_top, right, head_bottom, HEAD_FILL)
+    row_tops = [head_bottom]
     for _ in rows:
         row_tops.append(row_tops[-1] - ROW_H)
     bottom = row_tops[-1]
 
-    for line_y in row_tops:
-        _hline(doc, view, ox, ox + total_w, line_y)
-    for x in col_xs:
-        _vline(doc, view, x, top, bottom)
+    last = len(rows) - 1
+    for r in range(len(rows)):
+        if totals_row and r == last:
+            _fill(st, view, ox, row_tops[r], right, row_tops[r + 1],
+                  TOTALS_FILL)
+        elif r % 2 == 1:
+            _fill(st, view, ox, row_tops[r], right, row_tops[r + 1],
+                  ZEBRA_FILL)
 
-    for index, column in enumerate(columns):
-        _text(doc, view, col_xs[index], top - PAD, column[0], opts)
-    for row_index, row in enumerate(rows):
-        for col_index, value in enumerate(row):
-            if value:   # TextNote.Create rejects an empty string
-                _text(doc, view, col_xs[col_index],
-                      row_tops[row_index + 1] - PAD, value, opts)
+    _line(st, view, ox, head_bottom, right, head_bottom)
+    for y in row_tops[1:-1]:
+        _line(st, view, ox, y, right, y)
+    if totals_row and rows:
+        _line(st, view, ox, row_tops[last], right, row_tops[last], 3)
+    for x in xs[1:-1]:
+        _line(st, view, x, head_top, x, bottom)
+    _outline(st, view, ox, top, right, bottom)
+
+    for c, column in enumerate(columns):
+        if c in left_cols:
+            _t(st, view, xs[c], head_top, column[0], "bold")
+        else:
+            _t(st, view, (xs[c] + xs[c + 1]) / 2.0, head_top, column[0],
+               "bold", "center")
+    for r, row in enumerate(rows):
+        kind = "bold" if (totals_row and r == last) else "text"
+        for c, value in enumerate(row):
+            if not value:   # TextNote.Create rejects an empty string
+                continue
+            if c in left_cols:
+                _t(st, view, xs[c], row_tops[r], value, kind)
+            else:
+                _t(st, view, (xs[c] + xs[c + 1]) / 2.0, row_tops[r], value,
+                   kind, "center")
     return bottom
+
+
+def _ensure_text_type(doc, base_id, name, bold=False, rgb=None, size_ft=None):
+    """The TextNoteType called name, made from base_id when missing.
+
+    I believe TEXT_STYLE_BOLD, LINE_COLOR (BGR packed int), TEXT_BACKGROUND
+    (1 = transparent) and TEXT_SIZE are the right BuiltInParameters; each is
+    set on its own so one that does not apply only loses that one look.
+    Falls back to base_id.
+    """
+    if base_id is None:
+        return None
+    for tnt in FilteredElementCollector(doc).OfClass(TextNoteType):
+        try:
+            p = tnt.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)
+            if p is not None and p.AsString() == name:
+                return tnt.Id
+        except Exception:
+            continue
+    try:
+        new_type = doc.GetElement(base_id).Duplicate(name)
+    except Exception:
+        return base_id
+    settings = [(BuiltInParameter.TEXT_BACKGROUND, 1),
+                (BuiltInParameter.TEXT_STYLE_BOLD, 1 if bold else 0)]
+    if rgb is not None:
+        settings.append((BuiltInParameter.LINE_COLOR,
+                         rgb[0] + rgb[1] * 256 + rgb[2] * 65536))
+    if size_ft is not None:
+        settings.append((BuiltInParameter.TEXT_SIZE, float(size_ft)))
+    for bip, value in settings:
+        try:
+            p = new_type.get_Parameter(bip)
+            if p is not None and not p.IsReadOnly:
+                p.Set(value)
+        except Exception:
+            pass
+    # Fallback for the colour: the Type Properties "Color" parameter by name,
+    # in case LINE_COLOR is not the one that holds it in this Revit version.
+    if rgb is not None:
+        try:
+            p = new_type.LookupParameter("Color")
+            if p is not None and not p.IsReadOnly:
+                p.Set(rgb[0] + rgb[1] * 256 + rgb[2] * 65536)
+        except Exception:
+            pass
+    return new_type.Id
+
+
+def _solid_fill_id(doc):
+    for fp in FilteredElementCollector(doc).OfClass(FillPatternElement):
+        try:
+            if fp.GetFillPattern().IsSolidFill:
+                return fp.Id
+        except Exception:
+            pass
+    return ElementId.InvalidElementId
+
+
+def _new_drafting_view(doc, name):
+    drafting_type_id = _drafting_view_type_id(doc)
+    if drafting_type_id is None or _text_note_type_id(doc) is None:
+        return None
+    try:
+        view = ViewDrafting.Create(doc, drafting_type_id)
+        view.Scale = 1
+    except Exception:
+        return None
+    _name_view(view, name)
+    return view
 
 
 def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
@@ -266,7 +505,7 @@ def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
 
 
 def build_performance_view(doc, view_name, summary_lines, columns, rows,
-                           legend, fill_id):
+                           legend, fill_id, extra_tables=None):
     """Drafting view for Water Performance: summary, flagged table, legend.
 
     Args:
@@ -277,53 +516,62 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
         rows: [[cell text, ...]], already in display order. May be empty.
         legend: [(Revit Color, text)], one swatch row each.
         fill_id: solid fill pattern id, so the swatches match the plan.
+        extra_tables: optional [(title, columns, rows, note_lines)] drawn
+            after the legend, e.g. the pressure loss table.
 
     Returns:
         (ViewDrafting, content_height_ft, content_width_ft), or (None, 0, 0).
     """
-    drafting_type_id = _drafting_view_type_id(doc)
-    text_type_id = _text_note_type_id(doc)
-    if drafting_type_id is None or text_type_id is None:
+    view = _new_drafting_view(doc, view_name)
+    if view is None:
         return None, 0.0, 0.0
-    try:
-        view = ViewDrafting.Create(doc, drafting_type_id)
-        view.Scale = 1
-    except Exception:
-        return None, 0.0, 0.0
-    _name_view(view, view_name)
-
-    opts = TextNoteOptions(text_type_id)
-    ox = 0.0
-    y = 0.0
-    for line in summary_lines:
-        _text(doc, view, ox, y - PAD, line, opts)
-        y -= TEXT_H
-    y -= GAP / 2.0
-
-    if rows:
-        y = _draw_table(doc, view, ox, y, columns, rows, opts)
-    else:
-        _text(doc, view, ox, y - PAD, "Every judged pipe is at table size.",
-              opts)
-        y -= TEXT_H
-    y -= GAP
-
-    _text(doc, view, ox, y - PAD, "COLOR LEGEND", opts)
-    y -= HEAD_H
-    region_type_id = None
-    for frt in FilteredElementCollector(doc).OfClass(FilledRegionType):
-        region_type_id = frt.Id
-        break
-    swatch = 0.014
-    for color, meaning in legend:
-        if region_type_id is not None:
-            _legend_swatch(doc, view, region_type_id, ox + PAD,
-                           y - swatch - (ROW_H - swatch) / 2.0, swatch,
-                           color, fill_id)
-        _text(doc, view, ox + swatch + PAD * 2.0, y - PAD, meaning, opts)
-        y -= ROW_H
+    st = _Style(doc)
 
     width = sum([c[1] for c in columns], 0.0)
+    for _title, extra_columns, _rows, _notes in (extra_tables or []):
+        width = max(width, sum([c[1] for c in extra_columns], 0.0))
+    ox = 0.0
+    y = 0.0
+
+    # First summary line is the title, the rest sit in a panel under it.
+    title = summary_lines[0] if summary_lines else "WATER PERFORMANCE"
+    y = _band(st, view, ox, y, width, title, None, BAND_H)
+    if len(summary_lines) > 1:
+        y = _note_panel(st, view, ox, y, width, summary_lines[1:])
+    y -= GAP
+
+    y = _band(st, view, ox, y, width, "PIPES NEEDING ATTENTION", None,
+              SUB_BAND_H)
+    if rows:
+        y = _styled_table(st, view, ox, y, columns, rows,
+                          left_cols=(0, len(columns) - 1))
+    else:
+        y = _note_panel(st, view, ox, y, width,
+                        ["Every judged pipe is at table size."])
+    y -= GAP
+
+    # Legend: a swatch the plan colour, then its meaning, in an outlined box.
+    legend_w = min(width, 0.62)
+    y = _band(st, view, ox, y, legend_w, "COLOR LEGEND", None, SUB_BAND_H)
+    legend_top = y
+    swatch = 0.014
+    for color, meaning in legend:
+        if st.region_type_id is not None:
+            _legend_swatch(doc, view, st.region_type_id, ox + PAD * 2.0,
+                           y - swatch - (ROW_H - swatch) / 2.0, swatch,
+                           color, fill_id)
+        _t(st, view, ox + swatch + PAD * 3.0, y, meaning)
+        y -= ROW_H
+    _outline(st, view, ox, legend_top, ox + legend_w, y)
+
+    for title, extra_columns, extra_rows, notes in (extra_tables or []):
+        y -= GAP
+        table_w = sum([c[1] for c in extra_columns], 0.0)
+        y = _band(st, view, ox, y, table_w, title, None, SUB_BAND_H)
+        if extra_rows:
+            y = _styled_table(st, view, ox, y, extra_columns, extra_rows)
+        if notes:
+            y = _note_panel(st, view, ox, y, table_w, notes)
     return view, (0.0 - y), width
 
 
@@ -389,27 +637,6 @@ def _legend_swatch(doc, view, region_type_id, x0, y0, size, color, fill_id):
 # ---------------------------------------------------------------------------
 # Drawing primitives
 # ---------------------------------------------------------------------------
-
-def _hline(doc, view, x0, x1, y):
-    doc.Create.NewDetailCurve(
-        view, Line.CreateBound(XYZ(x0, y, 0.0), XYZ(x1, y, 0.0)))
-
-
-def _vline(doc, view, x, y0, y1):
-    doc.Create.NewDetailCurve(
-        view, Line.CreateBound(XYZ(x, y0, 0.0), XYZ(x, y1, 0.0)))
-
-
-def _text(doc, view, x, y, value, opts):
-    """A TextNote whose origin is the TOP of the text box, flowing down."""
-    if not value:
-        return None
-    try:
-        return TextNote.Create(doc, view.Id, XYZ(x + PAD, y, 0.0),
-                               str(value), opts)
-    except Exception:
-        return None
-
 
 def _wrap(text, width):
     """Wrap on spaces. The basis lines are long sentences and a drafting view

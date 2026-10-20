@@ -1,10 +1,12 @@
 title: Water Performance
 tooltip: >
   Open a floor plan, then pick the RPZ (or the tee on an existing main).
-  Makes a colored COPY of the view and writes nothing to the pipes.
-  Green: drawn size equals the firm table size. Yellow: at table size but the
-  computed speed is over the limit (8 fps cold, 5 fps hot and return).
-  Red: drawn smaller than the table. Purple: drawn larger. Gray: not judged.
-  The colored copy goes on a new sheet with the flagged pipe table and a
-  color legend. Flagged pipes and the basis of design also print to the
-  pyRevit window.
+  Read only: makes a colored COPY of the view on a new sheet and writes
+  nothing to the pipes.
+  Size and velocity: green at the firm table size, yellow at table size but
+  computed speed over the limit, red drawn smaller, purple drawn larger,
+  gray not judged.
+  Optional checks in the dialog: pressure loss at every fixture outlet
+  (2024 IPC E103.3, Table 604.3, from the pressure at the picked point),
+  the recirculation pump duty point (gpm and ft head), and the WSFU take-off
+  on its own drafting view and sheet.

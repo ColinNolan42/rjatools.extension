@@ -487,8 +487,42 @@ _PERF_BODY = (
     '<TextBlock Text="% over the speed limit" VerticalAlignment="Center"/>'
     '</StackPanel>' +
     _hint('', '20,4,0,6', name='tb_limits_note') +
-    '<CheckBox x:Name="cb_pressure" IsChecked="False" IsEnabled="False"'
-    ' Content="Pressure loss.  PENDING, under development."/>' +
+    '<CheckBox x:Name="cb_pressure" IsChecked="False" Content="Pressure loss"'
+    ' ToolTip="2024 IPC E103.3 segmented loss method, checked against Table 604.3."/>'
+    '<StackPanel x:Name="pnl_pressure" Margin="20,4,0,0" IsEnabled="False" Opacity="0.55">'
+    '<StackPanel Orientation="Horizontal">'
+    '<TextBlock Text="Pressure at start point" Width="150" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_start_psi" Width="72" Margin="0,0,6,0"'
+    ' ToolTip="Static pressure at the element you pick next. Shall be greater than 0."/>'
+    '<TextBlock Text="psi" VerticalAlignment="Center"/>'
+    '</StackPanel>' +
+    _hint('The pressure AT THE POINT YOU PICK: what the RPZ delivers (after its '
+          'loss), or the pressure in the existing main at the tee. Street, tap, '
+          'meter and RPZ losses are upstream of it and are not added again. '
+          'Each fixture outlet is checked against its Table 604.3 minimum.',
+          '0,4,0,0') +
+    '</StackPanel>' +
+
+    '<CheckBox x:Name="cb_pump" IsChecked="True" Margin="0,6,0,0"'
+    ' Content="Recirculation pump duty point"'
+    ' ToolTip="Flow and head for the pump at each water heater with a return."/>'
+    '<StackPanel x:Name="pnl_pump" Margin="20,4,0,0">'
+    '<StackPanel Orientation="Horizontal">'
+    '<TextBlock Text="Circuit setter drop" Width="150" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_setter_psi" Width="72" Margin="0,0,6,0"'
+    ' ToolTip="Design pressure drop across one circuit setter, from its submittal."/>'
+    '<TextBlock Text="psi" VerticalAlignment="Center"/>'
+    '</StackPanel>'
+    '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
+    '<TextBlock Text="Safety factor on head" Width="150" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_pump_sf" Width="72" Margin="0,0,6,0"/>'
+    '<TextBlock Text="%" VerticalAlignment="Center"/>'
+    '</StackPanel>' +
+    _hint('Flow is the circuit setter flows added at the heater. Head is the '
+          'friction round the worst circuit at circulation flow, plus the circuit '
+          'setter and devices. Used only if the piping picked has a return.',
+          '0,4,0,0') +
+    '</StackPanel>' +
 
     _PROJECT_XAML +
     _RECIRC_XAML +
@@ -522,6 +556,34 @@ def show_water_performance_dialog(title, project_info, use_theme=True):
         "return.".format(water_tables.velocity_limit_fps("cold"),
                          water_tables.velocity_limit_fps("hot")))
 
+    import water_pressure
+    cb_pressure = _named(win, 'cb_pressure')
+    pnl_pressure = _named(win, 'pnl_pressure')
+    tb_start_psi = _named(win, 'tb_start_psi')
+    tb_start_psi.Text = "{:.1f}".format(water_pressure.DEFAULT_START_PSI)
+
+    def on_pressure_toggled(sender, args):
+        on = bool(cb_pressure.IsChecked)
+        pnl_pressure.IsEnabled = on
+        pnl_pressure.Opacity = 1.0 if on else 0.55
+    cb_pressure.Checked += on_pressure_toggled
+    cb_pressure.Unchecked += on_pressure_toggled
+
+    import water_pump
+    cb_pump = _named(win, 'cb_pump')
+    pnl_pump = _named(win, 'pnl_pump')
+    tb_setter_psi = _named(win, 'tb_setter_psi')
+    tb_pump_sf = _named(win, 'tb_pump_sf')
+    tb_setter_psi.Text = "{:.1f}".format(water_pump.DEFAULT_CIRCUIT_SETTER_PSI)
+    tb_pump_sf.Text = "{:.0f}".format(water_pump.DEFAULT_SAFETY_FACTOR * 100.0)
+
+    def on_pump_toggled(sender, args):
+        on = bool(cb_pump.IsChecked)
+        pnl_pump.IsEnabled = on
+        pnl_pump.Opacity = 1.0 if on else 0.55
+    cb_pump.Checked += on_pump_toggled
+    cb_pump.Unchecked += on_pump_toggled
+
     project = _init_project(win, project_info)
     recirc = _init_recirc(win, None)
 
@@ -531,16 +593,33 @@ def show_water_performance_dialog(title, project_info, use_theme=True):
     def collect(errors):
         tolerance = _number(tb_tolerance, 'Yellow tolerance', errors,
                             kind='nonneg', maximum=100)
+        start_psi = None
+        if cb_pressure.IsChecked:
+            start_psi = _number(tb_start_psi, 'Pressure at start point',
+                                errors)
+        setter_psi, pump_sf = None, None
+        if cb_pump.IsChecked:
+            setter_psi = _number(tb_setter_psi, 'Circuit setter drop', errors,
+                                 kind='nonneg')
+            pump_sf = _number(tb_pump_sf, 'Safety factor', errors,
+                              kind='nonneg', maximum=100)
         values = recirc(errors)
         if errors:
             return None
         values.update(project())
         values["wsfu_calcs"] = bool(cb_wsfu.IsChecked)
         values["speed_tolerance"] = float(tolerance) / 100.0
+        values["pressure_loss"] = bool(cb_pressure.IsChecked)
+        values["start_psi"] = start_psi
+        values["pump_duty"] = bool(cb_pump.IsChecked)
+        values["circuit_setter_psi"] = setter_psi
+        values["pump_safety_factor"] = (pump_sf / 100.0
+                                        if pump_sf is not None else None)
         return values
 
-    return _run(win, [tb_tolerance, _named(win, 'tb_heat_loss'),
-                      _named(win, 'tb_delta_t')], collect)
+    return _run(win, [tb_tolerance, tb_start_psi, tb_setter_psi, tb_pump_sf,
+                      _named(win, 'tb_heat_loss'), _named(win, 'tb_delta_t')],
+                collect)
 
 
 # ---------------------------------------------------------------------------

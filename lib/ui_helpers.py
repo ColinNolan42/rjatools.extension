@@ -197,6 +197,9 @@ def show_water_performance_dialog(title, project_info):
         values = _show_water_dialog_legacy(title, project_info, None)
         if values is not None:
             values["speed_tolerance"] = water_performance.SPEED_TOLERANCE
+            values["pressure_loss"] = False
+            values["start_psi"] = None
+            values["pump_duty"] = False
         return values
 
     return sizer_dialogs.themed_or(
