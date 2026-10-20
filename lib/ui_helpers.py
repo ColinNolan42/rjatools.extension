@@ -208,6 +208,29 @@ def show_water_performance_dialog(title, project_info):
         legacy)
 
 
+def show_size_duct_dialog(title):
+    """The Size Duct dialog (RJA themed).
+
+    Fallback when no themed window can be built: run at the firm limits,
+    after saying so, rather than not run at all.
+    """
+    import sizer_dialogs
+    import hvac_graph
+    from pyrevit import forms
+
+    def legacy():
+        if not forms.alert("The Size Duct dialog could not open. Size the "
+                           "mains at the firm limits (SA 800 fpm / 0.08, "
+                           "RA EA 600 / 0.05, TA 400 / 0.05)?",
+                           title=title, yes=True, no=True):
+            return None
+        return {"limits": dict(hvac_graph.FIRM_DEFAULTS)}
+
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_size_duct_dialog(title, use_theme),
+        legacy)
+
+
 def show_start_point(title, rpz_label, tee_label):
     """RPZ or tee start point (RJA themed). Returns the label or None.
 

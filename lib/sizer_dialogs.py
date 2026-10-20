@@ -653,6 +653,113 @@ def show_start_point_dialog(title, rpz_label, tee_label, use_theme=True):
 
 
 # ---------------------------------------------------------------------------
+# Size Duct
+# ---------------------------------------------------------------------------
+
+# Systems in the limits grid, in display order. Keys match the duct System
+# Type names hvac_graph.FIRM_DEFAULTS uses, so the same limits drive Duct
+# Performance and Size Duct. No Outside Air row: Size Duct walks at equipment
+# level, which never reaches the outside air ductwork.
+DUCT_SYSTEMS = ['Supply Air', 'Return Air', 'Exhaust Air', 'Transfer Air']
+
+
+def _duct_limits_xaml():
+    rows = ''.join('<RowDefinition Height="Auto"/>'
+                   for _ in range(len(DUCT_SYSTEMS) + 1))
+    cells = ('<TextBlock Grid.Row="0" Grid.Column="1" FontWeight="SemiBold"'
+             ' Text="Max velocity (fpm)" Margin="0,0,12,4"/>'
+             '<TextBlock Grid.Row="0" Grid.Column="2" FontWeight="SemiBold"'
+             ' Text="Max friction (in. wc / 100 ft)" Margin="0,0,0,4"/>')
+    for i, name in enumerate(DUCT_SYSTEMS):
+        r = i + 1
+        cells += ('<TextBlock Grid.Row="%d" Text="%s" VerticalAlignment="Center"'
+                  ' Margin="0,2,12,2"/>'
+                  '<TextBox x:Name="tb_v_%d" Grid.Row="%d" Grid.Column="1"'
+                  ' Width="72" HorizontalAlignment="Left" Margin="0,2,12,2"/>'
+                  '<TextBox x:Name="tb_f_%d" Grid.Row="%d" Grid.Column="2"'
+                  ' Width="72" HorizontalAlignment="Left" Margin="0,2,0,2"/>'
+                  % (r, _q(name), i, r, i, r))
+    return ('<Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/>'
+            '<ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>'
+            '</Grid.ColumnDefinitions><Grid.RowDefinitions>' + rows +
+            '</Grid.RowDefinitions>' + cells + '</Grid>')
+
+
+_DUCT_BODY = (
+    _section('This run will', 10) +
+    '<CheckBox x:Name="cb_size" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
+    ' Content="Size every main and write the sizes into the model"/>' +
+    _hint('Always on. Mains only (two or more terminals downstream). Ducts first, '
+          'then the elbows, dampers and endcaps between two mains are matched. '
+          'Takeoff boots, branches and diffusers are never touched: the '
+          'auto-sizing diffusers set the branch. Existing phase ductwork is left '
+          'alone. Every joint is audited afterwards.', '20,0,0,0') +
+
+    _section('Main duct limits') +
+    _duct_limits_xaml() +
+    _hint('Firm defaults, the same limits Duct Performance checks, so a sized '
+          'system comes back green. Each main gets the smallest even size meeting '
+          'both. Rectangular mains keep their drawn height and are sized on width '
+          '(4:1 maximum); the height steps up only when no width fits.',
+          '0,6,0,0') +
+
+    _BASIS_XAML
+)
+
+
+def show_size_duct_dialog(title, use_theme=True):
+    """Themed Size Duct dialog.
+
+    Returns {"limits": {system: (max fpm, max friction)}} or None.
+    """
+    import duct_sizing
+    import hvac_graph
+
+    win = _build_window(
+        title, 'Size Duct',
+        'Sizes every main duct to the RJA velocity and friction limits and '
+        'writes the sizes into the model.', _DUCT_BODY, use_theme)
+
+    boxes = []
+    for i, name in enumerate(DUCT_SYSTEMS):
+        fpm, fric = hvac_graph.FIRM_DEFAULTS[name]
+        tb_v = _named(win, 'tb_v_%d' % i)
+        tb_f = _named(win, 'tb_f_%d' % i)
+        tb_v.Text = "{:.0f}".format(float(fpm))
+        tb_f.Text = "{:.2f}".format(float(fric))
+        boxes.append((name, tb_v, tb_f))
+
+    _fill_basis(win, [
+        ("Sizing", "Smallest even size, %d in minimum, meeting BOTH the max "
+                   "velocity and the max friction." % duct_sizing.MIN_DUCT_DIM),
+        ("Round", "%d to %d in, 2 in steps." % (duct_sizing.ROUND_SIZES[0],
+                                               duct_sizing.ROUND_SIZES[-1])),
+        ("Rectangular", "Drawn height held, width solved, %d:1 maximum "
+                        "aspect." % int(duct_sizing.MAX_ASPECT)),
+        ("Friction", "Darcy-Weisbach, Altshul-Tsal friction factor, "
+                     "galvanized steel, standard air (same as Duct "
+                     "Performance)."),
+        ("Not sized", "Branches, takeoff boots, diffusers, flex and oval "
+                      "duct, existing phase ductwork, outside air ductwork, "
+                      "and any main with a terminal downstream that has no "
+                      "Flow value."),
+    ])
+
+    def collect(errors):
+        limits = {}
+        for name, tb_v, tb_f in boxes:
+            fpm = _number(tb_v, name + ' velocity', errors)
+            fric = _number(tb_f, name + ' friction', errors)
+            if fpm is not None and fric is not None:
+                limits[name] = (fpm, fric)
+        if errors:
+            return None
+        return {"limits": limits}
+
+    return _run(win, [b for _n, v, f in boxes for b in (v, f)], collect)
+
+
+# ---------------------------------------------------------------------------
 # Size Gas and One-Line: pipe material, IFGC table, heat content
 # ---------------------------------------------------------------------------
 

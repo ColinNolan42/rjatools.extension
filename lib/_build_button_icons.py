@@ -1,5 +1,5 @@
 # -*- coding: ascii -*-
-"""Regenerate the Size Gas and Size Water button icons.
+"""Regenerate the Size Gas, Size Water and Size Duct button icons.
 
 Build-time tool, never imported by pyRevit. Run with CPython (Pillow needed):
 
@@ -23,6 +23,7 @@ S = 8                       # supersample factor
 N = 32 * S
 ORANGE = (230, 81, 0, 255)  # Material Deep Orange 800, gas
 BLUE = (2, 119, 189, 255)   # Material Light Blue 800, water
+TEAL = (0, 77, 64, 255)     # Material Teal 900, duct (matches Duct Performance)
 WHITE = (255, 255, 255, 255)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -83,6 +84,21 @@ def flame(d, cx, cy, w, h, field):
               fill=field)
 
 
+def duct(d, cx, cy, w, h, field):
+    """Duct: a rectangular duct section with an airflow arrow cut through it
+    in the field colour."""
+    left, right = cx - w * 0.62, cx + w * 0.62
+    top, bottom = cy - h * 0.30, cy + h * 0.30
+    d.rectangle([left, top, right, bottom], fill=WHITE)
+    shaft = h * 0.09
+    d.rectangle([left + w * 0.14, cy - shaft, right - w * 0.42, cy + shaft],
+                fill=field)
+    head = h * 0.22
+    tip = right - w * 0.14
+    d.polygon([(tip, cy), (tip - head * 1.3, cy - head),
+               (tip - head * 1.3, cy + head)], fill=field)
+
+
 # Glyph geometry for the two sizing buttons. Do not change these: the flame
 # and droplet produced by them are the icons Colin reviewed and accepted, and
 # regenerating with different numbers silently replaces an approved icon.
@@ -104,3 +120,5 @@ if __name__ == "__main__":
           os.path.join(PANEL, "Size Water.pushbutton", "icon.png"))
     build(ORANGE, lambda d, cx, cy, w, h: flame(d, cx, cy, w, h, ORANGE),
           os.path.join(PANEL, "Size Gas.pushbutton", "icon.png"))
+    build(TEAL, lambda d, cx, cy, w, h: duct(d, cx, cy, w, h, TEAL),
+          os.path.join(PANEL, "Size Duct.pushbutton", "icon.png"))

@@ -53,6 +53,7 @@ BODIES = {
     "existing": sizer_dialogs._EXISTING_BODY,
     "performance": sizer_dialogs._PERF_BODY,
     "start": sizer_dialogs._START_BODY,
+    "duct": sizer_dialogs._DUCT_BODY,
 }
 
 # The start point picker is a choice, not a calculation, so it carries no
@@ -146,6 +147,22 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
                 continue
             self.assertIn("grid_ref", _names_in(body), key)
             self.assertIn('Text="Calculation basis"', body, key)
+
+
+class TestSizeDuctLimitsGrid(unittest.TestCase):
+    """The limits grid names are generated per system, so they are checked
+    here rather than by the source scan above."""
+
+    def test_every_system_has_both_boxes(self):
+        names = _names_in(sizer_dialogs._DUCT_BODY)
+        for i in range(len(sizer_dialogs.DUCT_SYSTEMS)):
+            self.assertIn("tb_v_%d" % i, names)
+            self.assertIn("tb_f_%d" % i, names)
+
+    def test_systems_match_the_engine_defaults(self):
+        self.assertEqual(sorted(sizer_dialogs.DUCT_SYSTEMS),
+                         sorted(["Supply Air", "Return Air", "Exhaust Air",
+                                 "Transfer Air"]))
 
 
 class TestGasCalculationBasis(unittest.TestCase):
