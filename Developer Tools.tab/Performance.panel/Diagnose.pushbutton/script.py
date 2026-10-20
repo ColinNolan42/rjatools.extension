@@ -58,6 +58,9 @@ import pipe_graph
 import report_generator
 import hvac_graph
 import water_graph
+import water_checks
+import water_recirc
+import water_run
 import water_report
 from revit_helpers import eid_int
 
@@ -300,13 +303,24 @@ def diagnose_gas(element):
 def diagnose_water(element):
     output.print_md('Discipline: **DOMESTIC WATER**')
     if revit_helpers.is_pipe(element):
-        output.print_md(
-            ':warning: A pipe was picked, not an RPZ. This is diagnosed as an '
-            'existing building connection starting at that pipe. The existing '
-            'main upstream is NOT included.')
+        forms.alert("A pipe was picked. Pick the RPZ / backflow preventer, or "
+                    "on an existing building the tee on the existing cold "
+                    "water main.", title="Diagnose - Water")
+        output.print_md(':cross_mark: A pipe was picked, not an RPZ or tee.')
+        return
+
+    # Same two start points as Size Water, told apart by category so Diagnose
+    # stays zero input: a pipe fitting is the tee on an existing main,
+    # anything else is the RPZ.
+    upstream = None
+    if _category_id(element) == int(BuiltInCategory.OST_PipeFitting):
+        element, upstream = water_run._tee_origin(element, doc, output, forms)
+        if element is None:
+            return
 
     try:
-        graph = water_graph.build_water_network(element, doc)
+        revit_helpers.reset_pipe_diameter_approach()
+        graph = water_graph.build_water_network(element, doc, upstream)
     except Exception as e:
         forms.alert("Traversal failed:\n\n{}".format(str(e)),
                     title="Diagnose - Traversal Error")
@@ -377,6 +391,19 @@ def diagnose_water(element):
             output.print_md('| {} | {} | {} |'.format(
                 n.family_name, n.system or '-', n.element_id))
 
+    # Return detection and the completeness check, in the same order Size
+    # Water runs them, so Diagnose reads the model exactly as the sizer will.
+    output.print_md('\n---')
+    detection = water_graph.detect_return_system_types(graph)
+    water_run._print_return_detection(output, detection)
+    water_graph.apply_return_system_types(
+        graph, detection["detected"] - detection["unconfirmed"])
+    return_ids = set(detection["detected"])
+
+    checks = water_checks.check_system(graph, return_system_type_ids=return_ids)
+    output.print_md('\n## Completeness Check')
+    _print_pre('\n'.join(water_checks.format_checks(checks)))
+
     # WSFU take-off, same layout as Size Water's report, built from the graph
     # alone - no sizing table, matching "check systems without running a
     # sizer".
@@ -385,17 +412,22 @@ def diagnose_water(element):
     wsfu_lines = water_report.wsfu_table(graph)
     _print_pre('\n'.join(wsfu_lines))
 
+    # Circuit setter flows at the default heat loss and temperature drop.
+    # Size Water and Water Performance take both from their dialog.
+    if return_ids:
+        try:
+            recirc = water_recirc.analyze(graph)
+            output.print_md('\n## Recirculation (default {:.0f} BTU/h per '
+                            '100 ft, {:.0f} F drop)'.format(
+                                shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT,
+                                shared_params.DEFAULT_RECIRC_DELTA_T_F))
+            _print_pre('\n'.join(water_report.recirc_table(recirc)))
+        except Exception as e:
+            output.print_md(':warning: Recirculation analysis failed: {}'.format(
+                str(e)))
+
     errors = []
     warnings = []
-    if not fixtures:
-        errors.append(
-            "No water fixtures found (IS_WATER_FIXTURE = Yes). Check the "
-            "fixtures are physically connected to the piping and the "
-            "parameter is set.")
-    if not heaters:
-        warnings.append("No water heater found on the cold tree.")
-    if graph.open_ends:
-        warnings.append("{} open connector end(s) found.".format(len(graph.open_ends)))
     if graph.loops:
         warnings.append(
             "{} element(s) revisited (a loop in the network). HWR loops are "
@@ -403,6 +435,9 @@ def diagnose_water(element):
     if graph.unreadable:
         warnings.append("{} element(s) had unreadable connectors.".format(
             len(graph.unreadable)))
+    if not checks["ready_for_sizing"]:
+        errors.append("Completeness check: {} error(s), see above.".format(
+            len(checks["errors"])))
 
     _print_errors_warnings(errors, warnings)
 

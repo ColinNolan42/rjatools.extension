@@ -27,7 +27,7 @@ WHITE = (255, 255, 255, 255)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PANEL = os.path.normpath(
-    os.path.join(HERE, "..", "Developer Tools.tab", "Pipe Tools.panel"))
+    os.path.join(HERE, "..", "Developer Tools.tab", "Sizing.panel"))
 
 
 def sizing_bar(d):

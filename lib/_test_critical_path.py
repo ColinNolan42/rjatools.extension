@@ -25,7 +25,7 @@ import types
 # and runs on any machine: lib/_test_critical_path.py -> extension root.
 EXT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT_PATH = os.path.join(
-    EXT_ROOT, "Developer Tools.tab", "HVAC Tools.panel",
+    EXT_ROOT, "Developer Tools.tab", "Performance.panel",
     "Duct Performance.pushbutton", "script.py")
 LIB_DIR = os.path.join(EXT_ROOT, "lib")
 
