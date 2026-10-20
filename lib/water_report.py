@@ -442,7 +442,24 @@ def exceptions_block(graph, sizing_result):
                      "demand is therefore NOT included in any cold pipe.")
         any_flag = True
     else:
+        reported = set()
+        groups = getattr(graph, "heater_groups", {}) or {}
         for hid in graph.heater_ids:
+            group = groups.get(hid, (hid,))
+            if len(group) > 1:
+                if group in reported:
+                    continue
+                reported.add(group)
+                fixtures = set()
+                for member in group:
+                    fixtures.update(graph.nodes[member].served_fixture_ids)
+                lines.append(
+                    "  Water heaters {} are in parallel: they serve {} "
+                    "fixture(s) together and split the hot load equally, so "
+                    "each cold feed carries 1/{} of it.".format(
+                        ", ".join(str(m) for m in group), len(fixtures),
+                        len(group)))
+                continue
             node = graph.nodes[hid]
             lines.append("  Water heater {} serves {} fixture(s).".format(
                 hid, len(node.served_fixture_ids)))

@@ -124,6 +124,7 @@ class WaterGraph(object):
         self.return_roots    = []  # where each return line ends (heater, or the cold tie-in)
         self.return_unrooted = []  # return pipe ids whose end could not be found
         self.hot_joints      = {}  # every hot water joint, kept from before the split
+        self.heater_groups   = {}  # heater id -> tuple of heaters in parallel
 
         # Existing building: the run starts at the first NEW cold water pipe
         # instead of an RPZ (Colin, 2026-10-13). The connectors listed here
@@ -1068,7 +1069,19 @@ def _assign_demand(graph):
     Counting TOTAL on the cold side and HOT again through the heater would
     double-count: Table E103.3(2) note a already makes the separate hot and
     cold loads three-fourths of the total.
+
+    Water heaters in parallel (Colin, 2026-10-21): heaters whose hot outlets
+    join the same hot supply piping split that piping's hot load equally. A
+    cold pipe carries the group's hot load times the share of the group's
+    heaters downstream of it: the cold feed to one of two heaters carries
+    half, the common cold header ahead of both carries all of it.
     """
+    groups = heater_groups(graph)
+    group_fixtures = {}
+    for heater_id, group in groups.items():
+        fixtures = group_fixtures.setdefault(group, set())
+        fixtures.update(graph.nodes[heater_id].served_fixture_ids)
+
     for node in graph.nodes.values():
         if node.kind != KIND_PIPE:
             continue
@@ -1088,22 +1101,76 @@ def _assign_demand(graph):
         # and those reached only through a heater, so each is counted once and
         # a heater-only branch carries hot load rather than total load.
         direct = set()
-        via_heater = set()
+        heaters_by_group = {}
         for nid in downstream:
             child = graph.nodes[nid]
             if child.kind == KIND_FIXTURE:
                 direct.add(nid)
             elif child.kind == KIND_HEATER:
-                for fid in child.served_fixture_ids:
-                    via_heater.add(fid)
+                group = groups.get(nid, (nid,))
+                heaters_by_group.setdefault(group, set()).add(nid)
+
+        # Share of each fixture's hot load this pipe carries through heaters.
+        via_heater = {}
+        for group, heaters in heaters_by_group.items():
+            share = float(len(heaters)) / float(len(group))
+            fixtures = group_fixtures.get(
+                group, graph.nodes[list(heaters)[0]].served_fixture_ids)
+            for fid in fixtures:
+                via_heater[fid] = min(1.0, via_heater.get(fid, 0.0) + share)
 
         total = 0.0
         for fid in direct:
             total += graph.nodes[fid].total_wsfu
-        for fid in via_heater:
+        for fid, share in via_heater.items():
             if fid not in direct:
-                total += graph.nodes[fid].hw_wsfu
+                total += graph.nodes[fid].hw_wsfu * share
         node.demand_wsfu = total
+
+
+def heater_groups(graph):
+    """Water heaters in parallel: heater id -> sorted tuple of its group.
+
+    Two heaters are in parallel when both are fed from the cold tree and
+    their hot outlets join the same hot supply piping (return piping is not
+    followed, so heaters that only share a return stay separate). A heater on
+    its own is a group of one. Stored on graph.heater_groups for the report.
+    """
+    cold = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+    adjacency = graph.hot_joints or hot_adjacency(graph)
+    cold_fed = set(h for h in graph.heater_ids
+                   if h in graph.nodes and
+                   cold in graph.nodes[h].parent_by_system)
+
+    groups = {}
+    for start in graph.heater_ids:
+        if start in groups or start not in graph.nodes:
+            continue
+        if start not in cold_fed:
+            groups[start] = (start,)
+            continue
+        found = set([start])
+        seen = set([start])
+        queue = [start]
+        while queue:
+            current = queue.pop()
+            for neighbour in adjacency.get(current, []):
+                if neighbour in seen or neighbour not in graph.nodes:
+                    continue
+                seen.add(neighbour)
+                other = graph.nodes[neighbour]
+                if other.kind == KIND_HEATER:
+                    if neighbour in cold_fed:
+                        found.add(neighbour)
+                    continue        # never walk through a heater
+                if is_return_pipe(graph, other):
+                    continue
+                queue.append(neighbour)
+        group = tuple(sorted(found))
+        for heater_id in group:
+            groups[heater_id] = group
+    graph.heater_groups = groups
+    return groups
 
 
 # =============================================================================

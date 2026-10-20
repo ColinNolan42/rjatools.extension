@@ -371,10 +371,14 @@ def _served_fixture_ids(graph, node):
                 served.append(nid)
         elif (child.kind == water_graph.KIND_HEATER and
               node.system == shared_params.SYSTEM_DOMESTIC_COLD_WATER):
-            for fid in child.served_fixture_ids:
-                if fid not in seen:
-                    seen.add(fid)
-                    served.append(fid)
+            # A heater in parallel serves its whole group's fixtures, even
+            # when the hot walk credited them all to the other heater.
+            group = graph.heater_groups.get(nid, (nid,))
+            for heater_id in group:
+                for fid in graph.nodes[heater_id].served_fixture_ids:
+                    if fid not in seen:
+                        seen.add(fid)
+                        served.append(fid)
     return served
 
 

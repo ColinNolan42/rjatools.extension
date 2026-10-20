@@ -185,6 +185,60 @@ class TestColdDemandUsesTotal(unittest.TestCase):
         self.assertAlmostEqual(g.nodes[8].demand_wsfu, 1.5)
 
 
+class TestHeatersInParallel(unittest.TestCase):
+    """Two water heaters on a common hot header split the hot load equally,
+    so each heater's cold feed carries half (Colin, 2026-10-21).
+
+        RPZ(1) -> cold header(2) -> tee(3) -> feed A(4) -> heater A(6)
+                                            -> feed B(5) -> heater B(7)
+        heater A(6) -> hot(8) -> hot tee(10) -> hot main(11) -> 4 lavs
+        heater B(7) -> hot(9) -> hot tee(10)   (the joint the walk closed)
+    """
+
+    def build(self):
+        g = make_graph()
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        g.origin_id = 1
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1)
+        add_node(g, 3, water_graph.KIND_FITTING, parent=2)
+        add_node(g, 4, water_graph.KIND_PIPE, parent=3)
+        add_node(g, 5, water_graph.KIND_PIPE, parent=3)
+        lavs = [20, 21, 22, 23]
+        add_node(g, 6, water_graph.KIND_HEATER, parent=4, served=lavs)
+        add_node(g, 7, water_graph.KIND_HEATER, parent=5, served=[])
+        g.heater_ids.extend([6, 7])
+        add_node(g, 8, water_graph.KIND_PIPE, parent=6, system=HOT)
+        add_node(g, 10, water_graph.KIND_FITTING, parent=8, system=HOT)
+        add_node(g, 9, water_graph.KIND_PIPE, parent=7, system=HOT)
+        g.loop_edges.append((9, 10, HOT))
+        add_node(g, 11, water_graph.KIND_PIPE, parent=10, system=HOT)
+        for fid in lavs:
+            add_node(g, fid, water_graph.KIND_FIXTURE, parent=11, system=HOT,
+                     cw=1.5, hw=1.5, total=2.0)
+        return g
+
+    def test_grouped(self):
+        g = self.build()
+        groups = water_graph.heater_groups(g)
+        self.assertEqual(groups[6], (6, 7))
+        self.assertEqual(groups[7], (6, 7))
+
+    def test_each_feed_carries_half(self):
+        g = self.build()
+        water_graph._assign_demand(g)
+        hot_total = 4 * 1.5
+        self.assertAlmostEqual(g.nodes[4].demand_wsfu, hot_total / 2.0)
+        self.assertAlmostEqual(g.nodes[5].demand_wsfu, hot_total / 2.0)
+        self.assertAlmostEqual(g.nodes[2].demand_wsfu, hot_total)
+
+    def test_separate_heaters_unchanged(self):
+        g = self.build()
+        g.loop_edges = []            # heater B's outlet no longer joins A's
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[4].demand_wsfu, 6.0)
+        self.assertAlmostEqual(g.nodes[5].demand_wsfu, 0.0)
+
+
 class TestMixedFixtures(unittest.TestCase):
     """Cold-only fixtures must not be inflated, hot-only must still count.
 
