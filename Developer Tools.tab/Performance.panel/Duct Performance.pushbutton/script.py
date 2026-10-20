@@ -84,6 +84,7 @@ if _lib not in sys.path:
 import hvac_graph
 import fitting_tables
 import revit_helpers
+import rja_drafting
 from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
@@ -2535,193 +2536,108 @@ def _row_cells(label, dr, reason, role, branch_res,
 
 
 # ── Schedule table in a Drafting View ─────────────────────────────────────────
-
-def _hline(doc, view, x0, x1, y):
-    doc.Create.NewDetailCurve(view, Line.CreateBound(XYZ(x0, y, 0.0), XYZ(x1, y, 0.0)))
-
-def _vline(doc, view, x, y0, y1):
-    doc.Create.NewDetailCurve(view, Line.CreateBound(XYZ(x, y0, 0.0), XYZ(x, y1, 0.0)))
-
-
-def _legend_swatch(doc, view, filled_region_type_id, x0, y0, size, color, fill_id):
-    """Draw a small solid-color square at (x0, y0), size x size (ft), colored
-    the same way ducts/fittings are colored in the view (matching fill pattern)."""
-    pts = [XYZ(x0, y0, 0.0), XYZ(x0 + size, y0, 0.0),
-           XYZ(x0 + size, y0 + size, 0.0), XYZ(x0, y0 + size, 0.0)]
-    loop = CurveLoop()
-    for i in range(4):
-        loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
-    fr = FilledRegion.Create(doc, filled_region_type_id, view.Id, [loop])
-    ogs = OverrideGraphicSettings()
-    ogs.SetSurfaceForegroundPatternColor(color)
-    if fill_id != ElementId.InvalidElementId:
-        ogs.SetSurfaceForegroundPatternId(fill_id)
-    view.SetElementOverrides(fr.Id, ogs)
-    return fr
-
+# Drawn in the shared RJA table look (lib/rja_drafting.py, Colin 2026-10-21:
+# "update the hvac duct ones to use the new styling"), the same bands, shaded
+# headers and banded rows as the Water Performance and WSFU sheets.
 
 # Color key + meaning shown in the legend, in display order.
 # Wording covers both check methods, since one view mixes mains and branches.
 _LEGEND_ROWS = [
-    ('GREEN',  'Main: within limit.  Branch: diffuser and duct both correctly sized'),
-    ('PURPLE', 'Main only: oversized — smaller standard size available'),
-    ('YELLOW', 'Main only: approaching limit'),
-    ('RED',    'Main: exceeds limit.  Branch: diffuser or duct undersized.  '
-               'Either: fails diffuser/duct height clearance (see Reason column)'),
-    ('GRAY',   'No airflow data — no CFM reaches this element; broken or disconnected system'),
+    ('GREEN',  'Main: within limit. Branch: diffuser and duct both correctly sized.'),
+    ('PURPLE', 'Main only: oversized, a smaller standard size is available.'),
+    ('YELLOW', 'Main only: approaching the limit.'),
+    ('RED',    'Main: exceeds the limit. Branch: diffuser or duct undersized. '
+               'Either: fails the diffuser/duct height clearance (see Reason).'),
+    ('GRAY',   'No airflow data: no CFM reaches this element (broken or '
+               'disconnected system).'),
 ]
+
+# Columns read best left aligned; the rest are centred.
+_LEFT_COLUMNS = ('reason', 'role')
 
 
 def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id,
                         show_r_marker_note=False):
     """Create a Drafting View with a System Summary block + flagged-duct table
-    + color legend.
+    + color legend, in the RJA table look.
 
     flagged_rows: list of per-duct cell dicts from _row_cells(), already in
-    the order they should appear — the same order the numbered keynote circles
+    the order they should appear, the same order the numbered keynote circles
     were placed in the plan view, so row 3 here is circle 3 there.
     selected_cols: set of _COLUMN_DEFS keys the user kept in the dialog.
+    tn_type_id: kept for the caller; the RJA table text types are used.
 
     Returns (ViewDrafting, total_content_height_ft, table_width_ft), or
-    (None, 0.0, 0.0) on failure. The width is returned rather than hardcoded
-    at the call site because the column selection now changes it on every run,
-    and the viewport is positioned by its centre — the caller needs the width
-    to keep the table's left edge on its hand-placed anchor.
-
-    At scale 1:1, model feet = paper feet, so all dims below are paper inches / 12.
+    (None, 0.0, 0.0) on failure. The width is returned because the column
+    selection changes it on every run, and the viewport is positioned by its
+    centre: the caller needs it to keep the table's left edge on its anchor.
     """
-    drafting_type_id = None
-    for vft in FilteredElementCollector(doc).OfClass(ViewFamilyType).ToElements():
-        if vft.ViewFamily == ViewFamily.Drafting:
-            drafting_type_id = vft.Id
-            break
-    if drafting_type_id is None:
-        return None, 0.0, 0.0
-
     try:
-        sched_view = ViewDrafting.Create(doc, drafting_type_id)
-        sched_view.Scale = 1
-        base_name = 'Duct Schedule - DV-{} - {}'.format(source_sheet_num, ts)
-        try:
-            sched_view.Name = base_name
-        except Exception:
-            sched_view.Name = base_name + ' (2)'
-
-        # ── Layout (ft at 1:1 = inches on paper / 12) ─────────────────────
-        ox, oy = 0.0, 0.0   # top-left origin
-        PAD     = 0.004      # text inset from cell edge (~1/24")
-        HEAD_H  = 0.030      # header row height  (~3/8")
-        ROW_H   = 0.022      # data row height    (~1/4")
-        SUM_ROW_H = 0.018    # summary line height (~1/5")
+        sched_view = rja_drafting._new_drafting_view(
+            doc, 'Duct Schedule - DV-{} - {}'.format(source_sheet_num, ts))
+        if sched_view is None:
+            return None, 0.0, 0.0
+        st = rja_drafting._Style(doc)
 
         # Columns come from the shared _COLUMN_DEFS, filtered to the user's
-        # selection — same list, same order, same headers as the console
-        # table. The total width also sets the summary block width, and is
-        # returned to the caller so the viewport can stay left-anchored.
-        cols        = _selected_columns(selected_cols)
-        col_headers = [c[1] for c in cols]
-        col_widths  = [c[2] for c in cols]
-        # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
-        total_w     = sum(col_widths, 0.0)
+        # selection: same list, same order, same headers as the console table.
+        cols = _selected_columns(selected_cols)
+        columns = [(c[1], c[2]) for c in cols]
+        # sum(..., 0.0) forces float: sum([]) returns int 0 in Python 2.7
+        total_w = sum([c[2] for c in cols], 0.0)
+        left = tuple(i for i, c in enumerate(cols) if c[0] in _LEFT_COLUMNS)
 
-        opts = TextNoteOptions(tn_type_id)
-        y_cursor = oy
-
-        # ── System Summary block ────────────────────────────────────────────
+        y = rja_drafting._band(
+            st, sched_view, 0.0, 0.0, total_w,
+            'DUCT PERFORMANCE - DV-{}'.format(source_sheet_num), None,
+            rja_drafting.BAND_H)
         if summary_lines:
-            sum_top = y_cursor
-            for line in summary_lines:
-                y_cursor -= SUM_ROW_H
-            sum_bottom = y_cursor
+            y = rja_drafting._note_panel(st, sched_view, 0.0, y, total_w,
+                                         summary_lines)
+        y -= rja_drafting.GAP
 
-            _hline(doc, sched_view, ox, ox + total_w, sum_top)
-            _hline(doc, sched_view, ox, ox + total_w, sum_bottom)
-            _vline(doc, sched_view, ox, sum_top, sum_bottom)
-            _vline(doc, sched_view, ox + total_w, sum_top, sum_bottom)
-
-            row_y = sum_top
-            for line in summary_lines:
-                row_y -= SUM_ROW_H
-                TextNote.Create(doc, sched_view.Id,
-                                XYZ(ox + PAD, row_y + SUM_ROW_H - PAD, 0.0),
-                                line, opts)
-
-        # ── Flagged ducts table ──────────────────────────────────────────────
+        y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
+                               'DUCTS NEEDING ATTENTION', None,
+                               rja_drafting.SUB_BAND_H)
         if flagged_rows:
-            table_top = y_cursor
-            total_h   = HEAD_H + ROW_H * len(flagged_rows)
+            # '#' is this table's own row index: it matches the numbered
+            # keynote circle placed on the same duct in the plan view.
+            rows = [[str(ri + 1) if c[0] == 'num' else cells.get(c[0], '')
+                     for c in cols] for ri, cells in enumerate(flagged_rows)]
+            y = rja_drafting._styled_table(st, sched_view, 0.0, y, columns,
+                                           rows, left_cols=left)
+        else:
+            y = rja_drafting._note_panel(
+                st, sched_view, 0.0, y, total_w,
+                ['Every judged duct is within its limits.'])
+        y -= rja_drafting.GAP
 
-            col_xs = [ox]
-            for w in col_widths:
-                col_xs.append(col_xs[-1] + w)
-
-            row_tops = [table_top]
-            row_tops.append(table_top - HEAD_H)
-            for _ in range(len(flagged_rows)):
-                row_tops.append(row_tops[-1] - ROW_H)
-
-            for y in row_tops:
-                _hline(doc, sched_view, ox, ox + total_w, y)
-            for x in col_xs:
-                _vline(doc, sched_view, x, table_top, table_top - total_h)
-
-            for ci, header in enumerate(col_headers):
-                TextNote.Create(doc, sched_view.Id,
-                                XYZ(col_xs[ci] + PAD, table_top - PAD, 0.0),
-                                header, opts)
-
-            for ri, cells in enumerate(flagged_rows):
-                row_y = row_tops[ri + 1] - PAD
-                for ci, col in enumerate(cols):
-                    # '#' is this table's own row index — it matches the
-                    # numbered keynote circle placed on the same duct in the
-                    # plan view, which is why it is not baked into the cell
-                    # dict (the console table numbers the same ducts
-                    # differently).
-                    cell_text = str(ri + 1) if col[0] == 'num' else cells.get(col[0], '')
-                    # Blank cells are real (e.g. no Reason on a passing row), and
-                    # TextNote.Create rejects an empty string — leave the cell
-                    # empty rather than write a placeholder into the drawing.
-                    if not cell_text:
-                        continue
-                    TextNote.Create(doc, sched_view.Id,
-                                    XYZ(col_xs[ci] + PAD, row_y, 0.0),
-                                    cell_text, opts)
-            y_cursor = table_top - total_h
-
-        # ── Color legend ─────────────────────────────────────────────────────
-        LEGEND_HDR_H = 0.026     # header row height (~5/16")
-        LEGEND_ROW_H = 0.020     # legend row height (~1/4")
-        SWATCH       = 0.014     # swatch square size (~1/6")
-
-        frt_id = None
-        for frt in FilteredElementCollector(doc).OfClass(FilledRegionType).ToElements():
-            frt_id = frt.Id
-            break
-
-        TextNote.Create(doc, sched_view.Id, XYZ(ox + PAD, y_cursor - PAD, 0.0), 'COLOR LEGEND', opts)
-        y_cursor -= LEGEND_HDR_H
-
-        if frt_id is not None:
-            for color_key, meaning in _LEGEND_ROWS:
-                color = _COLOR_MAP[color_key]
-                sw_y0 = y_cursor - SWATCH - (LEGEND_ROW_H - SWATCH) / 2.0
-                _legend_swatch(doc, sched_view, frt_id, ox + PAD, sw_y0, SWATCH, color, fill_id)
-                TextNote.Create(doc, sched_view.Id,
-                                XYZ(ox + PAD + SWATCH + PAD * 2.0, y_cursor - PAD, 0.0),
-                                '{} — {}'.format(color_key.title(), meaning), opts)
-                y_cursor -= LEGEND_ROW_H
-
+        # Legend: the plan colour as a swatch, then its meaning, boxed.
+        y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
+                               'COLOR LEGEND', None, rja_drafting.SUB_BAND_H)
+        legend_top = y
+        row_h = rja_drafting.ROW_H
+        pad = rja_drafting.PAD
+        swatch = 0.014
+        for color_key, meaning in _LEGEND_ROWS:
+            if st.region_type_id is not None:
+                rja_drafting._legend_swatch(
+                    doc, sched_view, st.region_type_id, pad * 2.0,
+                    y - swatch - (row_h - swatch) / 2.0, swatch,
+                    _COLOR_MAP[color_key], fill_id)
+            rja_drafting._t(st, sched_view, swatch + pad * 3.0, y,
+                            '{}: {}'.format(color_key.title(), meaning))
+            y -= row_h
         if show_r_marker_note:
-            TextNote.Create(
-                doc, sched_view.Id, XYZ(ox + PAD, y_cursor - PAD, 0.0),
-                '(R) — Most restrictive diffuser: ends the index run that sets '
-                'required external static pressure for its equipment/system',
-                opts)
-            y_cursor -= LEGEND_ROW_H
+            rja_drafting._t(st, sched_view, swatch + pad * 3.0, y,
+                            '(R): Most restrictive diffuser. It ends the index '
+                            'run that sets the required external static '
+                            'pressure for its equipment or system.')
+            y -= row_h
+        rja_drafting._outline(st, sched_view, 0.0, legend_top, total_w, y)
 
-        return sched_view, (oy - y_cursor), total_w
+        return sched_view, (0.0 - y), total_w
 
     except Exception:
         return None, 0.0, 0.0
