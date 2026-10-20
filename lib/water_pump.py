@@ -27,8 +27,8 @@ import water_pressure
 HOT = shared_params.SYSTEM_DOMESTIC_HOT_WATER
 FT_PER_PSI = 2.31
 
-# Placeholders until Colin sets the firm values (asked 2026-10-20). Both are
-# dialog inputs and are printed in the basis.
+# Firm defaults (Colin, 2026-10-20). Both are dialog inputs and are printed
+# in the basis.
 DEFAULT_CIRCUIT_SETTER_PSI = 1.0
 DEFAULT_SAFETY_FACTOR = 0.10
 

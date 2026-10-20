@@ -88,7 +88,8 @@ _PRV_WORDS = ("pressure reducing", "pressure regulating", "prv",
 #     45 psi; a blowout bowl shall be checked by hand.
 #   Showers and bathtubs: the balanced-pressure / thermostatic rows (20 psi),
 #     since commercial showers and tubs carry those valves (Section 424).
-#   Flush tank urinal: no Table 604.3 row, so it is reported, not judged.
+#   Flush tank urinal: no Table 604.3 row, takes the tank water closet value
+#     (Colin, 2026-10-20).
 FIXTURE_PRESSURE_RULES = [
     (("water closet", "flushometer valve"), 35.0,
      "Water closet, siphonic, flushometer valve"),
@@ -96,7 +97,7 @@ FIXTURE_PRESSURE_RULES = [
      "Water closet, flushometer tank"),
     (("water closet",), 20.0, "Water closet, tank"),
     (("urinal", "flushometer"), 25.0, "Urinal, valve"),
-    (("urinal",), None, "Urinal, flush tank: no Table 604.3 row, not judged"),
+    (("urinal",), 20.0, "Urinal, flush tank (as Water closet, tank, Colin)"),
     (("lavatory",), 8.0, "Lavatory"),
     (("kitchen sink",), 8.0, "Sink, residential"),
     (("service sink",), 8.0, "Sink, service"),

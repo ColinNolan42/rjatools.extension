@@ -142,9 +142,9 @@ class TestFixturePressure(unittest.TestCase):
         self.assertIsNone(water_pressure.required_pressure(
             self._node("Eyewash"))[0])
 
-    def test_flush_tank_urinal_has_no_row(self):
-        self.assertIsNone(water_pressure.required_pressure(
-            self._node("Urinal, Flush Tank"))[0])
+    def test_flush_tank_urinal_as_tank_water_closet(self):
+        self.assertEqual(water_pressure.required_pressure(
+            self._node("Urinal, Flush Tank"))[0], 20.0)
 
 
 def pipe(g, nid, parent, system, length, nominal):
