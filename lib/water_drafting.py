@@ -38,7 +38,7 @@ CHART_WIDTHS = (0.090, 0.160, 0.150, 0.120)   # firm pipe sizing chart
 
 def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
                     recirc=None):
-    """Create a Drafting View holding the header, basis of design, the firm
+    """Create a Drafting View holding the header, the firm
     pipe sizing chart, the WSFU take-off table and, when the system has a
     return, the hot water recirculation sizing.
 
@@ -91,18 +91,9 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
         y -= TEXT_H
     y -= GAP / 2.0
 
-    # --- Basis of design ---------------------------------------------------
-    # Printed from water_tables so the sheet can never state a basis that
-    # differs from the one the sizing actually used.
-    _text(doc, view, ox, y - PAD, "BASIS OF DESIGN", opts)
-    y -= TEXT_H
-    basis_lines = (water_tables.basis_of_design_lines() +
-                   water_report.origin_basis_lines(graph))
-    for line in basis_lines:
-        for wrapped in _wrap(line, 110):
-            _text(doc, view, ox, y - PAD, wrapped, opts)
-            y -= TEXT_H
-    y -= GAP / 2.0
+    # The basis of design is not printed on the drafting view (Colin,
+    # 2026-10-13): the sheet already states it. The pyRevit window report and
+    # the dialog still carry it.
 
     # --- Firm pipe sizing chart --------------------------------------------
     # The same rows the sizing looked each pipe up in.
