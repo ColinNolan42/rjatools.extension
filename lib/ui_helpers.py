@@ -184,6 +184,50 @@ def show_water_dialog(title, project_info, return_detection):
             title, project_info, return_detection))
 
 
+def show_water_performance_dialog(title, project_info):
+    """The Water Performance dialog (RJA themed).
+
+    Fallback when no themed window can be built: the Size Water plain dialog
+    for the shared fields, with the yellow tolerance at its default.
+    """
+    import sizer_dialogs
+    import water_performance
+
+    def legacy():
+        values = _show_water_dialog_legacy(title, project_info, None)
+        if values is not None:
+            values["speed_tolerance"] = water_performance.SPEED_TOLERANCE
+        return values
+
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_water_performance_dialog(
+            title, project_info, use_theme),
+        legacy)
+
+
+def show_start_point(title, rpz_label, tee_label):
+    """RPZ or tee start point (RJA themed). Returns the label or None.
+
+    Fallback: the plain pyRevit alert with the same two options.
+    """
+    import sizer_dialogs
+    from pyrevit import forms
+
+    def legacy():
+        return forms.alert(
+            "Where does the domestic water system start?\n\n"
+            "{}: pick the RPZ / backflow preventer.\n"
+            "{}: on an existing building, pick the tee on the existing cold "
+            "water main where the new piping branches off.".format(
+                rpz_label, tee_label),
+            title=title, options=[rpz_label, tee_label])
+
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_start_point_dialog(
+            title, rpz_label, tee_label, use_theme),
+        legacy)
+
+
 def _show_water_dialog_legacy(title, project_info, return_detection):
     """FALLBACK ONLY. The code-built Size Water dialog.
 

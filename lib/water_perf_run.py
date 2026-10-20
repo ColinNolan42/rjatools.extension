@@ -49,9 +49,8 @@ def run(doc, uidoc, output, forms):
                     title="Water Performance")
         return False
 
-    settings = ui_helpers.show_water_dialog(
-        "Water Performance - 2024 IPC", water_run.project_info(doc, output),
-        None)
+    settings = ui_helpers.show_water_performance_dialog(
+        "Water Performance - 2024 IPC", water_run.project_info(doc, output))
     if settings is None:
         output.print_md("Cancelled. Nothing was changed.")
         return False
@@ -90,7 +89,8 @@ def run(doc, uidoc, output, forms):
         hot = (segment.is_return or
                node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER)
         key = water_tables.SYSTEM_HOT if hot else water_tables.SYSTEM_COLD
-        results[segment.element_id] = water_performance.classify(segment, key)
+        results[segment.element_id] = water_performance.classify(
+            segment, key, settings["speed_tolerance"])
 
     if not results:
         output.print_md("No pipes were found on this system. Nothing was "
@@ -101,9 +101,20 @@ def run(doc, uidoc, output, forms):
     stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
     new_view = _make_colored_view(doc, output, view, graph, results,
                                   fitting_labels, stamp)
-    _print_report(output, results, sizing)
+    _print_report(output, results, sizing, settings["speed_tolerance"])
     if new_view is not None:
-        _make_sheet(doc, output, view, new_view, results, stamp)
+        _make_sheet(doc, output, view, new_view, results, stamp,
+                    settings["speed_tolerance"])
+
+    if settings["wsfu_calcs"]:
+        header = {
+            "date": datetime.date.today().strftime("%Y-%m-%d"),
+            "job": settings["job"],
+            "job_number": settings["job_number"],
+            "by": settings["by"],
+        }
+        water_run._create_drafting_view(doc, output, graph, sizing, header,
+                                        recirc)
     return True
 
 
@@ -205,17 +216,19 @@ def _make_colored_view(doc, output, view, graph, results, fitting_labels,
     return new_view
 
 
-# Legend wording, worst first, matching the colors in the plan.
-_LEGEND = [
-    (water_performance.RED, "Red - drawn smaller than the firm table size"),
-    (water_performance.YELLOW,
-     "Yellow - at table size, computed speed more than 10 percent over the "
-     "limit"),
-    (water_performance.PURPLE, "Purple - drawn larger than the firm table "
-                               "size"),
-    (water_performance.GREEN, "Green - at table size"),
-    (water_performance.GRAY, "Gray - not judged (see Reason)"),
-]
+def _legend(tolerance):
+    """Legend wording, worst first, matching the colors in the plan."""
+    return [
+        (water_performance.RED,
+         "Red - drawn smaller than the firm table size"),
+        (water_performance.YELLOW,
+         "Yellow - at table size, computed speed more than {:.0f} percent "
+         "over the limit".format(float(tolerance) * 100.0)),
+        (water_performance.PURPLE,
+         "Purple - drawn larger than the firm table size"),
+        (water_performance.GREEN, "Green - at table size"),
+        (water_performance.GRAY, "Gray - not judged (see Reason)"),
+    ]
 
 # (header, width ft) for the sheet table, same cells as the pyRevit table.
 _TABLE_COLUMNS = [("STATUS", 0.075), ("PIPE", 0.075), ("SYSTEM", 0.065),
@@ -223,7 +236,8 @@ _TABLE_COLUMNS = [("STATUS", 0.075), ("PIPE", 0.075), ("SYSTEM", 0.065),
                   ("FPS", 0.045), ("REASON", 0.560)]
 
 
-def _make_sheet(doc, output, source_view, plan_view, results, stamp):
+def _make_sheet(doc, output, source_view, plan_view, results, stamp,
+                tolerance):
     """Put the colored plan, the flagged table and the legend on a new sheet.
 
     Its own transaction, so a missing title block or text type costs the
@@ -238,7 +252,7 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp):
             counts[water_performance.GRAY]),
     ]
     rows = [[str(c) for c in row] for row in _flagged_rows(results)]
-    legend = [(_COLORS[key], text) for key, text in _LEGEND]
+    legend = [(_COLORS[key], text) for key, text in _legend(tolerance)]
 
     source_sheet = revit_helpers.sheet_hosting_view(doc, source_view)
     source_number = source_sheet.SheetNumber if source_sheet else "NA"
@@ -272,7 +286,7 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp):
     output.print_md("Created sheet **{}**.".format(sheet.SheetNumber))
 
 
-def _print_report(output, results, sizing):
+def _print_report(output, results, sizing, tolerance):
     counts = water_performance.summarize(results.values())
     output.print_md("## Result")
     output.print_md(
@@ -299,7 +313,7 @@ def _print_report(output, results, sizing):
 
     output.print_md("## Basis of design")
     output.print_md("\n".join(
-        "    " + line for line in water_performance.basis_lines()))
+        "    " + line for line in water_performance.basis_lines(tolerance)))
 
 
 def _flagged_rows(results):

@@ -151,13 +151,8 @@ def pick_origin(uidoc, doc, output, forms):
     tie_in.resolve_tee_branch() found for a tee on an existing main. Returns
     (None, None) when the pick is cancelled or cannot be used.
     """
-    choice = forms.alert(
-        "Where does the domestic water system start?\n\n"
-        "RPZ: pick the RPZ / backflow preventer.\n"
-        "New pipe connection (TEE): on an existing building, pick the tee on "
-        "the existing cold water main where the new piping branches off.",
-        title="Size Water - Select Start Point",
-        options=[ORIGIN_RPZ, ORIGIN_TEE])
+    choice = ui_helpers.show_start_point(
+        "Domestic Water - Select Start Point", ORIGIN_RPZ, ORIGIN_TEE)
     if not choice:
         output.print_md("Cancelled. Nothing was changed.")
         return None, None

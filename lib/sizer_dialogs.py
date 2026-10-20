@@ -265,19 +265,8 @@ def themed_or(build, legacy):
 # Size Water
 # ---------------------------------------------------------------------------
 
-_WATER_BODY = (
-    _section('This run will', 10) +
-    '<CheckBox x:Name="cb_size" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
-    ' Content="Size the piping and write the sizes into the model"/>' +
-    _hint('Always on. Cold water is sized on TOTAL fixture units and hot water on HOT '
-          'fixture units. Drawn sizes are overwritten and the fittings are resized to '
-          'match.', '20,0,0,6') +
-    '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
-    ' ToolTip="The take-off prints in the pyRevit window either way."/>' +
-    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
-          'sheet, so the fixture unit count behind every pipe size can be checked '
-          'against the model.', '20,0,0,0') +
-
+# Shared by the Size Water and Water Performance dialogs.
+_PROJECT_XAML = (
     _section('Project information') +
     '<Grid>'
     '<Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>'
@@ -290,8 +279,10 @@ _WATER_BODY = (
     '<TextBox x:Name="tb_job_no" Grid.Row="1" Grid.Column="1" Margin="0,3,0,3"/>'
     '<TextBlock Grid.Row="2" Text="By" VerticalAlignment="Center" Margin="0,3,12,3"/>'
     '<TextBox x:Name="tb_by" Grid.Row="2" Grid.Column="1" Margin="0,3,0,3"/>'
-    '</Grid>' +
+    '</Grid>'
+)
 
+_RECIRC_XAML = (
     _section('Hot water recirculation') +
     '<StackPanel x:Name="pnl_recirc">'
     '<StackPanel Orientation="Horizontal">'
@@ -307,8 +298,24 @@ _WATER_BODY = (
     '<TextBlock x:Name="tb_delta_t_unit" VerticalAlignment="Center"/>'
     '</StackPanel>'
     '</StackPanel>' +
-    _hint('', '0,4,0,0', name='tb_recirc_note') +
+    _hint('', '0,4,0,0', name='tb_recirc_note')
+)
 
+_WATER_BODY = (
+    _section('This run will', 10) +
+    '<CheckBox x:Name="cb_size" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
+    ' Content="Size the piping and write the sizes into the model"/>' +
+    _hint('Always on. Cold water is sized on TOTAL fixture units and hot water on HOT '
+          'fixture units. Drawn sizes are overwritten and the fittings are resized to '
+          'match.', '20,0,0,6') +
+    '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
+    ' ToolTip="The take-off prints in the pyRevit window either way."/>' +
+    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
+          'sheet, so the fixture unit count behind every pipe size can be checked '
+          'against the model.', '20,0,0,0') +
+
+    _PROJECT_XAML +
+    _RECIRC_XAML +
     _BASIS_XAML
 )
 
@@ -369,17 +376,47 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
         _WATER_BODY, use_theme)
 
     cb_wsfu = _named(win, 'cb_wsfu')
+    project = _init_project(win, project_info)
+    recirc = _init_recirc(win, return_detection)
+
+    _fill_basis(win, water_tables.basis_of_design_rows())
+    _fill_chart(win, "Firm pipe sizing chart", water_tables.sizing_chart())
+
+    def collect(errors):
+        values = recirc(errors)
+        if errors:
+            return None
+        values.update(project())
+        values["wsfu_calcs"] = bool(cb_wsfu.IsChecked)
+        return values
+
+    return _run(win, [_named(win, 'tb_heat_loss'), _named(win, 'tb_delta_t')],
+                collect)
+
+
+def _init_project(win, project_info):
+    """Prefill the Project information fields. Returns a reader."""
     tb_job = _named(win, 'tb_job')
     tb_job_no = _named(win, 'tb_job_no')
     tb_by = _named(win, 'tb_by')
+    tb_job.Text = project_info.get("job", "") or ""
+    tb_job_no.Text = project_info.get("job_number", "") or ""
+    tb_by.Text = project_info.get("by", "") or ""
+
+    def read():
+        return {"job": tb_job.Text.strip(),
+                "job_number": tb_job_no.Text.strip(),
+                "by": tb_by.Text.strip()}
+    return read
+
+
+def _init_recirc(win, return_detection):
+    """Prefill the Hot water recirculation section. Returns a reader that
+    takes the errors list and gives the return ids and recirc inputs."""
     pnl_recirc = _named(win, 'pnl_recirc')
     tb_heat_loss = _named(win, 'tb_heat_loss')
     tb_delta_t = _named(win, 'tb_delta_t')
     tb_recirc_note = _named(win, 'tb_recirc_note')
-
-    tb_job.Text = project_info.get("job", "") or ""
-    tb_job_no.Text = project_info.get("job_number", "") or ""
-    tb_by.Text = project_info.get("by", "") or ""
 
     max_dt = float(shared_params.MAX_RECIRC_DELTA_T_F)
     tb_heat_loss.Text = "{:.0f}".format(
@@ -408,10 +445,7 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
         tb_recirc_note.Text = ("No hot water return piping was found on this "
                                "network, so these are not used.")
 
-    _fill_basis(win, water_tables.basis_of_design_rows())
-    _fill_chart(win, "Firm pipe sizing chart", water_tables.sizing_chart())
-
-    def collect(errors):
+    def read(errors):
         heat_loss = shared_params.DEFAULT_RECIRC_HEAT_LOSS_BTU_PER_100FT
         delta_t = shared_params.DEFAULT_RECIRC_DELTA_T_F
         if use_recirc:
@@ -419,18 +453,124 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
             delta_t = _number(tb_delta_t, 'Temperature drop', errors,
                               maximum=max_dt)
             if errors:
-                return None
+                return {}
         return {
-            "job": tb_job.Text.strip(),
-            "job_number": tb_job_no.Text.strip(),
-            "by": tb_by.Text.strip(),
-            "wsfu_calcs": bool(cb_wsfu.IsChecked),
             "return_system_type_ids": set(detected),
             "recirc_heat_loss_btu_per_100ft": float(heat_loss),
             "recirc_delta_t_f": float(delta_t),
         }
+    return read
 
-    return _run(win, [tb_heat_loss, tb_delta_t], collect)
+
+# ---------------------------------------------------------------------------
+# Water Performance
+# ---------------------------------------------------------------------------
+
+_PERF_BODY = (
+    _section('This run will', 10) +
+    '<CheckBox x:Name="cb_plan" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
+    ' Content="Color a copy of the active plan and put it on a new sheet"/>' +
+    _hint('Always on. Read only: nothing is written to the pipes. The sheet carries '
+          'the flagged pipe table and the color legend.', '20,0,0,6') +
+    '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
+    ' ToolTip="The take-off prints in the pyRevit window either way."/>' +
+    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
+          'sheet.', '20,0,0,0') +
+
+    _section('Checks') +
+    '<CheckBox x:Name="cb_velocity" IsChecked="True" IsEnabled="False"'
+    ' Content="Pipe size and velocity"/>'
+    '<StackPanel Orientation="Horizontal" Margin="20,4,0,0">'
+    '<TextBlock Text="Yellow tolerance" Width="110" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_tolerance" Width="72" Margin="0,0,6,0"'
+    ' ToolTip="How far computed speed may run over the limit before a pipe at table size turns yellow."/>'
+    '<TextBlock Text="% over the speed limit" VerticalAlignment="Center"/>'
+    '</StackPanel>' +
+    _hint('', '20,4,0,6', name='tb_limits_note') +
+    '<CheckBox x:Name="cb_pressure" IsChecked="False" IsEnabled="False"'
+    ' Content="Pressure loss.  PENDING, under development."/>' +
+
+    _PROJECT_XAML +
+    _RECIRC_XAML +
+    _BASIS_XAML
+)
+
+
+def show_water_performance_dialog(title, project_info, use_theme=True):
+    """Themed Water Performance dialog.
+
+    Returns a dict, or None when cancelled:
+        job, job_number, by, wsfu_calcs, speed_tolerance (fraction),
+        return_system_type_ids (empty, the run detects it after the pick),
+        recirc_heat_loss_btu_per_100ft, recirc_delta_t_f.
+    """
+    import water_performance
+
+    win = _build_window(
+        title, 'Water Performance',
+        'Checks domestic cold water, hot water and hot water return piping '
+        'against the 2024 IPC firm sizing table. Read only.',
+        _PERF_BODY, use_theme)
+
+    cb_wsfu = _named(win, 'cb_wsfu')
+    tb_tolerance = _named(win, 'tb_tolerance')
+    tb_tolerance.Text = "{:.0f}".format(
+        float(water_performance.SPEED_TOLERANCE) * 100.0)
+    _named(win, 'tb_limits_note').Text = (
+        "Pass or fail is the drawn size against the firm table size. Speed "
+        "limits from the firm table: {:.0f} fps cold, {:.0f} fps hot and "
+        "return.".format(water_tables.velocity_limit_fps("cold"),
+                         water_tables.velocity_limit_fps("hot")))
+
+    project = _init_project(win, project_info)
+    recirc = _init_recirc(win, None)
+
+    _fill_basis(win, water_tables.basis_of_design_rows())
+    _fill_chart(win, "Firm pipe sizing chart", water_tables.sizing_chart())
+
+    def collect(errors):
+        tolerance = _number(tb_tolerance, 'Yellow tolerance', errors,
+                            kind='nonneg', maximum=100)
+        values = recirc(errors)
+        if errors:
+            return None
+        values.update(project())
+        values["wsfu_calcs"] = bool(cb_wsfu.IsChecked)
+        values["speed_tolerance"] = float(tolerance) / 100.0
+        return values
+
+    return _run(win, [tb_tolerance, _named(win, 'tb_heat_loss'),
+                      _named(win, 'tb_delta_t')], collect)
+
+
+# ---------------------------------------------------------------------------
+# Start point (Size Water, Water Performance)
+# ---------------------------------------------------------------------------
+
+_START_BODY = (
+    _section('Where does the domestic water system start?', 10) +
+    '<RadioButton x:Name="rb_rpz" GroupName="start" IsChecked="True"'
+    ' FontWeight="SemiBold" Content="RPZ"/>' +
+    _hint('Pick the RPZ / backflow preventer.', '20,0,0,8') +
+    '<RadioButton x:Name="rb_tee" GroupName="start" FontWeight="SemiBold"'
+    ' Content="New pipe connection (TEE)"/>' +
+    _hint('Existing building: pick the tee on the existing cold water main where '
+          'the new piping branches off. The existing main is not checked.',
+          '20,0,0,0')
+)
+
+
+def show_start_point_dialog(title, rpz_label, tee_label, use_theme=True):
+    """Themed start point choice. Returns rpz_label, tee_label or None."""
+    win = _build_window(title, 'Select Start Point',
+                        'Choose the start point, then pick it in the model.',
+                        _START_BODY, use_theme, width=480)
+    rb_rpz = _named(win, 'rb_rpz')
+
+    def collect(errors):
+        return rpz_label if rb_rpz.IsChecked else tee_label
+
+    return _run(win, [], collect)
 
 
 # ---------------------------------------------------------------------------

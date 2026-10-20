@@ -51,14 +51,23 @@ BODIES = {
     "water": sizer_dialogs._WATER_BODY,
     "gas": sizer_dialogs._GAS_BODY,
     "existing": sizer_dialogs._EXISTING_BODY,
+    "performance": sizer_dialogs._PERF_BODY,
+    "start": sizer_dialogs._START_BODY,
 }
+
+# The start point picker is a choice, not a calculation, so it carries no
+# Calculation basis block.
+NO_BASIS = set(["start"])
 
 # Every name each dialog function looks up, read from its source so the test
 # cannot drift from the code.
 FUNCTIONS = {
-    "water": "show_water_dialog",
-    "gas": "show_gas_picker",
-    "existing": "show_existing_gas_dialog",
+    "water": ["show_water_dialog", "_init_project", "_init_recirc"],
+    "gas": ["show_gas_picker"],
+    "existing": ["show_existing_gas_dialog"],
+    "performance": ["show_water_performance_dialog", "_init_project",
+                    "_init_recirc"],
+    "start": ["show_start_point_dialog"],
 }
 
 
@@ -109,8 +118,11 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
 
     def test_names_used_by_each_dialog_are_in_its_xaml(self):
         shell = set(["tb_error", "btn_ok", "btn_cancel", "img_logo"])
-        for key, function_name in FUNCTIONS.items():
-            wanted = _names_looked_up(function_name)
+        for key, function_names in FUNCTIONS.items():
+            wanted = set()
+            for function_name in function_names:
+                wanted |= _names_looked_up(function_name)
+            function_name = ", ".join(function_names)
             self.assertTrue(wanted, "no lookups found in " + function_name)
             present = _names_in(BODIES[key]) | shell
             missing = sorted(wanted - present)
@@ -130,6 +142,8 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
 
     def test_every_dialog_has_a_calculation_basis_block(self):
         for key, body in BODIES.items():
+            if key in NO_BASIS:
+                continue
             self.assertIn("grid_ref", _names_in(body), key)
             self.assertIn('Text="Calculation basis"', body, key)
 

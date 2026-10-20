@@ -99,12 +99,14 @@ class PipeResult(object):
         self.length_feet = 0.0
 
 
-def classify(segment, system_key=None):
+def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
     """Judge one water_sizing_engine.SegmentResult.
 
     Args:
         segment: SegmentResult from size_network.
         system_key: 'cold' or 'hot'. For return pipes pass 'hot'.
+        speed_tolerance: fraction over the speed limit before a pipe at table
+            size turns yellow (dialog input, default SPEED_TOLERANCE).
 
     Returns:
         PipeResult.
@@ -151,11 +153,11 @@ def classify(segment, system_key=None):
         result.label = GREEN
         result.reason = "at table size"
         if (result.fps is not None and result.limit_fps is not None and
-                result.fps > result.limit_fps * (1.0 + SPEED_TOLERANCE)):
+                result.fps > result.limit_fps * (1.0 + speed_tolerance)):
             result.label = YELLOW
             result.reason = ("at table size, computed {:.1f} fps is more than "
                              "{:.0f} percent over the {:.0f} fps limit".format(
-                                 result.fps, SPEED_TOLERANCE * 100.0,
+                                 result.fps, float(speed_tolerance) * 100.0,
                                  result.limit_fps))
     return result
 
@@ -177,7 +179,7 @@ def worst_label(labels):
     return worst
 
 
-def basis_lines():
+def basis_lines(speed_tolerance=SPEED_TOLERANCE):
     """Basis of design block for the performance report."""
     cold = water_tables.velocity_limit_fps("cold")
     hot = water_tables.velocity_limit_fps("hot")
@@ -190,7 +192,8 @@ def basis_lines():
     lines.append("  Speed shown: gpm / (2.4483 x ID^2), ID from ASTM B88 "
                  "Copper Type L (OD - 2 x wall), at the DRAWN size.")
     lines.append("  Speed limits: {:.0f} fps cold, {:.0f} fps hot and hot "
-                 "water return (firm table).".format(cold, hot))
+                 "water return (firm table). Yellow above {:.0f} percent "
+                 "over.".format(cold, hot, float(speed_tolerance) * 100.0))
     lines.append("  Flow: 2024 IPC Table E103.3(3), flush tank column. "
                  "Flushometer heavy systems read low.")
     return lines
