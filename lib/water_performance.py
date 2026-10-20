@@ -186,16 +186,20 @@ def basis_lines(speed_tolerance=SPEED_TOLERANCE):
     lines = list(water_tables.basis_of_design_lines())
     lines.append("")
     lines.append("Performance check basis:")
-    lines.append("  Pass/fail: drawn nominal size against the firm WSFU table "
-                 "size for the pipe's demand (sizing run read only, minimums "
-                 "applied). Return pipes against circulation flow.")
-    lines.append("  Speed shown: gpm / (2.4483 x ID^2), ID from ASTM B88 "
-                 "Copper Type L (OD - 2 x wall), at the DRAWN size.")
-    lines.append("  Speed limits: {:.0f} fps cold, {:.0f} fps hot and hot "
-                 "water return (firm table). Yellow above {:.0f} percent "
-                 "over.".format(cold, hot, float(speed_tolerance) * 100.0))
-    lines.append("  Flow: 2024 IPC Table E103.3(3), flush tank column. "
-                 "Flushometer heavy systems read low.")
+    lines.append("  Pass or fail: the drawn nominal size against the size "
+                 "the firm table gives for the pipe's demand (the sizing is "
+                 "run read only, with the firm minimums). Return pipes are "
+                 "judged on circulation flow.")
+    lines.append("  Velocity: gpm / (2.4483 x ID^2) at the drawn size, with "
+                 "the inside diameter from ASTM B88 Copper Type L.")
+    lines.append("  Velocity limits: {:.0f} fps for cold water, {:.0f} fps "
+                 "for hot water and hot water return (firm table). A pipe at "
+                 "table size turns yellow when its velocity is more than "
+                 "{:.0f} percent over the limit.".format(
+                     cold, hot, float(speed_tolerance) * 100.0))
+    lines.append("  Flow: 2024 IPC Table E103.3(3), with the flush valve "
+                 "column for cold water when the system serves a flush valve "
+                 "fixture.")
     return lines
 
 

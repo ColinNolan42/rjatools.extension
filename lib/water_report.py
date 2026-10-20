@@ -527,7 +527,12 @@ def exceptions_block(graph, sizing_result):
     if hwr_unsized:
         lines.append("  NOT SIZED: {} hot water return pipe(s), see the "
                      "flags above.".format(hwr_unsized))
-    lines.append("  NOT EVALUATED: pressure loss and velocity.")
+    if sizing_result.get("flush_valve_system"):
+        lines.append("  DEMAND: the system serves a flush valve fixture, so "
+                     "cold water uses the flush valve column of Table "
+                     "E103.3(3) and is sized on gpm.")
+    lines.append("  VELOCITY AND PRESSURE LOSS: checked by Water "
+                 "Performance.")
 
     if not any_flag:
         lines.insert(2, "  No blocking issues found.")

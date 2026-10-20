@@ -45,16 +45,17 @@ def run(doc, uidoc, output, forms):
     output.print_md("# Water Performance")
 
     view = doc.ActiveView
-    if not isinstance(view, ViewPlan) or view.IsTemplate:
-        forms.alert("Open the floor plan to check, then run again. The result "
-                    "is a colored copy of the active plan view.",
-                    title="Water Performance")
-        return False
-
     settings = ui_helpers.show_water_performance_dialog(
         "Water Performance - 2024 IPC", water_run.project_info(doc, output))
     if settings is None:
         output.print_md("Cancelled. Nothing was changed.")
+        return False
+    # Only the size and velocity check colors a copy of the plan.
+    if settings["velocity"] and (not isinstance(view, ViewPlan) or
+                                 view.IsTemplate):
+        forms.alert("Open the floor plan to check, then run again. Pipe size "
+                    "and velocity colors a copy of the active plan view.",
+                    title="Water Performance")
         return False
 
     origin, upstream = water_run.pick_origin(uidoc, doc, output, forms)
@@ -83,21 +84,26 @@ def run(doc, uidoc, output, forms):
         graph, apply_minimums=True, return_system_type_ids=return_ids,
         recirc=recirc)
 
-    results = {}
-    for segment in sizing["segments"]:
-        node = graph.nodes.get(segment.element_id)
-        if node is None:
-            continue
-        hot = (segment.is_return or
-               node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER)
-        key = water_tables.SYSTEM_HOT if hot else water_tables.SYSTEM_COLD
-        results[segment.element_id] = water_performance.classify(
-            segment, key, settings["speed_tolerance"])
-
-    if not results:
+    if not sizing["segments"]:
         output.print_md("No pipes were found on this system. Nothing was "
                         "changed.")
         return False
+    if sizing.get("flush_valve_system"):
+        output.print_md("The system serves a flush valve fixture: cold water "
+                        "demand uses the flush valve column of Table "
+                        "E103.3(3).")
+
+    results = {}
+    if settings["velocity"]:
+        for segment in sizing["segments"]:
+            node = graph.nodes.get(segment.element_id)
+            if node is None:
+                continue
+            hot = (segment.is_return or
+                   node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER)
+            key = water_tables.SYSTEM_HOT if hot else water_tables.SYSTEM_COLD
+            results[segment.element_id] = water_performance.classify(
+                segment, key, settings["speed_tolerance"])
 
     if settings.get("pressure_loss") or settings.get("pump_duty"):
         _read_device_drops(graph)
@@ -121,11 +127,13 @@ def run(doc, uidoc, output, forms):
             output.print_md(":warning: Pump duty point failed, not reported: "
                             "{}".format(str(exc)))
 
-    fitting_labels = _fitting_labels(graph, results)
     stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    new_view = _make_colored_view(doc, output, view, graph, results,
-                                  fitting_labels, stamp)
-    _print_report(output, results, sizing, settings["speed_tolerance"])
+    new_view = None
+    if results:
+        fitting_labels = _fitting_labels(graph, results)
+        new_view = _make_colored_view(doc, output, view, graph, results,
+                                      fitting_labels, stamp)
+        _print_report(output, results, sizing, settings["speed_tolerance"])
     if pressure is not None:
         _print_pressure(output, pressure, settings["start_psi"])
     if pumps:
@@ -138,6 +146,8 @@ def run(doc, uidoc, output, forms):
     if new_view is not None:
         _make_sheet(doc, output, view, new_view, results, stamp,
                     settings["speed_tolerance"], extra)
+    elif extra:
+        _make_tables_sheet(doc, output, extra, stamp)
 
     if settings["wsfu_calcs"]:
         header = {
@@ -358,6 +368,33 @@ def _pump_table(pumps, settings):
                                         settings["pump_safety_factor"]))
     return ("RECIRCULATION PUMP DUTY POINT", water_pump.TABLE_COLUMNS,
             water_pump.table_rows(pumps), notes)
+
+
+def _make_tables_sheet(doc, output, tables, stamp):
+    """Pressure loss and pump tables on their own sheet, when the size and
+    velocity check (and so the colored plan) was not run."""
+    transaction = Transaction(doc, "RJA Tools - Water Performance Sheet")
+    transaction.Start()
+    try:
+        view, height, width = water_drafting.build_tables_view(
+            doc, "Water Performance Tables - {}".format(stamp),
+            "WATER PERFORMANCE - BASIS 2024 IPC", tables)
+        if view is None:
+            raise Exception("no drafting view or text type in the project")
+        sheet, _viewport = water_drafting.place_on_sheet(
+            doc, view, height, width, "WP-{}".format(stamp),
+            "Water Performance Tables (Sheet)")
+        transaction.Commit()
+    except Exception as exc:
+        transaction.RollBack()
+        output.print_md("Sheet failed, the results above are printed only: "
+                        "{}".format(str(exc)))
+        return
+    if sheet is not None:
+        output.print_md("Created sheet **{}**.".format(sheet.SheetNumber))
+    else:
+        output.print_md("Created drafting view **Water Performance Tables - "
+                        "{}** (no title block for a sheet).".format(stamp))
 
 
 def _make_sheet(doc, output, source_view, plan_view, results, stamp,

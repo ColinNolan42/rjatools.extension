@@ -68,6 +68,8 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
     segments = []
     flags = []
     returns = set(return_system_type_ids or [])
+    # Table E103.3(3) column for the whole cold system (Colin, 2026-10-21).
+    flush_valve_system = water_graph.has_flush_valves(graph)
 
     for node in graph.nodes.values():
         if node.kind != water_graph.KIND_PIPE:
@@ -90,21 +92,35 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
                       if node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER
                       else water_tables.SYSTEM_COLD)
 
-        # Demand in gpm, for the report only. The size comes from WSFU.
-        demand = water_tables.wsfu_to_gpm(node.demand_wsfu)
+        # Demand in gpm. On a flush valve system cold water uses the flush
+        # valve column and is sized on gpm; everything else on WSFU.
+        demand = water_tables.demand_gpm(
+            node.demand_wsfu,
+            flush_valve_system and system_key == water_tables.SYSTEM_COLD)
         result.demand_gpm = demand["gpm"]
+        result.demand_curve = demand["curve"]
+        by_gpm = demand["curve"] == water_tables.CURVE_FLUSHOMETER
 
-        selection = water_tables.select_size(node.demand_wsfu, system_key)
+        if by_gpm:
+            selection = water_tables.select_size_by_gpm(demand["gpm"] or 0.0,
+                                                        system_key)
+        else:
+            selection = water_tables.select_size(node.demand_wsfu, system_key)
         result.nominal_size = selection["nominal_size"]
         result.size_inches = selection["size_inches"]
 
-        if selection["status"] == "exceeds_table":
+        if selection["status"] == "exceeds_table" or (
+                by_gpm and demand["gpm"] is None):
             result.exceeds_table = True
             result.rule = "NOT SIZED"
-            result.flag = ("demand {:.1f} wsfu exceeds the firm table maximum "
-                           "of {:.0f} wsfu".format(
-                               float(node.demand_wsfu),
-                               float(selection["max_table_wsfu"])))
+            if by_gpm:
+                result.flag = ("flush valve demand exceeds the firm table "
+                               "restated in gpm")
+            else:
+                result.flag = ("demand {:.1f} wsfu exceeds the firm table "
+                               "maximum of {:.0f} wsfu".format(
+                                   float(node.demand_wsfu),
+                                   float(selection["max_table_wsfu"])))
             flags.append("Pipe {}: {}".format(node.element_id, result.flag))
             segments.append(result)
             continue
@@ -124,8 +140,15 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
             segments.append(result)
             continue
 
-        result.rule = "{} wsfu, {} table limit {:.0f}".format(
-            _fmt(node.demand_wsfu), system_key, float(selection["limit_wsfu"]))
+        if by_gpm:
+            result.rule = "{} wsfu, {:.1f} gpm flush valve, {} table limit " \
+                          "{:.1f} gpm".format(
+                              _fmt(node.demand_wsfu), float(demand["gpm"]),
+                              system_key, float(selection["limit_gpm"]))
+        else:
+            result.rule = "{} wsfu, {} table limit {:.0f}".format(
+                _fmt(node.demand_wsfu), system_key,
+                float(selection["limit_wsfu"]))
 
         fixture_ids = _served_fixture_ids(graph, node)
         result.fixture_count = len(fixture_ids)
@@ -146,7 +169,8 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
         "unsized_count": len(segments) - len(sized),
         "total_length_ft": sum(s.length_feet for s in segments),
     }
-    return {"segments": segments, "flags": flags, "totals": totals}
+    return {"segments": segments, "flags": flags, "totals": totals,
+            "flush_valve_system": flush_valve_system}
 
 
 def _size_return_pipe(graph, node, result, recirc, flags):

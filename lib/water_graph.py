@@ -95,6 +95,7 @@ class WaterNode(object):
         self.hwr_active       = False
         self.has_cw           = True
         self.has_hw           = True
+        self.is_flush_valve   = False   # flushometer valve water closet or urinal
 
         # Heater bookkeeping (only meaningful when kind == KIND_HEATER)
         self.served_fixture_ids = []
@@ -472,6 +473,7 @@ def _make_node(graph, element, element_id, system):
             element, shared_params.PARAM_HAS_HW)
         node.has_cw = True if has_cw is None else bool(has_cw)
         node.has_hw = True if has_hw is None else bool(has_hw)
+        node.is_flush_valve = _is_flush_valve(element, node)
         graph.fixture_ids.append(element_id)
         graph.log("FIXTURE {}: '{}' cold={} hot={} total={} hwr={}".format(
             element_id, node.fixture_name, node.cw_wsfu, node.hw_wsfu,
@@ -1107,6 +1109,42 @@ def _assign_demand(graph):
 # =============================================================================
 # CLASSIFICATION HELPERS
 # =============================================================================
+
+def _is_flush_valve(element, node):
+    """A flushometer VALVE fixture (water closet or urinal).
+
+    Flush_Type = Valve when the family carries it; otherwise the Type or
+    fixture name says "flushometer valve" or "flush valve". A flushometer
+    TANK is a tank fixture, not a flush valve.
+    """
+    flush_type = revit_helpers.get_type_parameter_value(
+        element, shared_params.PARAM_FLUSH_TYPE)
+    if flush_type is None:
+        flush_type = revit_helpers.get_parameter_value(
+            element, shared_params.PARAM_FLUSH_TYPE)
+    if isinstance(flush_type, str) and flush_type.strip():
+        return flush_type.strip().lower() == "valve"
+    return name_is_flush_valve(node.type_name, node.fixture_name)
+
+
+def name_is_flush_valve(*names):
+    text = " ".join(str(n or "") for n in names).lower()
+    return "flushometer valve" in text or "flush valve" in text
+
+
+def has_flush_valves(graph):
+    """True when the system serves at least one flush valve fixture on cold
+    water. Drives the Table E103.3(3) column for the whole cold system
+    (Colin, 2026-10-21)."""
+    for fid in graph.fixture_ids:
+        node = graph.nodes.get(fid)
+        if node is None:
+            continue
+        if getattr(node, "is_flush_valve", False) and \
+                float(node.cw_wsfu or 0.0) > 0.0:
+            return True
+    return False
+
 
 def _looks_like_heater(connectors):
     """A water heater has a cold water connector and a hot water connector.

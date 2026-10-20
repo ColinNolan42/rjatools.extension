@@ -342,11 +342,71 @@ class TestBasisOfDesignRows(unittest.TestCase):
             self.assertIn(token, joined_rows)
             self.assertIn(token, joined_lines)
 
-    def test_states_what_is_not_evaluated(self):
+    def test_states_velocity_and_pressure_are_evaluated(self):
         rows = dict(wt.basis_of_design_rows())
-        self.assertIn("pressure loss", rows["Not included:"].lower())
-        # Recirculation is sized now, so it must not be listed as missing.
-        self.assertNotIn("recirculation", rows["Not included:"].lower())
+        self.assertNotIn("Not included:", rows)
+        self.assertIn("Water Performance", rows["Velocity:"])
+        self.assertIn("E103.3", rows["Pressure loss:"])
+        self.assertIn("604.3", rows["Pressure loss:"])
+        joined = " ".join(wt.basis_of_design_lines())
+        self.assertNotIn("NOT evaluated", joined)
+
+    def test_states_the_flush_valve_column(self):
+        rows = dict(wt.basis_of_design_rows())
+        self.assertIn("flush valve column", rows["Demand:"])
+        self.assertIn("gpm", rows["Pipe sizing:"])
+
+    def test_every_row_is_a_sentence(self):
+        for label, value in wt.basis_of_design_rows():
+            self.assertTrue(value[0].isupper() or value[0].isdigit(), label)
+            self.assertTrue(value.endswith("."), label)
+
+
+class TestFlushValveDemand(unittest.TestCase):
+    """Table E103.3(3) flush valve column, whole cold system (Colin,
+    2026-10-21), sized on gpm against the firm table restated in gpm."""
+
+    def test_column_choice(self):
+        self.assertEqual(wt.demand_gpm(10, False)["curve"],
+                         wt.CURVE_FLUSH_TANK)
+        self.assertEqual(wt.demand_gpm(10, True)["curve"],
+                         wt.CURVE_FLUSHOMETER)
+        self.assertAlmostEqual(wt.demand_gpm(10, True)["gpm"], 27.0)
+
+    def test_below_the_flush_valve_column_uses_flush_tank(self):
+        self.assertEqual(wt.flush_valve_min_wsfu(), 5.0)
+        low = wt.demand_gpm(2, True)
+        self.assertEqual(low["curve"], wt.CURVE_FLUSH_TANK)
+        self.assertAlmostEqual(low["gpm"], 5.0)
+
+    def test_cold_gpm_rows_restate_the_firm_table(self):
+        rows = wt.firm_gpm_rows("cold")
+        for row in rows:
+            self.assertAlmostEqual(row["max_gpm"],
+                                   wt.wsfu_to_gpm(row["max_wsfu"])["gpm"])
+
+    def test_size_by_gpm_is_the_smallest_that_covers(self):
+        rows = wt.firm_gpm_rows("cold")
+        for i, row in enumerate(rows):
+            pick = wt.select_size_by_gpm(row["max_gpm"], "cold")
+            self.assertEqual(pick["nominal_size"], row["nominal_size"])
+            if i + 1 < len(rows):
+                over = wt.select_size_by_gpm(row["max_gpm"] + 0.01, "cold")
+                self.assertEqual(over["nominal_size"],
+                                 rows[i + 1]["nominal_size"])
+
+    def test_flush_valve_sizes_larger_than_flush_tank(self):
+        wsfu = 30.0
+        tank = wt.select_size(wsfu, "cold")
+        valve = wt.select_size_by_gpm(wt.demand_gpm(wsfu, True)["gpm"],
+                                      "cold")
+        self.assertGreater(valve["size_inches"], tank["size_inches"])
+
+    def test_zero_and_too_big(self):
+        self.assertEqual(wt.select_size_by_gpm(0, "cold")["status"],
+                         "no_demand")
+        self.assertEqual(wt.select_size_by_gpm(10000, "cold")["status"],
+                         "exceeds_table")
 
     def test_states_the_recirculation_method(self):
         """The return is sized on circulation flow, which is not a code

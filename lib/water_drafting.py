@@ -575,6 +575,29 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
     return view, (0.0 - y), width
 
 
+def build_tables_view(doc, view_name, title, tables):
+    """Drafting view holding only result tables (no flagged pipes, no
+    legend): a title band, then each (title, columns, rows, notes).
+
+    Returns (ViewDrafting, height_ft, width_ft), or (None, 0, 0).
+    """
+    view = _new_drafting_view(doc, view_name)
+    if view is None:
+        return None, 0.0, 0.0
+    st = _Style(doc)
+    width = max([sum([c[1] for c in t[1]], 0.0) for t in tables] or [0.6])
+    y = _band(st, view, 0.0, 0.0, width, title, None, BAND_H)
+    for table_title, columns, rows, notes in tables:
+        y -= GAP
+        table_w = sum([c[1] for c in columns], 0.0)
+        y = _band(st, view, 0.0, y, table_w, table_title, None, SUB_BAND_H)
+        if rows:
+            y = _styled_table(st, view, 0.0, y, columns, rows)
+        if notes:
+            y = _note_panel(st, view, 0.0, y, table_w, notes)
+    return view, (0.0 - y), width
+
+
 def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
                          sheet_number, sheet_name):
     """New sheet with the colored plan and the table beside it.

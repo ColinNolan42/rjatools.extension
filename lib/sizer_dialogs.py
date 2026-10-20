@@ -467,18 +467,18 @@ def _init_recirc(win, return_detection):
 # ---------------------------------------------------------------------------
 
 _PERF_BODY = (
-    _section('This run will', 10) +
-    '<CheckBox x:Name="cb_plan" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
-    ' Content="Color a copy of the active plan and put it on a new sheet"/>' +
-    _hint('Always on. Read only: nothing is written to the pipes. The sheet carries '
-          'the flagged pipe table and the color legend.', '20,0,0,6') +
+    _section('Outputs', 10) +
+    _hint('Read only: nothing is written to the pipes. The results go on a new '
+          'sheet; with Pipe size and velocity ticked, that sheet carries a '
+          'colored copy of the active plan and the color legend.', '0,0,0,6') +
     '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
     ' ToolTip="The take-off prints in the pyRevit window either way."/>' +
     _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
           'sheet.', '20,0,0,0') +
 
     _section('Checks') +
-    '<CheckBox x:Name="cb_velocity" IsChecked="True" IsEnabled="False"'
+    _hint('Tick at least one check.', '0,0,0,4') +
+    '<CheckBox x:Name="cb_velocity" IsChecked="True"'
     ' Content="Pipe size and velocity"/>'
     '<StackPanel Orientation="Horizontal" Margin="20,4,0,0">'
     '<TextBlock Text="Yellow tolerance" Width="110" VerticalAlignment="Center"/>'
@@ -591,6 +591,13 @@ def show_water_performance_dialog(title, project_info, use_theme=True):
     _fill_chart(win, "Firm pipe sizing chart", water_tables.sizing_chart())
 
     def collect(errors):
+        cb_velocity = _named(win, 'cb_velocity')
+        if not (cb_velocity.IsChecked or cb_pressure.IsChecked or
+                cb_pump.IsChecked):
+            errors.append((None, 'Tick at least one check: pipe size and '
+                                 'velocity, pressure loss or the pump duty '
+                                 'point.'))
+            return None
         tolerance = _number(tb_tolerance, 'Yellow tolerance', errors,
                             kind='nonneg', maximum=100)
         start_psi = None
@@ -609,6 +616,7 @@ def show_water_performance_dialog(title, project_info, use_theme=True):
         values.update(project())
         values["wsfu_calcs"] = bool(cb_wsfu.IsChecked)
         values["speed_tolerance"] = float(tolerance) / 100.0
+        values["velocity"] = bool(cb_velocity.IsChecked)
         values["pressure_loss"] = bool(cb_pressure.IsChecked)
         values["start_psi"] = start_psi
         values["pump_duty"] = bool(cb_pump.IsChecked)
@@ -686,14 +694,13 @@ def _duct_limits_xaml():
 
 
 _DUCT_BODY = (
-    _section('This run will', 10) +
-    '<CheckBox x:Name="cb_size" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
-    ' Content="Size every main and write the sizes into the model"/>' +
-    _hint('Always on. Mains only (two or more terminals downstream). Ducts first, '
-          'then the elbows, dampers and endcaps between two mains are matched. '
-          'Takeoff boots, branches and diffusers are never touched: the '
-          'auto-sizing diffusers set the branch. Existing phase ductwork is left '
-          'alone. Every joint is audited afterwards.', '20,0,0,0') +
+    _section('This run', 10) +
+    _hint('Sizes every main (two or more terminals downstream) and writes the '
+          'sizes into the model: the ducts first, then the elbows, dampers and '
+          'endcaps between two mains. Takeoff boots, branches and diffusers are '
+          'never touched, because the auto-sizing diffusers set the branch. '
+          'Existing phase ductwork is left alone. Every joint is audited '
+          'afterwards.', '0,0,0,0') +
 
     _section('Main duct limits') +
     _duct_limits_xaml() +

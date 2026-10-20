@@ -248,8 +248,19 @@ def return_gpm_rows():
         List of dicts: nominal_size, size_inches, max_wsfu, max_gpm. The
         first row is 1/2 inch, which is the minimum return size.
     """
+    return firm_gpm_rows(SYSTEM_HOT)
+
+
+def firm_gpm_rows(system):
+    """The firm table for one system restated in gpm.
+
+    Each row's WSFU limit is converted to the gpm Table E103.3(3) gives for
+    that load, flush tank column: the flow the firm table allows in that size
+    at its velocity limit. Used to size on gpm where WSFU cannot be looked up
+    directly (hot water return, and cold water on a flush valve system).
+    """
     rows = []
-    limit_field = _SYSTEM_LIMIT_FIELDS[SYSTEM_HOT]
+    limit_field = _SYSTEM_LIMIT_FIELDS[_system_key(system)]
     for row in _load()["firm_sizing_table"]:
         demand = wsfu_to_gpm(row[limit_field])
         rows.append({
@@ -259,6 +270,49 @@ def return_gpm_rows():
             "max_gpm": demand["gpm"],
         })
     return rows
+
+
+def select_size_by_gpm(gpm, system):
+    """Smallest firm size whose gpm capacity (firm_gpm_rows) covers gpm.
+
+    Returns the select_size() dict shape: nominal_size, size_inches, gpm,
+    system, limit_gpm, status ("ok", "no_demand", "exceeds_table" with
+    max_table_gpm).
+    """
+    flow = _to_nonneg_float(gpm, "gpm")
+    sys_key = _system_key(system)
+    result = {"nominal_size": None, "size_inches": None, "gpm": flow,
+              "system": sys_key, "limit_gpm": None, "status": "no_demand"}
+    if flow == 0:
+        return result
+    rows = firm_gpm_rows(sys_key)
+    for row in rows:
+        if row["max_gpm"] is not None and row["max_gpm"] >= flow:
+            result.update(nominal_size=row["nominal_size"],
+                          size_inches=row["size_inches"],
+                          limit_gpm=row["max_gpm"], status="ok")
+            return result
+    result["status"] = "exceeds_table"
+    result["max_table_gpm"] = rows[-1]["max_gpm"]
+    return result
+
+
+def flush_valve_min_wsfu():
+    """The first load the flush valve column of Table E103.3(3) lists."""
+    return float(_load()[_CURVE_DATA_KEYS[CURVE_FLUSHOMETER]][0]["wsfu"])
+
+
+def demand_gpm(wsfu, flush_valve_system=False):
+    """Probable demand for a load, choosing the Table E103.3(3) column.
+
+    On a flush valve system the flush valve column applies; a load below
+    that column's first row (it gives no value there) takes the flush tank
+    column. Returns dict: gpm, curve (the column used), status.
+    """
+    w = _to_nonneg_float(wsfu, "wsfu")
+    if flush_valve_system and w >= flush_valve_min_wsfu():
+        return wsfu_to_gpm(w, CURVE_FLUSHOMETER)
+    return wsfu_to_gpm(w, CURVE_FLUSH_TANK)
 
 
 def select_return_size(gpm):
@@ -474,11 +528,17 @@ def _fmt_fps(value):
 # entered in the dialog, so their values are printed with the circuit setter
 # table rather than here.
 _RETURN_BASIS = (
-    "one circuit setter per return leg, flow from the heat loss over the "
-    "effective length (gpm = BTU/h / (500 x temperature drop)), " +
+    "One circuit setter per return leg. Its flow makes up the heat loss over "
+    "the leg's effective length: gpm = BTU/h / (500 x temperature drop), " +
     "{:.1f}".format(float(shared_params.MIN_CIRCUIT_SETTER_GPM)) +
-    " gpm minimum per circuit setter, flows added at each junction toward "
-    "the water heater.")
+    " gpm minimum. Flows add at each junction toward the water heater.")
+
+
+def _demand_sentence(demand_table_id):
+    return (demand_table_id + ", flush tank column. When the system serves "
+            "a flush valve fixture, cold water uses the flush valve column; "
+            "a load below " + _fmt_fps(flush_valve_min_wsfu()) + " WSFU, the "
+            "first row of that column, uses the flush tank column.")
 
 
 def basis_of_design_lines(extra=None):
@@ -525,33 +585,31 @@ def basis_of_design_lines(extra=None):
 
     lines = []
     lines.append("Basis of design: " + str(code_edition) + ".")
+    lines.append("Fixture loads: " + wsfu_table_id +
+                 ", water supply fixture units (WSFU).")
+    lines.append("Demand: " + _demand_sentence(demand_table_id))
     lines.append(
-        "Fixture loads per " + wsfu_table_id + " (Water Supply Fixture Units)."
-    )
+        "Pipe sizing: the firm WSFU per size table (" + pipe_material +
+        "), " + str(size_min) + "\" through " + str(size_max) + "\", at a "
+        "maximum velocity of " + _fmt_fps(cold_fps) + " fps for cold water "
+        "and " + _fmt_fps(hot_fps) + " fps for hot water. On a flush valve "
+        "system, cold water piping is sized on gpm against the same table "
+        "restated in gpm.")
     lines.append(
-        "Demand (gpm) per " + demand_table_id + ", flush tank column."
-    )
+        "Cold water piping is sized on total fixture units and hot water "
+        "piping on hot fixture units. A cold water branch that serves only a "
+        "water heater is sized on the hot fixture units that heater serves.")
     lines.append(
-        "Pipe sizing per the firm WSFU-per-size table (" + pipe_material +
-        "), nominal sizes " + str(size_min) + "\" through " + str(size_max) +
-        "\", maximum velocity " + _fmt_fps(cold_fps) + " fps cold water and " +
-        _fmt_fps(hot_fps) + " fps hot water."
-    )
-    lines.append(
-        "Cold water piping is sized on TOTAL fixture units; hot water "
-        "piping is sized on HOT fixture units."
-    )
-    lines.append(
-        "A cold water branch serving only a water heater is sized on the "
-        "TOTAL HOT fixture units that heater serves."
-    )
-    lines.append(
-        "Hot water return piping is sized on circulation flow: " +
-        _RETURN_BASIS + " Sized against the hot water table restated in gpm "
+        "Hot water return: sized on circulation flow. " + _RETURN_BASIS +
+        " The return is sized against the hot water table restated in gpm "
         "per " + demand_table_id + " (" + _fmt_fps(hot_fps) + " fps), " +
-        str(size_min) + "\" minimum."
-    )
-    lines.append("Pressure loss is NOT evaluated in this build.")
+        str(size_min) + "\" minimum.")
+    lines.append(
+        "Velocity: computed from ASTM B88 Type L inside diameters and "
+        "checked in Water Performance.")
+    lines.append(
+        "Pressure loss: 2024 IPC Section E103.3 segmented loss method, "
+        "checked against Table 604.3 in Water Performance.")
 
     if extra:
         for line in extra:
@@ -603,25 +661,32 @@ def basis_of_design_rows():
     size_max = firm_rows[-1]["nominal_size"]
 
     return [
-        ("Code:", str(code_edition)),
-        ("Fixture loads:", wsfu_table_id + ", Water Supply Fixture Units"),
-        ("Demand (gpm):", demand_table_id + ", flush tank column"),
+        ("Code:", str(code_edition) + "."),
+        ("Fixture loads:", wsfu_table_id +
+         ", water supply fixture units (WSFU)."),
+        ("Demand:", _demand_sentence(demand_table_id)),
         ("Pipe sizing:",
-         "firm WSFU-per-size table (" + pipe_material + "), nominal " +
-         str(size_min) + "\" through " + str(size_max) + "\""),
+         "Firm WSFU per size table (" + pipe_material + "), " +
+         str(size_min) + "\" through " + str(size_max) + "\". On a flush "
+         "valve system, cold water piping is sized on gpm against the same "
+         "table restated in gpm."),
         ("Max velocity:",
-         _fmt_fps(cold_fps) + " fps cold water, " + _fmt_fps(hot_fps) +
-         " fps hot water"),
+         _fmt_fps(cold_fps) + " fps for cold water, " + _fmt_fps(hot_fps) +
+         " fps for hot water."),
         ("Sized on:",
-         "cold water on TOTAL fixture units, hot water on HOT fixture "
-         "units. A cold branch serving only a water heater is sized on the "
-         "TOTAL HOT fixture units that heater serves."),
+         "Cold water piping on total fixture units, hot water piping on hot "
+         "fixture units. A cold water branch that serves only a water heater "
+         "is sized on the hot fixture units that heater serves."),
         ("Recirculation:",
-         _RETURN_BASIS + " Sized against the hot water table restated in "
-         "gpm per " + demand_table_id + " (" + _fmt_fps(hot_fps) +
-         " fps), " + str(size_min) + "\" minimum."),
-        ("Not included:",
-         "pressure loss and velocity are NOT evaluated in this build."),
+         _RETURN_BASIS + " The return is sized against the hot water table "
+         "restated in gpm per " + demand_table_id + " (" +
+         _fmt_fps(hot_fps) + " fps), " + str(size_min) + "\" minimum."),
+        ("Velocity:",
+         "Computed from ASTM B88 Type L inside diameters and checked in "
+         "Water Performance."),
+        ("Pressure loss:",
+         "2024 IPC Section E103.3 segmented loss method, checked against "
+         "Table 604.3 in Water Performance."),
     ]
 
 

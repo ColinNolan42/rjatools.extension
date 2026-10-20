@@ -97,6 +97,7 @@ def add_node(graph, nid, kind, parent=None, system=COLD, **kw):
     node.hwr_active = False
     node.has_cw = True
     node.has_hw = True
+    node.is_flush_valve = kw.get("flush_valve", False)
     node.served_fixture_ids = kw.get("served", [])
     node.demand_wsfu = 0.0
     node.assigned_size = None
