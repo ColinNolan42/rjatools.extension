@@ -497,10 +497,10 @@ _PERF_BODY = (
           '0,4,0,0') +
     '</StackPanel>' +
 
-    '<CheckBox x:Name="cb_pump" IsChecked="True" Margin="0,6,0,0"'
-    ' Content="Recirculation pump duty point"'
+    '<CheckBox x:Name="cb_pump" IsChecked="False" Margin="0,6,0,0"'
+    ' Content="Recirculation pump duty point (preliminary)"'
     ' ToolTip="Flow and head for the pump at each water heater with a return."/>'
-    '<StackPanel x:Name="pnl_pump" Margin="20,4,0,0">'
+    '<StackPanel x:Name="pnl_pump" Margin="20,4,0,0" IsEnabled="False" Opacity="0.55">'
     '<StackPanel Orientation="Horizontal">'
     '<TextBlock Text="Circuit setter drop" Width="150" VerticalAlignment="Center"/>'
     '<TextBox x:Name="tb_setter_psi" Width="72" Margin="0,0,6,0"'
@@ -512,7 +512,8 @@ _PERF_BODY = (
     '<TextBox x:Name="tb_pump_sf" Width="72" Margin="0,0,6,0"/>'
     '<TextBlock Text="%" VerticalAlignment="Center"/>'
     '</StackPanel>' +
-    _hint('Flow is the circuit setter flows added at the heater. Head is the '
+    _hint('Preliminary until the RJA pump method is set. '
+          'Flow is the circuit setter flows added at the heater. Head is the '
           'friction round the worst circuit at circulation flow, plus the circuit '
           'setter and devices. Used only if the piping picked has a return.',
           '0,4,0,0') +

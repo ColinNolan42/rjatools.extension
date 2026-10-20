@@ -245,6 +245,28 @@ class TestPathsAndBudget(unittest.TestCase):
         self.assertFalse(any("604.8" in w for w in result["warnings"]))
         self.assertTrue(any("No path" in w for w in result["warnings"]))
 
+    def test_static_head_by_level(self):
+        # Start point hung 3 ft up, fixture connectors at the floor: same
+        # level, so no static head (the -1.3 psi Colin saw).
+        g, segs = build()
+        g.nodes[1].location_xyz = [0.0, 0.0, 3.0]
+        g.nodes[3].location_xyz = [0.0, 0.0, 0.0]
+        g.nodes[1].level_elev_ft = 0.0
+        g.nodes[3].level_elev_ft = 0.0
+        cold = [o for o in water_pressure.analyze(g, segs, 50.0)["outlets"]
+                if o.system == COLD][0]
+        self.assertAlmostEqual(cold.static_psi, 0.0)
+        # One floor up, 12 ft: 12 x 0.433.
+        g.nodes[3].level_elev_ft = 12.0
+        cold = [o for o in water_pressure.analyze(g, segs, 50.0)["outlets"]
+                if o.system == COLD][0]
+        self.assertAlmostEqual(cold.static_psi, 12.0 * 0.433)
+
+    def test_rows_show_pressure_and_verdict(self):
+        g, segs = build()
+        rows = water_pressure.table_rows(water_pressure.analyze(g, segs, 50.0))
+        self.assertIn(rows[0][4], ("YES", "NO", "NOT CHECKED"))
+
     def test_rows_shape(self):
         g, segs = build()
         rows = water_pressure.table_rows(water_pressure.analyze(g, segs, 50.0))

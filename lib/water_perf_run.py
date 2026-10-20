@@ -107,6 +107,7 @@ def run(doc, uidoc, output, forms):
 
     if settings.get("pressure_loss") or settings.get("pump_duty"):
         _read_device_drops(graph)
+        _read_levels(doc, graph)
     # Each extra check fails on its own: an error here is printed and the
     # colored view and report the user asked for still get made.
     pressure = None
@@ -297,23 +298,41 @@ def _read_device_drops(graph):
             node.device_drop_psi = None
 
 
-def _print_pressure(output, pressure, start_psi):
-    output.print_md("## Pressure loss")
-    critical = pressure["critical"]
-    if critical is not None:
-        output.print_md(
-            "Critical outlet: **{}** ({}), {:.1f} psi left against {:.0f} psi "
-            "required, margin **{:+.1f} psi**.".format(
+def _read_levels(doc, graph):
+    """Level elevation of the start point and every fixture, onto
+    node.level_elev_ft, so static head is measured floor to floor."""
+    wanted = set(graph.fixture_ids)
+    wanted.add(graph.origin_id)
+    for nid in wanted:
+        node = graph.nodes.get(nid)
+        if node is None or node.element is None:
+            continue
+        try:
+            level = doc.GetElement(node.element.LevelId)
+            node.level_elev_ft = float(level.Elevation) if level else None
+        except Exception:
+            node.level_elev_ft = None
+
+
+def _critical_line(critical):
+    return ("Lowest pressure: {} ({} water), {:.1f} psi at the outlet "
+            "against a {:.0f} psi minimum.".format(
                 critical.fixture_name,
                 "hot" if critical.system == water_pressure.HOT else "cold",
-                critical.residual_psi, critical.required_psi,
-                critical.margin_psi))
+                critical.residual_psi, critical.required_psi))
+
+
+def _print_pressure(output, pressure, start_psi):
+    output.print_md("## Pressure at fixture outlets")
+    critical = pressure["critical"]
+    if critical is not None:
+        output.print_md(_critical_line(critical))
     for warning in pressure["warnings"]:
         output.print_md(":warning: " + warning)
     output.print_table(
         table_data=water_pressure.table_rows(pressure),
-        title="Pressure at each fixture outlet, worst first (psi)",
-        columns=[c[0].title() for c in water_pressure.TABLE_COLUMNS])
+        title="Pressure at each fixture outlet, lowest first",
+        columns=[c[0] for c in water_pressure.TABLE_COLUMNS])
     notes = sorted(set(n for o in pressure["outlets"] for n in o.notes))
     if notes:
         output.print_md("Not counted or assumed:\n" +
@@ -329,12 +348,9 @@ def _pressure_table(pressure, start_psi):
     notes = list(pressure["warnings"])
     critical = pressure["critical"]
     if critical is not None:
-        notes.insert(0, "CRITICAL OUTLET: {} {}, MARGIN {:+.1f} PSI".format(
-            critical.fixture_name,
-            "HW" if critical.system == water_pressure.HOT else "CW",
-            critical.margin_psi))
+        notes.insert(0, _critical_line(critical))
     notes.extend(water_pressure.basis_lines(start_psi))
-    return ("PRESSURE LOSS - 2024 IPC E103.3, TABLE 604.3 (PSI)",
+    return ("PRESSURE AT FIXTURE OUTLETS - 2024 IPC E103.3, TABLE 604.3",
             water_pressure.TABLE_COLUMNS, water_pressure.table_rows(pressure),
             notes)
 

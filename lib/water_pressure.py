@@ -413,9 +413,20 @@ def _outlet(graph, fixture, system, start_psi, origin_z, gpm_by_pipe):
         result.notes.append("path to the start point not found")
         return result
 
-    fixture_z = _connector_z(fixture, system)
-    if fixture_z is None:
-        fixture_z = _z(fixture)
+    # Static head by floor level (Colin, 2026-10-21): the RJA fixture family
+    # puts its connectors at the floor, not at the outlet, and an RPZ hung
+    # 3 ft up then read as a 1.3 psi gain at every fixture on its own floor.
+    # Level to level puts a same-floor fixture at 0. The connector heights
+    # are only the fallback when a level cannot be read.
+    origin_level = getattr(graph.nodes.get(graph.origin_id), "level_elev_ft",
+                           None)
+    fixture_level = getattr(fixture, "level_elev_ft", None)
+    if origin_level is not None and fixture_level is not None:
+        fixture_z, origin_z = fixture_level, origin_level
+    else:
+        fixture_z = _connector_z(fixture, system)
+        if fixture_z is None:
+            fixture_z = _z(fixture)
     if origin_z is not None and fixture_z is not None:
         result.static_psi = (fixture_z - origin_z) * PSI_PER_FT_HEAD
     else:
@@ -531,50 +542,53 @@ def _connector_z(node, system):
 # Report
 # ---------------------------------------------------------------------------
 
-TABLE_COLUMNS = [("FIXTURE", 0.110), ("SYS", 0.040), ("REQ PSI", 0.060),
-                 ("STATIC", 0.055), ("PIPE", 0.050), ("FITTINGS", 0.065),
-                 ("DEVICES", 0.060), ("LEFT", 0.050), ("MARGIN", 0.060),
-                 ("DEV LENGTH FT", 0.090), ("RESULT", 0.060)]
+# Colin, 2026-10-21: show the pressure at each outlet and whether it meets
+# the minimum; the loss breakdown stays out of the table.
+TABLE_COLUMNS = [("FIXTURE", 0.140), ("SYSTEM", 0.070),
+                 ("PRESSURE AT OUTLET (PSI)", 0.190),
+                 ("MINIMUM (PSI)", 0.110), ("MEETS MINIMUM", 0.120),
+                 ("TABLE 604.3 ROW", 0.330)]
 
 
 def table_rows(analysis):
     """Rows for the pyRevit and sheet tables, worst first."""
     rows = []
     for o in analysis["outlets"]:
+        if o.passes is None:
+            verdict = "NOT CHECKED"
+        else:
+            verdict = "YES" if o.passes else "NO"
         rows.append([
             o.fixture_name,
-            "HW" if o.system == HOT else "CW",
-            _f(o.required_psi),
-            _f(o.static_psi),
-            _f(o.pipe_psi),
-            _f(o.fitting_psi),
-            _f(o.device_psi),
+            "Hot" if o.system == HOT else "Cold",
             _f(o.residual_psi),
-            _f(o.margin_psi),
-            "{:.0f}".format(o.developed_ft),
-            "-" if o.passes is None else ("PASS" if o.passes else "FAIL"),
+            _f(o.required_psi),
+            verdict,
+            o.row,
         ])
     return rows
 
 
 def basis_lines(start_psi):
     return [
-        "Pressure loss basis: 2024 IPC Appendix E, Section E103.3 "
-        "(segmented loss method), checked against Table 604.3.",
-        "  Start pressure {:.1f} psi at the picked point (after the RPZ, or "
+        "Pressure basis: 2024 IPC Appendix E, Section E103.3 (segmented loss "
+        "method). Each outlet is checked against its minimum flow pressure "
+        "in Table 604.3.",
+        "Pressure at an outlet = the start pressure, less static head, pipe "
+        "friction, fittings and devices on the way to it.",
+        "Start pressure: {:.1f} psi at the picked point (after the RPZ, or "
         "in the existing main at the tee).".format(float(start_psi)),
-        "  Pipe friction: Darcy-Weisbach, Swamee-Jain friction factor, drawn "
-        "copper roughness {} ft, water at {:.0f} F for hot and cold "
-        "(conservative for hot water), ASTM B88 Type L inside "
-        "diameters.".format(ROUGHNESS_FT, WATER_TEMP_F),
-        "  Fittings and valves: equivalent length, Table E103.3(6), at the "
-        "friction rate of the pipe they sit on.",
-        "  Devices: Device_Pressure_Drop_PSI on the element when set.",
-        "  Static head {:.3f} psi per ft of rise above the start point. "
-        "Section 604.8: {:.0f} psi maximum static.".format(
-            PSI_PER_FT_HEAD, MAX_STATIC_PSI),
-        "  Flow: probable demand per pipe, Table E103.3(3), at the drawn "
-        "size.",
+        "Static head: {:.3f} psi per ft of floor level above the start "
+        "point's level. Section 604.8 limits static pressure to {:.0f} "
+        "psi.".format(PSI_PER_FT_HEAD, MAX_STATIC_PSI),
+        "Pipe friction: Darcy-Weisbach with the Swamee-Jain friction factor, "
+        "drawn copper, water at {:.0f} F (conservative for hot water), ASTM "
+        "B88 Type L inside diameters.".format(WATER_TEMP_F),
+        "Fittings and valves: equivalent lengths from Table E103.3(6), priced "
+        "at the friction rate of the pipe they sit on. Devices: "
+        "Device_Pressure_Drop_PSI where it is set.",
+        "Flow: the probable demand in each pipe, Table E103.3(3), at the "
+        "drawn size.",
     ]
 
 
