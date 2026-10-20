@@ -21,8 +21,9 @@
 #
 # IronPython 2.7 / pyRevit
 
+from Autodesk.Revit.DB.Mechanical import MechanicalUtils
 from Autodesk.Revit.DB import (
-    BuiltInCategory, BuiltInParameter, ConnectorProfileType,
+    BuiltInCategory, BuiltInParameter, ConnectorProfileType, ConnectorType,
     FailureProcessingResult, FailureSeverity, FilteredElementCollector,
     IFailuresPreprocessor, MEPSystem, Transaction, TransactionGroup,
     TransactionStatus)
@@ -85,16 +86,21 @@ def run(doc, uidoc, output, forms):
     group.Start()
     try:
         before = _fitting_ids(doc)
-        duct_failures = _write_ducts(doc, net, to_write)
+        pieces = set()
+        duct_failures = _write_ducts(doc, net, to_write, pieces)
         # Only ducts this run sized: a fitting is touched only when every
         # duct it joins is in here (never one next to a branch, an existing
-        # or an unsized duct).
+        # or an unsized duct). Pieces made by a step-down count too.
         main_ids = set(p.element_id for p in plans if p.new is not None)
-        resized_ids = set(p.element_id for p in to_write) - set(
-            duct_failures.keys())
+        main_ids |= pieces
+        resized_ids = (set(p.element_id for p in to_write) -
+                       set(duct_failures.keys())) | pieces
         fit_done, fit_failures, fit_skipped = _write_fittings(
             doc, net, resized_ids, main_ids)
         added = sorted(_fitting_ids(doc) - before)
+        # The step-down transitions this run made join two sizes on purpose.
+        fit_skipped = dict((k, v) for k, v in fit_skipped.items()
+                           if k not in set(added))
         status = group.Assimilate()
         if status != TransactionStatus.Committed:
             raise Exception("the changes could not be committed "
@@ -159,6 +165,7 @@ def _plan(doc, net, limits):
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
     no_flow = set(net.zero_terminals) | set(net.missing_flow)
+    parents = _parents(net)
 
     plans = []
     for eid, dr in net.duct_results.items():
@@ -173,9 +180,106 @@ def _plan(doc, net, limits):
             is_existing=not is_new_construction(doc, dr.elem),
             flow_missing=bool(below & no_flow))
         plan.length_ft = dr.length_ft
+        plan.sections = None
+        plan.step_notes = []
+        if plan.new is not None:
+            _plan_steps(net, dr.elem, plan, limits, parents)
         plans.append(plan)
     plans.sort(key=lambda p: (p.sys_class, -p.cfm))
     return plans
+
+
+def _plan_steps(net, duct, plan, limits, parents):
+    """Step-downs along one main, after taps where the airflow allows."""
+    ends = _flow_ends(duct, parents.get(eid_int(duct.Id)))
+    if ends is None:
+        plan.step_notes.append("flow direction not read, no step-downs")
+        return
+    up_pt, direction = ends
+    taps = _taps_on(net, duct, up_pt, direction)
+    if not taps:
+        return
+    max_fpm, max_fric = limits[plan.sys_class]
+    sections, notes = duct_sizing.plan_sections(
+        plan.shape, plan.current, plan.cfm, plan.length_ft, taps, max_fpm,
+        max_fric, hvac_graph.duct_friction_loss_per_100ft)
+    plan.step_notes.extend(notes)
+    if len(sections) > 1:
+        plan.sections = sections
+        plan.changed = True
+        plan.up_pt = up_pt
+        plan.direction = direction
+        plan.taps = taps
+
+
+def _flow_ends(duct, parent_id):
+    """(upstream end point, unit direction downstream), or None."""
+    if parent_id is None:
+        return None
+    ends = [c for c in _connectors(duct)
+            if c.ConnectorType == ConnectorType.End]
+    if len(ends) != 2:
+        return None
+    for i, conn in enumerate(ends):
+        try:
+            for ref in conn.AllRefs:
+                if ref.Owner is not None and eid_int(ref.Owner.Id) == parent_id:
+                    other = ends[1 - i].Origin
+                    return conn.Origin, (other - conn.Origin).Normalize()
+        except Exception:
+            continue
+    return None
+
+
+def _taps_on(net, duct, up_pt, direction):
+    """Every takeoff on the duct's side (curve connectors), as Taps."""
+    taps = []
+    own = eid_int(duct.Id)
+    for conn in _connectors(duct):
+        if conn.ConnectorType != ConnectorType.Curve:
+            continue
+        try:
+            refs = list(conn.AllRefs)
+        except Exception:
+            continue
+        for ref in refs:
+            tap = ref.Owner
+            if tap is None or isinstance(tap, MEPSystem) or \
+                    eid_int(tap.Id) == own:
+                continue
+            pos = (ref.Origin - up_pt).DotProduct(direction)
+            main_size = _conn_size_in(ref)
+            branch_size = 0.0
+            for other in _connectors(tap):
+                if other.Origin.DistanceTo(ref.Origin) > 0.01:
+                    branch_size = max(branch_size, _conn_size_in(other))
+            try:
+                on_top = abs(ref.CoordinateSystem.BasisZ.Z) > 0.7
+            except Exception:
+                on_top = True
+            taps.append(duct_sizing.Tap(
+                pos, (main_size / 2.0 + 2.0) / IN_PER_FT,
+                net.cfm_map.get(eid_int(tap.Id), 0.0),
+                branch_size or main_size, on_top))
+    return taps
+
+
+def _conn_size_in(conn):
+    """Largest dimension of a connector, inches."""
+    try:
+        if conn.Shape == ConnectorProfileType.Round:
+            return conn.Radius * 2.0 * IN_PER_FT
+        return max(conn.Width, conn.Height) * IN_PER_FT
+    except Exception:
+        return 0.0
+
+
+def _parents(net):
+    parents = {}
+    for parent_id, kids in net.children.items():
+        for kid in kids:
+            parents[kid] = parent_id
+    return parents
 
 
 def is_new_construction(doc, elem):
@@ -280,8 +384,14 @@ def _text(exc):
         return repr(exc)
 
 
-def _write_ducts(doc, net, plans):
-    """Resize each planned duct. Returns {duct id: error}."""
+def _write_ducts(doc, net, plans, pieces):
+    """Resize each planned duct, splitting it at its step-downs.
+
+    A duct whose step-downs fail (no room, a transition that will not fit,
+    Revit refusing the split) is rolled back and sized whole at its upstream
+    size instead, so the main is never left undersized. New piece ids go into
+    `pieces`. Returns {duct id: error}.
+    """
     failures = {}
     for plan in plans:
         duct = net.nodes.get(plan.element_id)
@@ -289,20 +399,117 @@ def _write_ducts(doc, net, plans):
             failures[plan.element_id] = "element not found"
             continue
 
+        if plan.sections:
+            made = []
+
+            def split(duct=duct, plan=plan, made=made):
+                _split_and_size(doc, duct, plan, made)
+
+            error = _one(doc, "Size Duct steps {}".format(plan.element_id),
+                         split)
+            if not error:
+                pieces.update(made)
+                continue
+            plan.step_notes.append("step-downs rolled back ({}), sized "
+                                   "whole".format(error))
+            plan.sections = None
+
         def action(duct=duct, plan=plan):
-            if plan.shape == duct_sizing.SHAPE_ROUND:
-                _set(duct, BuiltInParameter.RBS_CURVE_DIAMETER_PARAM,
-                     plan.new / IN_PER_FT)
-            else:
-                _set(duct, BuiltInParameter.RBS_CURVE_WIDTH_PARAM,
-                     plan.new[0] / IN_PER_FT)
-                _set(duct, BuiltInParameter.RBS_CURVE_HEIGHT_PARAM,
-                     plan.new[1] / IN_PER_FT)
+            _apply_size(duct, plan.shape, plan.new)
 
         error = _one(doc, "Size Duct {}".format(plan.element_id), action)
         if error:
             failures[plan.element_id] = error
     return failures
+
+
+def _apply_size(duct, shape, size):
+    if shape == duct_sizing.SHAPE_ROUND:
+        _set(duct, BuiltInParameter.RBS_CURVE_DIAMETER_PARAM,
+             size / IN_PER_FT)
+    else:
+        _set(duct, BuiltInParameter.RBS_CURVE_WIDTH_PARAM,
+             size[0] / IN_PER_FT)
+        _set(duct, BuiltInParameter.RBS_CURVE_HEIGHT_PARAM,
+             size[1] / IN_PER_FT)
+
+
+def _split_and_size(doc, duct, plan, made):
+    """Break the duct at each step-down, size each piece, and put a
+    transition between neighbours. Raises on anything that does not come out
+    clean, so the caller's transaction rolls the whole duct back.
+
+    Live-tested technique (2026-10-20): MechanicalUtils.BreakCurve leaves the
+    two new ends unconnected and keeps each tap on its own piece;
+    NewTransitionFitting then joins them and sizes itself from the ducts,
+    taking its length out of the upstream piece.
+    """
+    up_pt, direction = plan.up_pt, plan.direction
+
+    def far(piece):
+        curve = piece.Location.Curve
+        return max((curve.GetEndPoint(i) - up_pt).DotProduct(direction)
+                   for i in (0, 1))
+
+    ordered = [duct]
+    for section in plan.sections[1:]:
+        point = up_pt + direction * section.start_ft
+        current = ordered[-1]
+        new_id = MechanicalUtils.BreakCurve(doc, current.Id, point)
+        new = doc.GetElement(new_id)
+        if new is None:
+            raise Exception("BreakCurve made no new piece")
+        if far(new) > far(current):
+            ordered.append(new)
+        else:
+            ordered[-1] = new
+            ordered.append(current)
+    doc.Regenerate()
+
+    for piece, section in zip(ordered, plan.sections):
+        _apply_size(piece, plan.shape, section.size)
+    doc.Regenerate()
+
+    transitions = []
+    for a, b in zip(ordered, ordered[1:]):
+        ca, cb = _facing_ends(a, b)
+        if ca is None:
+            raise Exception("the ends at a step-down could not be found")
+        fitting = doc.Create.NewTransitionFitting(ca, cb)
+        if fitting is None:
+            raise Exception("Revit made no transition")
+        transitions.append(fitting)
+    doc.Regenerate()
+
+    # The transition is cut out of the upstream piece: it shall not reach a
+    # tap fitting.
+    for fitting in transitions:
+        span = [(c.Origin - up_pt).DotProduct(direction)
+                for c in _connectors(fitting)]
+        lo, hi = min(span), max(span)
+        for tap in plan.taps:
+            if tap.pos_ft + tap.half_ft > lo - 0.05 and \
+                    tap.pos_ft - tap.half_ft < hi + 0.05:
+                raise Exception("a transition would overlap a tap")
+
+    made.extend(eid_int(p.Id) for p in ordered)
+
+
+def _facing_ends(a, b):
+    """The unconnected end connectors where pieces a and b meet."""
+    best = None
+    for ca in _connectors(a):
+        if ca.ConnectorType != ConnectorType.End or ca.IsConnected:
+            continue
+        for cb in _connectors(b):
+            if cb.ConnectorType != ConnectorType.End or cb.IsConnected:
+                continue
+            d = ca.Origin.DistanceTo(cb.Origin)
+            if best is None or d < best[0]:
+                best = (d, ca, cb)
+    if best is None or best[0] > 0.05:
+        return None, None
+    return best[1], best[2]
 
 
 def _set(elem, bip, value_ft):
@@ -535,11 +742,18 @@ def _print_plan(output, plans):
         len(sized), len(changed)))
     rows = []
     for p in sized:
+        size = duct_sizing.size_label(p.shape, p.new)
+        if p.sections:
+            size = " > ".join(duct_sizing.size_label(p.shape, s.size)
+                              for s in p.sections)
         rows.append([str(p.element_id), p.sys_class, "{:.0f}".format(p.cfm),
-                     duct_sizing.size_label(p.shape, p.current),
-                     duct_sizing.size_label(p.shape, p.new),
+                     duct_sizing.size_label(p.shape, p.current), size,
                      "{:.0f}".format(p.fpm), "{:.3f}".format(p.friction),
                      "CHANGE" if p.changed else "ok"])
+    notes = ["- duct {}: {}".format(p.element_id, n) for p in sized
+             for n in getattr(p, "step_notes", [])]
+    if notes:
+        output.print_md("Step-down notes:\n" + "\n".join(notes))
     if rows:
         output.print_table(table_data=rows, title="Mains",
                            columns=["Duct", "System", "CFM", "Drawn", "Size",
@@ -571,9 +785,9 @@ def _report_writes(output, to_write, duct_failures, fit_done, fit_failures,
         output.print_table(table_data=rows, title="Not resized",
                            columns=["Kind", "Element", "Why"])
     if added:
-        output.print_md(":warning: Revit added {} fitting(s) while resizing "
-                        "(usually transitions at elbows): {}. Check each one "
-                        "fits.".format(len(added), ", ".join(
+        output.print_md(":warning: {} fitting(s) were added: the step-down "
+                        "transitions, plus any Revit inserted at elbows: {}. "
+                        "Check each one fits.".format(len(added), ", ".join(
                             str(i) for i in added[:30])))
 
 

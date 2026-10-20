@@ -189,6 +189,106 @@ def plan_duct(element_id, shape, current, cfm, sys_class, limits,
     return plan
 
 
+# ---------------------------------------------------------------------------
+# Step-downs along one duct (Colin, 2026-10-20)
+# ---------------------------------------------------------------------------
+# A main steps down after any tap where the reduced airflow calls for a
+# smaller size, the same test Duct Performance applies, so a sized main never
+# reads oversized. The transition goes just past the tap. Live test
+# 2026-10-20 (Revit 2026): BreakCurve keeps each tap on its own piece, and a
+# "Rectangular Transition - Length" (15 in) is cut out of the UPSTREAM piece,
+# so the break sits at tap edge + clearance + transition length.
+
+TRANSITION_LEN_FT = 1.5       # allowance; the live rect transition was 1.25 ft
+STEP_CLEARANCE_FT = 0.5       # between a tap fitting and a transition
+TAP_FACE_CLEARANCE_IN = 2.0   # main face at least tap size + 2 in (AI rules)
+
+
+class Tap(object):
+    """A takeoff on a main, as seen along that main."""
+
+    def __init__(self, pos_ft, half_ft, cfm, size_in, on_width_face):
+        self.pos_ft = float(pos_ft)        # from the upstream end
+        self.half_ft = float(half_ft)      # half its footprint along the main
+        self.cfm = float(cfm or 0.0)
+        self.size_in = float(size_in or 0.0)
+        self.on_width_face = bool(on_width_face)   # top or bottom of a rect
+
+
+class Section(object):
+    def __init__(self, start_ft, cfm, size):
+        self.start_ft = start_ft
+        self.end_ft = None
+        self.cfm = cfm
+        self.size = size
+
+
+def _smaller(shape, a, b):
+    if shape == SHAPE_ROUND:
+        return float(a) < float(b) - 0.01
+    return float(a[0]) * float(a[1]) < float(b[0]) * float(b[1]) - 0.01
+
+
+def _fits_taps(shape, size, taps):
+    """Every tap still on the section fits the main face it sits on."""
+    for tap in taps:
+        if shape == SHAPE_ROUND:
+            if size < tap.size_in - 0.01:
+                return False
+        elif tap.on_width_face and \
+                size[0] < tap.size_in + TAP_FACE_CLEARANCE_IN - 0.01:
+            return False
+    return True
+
+
+def plan_sections(shape, drawn, duct_cfm, length_ft, taps, max_fpm, max_fric,
+                  friction_fn):
+    """Sections along one main duct, stepping down after taps.
+
+    Returns (sections, notes). One section means no step-down. A step that
+    has no room before the next tap (or the duct end) is skipped and noted;
+    the larger size then carries on to the next tap.
+    """
+    def size_for(cfm):
+        if shape == SHAPE_ROUND:
+            return size_round(cfm, max_fpm, max_fric, friction_fn)
+        return size_rect(cfm, drawn[1] if drawn else MIN_DUCT_DIM, max_fpm,
+                         max_fric, friction_fn)
+
+    taps = sorted(taps, key=lambda t: t.pos_ft)
+    notes = []
+    first = size_for(duct_cfm)
+    if first is None:
+        return [], ["needs more than the largest size"]
+    current = Section(0.0, float(duct_cfm), first)
+    sections = [current]
+    flow = float(duct_cfm)
+    for i, tap in enumerate(taps):
+        flow -= tap.cfm
+        if flow <= 0.0:
+            break
+        need = size_for(flow)
+        if need is None or not _smaller(shape, need, current.size):
+            continue
+        if not _fits_taps(shape, need, taps[i + 1:]):
+            notes.append("no step after tap {}: a later tap needs the larger "
+                         "face".format(i + 1))
+            continue
+        brk = tap.pos_ft + tap.half_ft + STEP_CLEARANCE_FT + TRANSITION_LEN_FT
+        if i + 1 < len(taps):
+            limit = taps[i + 1].pos_ft - taps[i + 1].half_ft - STEP_CLEARANCE_FT
+        else:
+            limit = length_ft - STEP_CLEARANCE_FT
+        if brk > limit:
+            notes.append("no room to step down after tap {}".format(i + 1))
+            continue
+        current.end_ft = brk
+        current = Section(brk, flow, need)
+        sections.append(current)
+    current.end_ft = float(length_ft)
+    return sections, notes
+
+
 def size_label(shape, size):
     if size is None:
         return "-"
@@ -206,6 +306,10 @@ def basis_lines(limits):
         "width solved, {:.0f}:1 maximum aspect; the height steps up 2 in only "
         "when no width fits.".format(ROUND_SIZES[0], ROUND_SIZES[-1],
                                      MAX_ASPECT),
+        "  Step-downs: after any tap where the reduced airflow calls for a "
+        "smaller size; transition just past the tap ({:.1f} ft clearance), "
+        "skipped when there is no room before the next tap.".format(
+            STEP_CLEARANCE_FT),
         "  Friction: Darcy-Weisbach, Altshul-Tsal friction factor (same as "
         "Duct Performance).",
         "  Not sized: branches, takeoff boots and diffusers (auto-sizing "

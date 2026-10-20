@@ -700,7 +700,9 @@ _DUCT_BODY = (
     _hint('Firm defaults, the same limits Duct Performance checks, so a sized '
           'system comes back green. Each main gets the smallest even size meeting '
           'both. Rectangular mains keep their drawn height and are sized on width '
-          '(4:1 maximum); the height steps up only when no width fits.',
+          '(4:1 maximum); the height steps up only when no width fits. A main '
+          'steps down after any tap where the reduced airflow allows, with the '
+          'transition just past the tap.',
           '0,6,0,0') +
 
     _BASIS_XAML

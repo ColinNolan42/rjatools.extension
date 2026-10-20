@@ -161,5 +161,56 @@ class TestPlan(unittest.TestCase):
         self.assertLessEqual(p.friction, 0.08)
 
 
+class TestStepDowns(unittest.TestCase):
+    """A 40 ft main, 2,400 cfm, three 800 cfm taps at 8, 18 and 28 ft."""
+
+    def taps(self, spacing=10.0, cfm=800.0, size=10.0, top=False):
+        return [ds.Tap(8.0 + spacing * i, 0.5, cfm, size, top)
+                for i in range(3)]
+
+    def test_steps_after_each_tap(self):
+        secs, notes = ds.plan_sections(ds.SHAPE_RECT, (36, 12), 2400.0, 40.0,
+                                       self.taps(), 800, 0.08, FRICTION)
+        self.assertEqual(len(secs), 3)
+        widths = [s.size[0] for s in secs]
+        self.assertEqual(widths, sorted(widths, reverse=True))
+        self.assertTrue(all(s.size[1] == 12 for s in secs))
+        # break = tap 8 + half 0.5 + clearance 0.5 + transition 1.5
+        self.assertAlmostEqual(secs[1].start_ft, 10.5)
+        self.assertAlmostEqual(secs[-1].end_ft, 40.0)
+        for s in secs:
+            self.assertTrue(passes(s.cfm, ds.SHAPE_RECT, s.size))
+
+    def test_no_room_between_close_taps(self):
+        secs, notes = ds.plan_sections(ds.SHAPE_RECT, (36, 12), 2400.0, 40.0,
+                                       self.taps(spacing=2.0), 800, 0.08,
+                                       FRICTION)
+        self.assertTrue(any("no room" in n for n in notes))
+        self.assertLess(len(secs), 3)
+
+    def test_no_step_when_size_does_not_drop(self):
+        taps = [ds.Tap(10.0, 0.5, 20.0, 6.0, False)]
+        secs, _ = ds.plan_sections(ds.SHAPE_ROUND, 16, 1000.0, 30.0, taps,
+                                   800, 0.08, FRICTION)
+        self.assertEqual(len(secs), 1)
+
+    def test_top_tap_holds_the_width(self):
+        # A 14 in tap on the bottom of the last section needs 16 in of face.
+        taps = [ds.Tap(8.0, 0.6, 1200.0, 8.0, False),
+                ds.Tap(20.0, 0.6, 300.0, 14.0, True)]
+        secs, notes = ds.plan_sections(ds.SHAPE_RECT, (30, 12), 1600.0, 30.0,
+                                       taps, 800, 0.08, FRICTION)
+        for s in secs:
+            if s.start_ft < 20.0 < s.end_ft:
+                self.assertGreaterEqual(s.size[0], 16)
+
+    def test_round_steps(self):
+        secs, _ = ds.plan_sections(ds.SHAPE_ROUND, 22, 2400.0, 40.0,
+                                   self.taps(), 800, 0.08, FRICTION)
+        self.assertGreater(len(secs), 1)
+        self.assertEqual([s.size for s in secs],
+                         sorted([s.size for s in secs], reverse=True))
+
+
 if __name__ == "__main__":
     unittest.main()
