@@ -83,6 +83,7 @@ if _lib not in sys.path:
 
 import hvac_graph
 import fitting_tables
+import revit_helpers
 from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
@@ -2893,42 +2894,12 @@ def _open_view_range(view, base_lvl_id, low_lvl_id, top_z):
 
 
 def _file_like_source_sheet(new_sheet, source_sheet):
-    """Put a new sheet in the same Project Browser folder as its source sheet
-    by copying each parameter the sheet browser organization groups by
-    (Colin, 2026-10-16: every new sheet goes into the sheet organization).
-    Best effort: a failure here never stops the run."""
-    if source_sheet is None:
-        return
-    try:
-        bo = BrowserOrganization.GetCurrentBrowserOrganizationForSheets(doc)
-        for info in bo.GetFolderItems(source_sheet.Id):
-            # FolderItemInfo.ElementId is the grouping parameter's id
-            # (confirmed via Revit MCP 2026-10-16: 'Category' on OLMC).
-            pid = info.ElementId
-            if eid_int(pid) in (int(BuiltInParameter.SHEET_NUMBER),
-                                int(BuiltInParameter.SHEET_NAME)):
-                continue
-            src = None
-            for p in source_sheet.Parameters:
-                if p.Id == pid:
-                    src = p
-                    break
-            if src is None:
-                continue
-            for p in new_sheet.Parameters:
-                if p.Id == pid and not p.IsReadOnly:
-                    if src.StorageType == StorageType.String:
-                        p.Set(src.AsString() or '')
-                    elif src.StorageType == StorageType.Integer:
-                        p.Set(src.AsInteger())
-                    elif src.StorageType == StorageType.Double:
-                        p.Set(src.AsDouble())
-                    elif src.StorageType == StorageType.ElementId:
-                        p.Set(src.AsElementId())
-                    break
-    except Exception as ex:
+    """File the new sheet beside its source sheet. See
+    revit_helpers.file_like_source_sheet."""
+    err = revit_helpers.file_like_source_sheet(doc, new_sheet, source_sheet)
+    if err:
         output.print_md(':warning: Could not file sheet {} in the sheet browser: {}'.format(
-            new_sheet.SheetNumber, ex))
+            new_sheet.SheetNumber, err))
 
 
 def main():

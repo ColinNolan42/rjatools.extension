@@ -17,7 +17,8 @@
 from Autodesk.Revit.DB import (
     XYZ, Line, TextNote, TextNoteOptions, TextNoteType,
     ViewDrafting, ViewFamily, ViewFamilyType, ViewSheet, Viewport,
-    FilteredElementCollector, BuiltInCategory)
+    FilteredElementCollector, BuiltInCategory, CurveLoop, FilledRegion,
+    FilledRegionType, OverrideGraphicSettings, ElementId)
 
 import water_report
 import water_tables
@@ -262,6 +263,127 @@ def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
 
     _hide_viewport_title(doc, viewport)
     return sheet, viewport
+
+
+def build_performance_view(doc, view_name, summary_lines, columns, rows,
+                           legend, fill_id):
+    """Drafting view for Water Performance: summary, flagged table, legend.
+
+    Args:
+        doc: the Revit Document. Must already be inside a Transaction.
+        view_name: wanted view name, suffixed if taken.
+        summary_lines: plain text lines printed above the table.
+        columns: [(header, width_ft)].
+        rows: [[cell text, ...]], already in display order. May be empty.
+        legend: [(Revit Color, text)], one swatch row each.
+        fill_id: solid fill pattern id, so the swatches match the plan.
+
+    Returns:
+        (ViewDrafting, content_height_ft, content_width_ft), or (None, 0, 0).
+    """
+    drafting_type_id = _drafting_view_type_id(doc)
+    text_type_id = _text_note_type_id(doc)
+    if drafting_type_id is None or text_type_id is None:
+        return None, 0.0, 0.0
+    try:
+        view = ViewDrafting.Create(doc, drafting_type_id)
+        view.Scale = 1
+    except Exception:
+        return None, 0.0, 0.0
+    _name_view(view, view_name)
+
+    opts = TextNoteOptions(text_type_id)
+    ox = 0.0
+    y = 0.0
+    for line in summary_lines:
+        _text(doc, view, ox, y - PAD, line, opts)
+        y -= TEXT_H
+    y -= GAP / 2.0
+
+    if rows:
+        y = _draw_table(doc, view, ox, y, columns, rows, opts)
+    else:
+        _text(doc, view, ox, y - PAD, "Every judged pipe is at table size.",
+              opts)
+        y -= TEXT_H
+    y -= GAP
+
+    _text(doc, view, ox, y - PAD, "COLOR LEGEND", opts)
+    y -= HEAD_H
+    region_type_id = None
+    for frt in FilteredElementCollector(doc).OfClass(FilledRegionType):
+        region_type_id = frt.Id
+        break
+    swatch = 0.014
+    for color, meaning in legend:
+        if region_type_id is not None:
+            _legend_swatch(doc, view, region_type_id, ox + PAD,
+                           y - swatch - (ROW_H - swatch) / 2.0, swatch,
+                           color, fill_id)
+        _text(doc, view, ox + swatch + PAD * 2.0, y - PAD, meaning, opts)
+        y -= ROW_H
+
+    width = sum([c[1] for c in columns], 0.0)
+    return view, (0.0 - y), width
+
+
+def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
+                         sheet_number, sheet_name):
+    """New sheet with the colored plan and the table beside it.
+
+    Same placement as the Duct Performance sheets (centres hand placed on the
+    RJA title block and read back over Revit MCP), so the two performance
+    tools produce sheets that look alike. Must be inside a Transaction.
+
+    Returns the ViewSheet, or None when there is no title block.
+    """
+    title_block_id = _title_block_type_id(doc)
+    if title_block_id is None:
+        return None
+    sheet = ViewSheet.Create(doc, title_block_id)
+    try:
+        sheet.SheetNumber = sheet_number
+    except Exception:
+        pass
+    try:
+        sheet.Name = sheet_name
+    except Exception:
+        pass
+
+    # Regenerate before SetBoxCenter: a box centre set before the new
+    # viewport's crop has settled lands offset (found on Duct Performance).
+    plan_vp = Viewport.Create(doc, sheet.Id, plan_view.Id, XYZ(0, 0, 0))
+    doc.Regenerate()
+    plan_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
+
+    if table_view is not None:
+        # Left edge and bottom pinned, centre derived, because the table
+        # width and height change run to run.
+        left_edge_x = -1.014 - 1.360 / 2.0
+        bottom_y = 1.546
+        table_vp = Viewport.Create(
+            doc, sheet.Id, table_view.Id,
+            XYZ(left_edge_x + table_w / 2.0, bottom_y + table_h / 2.0, 0))
+        _hide_viewport_title(doc, table_vp)
+    return sheet
+
+
+def _legend_swatch(doc, view, region_type_id, x0, y0, size, color, fill_id):
+    """A small square filled with the same color the plan uses."""
+    pts = [XYZ(x0, y0, 0.0), XYZ(x0 + size, y0, 0.0),
+           XYZ(x0 + size, y0 + size, 0.0), XYZ(x0, y0 + size, 0.0)]
+    loop = CurveLoop()
+    for i in range(4):
+        loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+    try:
+        region = FilledRegion.Create(doc, region_type_id, view.Id, [loop])
+        ogs = OverrideGraphicSettings()
+        ogs.SetSurfaceForegroundPatternColor(color)
+        if fill_id != ElementId.InvalidElementId:
+            ogs.SetSurfaceForegroundPatternId(fill_id)
+        view.SetElementOverrides(region.Id, ogs)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

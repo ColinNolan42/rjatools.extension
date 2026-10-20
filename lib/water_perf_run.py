@@ -25,6 +25,7 @@ import water_sizing_engine
 import water_tables
 import water_performance
 import water_run
+import water_drafting
 import hvac_graph
 import ui_helpers
 
@@ -97,8 +98,12 @@ def run(doc, uidoc, output, forms):
         return False
 
     fitting_labels = _fitting_labels(graph, results)
-    _make_colored_view(doc, output, view, graph, results, fitting_labels)
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    new_view = _make_colored_view(doc, output, view, graph, results,
+                                  fitting_labels, stamp)
     _print_report(output, results, sizing)
+    if new_view is not None:
+        _make_sheet(doc, output, view, new_view, results, stamp)
     return True
 
 
@@ -145,10 +150,13 @@ def _fitting_labels(graph, results):
     return labels
 
 
-def _make_colored_view(doc, output, view, graph, results, fitting_labels):
-    """Copy the active plan view and color the system in the copy."""
+def _make_colored_view(doc, output, view, graph, results, fitting_labels,
+                       stamp):
+    """Copy the active plan view and color the system in the copy.
+
+    Returns the new view, or None when it could not be made.
+    """
     fill_id = hvac_graph.solid_fill_pattern_id(doc)
-    stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
 
     transaction = Transaction(doc, "RJA Tools - Water Performance")
     transaction.Start()
@@ -190,10 +198,78 @@ def _make_colored_view(doc, output, view, graph, results, fitting_labels):
         transaction.RollBack()
         output.print_md("Colored view failed, nothing was added to the "
                         "model: {}".format(str(exc)))
-        return
+        return None
 
     output.print_md("Created view **{}**. Colored {} element(s), {} "
                     "failed.".format(name, colored, failed))
+    return new_view
+
+
+# Legend wording, worst first, matching the colors in the plan.
+_LEGEND = [
+    (water_performance.RED, "Red - drawn smaller than the firm table size"),
+    (water_performance.YELLOW,
+     "Yellow - at table size, computed speed more than 10 percent over the "
+     "limit"),
+    (water_performance.PURPLE, "Purple - drawn larger than the firm table "
+                               "size"),
+    (water_performance.GREEN, "Green - at table size"),
+    (water_performance.GRAY, "Gray - not judged (see Reason)"),
+]
+
+# (header, width ft) for the sheet table, same cells as the pyRevit table.
+_TABLE_COLUMNS = [("STATUS", 0.075), ("PIPE", 0.075), ("SYSTEM", 0.065),
+                  ("DRAWN", 0.055), ("TABLE", 0.060), ("GPM", 0.050),
+                  ("FPS", 0.045), ("REASON", 0.560)]
+
+
+def _make_sheet(doc, output, source_view, plan_view, results, stamp):
+    """Put the colored plan, the flagged table and the legend on a new sheet.
+
+    Its own transaction, so a missing title block or text type costs the
+    sheet and never the colored view already committed.
+    """
+    counts = water_performance.summarize(results.values())
+    summary = [
+        "WATER PERFORMANCE - BASIS 2024 IPC, FIRM WSFU TABLE",
+        "Green {}   Yellow {}   Red {}   Purple {}   Gray {}".format(
+            counts[water_performance.GREEN], counts[water_performance.YELLOW],
+            counts[water_performance.RED], counts[water_performance.PURPLE],
+            counts[water_performance.GRAY]),
+    ]
+    rows = [[str(c) for c in row] for row in _flagged_rows(results)]
+    legend = [(_COLORS[key], text) for key, text in _LEGEND]
+
+    source_sheet = revit_helpers.sheet_hosting_view(doc, source_view)
+    source_number = source_sheet.SheetNumber if source_sheet else "NA"
+
+    transaction = Transaction(doc, "RJA Tools - Water Performance Sheet")
+    transaction.Start()
+    try:
+        fill_id = hvac_graph.solid_fill_pattern_id(doc)
+        table_view, table_h, table_w = water_drafting.build_performance_view(
+            doc, "Water Performance Table - {}".format(stamp), summary,
+            _TABLE_COLUMNS, rows, legend, fill_id)
+        sheet = water_drafting.place_plan_and_table(
+            doc, plan_view, table_view, table_h, table_w,
+            "WP-{}-{}".format(source_number, stamp),
+            "Water Performance - {} (Sheet)".format(source_number))
+        if sheet is None:
+            transaction.RollBack()
+            output.print_md("No title block is loaded, so no sheet was made. "
+                            "The colored view is kept.")
+            return
+        err = revit_helpers.file_like_source_sheet(doc, sheet, source_sheet)
+        if err:
+            output.print_md("Could not file the sheet in the sheet browser: "
+                            "{}".format(err))
+        transaction.Commit()
+    except Exception as exc:
+        transaction.RollBack()
+        output.print_md("Sheet failed, the colored view is kept: {}".format(
+            str(exc)))
+        return
+    output.print_md("Created sheet **{}**.".format(sheet.SheetNumber))
 
 
 def _print_report(output, results, sizing):
@@ -211,6 +287,24 @@ def _print_report(output, results, sizing):
             counts[water_performance.PURPLE],
             counts[water_performance.GRAY]))
 
+    rows = _flagged_rows(results)
+    if rows:
+        output.print_table(
+            table_data=rows,
+            title="Pipes needing attention",
+            columns=["Status", "Pipe", "System", "Drawn (in)", "Table size",
+                     "gpm", "fps", "Reason"])
+    else:
+        output.print_md("Every judged pipe is at table size.")
+
+    output.print_md("## Basis of design")
+    output.print_md("\n".join(
+        "    " + line for line in water_performance.basis_lines()))
+
+
+def _flagged_rows(results):
+    """Every pipe that is not green, worst first. One source for the pyRevit
+    table and the sheet table."""
     rows = []
     order = (water_performance.RED, water_performance.YELLOW,
              water_performance.PURPLE, water_performance.GRAY)
@@ -230,18 +324,7 @@ def _print_report(output, results, sizing):
             "{:.1f}".format(r.fps) if r.fps is not None else "-",
             r.reason,
         ])
-    if rows:
-        output.print_table(
-            table_data=rows,
-            title="Pipes needing attention",
-            columns=["Status", "Pipe", "System", "Drawn (in)", "Table size",
-                     "gpm", "fps", "Reason"])
-    else:
-        output.print_md("Every judged pipe is at table size.")
-
-    output.print_md("## Basis of design")
-    output.print_md("\n".join(
-        "    " + line for line in water_performance.basis_lines()))
+    return rows
 
 
 def _fmt_size(value):

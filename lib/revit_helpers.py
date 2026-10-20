@@ -1111,3 +1111,62 @@ def validate_selected_element(element):
         "reason": "PASS",
         "connector_summary": connector_summary
     }
+
+
+# =============================================================================
+# SHEETS
+# =============================================================================
+
+def sheet_hosting_view(doc, view):
+    """The ViewSheet the view is placed on, or None."""
+    from Autodesk.Revit.DB import ViewSheet
+    target = eid_int(view.Id)
+    for sheet in FilteredElementCollector(doc).OfClass(ViewSheet):
+        for vpid in sheet.GetAllViewports():
+            vp = doc.GetElement(vpid)
+            if vp is not None and eid_int(vp.ViewId) == target:
+                return sheet
+    return None
+
+
+def file_like_source_sheet(doc, new_sheet, source_sheet):
+    """Put a new sheet in the same Project Browser folder as its source sheet
+    by copying each parameter the sheet browser organization groups by
+    (Colin, 2026-10-16: every new sheet goes into the sheet organization).
+
+    Best effort. Returns None on success, or the error text so the caller can
+    report it. Never raises.
+    """
+    if source_sheet is None:
+        return None
+    from Autodesk.Revit.DB import BrowserOrganization, StorageType
+    try:
+        bo = BrowserOrganization.GetCurrentBrowserOrganizationForSheets(doc)
+        for info in bo.GetFolderItems(source_sheet.Id):
+            # FolderItemInfo.ElementId is the grouping parameter's id
+            # (confirmed via Revit MCP 2026-10-16: 'Category' on OLMC).
+            pid = info.ElementId
+            if eid_int(pid) in (int(BuiltInParameter.SHEET_NUMBER),
+                                int(BuiltInParameter.SHEET_NAME)):
+                continue
+            src = None
+            for p in source_sheet.Parameters:
+                if p.Id == pid:
+                    src = p
+                    break
+            if src is None:
+                continue
+            for p in new_sheet.Parameters:
+                if p.Id == pid and not p.IsReadOnly:
+                    if src.StorageType == StorageType.String:
+                        p.Set(src.AsString() or '')
+                    elif src.StorageType == StorageType.Integer:
+                        p.Set(src.AsInteger())
+                    elif src.StorageType == StorageType.Double:
+                        p.Set(src.AsDouble())
+                    elif src.StorageType == StorageType.ElementId:
+                        p.Set(src.AsElementId())
+                    break
+    except Exception as ex:
+        return str(ex)
+    return None

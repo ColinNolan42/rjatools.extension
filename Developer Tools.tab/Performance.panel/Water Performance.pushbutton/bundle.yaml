@@ -5,4 +5,6 @@ tooltip: >
   Green: drawn size equals the firm table size. Yellow: at table size but the
   computed speed is over the limit (8 fps cold, 5 fps hot and return).
   Red: drawn smaller than the table. Purple: drawn larger. Gray: not judged.
-  Flagged pipes and the basis of design print to the pyRevit window.
+  The colored copy goes on a new sheet with the flagged pipe table and a
+  color legend. Flagged pipes and the basis of design also print to the
+  pyRevit window.
