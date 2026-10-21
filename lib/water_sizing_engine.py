@@ -259,6 +259,10 @@ def _enforce_downsize_after_the_tee(graph, segments, flags):
         node = graph.nodes.get(segment.element_id)
         if node is None:
             continue
+        # A heater outlet in parallel sits upstream of the combined hot main
+        # on the walked tree, but carries only its share (Colin, 2026-10-21).
+        if getattr(node, "parallel_leg", False):
+            continue
 
         largest = 0.0
         for nid in graph.descendants(segment.element_id, node.system):
@@ -363,6 +367,15 @@ def _served_fixture_ids(graph, node):
     """Which fixtures this pipe serves, matching water_graph's demand rule."""
     served = []
     seen = set()
+    if getattr(node, "parallel_leg", False):
+        # A heater outlet in parallel serves its group's fixtures, wherever
+        # the hot walk happened to hang them.
+        for heater_id in node.parallel_leg:
+            for fid in graph.nodes[heater_id].served_fixture_ids:
+                if fid not in seen:
+                    seen.add(fid)
+                    served.append(fid)
+        return served
     for nid in graph.descendants(node.element_id, node.system):
         child = graph.nodes[nid]
         if child.kind == water_graph.KIND_FIXTURE:

@@ -301,19 +301,9 @@ _RECIRC_XAML = (
     _hint('', '0,4,0,0', name='tb_recirc_note')
 )
 
+# No "This run will" check boxes: sizing is the only job, and the WSFU
+# take-off drafting view belongs to Water Performance (Colin, 2026-10-21).
 _WATER_BODY = (
-    _section('This run will', 10) +
-    '<CheckBox x:Name="cb_size" IsChecked="True" IsEnabled="False" FontWeight="SemiBold"'
-    ' Content="Size the piping and write the sizes into the model"/>' +
-    _hint('Always on. Cold water is sized on TOTAL fixture units and hot water on HOT '
-          'fixture units. Drawn sizes are overwritten and the fittings are resized to '
-          'match.', '20,0,0,6') +
-    '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
-    ' ToolTip="The take-off prints in the pyRevit window either way."/>' +
-    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
-          'sheet, so the fixture unit count behind every pipe size can be checked '
-          'against the model.', '20,0,0,0') +
-
     _PROJECT_XAML +
     _RECIRC_XAML +
     _BASIS_XAML
@@ -375,7 +365,6 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
         'the 2024 IPC, and writes the sizes into the model.',
         _WATER_BODY, use_theme)
 
-    cb_wsfu = _named(win, 'cb_wsfu')
     project = _init_project(win, project_info)
     recirc = _init_recirc(win, return_detection)
 
@@ -387,7 +376,6 @@ def show_water_dialog(title, project_info, return_detection, use_theme=True):
         if errors:
             return None
         values.update(project())
-        values["wsfu_calcs"] = bool(cb_wsfu.IsChecked)
         return values
 
     return _run(win, [_named(win, 'tb_heat_loss'), _named(win, 'tb_delta_t')],
@@ -520,8 +508,9 @@ _PERF_BODY = (
     '</StackPanel>' +
     '<CheckBox x:Name="cb_wsfu" IsChecked="True" Content="WSFU Calculations"'
     ' Margin="0,6,0,0" ToolTip="The take-off prints in the pyRevit window either way."/>' +
-    _hint('Puts the water supply fixture unit take-off on a drafting view and a new '
-          'sheet.', '20,0,0,0') +
+    _hint('Puts the water supply fixture unit take-off on a drafting view, placed on '
+          'the Water Performance sheet under the flagged pipes table.',
+          '20,0,0,0') +
 
     _PROJECT_XAML +
     _RECIRC_XAML +

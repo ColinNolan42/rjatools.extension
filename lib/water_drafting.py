@@ -295,12 +295,15 @@ def build_tables_view(doc, view_name, title, tables):
 
 
 def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
-                         sheet_number, sheet_name):
+                         sheet_number, sheet_name, wsfu_view=None):
     """New sheet with the colored plan and the table beside it.
 
     Same placement as the Duct Performance sheets (centres hand placed on the
     RJA title block and read back over Revit MCP), so the two performance
     tools produce sheets that look alike. Must be inside a Transaction.
+
+    wsfu_view, when given, is the WSFU take-off, stacked under the table in
+    the same column so the two read as one (Colin, 2026-10-21).
 
     Returns the ViewSheet, or None when there is no title block.
     """
@@ -332,6 +335,21 @@ def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
             doc, sheet.Id, table_view.Id,
             XYZ(left_edge_x + table_w / 2.0, bottom_y + table_h / 2.0, 0))
         _hide_viewport_title(doc, table_vp)
+
+    if wsfu_view is not None:
+        # Same left edge, top just under the table's bottom. Created at the
+        # origin and moved by its measured outline, so its size need not be
+        # known before Revit draws it.
+        left_edge_x = -1.014 - 1.360 / 2.0
+        top_y = 1.546 - GAP
+        wsfu_vp = Viewport.Create(doc, sheet.Id, wsfu_view.Id, XYZ(0, 0, 0))
+        doc.Regenerate()
+        outline = wsfu_vp.GetBoxOutline()
+        height = outline.MaximumPoint.Y - outline.MinimumPoint.Y
+        width = outline.MaximumPoint.X - outline.MinimumPoint.X
+        wsfu_vp.SetBoxCenter(XYZ(left_edge_x + width / 2.0,
+                                 top_y - height / 2.0, 0))
+        _hide_viewport_title(doc, wsfu_vp)
     return sheet
 
 

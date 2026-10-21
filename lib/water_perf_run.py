@@ -144,22 +144,70 @@ def run(doc, uidoc, output, forms):
                         "recirculation pump duty point.")
     extra = [t for t in (_pressure_table(pressure, settings["start_psi"]),
                          _pump_table(pumps, settings)) if t]
-    if new_view is not None:
-        _make_sheet(doc, output, view, new_view, results, stamp,
-                    settings["speed_tolerance"], extra)
-    elif extra:
-        _make_tables_sheet(doc, output, extra, stamp)
-
+    # The WSFU take-off goes on the colored plan sheet, under the flagged
+    # table (Colin, 2026-10-21). Only without that sheet does it get its own.
+    wsfu = None
     if settings["wsfu_calcs"]:
-        header = {
+        wsfu = (graph, sizing, {
             "date": datetime.date.today().strftime("%Y-%m-%d"),
             "job": settings["job"],
             "job_number": settings["job_number"],
             "by": settings["by"],
-        }
-        water_run._create_drafting_view(doc, output, graph, sizing, header,
-                                        recirc)
+        }, recirc)
+    if new_view is not None:
+        _make_sheet(doc, output, view, new_view, results, stamp,
+                    settings["speed_tolerance"], extra, wsfu)
+    else:
+        if extra:
+            _make_tables_sheet(doc, output, extra, stamp)
+        if wsfu is not None:
+            _create_wsfu_view(doc, output, *wsfu)
     return True
+
+
+def _create_wsfu_view(doc, output, graph, sizing, header, recirc=None):
+    """The WSFU take-off on a drafting view and a new sheet, per firm standard.
+
+    Moved here from Size Water (Colin, 2026-10-21): the take-off is a check,
+    so it lives on the check tool. Its own transaction so a failure here
+    cannot roll anything else back.
+    """
+    transaction = Transaction(doc, "RJA Tools - Water WSFU Take-Off")
+    transaction.Start()
+    try:
+        view, content_h, content_w = water_drafting.build_wsfu_view(
+            doc, graph, header, sizing, recirc=recirc)
+        if view is None:
+            transaction.RollBack()
+            output.print_md(
+                "Could not create the drafting view. The project needs a "
+                "Drafting view family type and at least one Text Note type.")
+            return
+
+        output.print_md("Created drafting view **{}**.".format(view.Name))
+
+        stamp = datetime.datetime.now().strftime("%m%d-%H%M")
+        sheet, viewport = water_drafting.place_on_sheet(
+            doc, view, content_h, content_w,
+            "WS-{}".format(stamp),
+            "Domestic Water WSFU Take-Off {}".format(stamp))
+        if sheet is None:
+            output.print_md(
+                "The drafting view was created, but no sheet was made: this "
+                "project has no title block type loaded.")
+        else:
+            output.print_md("Placed on sheet **{} - {}**.".format(
+                sheet.SheetNumber, sheet.Name))
+            if viewport is None:
+                output.print_md(
+                    "The sheet was made but the viewport could not be placed. "
+                    "Drag the view on by hand.")
+        transaction.Commit()
+    except Exception as exc:
+        transaction.RollBack()
+        output.print_md(
+            "Drafting view failed, nothing was added to the model: "
+            "{}".format(str(exc)))
 
 
 def _fitting_labels(graph, results):
@@ -414,8 +462,11 @@ def _make_tables_sheet(doc, output, tables, stamp):
 
 
 def _make_sheet(doc, output, source_view, plan_view, results, stamp,
-                tolerance, extra_tables=None):
+                tolerance, extra_tables=None, wsfu=None):
     """Put the colored plan, the flagged table and the legend on a new sheet.
+
+    wsfu, when given, is (graph, sizing, header, recirc) for the WSFU take-off,
+    placed on the same sheet under the flagged table.
 
     Its own transaction, so a missing title block or text type costs the
     sheet and never the colored view already committed.
@@ -441,10 +492,20 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
         table_view, table_h, table_w = water_drafting.build_performance_view(
             doc, "Water Performance Table - {}".format(stamp), summary,
             _TABLE_COLUMNS, rows, legend, fill_id, extra_tables or None)
+        wsfu_view = None
+        if wsfu is not None:
+            graph, sizing, header, recirc = wsfu
+            wsfu_view, _h, _w = water_drafting.build_wsfu_view(
+                doc, graph, header, sizing, recirc=recirc)
+            if wsfu_view is None:
+                output.print_md("The WSFU take-off could not be drawn: the "
+                                "project needs a Drafting view family type "
+                                "and a Text Note type.")
         sheet = water_drafting.place_plan_and_table(
             doc, plan_view, table_view, table_h, table_w,
             "WP-{}-{}".format(source_number, stamp),
-            "Water Performance - {} (Sheet)".format(source_number))
+            "Water Performance - {} (Sheet)".format(source_number),
+            wsfu_view)
         if sheet is None:
             transaction.RollBack()
             output.print_md("No title block is loaded, so no sheet was made. "
@@ -460,7 +521,9 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
         output.print_md("Sheet failed, the colored view is kept: {}".format(
             str(exc)))
         return
-    output.print_md("Created sheet **{}**.".format(sheet.SheetNumber))
+    output.print_md("Created sheet **{}**{}.".format(
+        sheet.SheetNumber,
+        ", WSFU take-off included" if wsfu is not None and wsfu_view else ""))
 
 
 def _print_report(output, results, sizing, tolerance):

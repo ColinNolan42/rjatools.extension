@@ -100,6 +100,11 @@ class WaterNode(object):
         # Heater bookkeeping (only meaningful when kind == KIND_HEATER)
         self.served_fixture_ids = []
 
+        # Hot pipe between water heaters in parallel and the tee where their
+        # outlets have all combined: the heater group tuple, else False (set
+        # by _assign_parallel_hot_demand)
+        self.parallel_leg = False
+
         # Sizing results, filled by the sizing engine
         self.demand_wsfu   = 0.0
         self.assigned_size = None
@@ -1085,6 +1090,7 @@ def _assign_demand(graph):
     for node in graph.nodes.values():
         if node.kind != KIND_PIPE:
             continue
+        node.parallel_leg = False   # demand is redone after the return split
 
         downstream = graph.descendants(node.element_id, node.system)
 
@@ -1126,6 +1132,84 @@ def _assign_demand(graph):
             if fid not in direct:
                 total += graph.nodes[fid].hw_wsfu * share
         node.demand_wsfu = total
+
+    _assign_parallel_hot_demand(graph, groups)
+
+
+def _assign_parallel_hot_demand(graph, groups):
+    """Hot demand on the piping of water heaters in parallel.
+
+    Colin, 2026-10-21: the hot water out of each of two heaters is sized on
+    half the hot load, and the loads combine at the tee where the outlets
+    join. The hot walk roots the tree at one heater, so without this that
+    heater's outlet carries the whole load and the other's carries none.
+
+    Each heater in a group puts in an equal share of the group's hot load.
+    The hot supply piping is a tree, so cutting a pipe leaves two sides, and
+    the pipe carries what the heaters on one side put in less what the
+    fixtures on that side take out. A heater's own outlet carries 1/n, the
+    piping past the tee where every outlet has joined carries all of it, and
+    a pipe with only some of the heaters on one side gets parallel_leg set to
+    the group.
+    """
+    hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    adjacency = None
+    done = set()
+    for group in set(groups.values()):
+        if len(group) < 2:
+            continue
+        if adjacency is None:
+            adjacency = _hot_supply_adjacency(graph)
+        component = _side(adjacency, group[0], None)
+        members = set(group)
+        load = sum(graph.nodes[nid].hw_wsfu for nid in component
+                   if graph.nodes[nid].kind == KIND_FIXTURE)
+        share = load / float(len(group))
+        for nid in sorted(component):
+            node = graph.nodes[nid]
+            if (nid in done or node.kind != KIND_PIPE or node.system != hot or
+                    is_return_pipe(graph, node)):
+                continue
+            done.add(nid)
+            # A pipe has two ends, so two sides that agree. Every side is
+            # checked and the largest kept, in case anything hangs mid pipe.
+            demand = 0.0
+            leg = False
+            for neighbour in adjacency.get(nid, []):
+                side = _side(adjacency, neighbour, nid)
+                heaters = len(members & side)
+                taken = sum(graph.nodes[s].hw_wsfu for s in side
+                            if graph.nodes[s].kind == KIND_FIXTURE)
+                demand = max(demand, abs(heaters * share - taken))
+                leg = leg or 0 < heaters < len(group)
+            node.demand_wsfu = demand
+            node.parallel_leg = group if leg else False
+        graph.log("HEATERS IN PARALLEL {}: {:.1f} hot WSFU, {:.2f} out of "
+                  "each.".format(", ".join(str(h) for h in group), load, share))
+
+
+def _hot_supply_adjacency(graph):
+    """Hot water joints with the return piping left out."""
+    adjacency = {}
+    for nid, neighbours in (graph.hot_joints or hot_adjacency(graph)).items():
+        if is_return_pipe(graph, graph.nodes.get(nid)):
+            continue
+        adjacency[nid] = [n for n in neighbours
+                          if not is_return_pipe(graph, graph.nodes.get(n))]
+    return adjacency
+
+
+def _side(adjacency, start_id, cut_id):
+    """Everything joined to start_id without passing through cut_id."""
+    seen = set([start_id])
+    stack = [start_id]
+    while stack:
+        current = stack.pop()
+        for neighbour in adjacency.get(current, []):
+            if neighbour != cut_id and neighbour not in seen:
+                seen.add(neighbour)
+                stack.append(neighbour)
+    return seen
 
 
 def heater_groups(graph):

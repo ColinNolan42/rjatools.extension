@@ -8,9 +8,8 @@ tooltip: >
   Sizes BOTH domestic cold water (on TOTAL fixture units) and domestic hot
   water (on HOT fixture units), overwrites the drawn sizes, and resizes the
   fittings to match.
-  The dialog has two check boxes: Sizing, always on, and WSFU Calculations,
-  which puts the fixture unit take-off on a drafting view and a sheet so the
-  count behind every pipe size can be checked.
+  The fixture unit take-off prints in the pyRevit window. For it on a
+  drafting view and a sheet, run Water Performance with WSFU Calculations.
   The hot water RETURN system is detected from the pipes' System Types and
   sized on circulation flow: one circuit setter per return leg, 0.5 gpm
   minimum, flows added up toward the water heater. The report lists the flow

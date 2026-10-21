@@ -456,7 +456,8 @@ def exceptions_block(graph, sizing_result):
                 lines.append(
                     "  Water heaters {} are in parallel: they serve {} "
                     "fixture(s) together and split the hot load equally, so "
-                    "each cold feed carries 1/{} of it.".format(
+                    "each cold feed and hot outlet carries 1/{} of it, "
+                    "combined at the tee where the outlets join.".format(
                         ", ".join(str(m) for m in group), len(fixtures),
                         len(group)))
                 continue

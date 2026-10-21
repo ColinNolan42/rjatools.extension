@@ -600,7 +600,8 @@ def basis_of_design_lines(extra=None):
         "piping on hot fixture units. A cold water branch that serves only a "
         "water heater is sized on the hot fixture units that heater serves. "
         "Water heaters in parallel on a common hot header split the hot load "
-        "equally, so the cold feed to each carries its share.")
+        "equally, so the cold feed to each and its hot outlet carry its "
+        "share, combined at the tee where the outlets join.")
     lines.append(
         "Hot water return: sized on circulation flow. " + _RETURN_BASIS +
         " The return is sized against the hot water table restated in gpm "
@@ -680,7 +681,8 @@ def basis_of_design_rows():
          "fixture units. A cold water branch that serves only a water heater "
          "is sized on the hot fixture units that heater serves. Water heaters "
          "in parallel on a common hot header split the hot load equally, so "
-         "the cold feed to each carries its share."),
+         "the cold feed to each and its hot outlet carry its share, combined "
+         "at the tee where the outlets join."),
         ("Recirculation:",
          _RETURN_BASIS + " The return is sized against the hot water table "
          "restated in gpm per " + demand_table_id + " (" +

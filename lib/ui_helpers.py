@@ -194,7 +194,8 @@ def show_water_performance_dialog(title, project_info):
     import water_performance
 
     def legacy():
-        values = _show_water_dialog_legacy(title, project_info, None)
+        values = _show_water_dialog_legacy(title, project_info, None,
+                                           wsfu_option=True)
         if values is not None:
             values["speed_tolerance"] = water_performance.SPEED_TOLERANCE
             values["velocity"] = True
@@ -255,16 +256,17 @@ def show_start_point(title, rpz_label, tee_label):
         legacy)
 
 
-def _show_water_dialog_legacy(title, project_info, return_detection):
+def _show_water_dialog_legacy(title, project_info, return_detection,
+                              wsfu_option=False):
     """FALLBACK ONLY. The code-built Size Water dialog.
 
     Same idiom as show_velocity_settings_dialog(): options first, bold grey
     section headers, separators between sections, and the basis of design as
     label / value rows at the BOTTOM, directly above OK / Cancel.
 
-    Two check boxes say what the run does. Sizing is always on and shown
-    disabled, so the dialog states the job rather than offering it. WSFU
-    Calculations is optional and produces the take-off.
+    Size Water shows no check boxes: sizing is its only job. The WSFU take-off
+    drafting view belongs to Water Performance (Colin, 2026-10-21), whose
+    fallback passes wsfu_option=True for the WSFU Calculations box.
 
     The hot water RETURN is NOT asked about. It is detected from the pipes'
     System Types before this dialog opens, because System Type separates the
@@ -280,8 +282,11 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
         return_detection: the dict from
             water_graph.detect_return_system_types(). Reported, not asked.
 
+        wsfu_option: show the WSFU Calculations box (Water Performance only).
+
     Returns:
-        dict with "job", "job_number", "by", "wsfu_calcs" (bool),
+        dict with "job", "job_number", "by", "wsfu_calcs" (bool, False
+        unless wsfu_option),
         "return_system_type_ids" (set of ints),
         "recirc_heat_loss_btu_per_100ft" and "recirc_delta_t_f" (floats),
         or None if cancelled.
@@ -355,20 +360,15 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
         outer.Children.Add(tb)
         return tb
 
-    # -- 1. what this run does ----------------------------------------------
-    _section("This Run Will")
-    _checkbox("Size the piping and write the sizes into the model",
-              True, enabled=False, bold=True)
-    _note("Always on. Cold water is sized on TOTAL fixture units and hot "
-          "water on HOT fixture units. Drawn sizes are overwritten and the "
-          "fittings are resized to match.")
-    cb_wsfu = _checkbox("WSFU Calculations", True)
-    _note("Puts the water supply fixture unit take-off on a drafting view "
-          "and a new sheet, so the fixture unit count behind every pipe size "
-          "can be checked against the model. The take-off prints in the "
-          "pyRevit window either way.")
-
-    _separator()
+    # -- 1. WSFU take-off (Water Performance only) ---------------------------
+    cb_wsfu = None
+    if wsfu_option:
+        cb_wsfu = _checkbox("WSFU Calculations", True)
+        _note("Puts the water supply fixture unit take-off on a drafting "
+              "view, placed on the Water Performance sheet, so the fixture "
+              "unit count behind every pipe size can be checked against the "
+              "model.")
+        _separator()
 
     # -- 2. project information ---------------------------------------------
     _section("Project Information")
@@ -515,7 +515,7 @@ def _show_water_dialog_legacy(title, project_info, return_detection):
             "job": tb_job.Text.strip(),
             "job_number": tb_job_no.Text.strip(),
             "by": tb_by.Text.strip(),
-            "wsfu_calcs": bool(cb_wsfu.IsChecked),
+            "wsfu_calcs": bool(cb_wsfu is not None and cb_wsfu.IsChecked),
             # Detected, not chosen. The dialog never asked.
             "return_system_type_ids": set(detected),
             "recirc_heat_loss_btu_per_100ft": float(heat_loss),

@@ -237,6 +237,67 @@ class TestHeatersInParallel(unittest.TestCase):
         water_graph._assign_demand(g)
         self.assertAlmostEqual(g.nodes[4].demand_wsfu, 6.0)
         self.assertAlmostEqual(g.nodes[5].demand_wsfu, 0.0)
+        self.assertAlmostEqual(g.nodes[8].demand_wsfu, 6.0)
+        self.assertFalse(g.nodes[8].parallel_leg)
+
+    def test_each_hot_outlet_carries_half(self):
+        # Colin, 2026-10-21: half out of each heater, combined at the tee.
+        g = self.build()
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[8].demand_wsfu, 3.0)
+        self.assertAlmostEqual(g.nodes[9].demand_wsfu, 3.0)
+        self.assertAlmostEqual(g.nodes[11].demand_wsfu, 6.0)
+        self.assertEqual(g.nodes[8].parallel_leg, (6, 7))
+        self.assertEqual(g.nodes[9].parallel_leg, (6, 7))
+        self.assertFalse(g.nodes[11].parallel_leg)
+
+    def test_hot_outlets_when_one_heater_hangs_off_the_other(self):
+        # The real walk: heater A's tree runs through the tee, up heater B's
+        # outlet and into heater B, which is then not walked again.
+        g = self.build()
+        g.loop_edges = []
+        g.nodes[7].children_by_system.pop(HOT)
+        g.nodes[9].parent_by_system.pop(HOT)
+        link(g, 10, 9, HOT)
+        link(g, 9, 7, HOT)
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[8].demand_wsfu, 3.0)
+        self.assertAlmostEqual(g.nodes[9].demand_wsfu, 3.0)
+        self.assertAlmostEqual(g.nodes[11].demand_wsfu, 6.0)
+
+    def test_outlets_sized_on_half_not_raised_to_the_main(self):
+        # On the walked tree heater A's outlet sits upstream of the combined
+        # main, so the "never smaller than downstream" rule shall skip it.
+        import water_sizing_engine
+        g = self.build()
+        for fid in (20, 21, 22, 23):
+            g.nodes[fid].hw_wsfu = 15.0
+            g.nodes[fid].total_wsfu = 20.0
+        water_graph._assign_demand(g)
+        res = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in res["segments"])
+        self.assertEqual(by_id[8].nominal_size, by_id[9].nominal_size)
+        self.assertLess(by_id[8].size_inches, by_id[11].size_inches)
+        self.assertEqual(by_id[9].fixture_count, 4)
+
+    def test_three_heaters_combine_in_steps(self):
+        # A -> 8 -> tee 10 (B joins) -> 12 -> tee 13 (C joins) -> main 11
+        g = self.build()
+        g.nodes[10].children_by_system[HOT].remove(11)
+        add_node(g, 12, water_graph.KIND_PIPE, parent=10, system=HOT)
+        add_node(g, 13, water_graph.KIND_FITTING, parent=12, system=HOT)
+        link(g, 13, 11, HOT)
+        add_node(g, 30, water_graph.KIND_PIPE, parent=3)
+        add_node(g, 31, water_graph.KIND_HEATER, parent=30, served=[])
+        g.heater_ids.append(31)
+        add_node(g, 32, water_graph.KIND_PIPE, parent=31, system=HOT)
+        g.loop_edges.append((32, 13, HOT))
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[8].demand_wsfu, 2.0)
+        self.assertAlmostEqual(g.nodes[9].demand_wsfu, 2.0)
+        self.assertAlmostEqual(g.nodes[32].demand_wsfu, 2.0)
+        self.assertAlmostEqual(g.nodes[12].demand_wsfu, 4.0)
+        self.assertAlmostEqual(g.nodes[11].demand_wsfu, 6.0)
 
 
 class TestMixedFixtures(unittest.TestCase):

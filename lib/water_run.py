@@ -8,13 +8,10 @@
 #
 #   dialog -> choose RPZ / tee -> pick -> traverse -> detect the return
 #   system -> split supply from return -> check the system -> circuit setter
-#   flows -> size -> print the report -> write the sizes -> WSFU take-off on
-#   a drafting view and a sheet
+#   flows -> size -> print the report -> write the sizes
 #
-# Two check boxes say what a run does. SIZING is always on. WSFU CALCULATIONS
-# is optional, and produces the take-off: the check ON the sizing, how the
-# fixture unit count that drove every pipe size gets verified against the
-# fixtures actually in the model.
+# Sizing is the only job. The WSFU take-off drafting view and sheet belong to
+# Water Performance (Colin, 2026-10-21); the take-off still prints here.
 #
 # The dialog opens before the network is known, so it cannot grey out the
 # recirculation inputs. They stay live and are used only if the traversal
@@ -40,7 +37,6 @@ import water_sizing_engine
 import water_recirc
 import water_tables
 import water_report
-import water_drafting
 import ui_helpers
 
 
@@ -118,21 +114,11 @@ def run(doc, uidoc, output, forms):
     }
     print(water_report.build_report(graph, sizing, header, recirc))
 
-    # Sizes first, because writing them is the job. The take-off follows in
-    # its own transaction, so a project missing a drafting view family type or
-    # a title block costs the user a sheet, never the sizes already committed.
     _warn_over_table(output, forms, sizing)
     _write_sizes(doc, output, forms, graph, sizing)
-
-    if settings["wsfu_calcs"]:
-        _create_drafting_view(doc, output, graph, sizing, header, recirc)
-        output.print_md(
-            "Check the take-off against the fixtures in the model. The "
-            "fixture unit totals on it are what drove every pipe size.")
-    else:
-        output.print_md(
-            "WSFU Calculations were not requested, so no drafting view or "
-            "sheet was made. The take-off above is print only.")
+    output.print_md(
+        "Run Water Performance with WSFU Calculations for the take-off on a "
+        "drafting view and a sheet.")
     return True
 
 
@@ -299,49 +285,6 @@ def _print_return_detection(output, detection):
             "circulation flow instead of fixture units. One picked on pipe "
             "count alone is left unsized. Check it against the model before "
             "using these sizes.")
-
-
-def _create_drafting_view(doc, output, graph, sizing, header, recirc=None):
-    """The take-off on a drafting view and a new sheet, per firm standard.
-
-    Its own transaction so a failure here cannot roll anything else back.
-    """
-    transaction = Transaction(doc, "RJA Tools - Water WSFU Take-Off")
-    transaction.Start()
-    try:
-        view, content_h, content_w = water_drafting.build_wsfu_view(
-            doc, graph, header, sizing, recirc=recirc)
-        if view is None:
-            transaction.RollBack()
-            output.print_md(
-                "Could not create the drafting view. The project needs a "
-                "Drafting view family type and at least one Text Note type.")
-            return
-
-        output.print_md("Created drafting view **{}**.".format(view.Name))
-
-        stamp = datetime.datetime.now().strftime("%m%d-%H%M")
-        sheet, viewport = water_drafting.place_on_sheet(
-            doc, view, content_h, content_w,
-            "WS-{}".format(stamp),
-            "Domestic Water WSFU Take-Off {}".format(stamp))
-        if sheet is None:
-            output.print_md(
-                "The drafting view was created, but no sheet was made: this "
-                "project has no title block type loaded.")
-        else:
-            output.print_md("Placed on sheet **{} - {}**.".format(
-                sheet.SheetNumber, sheet.Name))
-            if viewport is None:
-                output.print_md(
-                    "The sheet was made but the viewport could not be placed. "
-                    "Drag the view on by hand.")
-        transaction.Commit()
-    except Exception as exc:
-        transaction.RollBack()
-        output.print_md(
-            "Drafting view failed, nothing was added to the model: "
-            "{}".format(str(exc)))
 
 
 def _warn_over_table(output, forms, sizing):
