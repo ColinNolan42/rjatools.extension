@@ -3461,25 +3461,6 @@ def main():
             lid = _elem_level_id(elem)
             return lid is None or lid == lvl_eid
 
-        # Viewport type "None" for the schedule, found once. Best-effort only:
-        # cosmetic, must never break the whole tool if this lookup misbehaves
-        # (confirmed AttributeError on vp_type.Name here even though the
-        # identical query works fine outside pyRevit's IronPython).
-        # FilteredElementCollector on OST_Viewports + WhereElementIsElementType
-        # misses this system-family type entirely (confirmed via MCP inspection).
-        none_vp_type_id = None
-        try:
-            for vp in FilteredElementCollector(doc).OfClass(Viewport):
-                vp_type = doc.GetElement(vp.GetTypeId())
-                if vp_type is None:
-                    continue
-                vp_type_name = vp_type.Name
-                if vp_type_name is not None and vp_type_name.strip().lower() == 'none':
-                    none_vp_type_id = vp_type.Id
-                    break
-        except Exception:
-            pass
-
         new_sheets = []
         used_keys  = set()
         for lvl_eid, src_view, src_sheet in targets:
@@ -3596,6 +3577,7 @@ def main():
             diagram_vp = Viewport.Create(doc, new_sheet.Id, new_vid, XYZ(0, 0, 0))
             doc.Regenerate()
             diagram_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
+            rja_drafting.set_viewport_type_none(doc, diagram_vp)
 
             # System Summary + flagged-duct table + legend, placed as second
             # viewport on every sheet (the table covers all levels).
@@ -3624,11 +3606,7 @@ def main():
                     sched_y  = bottom_margin_y + content_h / 2.0
                     sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
                                                XYZ(sched_x, sched_y, 0))
-                    if none_vp_type_id is not None:
-                        try:
-                            sched_vp.ChangeTypeId(none_vp_type_id)
-                        except Exception:
-                            pass
+                    rja_drafting.set_viewport_type_none(doc, sched_vp)
 
         t.Commit()
     except Exception as ex:

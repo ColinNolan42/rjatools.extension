@@ -391,32 +391,34 @@ def _title_block_type_id(doc):
 
 
 def _hide_viewport_title(doc, viewport):
-    """Best effort: switch to the title-less viewport type if one exists.
+    """Switch a new viewport to the title-less type, "None" in RJA's template.
 
-    The type is named exactly "None" in RJA's template (confirmed live in
-    (2022) RJA Template M&P, whose viewport types are None, RJA - Double Line
-    and RJA - Single Line), so match that rather than "No Title".
+    Every viewport the tools place defaults to None, not the template's
+    RJA - Double Line (Colin, 2026-10-21).
 
-    Cosmetic only. The Duct Velocity tool found that a FilteredElementCollector
-    on OST_Viewports misses this system-family type, which is why the existing
-    viewports are sampled instead, and that reading vp_type.Name can throw
-    inside pyRevit's IronPython even when the same query works outside it. This
-    must never break the run.
+    The types come from viewport.GetValidTypes(), confirmed live (Revit 2026,
+    lists None, RJA - Double Line, the Single Line variants). The old way
+    sampled viewports already on sheets and found nothing when no viewport in
+    the model used None yet. The name is read through SYMBOL_NAME_PARAM
+    because .Name can throw in pyRevit's IronPython. Cosmetic only, so it
+    never breaks the run.
     """
     try:
-        for vp in FilteredElementCollector(doc).OfClass(Viewport):
-            vp_type = doc.GetElement(vp.GetTypeId())
-            if vp_type is None:
-                continue
-            try:
-                name = vp_type.Name
-            except Exception:
-                continue
+        for type_id in viewport.GetValidTypes():
+            vp_type = doc.GetElement(type_id)
+            param = vp_type.get_Parameter(
+                BuiltInParameter.SYMBOL_NAME_PARAM) if vp_type else None
+            name = param.AsString() if param is not None else None
             if name is not None and name.strip().lower() in ("none", "no title"):
-                viewport.ChangeTypeId(vp_type.Id)
-                return
+                viewport.ChangeTypeId(type_id)
+                return True
     except Exception:
         pass
+    return False
+
+
+# Public name for the pushbutton scripts.
+set_viewport_type_none = _hide_viewport_title
 
 
 def _name_view(view, base_name):

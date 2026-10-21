@@ -325,6 +325,7 @@ def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
     plan_vp = Viewport.Create(doc, sheet.Id, plan_view.Id, XYZ(0, 0, 0))
     doc.Regenerate()
     plan_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
+    _hide_viewport_title(doc, plan_vp)
 
     if table_view is not None:
         # Left edge and bottom pinned, centre derived, because the table
