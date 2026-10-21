@@ -201,7 +201,8 @@ def wsfu_data(graph):
     }
 
     return {"rows": rows, "totals": totals, "ext_cold": ext_cold,
-            "ext_hot": ext_hot, "ext_total": ext_total}
+            "ext_hot": ext_hot, "ext_total": ext_total,
+            "flush_valve_system": water_graph.has_flush_valves(graph)}
 
 
 def wsfu_load_lines(data):
@@ -215,14 +216,31 @@ def wsfu_load_lines(data):
     separate hot and cold loads at three-fourths of the total for any fixture
     served by both, as a diversity allowance, so the columns are deliberately
     not additive.
+
+    The gpm follows the Table E103.3(3) column the sizing used, and says
+    which (Colin, 2026-10-21): flushometer valve for cold water on a system
+    serving a flush valve fixture, flush tank otherwise and for hot water.
     """
+    cold = water_tables.demand_gpm(data["ext_total"],
+                                   data.get("flush_valve_system", False))
+    hot = water_tables.wsfu_to_gpm(data["ext_hot"])
+    if cold["curve"] == water_tables.CURVE_FLUSHOMETER:
+        basis = ("WSFU to gpm: 2024 IPC Table E103.3(3). Cold water uses the "
+                 "flushometer valve column (the system serves a flush valve "
+                 "fixture), hot water the flush tank column.")
+    elif data.get("flush_valve_system"):
+        basis = ("WSFU to gpm: 2024 IPC Table E103.3(3), flush tank column. "
+                 "The system serves a flush valve fixture, but the cold load "
+                 "is below the first row of the flushometer valve column.")
+    else:
+        basis = ("WSFU to gpm: 2024 IPC Table E103.3(3), flush tank column "
+                 "(no flush valve fixtures on the system).")
     return [
         "Cold water sizing load (TOTAL wsfu): {}  ->  {} gpm".format(
-            _num(data["ext_total"]),
-            _gpm(water_tables.wsfu_to_gpm(data["ext_total"]))),
+            _num(data["ext_total"]), _gpm(cold)),
         "Hot water sizing load (HOT wsfu): {}  ->  {} gpm".format(
-            _num(data["ext_hot"]),
-            _gpm(water_tables.wsfu_to_gpm(data["ext_hot"]))),
+            _num(data["ext_hot"]), _gpm(hot)),
+        basis,
         "Note: COLD + HOT does not equal TOTAL. Per note a to IPC Table "
         "E103.3(2), a fixture served by both hot and cold water has its "
         "separate hot and cold loads set at three-fourths of its total load.",

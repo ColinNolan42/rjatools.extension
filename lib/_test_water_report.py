@@ -344,6 +344,24 @@ class TestMixedTypesDoNotCollapse(unittest.TestCase):
         self.assertIn("does not equal TOTAL", note)
         self.assertIn("three-fourths", note)
 
+    def test_design_load_names_the_flush_tank_column(self):
+        g = self.build(["Water Closet, Flush Tank", "Lavatory"])
+        note = " ".join(water_report.wsfu_load_lines(water_report.wsfu_data(g)))
+        self.assertIn("flush tank column (no flush valve fixtures", note)
+
+    def test_design_load_names_the_flushometer_column(self):
+        # Colin, 2026-10-21: the design load says which column turned the
+        # fixture units into gpm, and the cold gpm follows that column.
+        g = self.build(["Water Closet, Flushometer Valve", "Lavatory"])
+        for i in range(12):
+            g.nodes[100 + i].is_flush_valve = True
+        d = water_report.wsfu_data(g)
+        lines = water_report.wsfu_load_lines(d)
+        self.assertIn("flushometer valve column", " ".join(lines))
+        flushometer = water_report.water_tables.demand_gpm(
+            d["ext_total"], True)["gpm"]
+        self.assertIn("{:.1f} gpm".format(flushometer), lines[0])
+
     def test_per_fixture_columns_shown_when_the_row_is_uniform(self):
         g = self.build(["Water Closet, Flush Tank", "Lavatory"])
         d = water_report.wsfu_data(g)
