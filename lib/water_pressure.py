@@ -550,10 +550,16 @@ TABLE_COLUMNS = [("FIXTURE", 0.140), ("SYSTEM", 0.070),
                  ("TABLE 604.3 ROW", 0.330)]
 
 
-def table_rows(analysis):
-    """Rows for the pyRevit and sheet tables, worst first."""
+def table_rows(analysis, failing_only=False):
+    """Rows for the pyRevit and sheet tables, worst first.
+
+    failing_only keeps just the outlets below their minimum (Colin,
+    2026-10-21: Water Performance lists only the ones that do not pass).
+    """
     rows = []
     for o in analysis["outlets"]:
+        if failing_only and o.passes is not False:
+            continue
         if o.passes is None:
             verdict = "NOT CHECKED"
         else:
@@ -567,6 +573,19 @@ def table_rows(analysis):
             o.row,
         ])
     return rows
+
+
+def outlet_summary(analysis):
+    """One line: how many outlets meet the minimum, fail, or were not checked."""
+    outlets = analysis["outlets"]
+    passed = len([o for o in outlets if o.passes is True])
+    failed = len([o for o in outlets if o.passes is False])
+    unchecked = len(outlets) - passed - failed
+    line = "{} of {} fixture outlets meet the Table 604.3 minimum, {} do " \
+           "not.".format(passed, len(outlets), failed)
+    if unchecked:
+        line += " {} not checked (no Table 604.3 row).".format(unchecked)
+    return line
 
 
 def basis_lines(start_psi):

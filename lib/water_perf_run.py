@@ -377,10 +377,13 @@ def _print_pressure(output, pressure, start_psi):
         output.print_md(_critical_line(critical))
     for warning in pressure["warnings"]:
         output.print_md(":warning: " + warning)
-    output.print_table(
-        table_data=water_pressure.table_rows(pressure),
-        title="Pressure at each fixture outlet, lowest first",
-        columns=[c[0] for c in water_pressure.TABLE_COLUMNS])
+    output.print_md(water_pressure.outlet_summary(pressure))
+    failing = water_pressure.table_rows(pressure, failing_only=True)
+    if failing:
+        output.print_table(
+            table_data=failing,
+            title="Fixture outlets below their minimum, lowest first",
+            columns=[c[0] for c in water_pressure.TABLE_COLUMNS])
     notes = sorted(set(n for o in pressure["outlets"] for n in o.notes))
     if notes:
         output.print_md("Not counted or assumed:\n" +
@@ -397,10 +400,13 @@ def _pressure_table(pressure, start_psi):
     critical = pressure["critical"]
     if critical is not None:
         notes.insert(0, _critical_line(critical))
+    notes.insert(0, water_pressure.outlet_summary(pressure))
     notes.extend(water_pressure.basis_lines(start_psi))
-    return ("PRESSURE AT FIXTURE OUTLETS - 2024 IPC E103.3, TABLE 604.3",
-            water_pressure.TABLE_COLUMNS, water_pressure.table_rows(pressure),
-            notes)
+    # Only the outlets that do not pass (Colin, 2026-10-21). With none, the
+    # summary line above the basis says so and no table is drawn.
+    return ("FIXTURE OUTLETS BELOW MINIMUM PRESSURE - 2024 IPC E103.3, "
+            "TABLE 604.3", water_pressure.TABLE_COLUMNS,
+            water_pressure.table_rows(pressure, failing_only=True), notes)
 
 
 def _print_pumps(output, pumps, settings):

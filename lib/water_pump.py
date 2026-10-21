@@ -196,24 +196,18 @@ def _circuit(graph, leg, supply_path, supply_gpm, return_gpm,
     return out
 
 
+# The psi breakdown (supply, return, fittings, setter, devices) is left out
+# until the recirculation sizing is reworked (Colin, 2026-10-21). The
+# circuits keep it for when it comes back.
 TABLE_COLUMNS = [("HEATER", 0.090), ("PUMP GPM", 0.075),
-                 ("HEAD FT", 0.070), ("INDEX LEG", 0.080),
-                 ("SUPPLY PSI", 0.080), ("RETURN PSI", 0.080),
-                 ("FITTINGS PSI", 0.090), ("SETTER PSI", 0.080),
-                 ("DEVICES PSI", 0.085)]
+                 ("HEAD FT", 0.070), ("INDEX LEG", 0.080)]
 
 
 def table_rows(points):
     rows = []
     for p in points:
-        index = [c for c in p["circuits"] if c["number"] == p["index_leg"]][0]
         rows.append([str(p["root_id"]), "{:.1f}".format(p["gpm"]),
-                     "{:.1f}".format(p["head_ft"]), str(p["index_leg"]),
-                     "{:.2f}".format(index["supply_psi"]),
-                     "{:.2f}".format(index["return_psi"]),
-                     "{:.2f}".format(index["fitting_psi"]),
-                     "{:.2f}".format(index["setter_psi"]),
-                     "{:.2f}".format(index["device_psi"])])
+                     "{:.1f}".format(p["head_ft"]), str(p["index_leg"])])
     return rows
 
 
