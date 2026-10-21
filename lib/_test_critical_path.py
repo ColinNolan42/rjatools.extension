@@ -621,6 +621,107 @@ check("case13 the SUPPLY path is untouched by the return filter",
       and abs(sup_on['total_inwc'] - r13_off[0]['Supply Air']['total_inwc']) < 1e-12)
 
 
+# ── case 14: transitions are priced in the direction the AIR flows ───────────
+#
+# Colin, 2026-10-21. The walk always goes unit outward. Supply air goes the same
+# way, return air the opposite way. One transition that GROWS along the walk
+# (0.5 ft2 -> 1.0 ft2) is an expansion on supply but a contraction on return.
+#   duct 701 (0.5 ft2) -> transition 702 (down_area 1.0) -> duct 703 -> T710
+def _transition_net(sys_class):
+    ch = {700: [701], 701: [702], 702: [703], 703: [710]}
+    nd = {702: Elem(kind='transition', family_name='Round Transition - Angle',
+                    is_round=True, down_area=1.0)}
+    dc = build([(701, 0.0, 5.0, 1000.0, 0.5, sys_class),
+                (703, 0.0, 5.0, 500.0, 1.0, sys_class)])
+    tm = {710: (500.0, sys_class, 'T-14')}
+    return crit([700], ch, dc, tm, nd)[700][sys_class]
+
+sup14 = _transition_net('Supply Air')
+ret14 = _transition_net('Return Air')
+exp14 = fitting_tables.DEFAULT_C['transition_expansion'] * pv(1000.0)
+con14 = fitting_tables.DEFAULT_C['transition_contraction'] * pv(1000.0)
+check("case14 supply: a transition growing along the walk is an EXPANSION",
+      abs(sup14['fitting_inwc'] - exp14) < 1e-9,
+      "expected %.6f got %r" % (exp14, sup14['fitting_inwc']))
+check("case14 return: the same transition is a CONTRACTION (air flows toward the unit)",
+      abs(ret14['fitting_inwc'] - con14) < 1e-9,
+      "expected %.6f got %r (expansion would be %.6f)"
+      % (con14, ret14['fitting_inwc'], exp14))
+ext14 = _transition_net('Exhaust Air')
+check("case14 exhaust follows return (contraction)",
+      abs(ext14['fitting_inwc'] - con14) < 1e-9, "got %r" % ext14['fitting_inwc'])
+
+
+# ── case 15: unit-side stretch is walked TOWARD the unit, so the rule flips ──
+#
+#   picked duct 800 (0.5 ft2) -> transition 801 (down_area 1.0) -> stub 802  <- unit side
+#                             -> duct 803 -> T810                           <- the run
+# Walking from the picked duct to the unit, the area grows. For SUPPLY, air comes
+# FROM the unit, so it really goes 1.0 -> 0.5: a contraction. For RETURN the air
+# goes to the unit with the walk: an expansion.
+def _unit_side_net(sys_class):
+    ch = {800: [801, 803], 801: [802], 803: [810]}
+    nd = {801: Elem(kind='transition', family_name='Round Transition - Angle',
+                    is_round=True, down_area=1.0)}
+    dc = build([(800, 0.0, 5.0, 1000.0, 0.5, sys_class),
+                (802, 0.0, 0.5, 0.0, 1.0, sys_class),
+                (803, 0.0, 5.0, 1000.0, 0.5, sys_class)])
+    for _d in dc.values():
+        _d.d_h_in = 10.0
+    tm = {810: (500.0, sys_class, 'T-15')}
+    return crit([800], ch, dc, tm, nd, duct_rooted_ids=set([800]))[800][sys_class]
+
+sup15 = _unit_side_net('Supply Air')
+ret15 = _unit_side_net('Return Air')
+check("case15 unit side, supply: priced as a CONTRACTION (air flows away from the unit)",
+      abs(sup15['fitting_inwc'] - con14) < 1e-9,
+      "expected %.6f got %r" % (con14, sup15['fitting_inwc']))
+check("case15 unit side, return: priced as an EXPANSION (air flows into the unit)",
+      abs(ret15['fitting_inwc'] - exp14) < 1e-9,
+      "expected %.6f got %r" % (exp14, ret15['fitting_inwc']))
+
+
+# ── case 16: one flex bend per continuous flex run ───────────────────────────
+#
+# Colin, 2026-10-21: C 3.3 (top of the ASHRAE Duct Systems Design Guide's 0.9 to
+# 3.3 range), once per flex run, at the flex's own velocity.
+#   rigid 901 -> flex 902 -> flex 903 (same run, split in Revit) -> T910
+def _flex_net(flex_ids):
+    ch = {900: [901], 901: [902], 902: [903], 903: [910]}
+    dc = build([(901, 0.0, 10.0, 900.0, 1.0, 'Supply Air'),
+                (902, 0.0, 3.0, 600.0, 0.35, 'Supply Air'),
+                (903, 0.0, 3.0, 600.0, 0.35, 'Supply Air')])
+    for _d in dc.values():
+        _d.is_flex = _d.element_id in flex_ids
+    tm = {910: (210.0, 'Supply Air', 'T-16')}
+    return crit([900], ch, dc, tm, {})[900]['Supply Air']
+
+none16 = _flex_net(set())
+two16  = _flex_net(set([902, 903]))
+bend16 = fitting_tables.DEFAULT_C['flex_bend'] * pv(600.0)
+check("case16 no flex on the path: no bend charged",
+      abs(none16['fitting_inwc']) < 1e-12, "got %r" % none16['fitting_inwc'])
+check("case16 a flex run split in two segments gets ONE bend, at the flex velocity",
+      abs(two16['fitting_inwc'] - bend16) < 1e-9 and two16['fitting_count'] == 1,
+      "expected %.6f got %r count %r" % (bend16, two16['fitting_inwc'],
+                                          two16['fitting_count']))
+check("case16 flex_bend default is 3.3",
+      fitting_tables.DEFAULT_C['flex_bend'] == 3.3)
+ovr16 = dict(fitting_tables.DEFAULT_C)
+ovr16['flex_bend'] = 0.9
+ch16 = {900: [901], 901: [902], 902: [903], 903: [910]}
+dc16 = build([(901, 0.0, 10.0, 900.0, 1.0, 'Supply Air'),
+              (902, 0.0, 3.0, 600.0, 0.35, 'Supply Air'),
+              (903, 0.0, 3.0, 600.0, 0.35, 'Supply Air')])
+for _d in dc16.values():
+    _d.is_flex = _d.element_id in (902, 903)
+r16o = crit([900], ch16, dc16, {910: (210.0, 'Supply Air', 'T-16')}, {},
+            c_values=ovr16)[900]['Supply Air']
+check("case16 the dialog override of flex_bend reaches the walker",
+      abs(r16o['fitting_inwc'] - 0.9 * pv(600.0)) < 1e-9,
+      "got %r" % r16o['fitting_inwc'])
+
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

@@ -152,11 +152,11 @@ def is_duct(elem):
 def is_flex_duct(elem):
     """Flex duct, which Revit keeps in its own category (OST_FlexDuctCurves).
 
-    Worth its own test because flex is 40x rougher than galvanized steel
-    (eps 0.012 ft against 0.0003), which is about 1.8x the friction for a
-    typical 8-12 in. branch. Flex runs were already being TRAVERSED - is_duct()
-    has always included this category - they were just being priced as if they
-    were sheet metal.
+    Worth its own test because flex is 10x rougher than galvanized steel
+    (eps 0.003 ft against 0.0003) and every flex run on an index path is
+    charged one bend (fitting_tables 'flex_bend'). Flex runs were already being
+    TRAVERSED - is_duct() has always included this category - they were just
+    being priced as if they were sheet metal.
 
     Colin, 2026-09-24: "flex branches are generally only ceiling diffusers so
     you can probably include the difference of the two as i have a flex duct
@@ -582,16 +582,20 @@ _GRAVITY_FT_S2     = 32.174
 _WATER_LB_FT3      = 62.4
 _IN_WG_PER_LBF_FT2 = _WATER_LB_FT3 / 12.0
 
-# Absolute roughness, ft. ASHRAE Fundamentals Ch. 21 Table 1, same values as
-# ductulator.py. Flex is 40x galvanized, which is why it gets its own entry:
-# ceiling diffuser branches are flex and computing them as galvanized
-# understates their friction by roughly 1.8x.
+# Absolute roughness, ft. Galvanized, aluminum and stainless match ASHRAE
+# Fundamentals Ch. 21 Table 1 (reproduced as Table 1-2 in the ASHRAE Duct
+# Systems Design Guide). Flex gets its own entry: 0.003 ft is the guide's
+# "medium rough" figure for nonmetallic flex fully extended (Colin,
+# 2026-10-21, replacing 0.012, which is not in the table). The bends a real
+# flex run has are charged separately, one per flex run, as
+# fitting_tables 'flex_bend' (C 3.3). Fiberglass duct board and PVC / rigid
+# liner were checked against Table 1-2 and kept as they are by Colin's call.
 ROUGHNESS_FT = {
     'Galvanized Steel':       0.0003,
     'Aluminum':               0.00015,
     'Stainless Steel':        0.00015,
     'PVC / Rigid Liner':      0.00017,
-    'Flex Duct (corrugated)': 0.012,
+    'Flex Duct (corrugated)': 0.003,
     'Fiberglass Duct Board':  0.0003,
     'Concrete':               0.005,
 }

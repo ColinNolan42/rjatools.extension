@@ -527,7 +527,7 @@ def _show_velocity_settings_xaml(use_theme):
           '0.0003 galvanized, 0.005 interior insulated',
           hvac_graph.STANDARD_RIGID_ROUGHNESS_FT),
          ('flex_roughness', 'Duct roughness, flex (ft)',
-          '0.012 corrugated flex',
+          '0.003 flex, fully extended (ASHRAE)',
           hvac_graph.STANDARD_FLEX_ROUGHNESS_FT),
          ('air_density', 'Air density (lb/ft3)',
           '0.075 standard air, sea level',
@@ -544,12 +544,15 @@ def _show_velocity_settings_xaml(use_theme):
         ('Air density', '%g lb/ft3, standard air at sea level, not altitude '
                         'corrected. Editable under Advanced.'
                         % hvac_graph.STANDARD_AIR_DENSITY_LB_FT3),
-        ('Roughness', '%g ft galvanized, %g ft flex (flex detected by category). '
-                      'Editable under Advanced.'
+        ('Roughness', '%g ft galvanized, %g ft flex (flex detected by category), '
+                      'plus one flex bend per flex run. Editable under Advanced.'
                       % (hvac_graph.STANDARD_RIGID_ROUGHNESS_FT,
                          hvac_graph.STANDARD_FLEX_ROUGHNESS_FT)),
         ('Fittings', 'C x Pv, with C from the RJA SP loss worksheet (1985 ASHRAE '
-                     'fitting numbers). Editable under Advanced.'),
+                     'fitting numbers), plus one flex bend (C 3.3, ASHRAE Duct '
+                     'Systems Design Guide) per flex run. Return and exhaust '
+                     'transitions are priced in the direction the air flows. '
+                     'Editable under Advanced.'),
         ('External static', 'The most restrictive run (index run) from the unit to '
                             'a terminal, supply path plus return path. Includes duct '
                             'friction, fittings, balancing dampers, the diffuser and '
@@ -1074,7 +1077,7 @@ def _show_velocity_settings_dialog_legacy():
           u'0.0003 galvanized, 0.005 interior-insulated',
           hvac_graph.STANDARD_RIGID_ROUGHNESS_FT),
          ('flex_roughness', 'Duct roughness, flex (ft)',
-          u'0.012 corrugated flex',
+          u'0.003 flex, fully extended (ASHRAE)',
           hvac_graph.STANDARD_FLEX_ROUGHNESS_FT),
          ('air_density', u'Air density (lb/ft³)',
           u'0.075 standard air, sea level',
@@ -1155,11 +1158,14 @@ def _show_velocity_settings_dialog_legacy():
     _info_row('Verified against:', u'RJA SP_LOSS_WORKSHEET, matches its duct rows to the printed digit')
     _info_row('Air density:',     u'0.0750 lb/ft³  (standard air, 68°F, SEA LEVEL, '
                                   u'not altitude-corrected). Editable under Advanced settings.')
-    _info_row('Duct roughness:',  u'ε = 0.0003 ft galvanized, 0.012 ft flex '
-                                  u'(detected by category, ~1.8× the friction). '
+    _info_row('Duct roughness:',  u'ε = 0.0003 ft galvanized, 0.003 ft flex '
+                                  u'(detected by category, ASHRAE Table 1-2). '
                                   u'Editable under Advanced settings.')
     _info_row('Fitting losses:',  u'C × Pv, C from RJA SP_LOSS_WORKSHEET '
-                                  u'(1985 ASHRAE fitting numbers), editable above')
+                                  u'(1985 ASHRAE fitting numbers), plus one flex '
+                                  u'bend (C 3.3) per flex run. Return and exhaust '
+                                  u'transitions priced in the airflow direction. '
+                                  u'Editable above')
     _info_row('External static:', 'the single most restrictive run (index run) from '
                                   'the unit to a terminal, supply path + return path')
     _info_row('  includes:',      'duct friction, fittings (elbows, take-offs, '
@@ -1818,21 +1824,30 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             cont_cache[nid] = hvac_graph.duct_continues_past(nid, all_nodes, all_children)
         return cont_cache[nid]
 
-    def _price_fitting(elem, sys_class, up_fpm, up_area):
+    def _price_fitting(elem, sys_class, up_fpm, up_area, against_flow=False):
         """(loss in. wc, counted 0/1, unpriced note or None, downstream area).
 
         One place that prices a fitting the path passes THROUGH, used by the main
         walk and by the unit-side chain below so the two can never disagree.
+
+        against_flow: the walk is going the opposite way to the air. A transition
+        then has its two areas swapped before it is classified, so a return
+        transition that grows toward the unit is priced as the contraction the
+        air actually sees, not as an expansion (Colin, 2026-10-21). The returned
+        downstream area stays in WALK order, because the caller tracks area
+        along the walk.
         """
         fam  = hvac_graph.fitting_family_name(elem)
         role = fitting_tables.classify_fitting(fam)
         up_a, down_a = (None, None)
+        flow_up, flow_down = (None, None)
         if role == 'transition':
             up_a, down_a = hvac_graph.transition_areas(elem, up_area)
+            flow_up, flow_down = (down_a, up_a) if against_flow else (up_a, down_a)
         c, note = fitting_tables.fitting_c(
             role, sys_class,
             is_round=hvac_graph.fitting_is_round(elem),
-            upstream_area_ft2=up_a, downstream_area_ft2=down_a,
+            upstream_area_ft2=flow_up, downstream_area_ft2=flow_down,
             is_end_of_main=False, c=c_values)
         if c > 0.0:
             return c * hvac_graph.velocity_pressure_inwg(up_fpm), 1, None, down_a
@@ -1898,8 +1913,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     up_area = dr.area_ft2
                 elif elem is not None and hvac_graph.is_fitting(elem):
                     up_fpm = flow_cfm / up_area if up_area else 0.0
+                    # This stretch is walked from the picked duct back TOWARD the
+                    # unit, the reverse of the main walk, so supply air runs
+                    # against it and return air runs with it.
                     loss, counted, note, down_a = _price_fitting(
-                        elem, root_dr.sys_class, up_fpm, up_area)
+                        elem, root_dr.sys_class, up_fpm, up_area,
+                        against_flow=not fitting_tables.flows_toward_unit(
+                            root_dr.sys_class))
                     fit   += loss
                     n_fit += counted
                     if note:
@@ -1928,8 +1948,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if duct_rooted_ids and root_id in duct_rooted_ids:
             pre = _unit_side_chain(root_id)
         # pre = (friction, fitting loss, fittings, ducts, feet, unpriced)
+        # Last field: was the previous duct on this path flex? One flex bend is
+        # charged when a path ENTERS flex, so a flex run split into several
+        # Revit segments still gets one bend, not one per segment.
         stack = [(root_id, pre[0], pre[1], (), pre[3], pre[2], 0, pre[4], 0.0,
-                  0.0, None, pre[5], frozenset([root_id]))]
+                  0.0, None, pre[5], frozenset([root_id]), False)]
         steps = 0
         while stack:
             steps = steps + 1
@@ -1939,7 +1962,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 truncated_roots.add(root_id)
                 break
             (nid, fric, fit, comp_keys, dcount, fcount, tcount, dlen,
-             up_fpm, up_area, sys_class, unpriced, path) = stack.pop()
+             up_fpm, up_area, sys_class, unpriced, path, in_flex) = stack.pop()
 
             elem = all_nodes.get(nid)
             dr   = dr_by_int_id.get(nid)
@@ -1951,10 +1974,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 up_fpm    = dr.fpm
                 up_area   = dr.area_ft2
                 sys_class = dr.sys_class
+                # Straight flex friction alone covers far less than one real
+                # bend (ASHRAE Duct Systems Design Guide Ch. 2: flex bend C 0.9 to
+                # 3.3). Colin, 2026-10-21: charge one bend per continuous flex
+                # run at the duct's own velocity.
+                is_flex_here = bool(getattr(dr, 'is_flex', False))
+                if is_flex_here and not in_flex and dr.fpm:
+                    fit    = fit + (fitting_tables.flex_bend_c(c_values) *
+                                    hvac_graph.velocity_pressure_inwg(dr.fpm))
+                    fcount = fcount + 1
+                in_flex = is_flex_here
 
             elif elem is not None and hvac_graph.is_fitting(elem):
                 loss, counted, note, _down_a = _price_fitting(
-                    elem, sys_class, up_fpm, up_area)
+                    elem, sys_class, up_fpm, up_area,
+                    against_flow=fitting_tables.flows_toward_unit(sys_class))
                 fit    = fit + loss
                 fcount = fcount + counted
                 if note:
@@ -2048,7 +2082,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 stack.append((child_id, fric, extra_fit, comp_keys, dcount,
                               fcount, extra_t, dlen, up_fpm, up_area,
                               sys_class, unpriced,
-                              path | frozenset([child_id])))
+                              path | frozenset([child_id]), in_flex))
 
         if best_here:
             best[root_id] = best_here

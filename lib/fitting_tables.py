@@ -52,6 +52,7 @@ C_TABLE = (
     ('wye_bullhead',         'Bull head 90 deg wye',                     '6-33',    0.30),
     ('offset',               'Offset (K x elbow C)',                     '3-13',    1.70),
     ('abrupt_exit',          'Abrupt exit (stacks, no cone)',            '2-11',    1.00),
+    ('flex_bend',            'Flex duct bend (one per flex run)',        'DSDG Ch2', 3.30),
 )
 
 DEFAULT_C = {}
@@ -81,6 +82,14 @@ PUBLISHED_C_SUM = 19.91
 DEPARTURES_FROM_WORKSHEET = (
     ('supply_tap_main', 0.28, 0.20),
 )
+
+# flex_bend is NOT a worksheet row (the worksheet has no flex fitting), so it sits
+# outside PUBLISHED_C_SUM too. Source: ASHRAE Duct Systems Design Guide, Ch. 2,
+# Pressure Loss Considerations, citing Abushakra et al. 2004: loss coefficients for
+# bends in flexible duct run 0.9 to 3.3 with no consistent trend. Colin,
+# 2026-10-21: use the top of that range, 3.3, and charge ONE bend per continuous
+# flex run, because straight flex friction alone covered only a C of about 0.04
+# to 0.18 (6 to 12 in. flex, 4 to 8 ft), far short of a single bend.
 
 
 def c_of(key, c=None):
@@ -216,6 +225,24 @@ def _is_supply(sys_class):
     return sys_class == 'Supply Air'
 
 
+def flows_toward_unit(sys_class):
+    """True when air in this system moves TOWARD the unit (return, exhaust,
+    outside air), i.e. against the traversal, which always walks unit outward.
+
+    Which way the air really goes decides whether a transition is an expansion
+    or a contraction. The ASHRAE Duct Systems Design Guide, Ch. 1 (fitting
+    nomenclature), keeps entries and converging junctions to the return/exhaust
+    side for the same reason. Colin, 2026-10-21: price return transitions in the
+    direction the air actually flows.
+    """
+    return not _is_supply(sys_class)
+
+
+def flex_bend_c(c=None):
+    """C for the one bend charged per continuous flex run (see C_TABLE)."""
+    return c_of('flex_bend', c)
+
+
 def takeoff_c(sys_class, is_end_of_main=False, conical=False, c=None):
     """C for the air that TURNS OFF through a take-off into a branch."""
     side = 'supply' if _is_supply(sys_class) else 'exhaust'
@@ -252,7 +279,9 @@ def transition_c(upstream_area_ft2, downstream_area_ft2, c=None):
 
     Both areas come off the fitting's own two connectors, so this needs no
     look at the neighbouring ducts -- but it DOES need the flow direction, which
-    only the graph knows (every Revit connector reports Bidirectional).
+    only the graph knows (every Revit connector reports Bidirectional). The
+    caller passes the areas in the direction the AIR flows, not the walk
+    direction (see flows_toward_unit).
 
     Returns 0.0 when either area is unreadable: a transition that cannot be
     measured is reported as unpriced, not silently charged the wrong direction.
