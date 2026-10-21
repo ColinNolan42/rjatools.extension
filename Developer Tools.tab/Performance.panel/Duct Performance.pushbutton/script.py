@@ -1951,8 +1951,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # Last field: was the previous duct on this path flex? One flex bend is
         # charged when a path ENTERS flex, so a flex run split into several
         # Revit segments still gets one bend, not one per segment.
+        # Last field: the run item by item, (item, detail, fpm, loss in. wc),
+        # printed under the summary so every number in the total can be traced.
+        pre_items = ()
+        if pre[1] or pre[0]:
+            pre_items = (('Unit side stretch', '{} fitting(s), {} duct(s), {:.0f} ft'.format(
+                pre[2], pre[3], pre[4]), None, pre[0] + pre[1]),)
         stack = [(root_id, pre[0], pre[1], (), pre[3], pre[2], 0, pre[4], 0.0,
-                  0.0, None, pre[5], frozenset([root_id]), False)]
+                  0.0, None, pre[5], frozenset([root_id]), False, pre_items)]
         steps = 0
         while stack:
             steps = steps + 1
@@ -1962,7 +1968,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 truncated_roots.add(root_id)
                 break
             (nid, fric, fit, comp_keys, dcount, fcount, tcount, dlen,
-             up_fpm, up_area, sys_class, unpriced, path, in_flex) = stack.pop()
+             up_fpm, up_area, sys_class, unpriced, path, in_flex,
+             items) = stack.pop()
 
             elem = all_nodes.get(nid)
             dr   = dr_by_int_id.get(nid)
@@ -1974,15 +1981,25 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 up_fpm    = dr.fpm
                 up_area   = dr.area_ft2
                 sys_class = dr.sys_class
+                items     = items + ((
+                    'Duct {}'.format(nid),
+                    '{}, {:.1f} ft'.format(getattr(dr, 'size', '?'),
+                                           float(dr.length_ft)),
+                    dr.fpm, dr.friction_loss_inwc),)
                 # Straight flex friction alone covers far less than one real
                 # bend (ASHRAE Duct Systems Design Guide Ch. 2: flex bend C 0.9 to
                 # 3.3). Colin, 2026-10-21: charge one bend per continuous flex
                 # run at the duct's own velocity.
                 is_flex_here = bool(getattr(dr, 'is_flex', False))
                 if is_flex_here and not in_flex and dr.fpm:
-                    fit    = fit + (fitting_tables.flex_bend_c(c_values) *
-                                    hvac_graph.velocity_pressure_inwg(dr.fpm))
+                    bend   = (fitting_tables.flex_bend_c(c_values) *
+                              hvac_graph.velocity_pressure_inwg(dr.fpm))
+                    fit    = fit + bend
                     fcount = fcount + 1
+                    items  = items + ((
+                        'Flex bend', 'C {:.2f}'.format(
+                            fitting_tables.flex_bend_c(c_values)),
+                        dr.fpm, bend),)
                 in_flex = is_flex_here
 
             elif elem is not None and hvac_graph.is_fitting(elem):
@@ -1993,6 +2010,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 fcount = fcount + counted
                 if note:
                     unpriced = unpriced + (note,)
+                _pv = hvac_graph.velocity_pressure_inwg(up_fpm) if up_fpm else 0.0
+                items = items + ((
+                    'Fitting {}'.format(nid),
+                    '{}, {}'.format(
+                        hvac_graph.fitting_family_name(elem) or '?',
+                        'UNPRICED' if note else 'C {:.2f}'.format(
+                            loss / _pv if _pv else 0.0)),
+                    up_fpm, loss),)
 
             elif elem is not None and hvac_graph.is_accessory(elem):
                 # Accessories are components, not fittings: the drop is a
@@ -2005,6 +2030,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 akey = fitting_tables.classify_accessory(fam)
                 if akey is not None:
                     comp_keys = comp_keys + (akey,)
+                    items = items + ((
+                        'Accessory {}'.format(nid), fam or '?', None,
+                        fitting_tables.component_of(akey, comp_values)),)
                 else:
                     unpriced = unpriced + (
                         (fam or '?') + ': accessory on the run, not priced',)
@@ -2040,6 +2068,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'terminal_id':      nid,
                         'terminal_name':    _family or '-',
                         'unpriced':         unpriced,
+                        'items':            items + ((
+                            'Terminal {}'.format(nid), _family or '-', None,
+                            fitting_tables.component_of('diffuser', comp_values)),),
                     }
 
             for child_id in all_children.get(nid, []):
@@ -2056,16 +2087,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     continue
                 extra_fit = fit
                 extra_t   = tcount
+                extra_items = items
                 if dr is not None:
                     # Every tap on this main that the run does NOT leave
                     # through restricts it, and gets the main-duct coefficient.
                     taps = _taps(nid)
                     n_by = len(taps) - (1 if child_id in taps else 0)
                     if n_by > 0:
-                        extra_fit = extra_fit + (
-                            fitting_tables.takeoff_main_c(dr.sys_class, c_values) *
-                            hvac_graph.velocity_pressure_inwg(dr.fpm) * n_by)
+                        _mc = fitting_tables.takeoff_main_c(dr.sys_class, c_values)
+                        _tl = _mc * hvac_graph.velocity_pressure_inwg(dr.fpm) * n_by
+                        extra_fit = extra_fit + _tl
                         extra_t = extra_t + n_by
+                        extra_items = extra_items + ((
+                            'Taps passed', '{} on duct {}, C {:.2f} each'.format(
+                                n_by, nid, _mc),
+                            dr.fpm, _tl),)
                     # A tap at the terminus of a main is the worksheet's "end of
                     # main branch" case and carries a different C, so the swing
                     # is applied here where the parent duct is known.
@@ -2076,13 +2112,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 dr.sys_class, is_end_of_main=True, c=c_values)
                             typ_c = fitting_tables.takeoff_c(
                                 dr.sys_class, c=c_values)
-                            extra_fit = extra_fit + (
-                                (end_c - typ_c) *
-                                hvac_graph.velocity_pressure_inwg(dr.fpm))
+                            _sw = ((end_c - typ_c) *
+                                   hvac_graph.velocity_pressure_inwg(dr.fpm))
+                            extra_fit = extra_fit + _sw
+                            extra_items = extra_items + ((
+                                'End of main tap', 'C {:.2f} in place of {:.2f}'.format(
+                                    end_c, typ_c),
+                                dr.fpm, _sw),)
                 stack.append((child_id, fric, extra_fit, comp_keys, dcount,
                               fcount, extra_t, dlen, up_fpm, up_area,
                               sys_class, unpriced,
-                              path | frozenset([child_id]), in_flex))
+                              path | frozenset([child_id]), in_flex,
+                              extra_items))
 
         if best_here:
             best[root_id] = best_here
@@ -3085,6 +3126,7 @@ def main():
         t[1] += cfm
 
     summary_lines = ['SYSTEM SUMMARY']
+    run_detail_lines = []   # filled only when external static is computed
     for name, aid, discharge_cfm, term_count, other_class_cfm in ahu_totals:
         summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM supply air discharge ({} diffusers)'.format(
             name, aid, discharge_cfm, term_count))
@@ -3187,6 +3229,21 @@ def main():
                         c['total_inwc'], c['terminal_name']))
                 for u in c['unpriced']:
                     summary_lines.append('      UNPRICED: ' + u)
+                # Console only: the index run item by item, so each number in
+                # the total can be traced to a duct, fitting or tap.
+                run_detail_lines.append('')
+                run_detail_lines.append('=== {} | {} | worst run ends at terminal {} ==='.format(
+                    root_labels.get(root_id, 'id {}'.format(root_id)), sys_class,
+                    c['terminal_id']))
+                run_detail_lines.append('{:<18} {:>7} {:>9}  {}'.format(
+                    'Item', 'FPM', 'in. wc', 'Detail'))
+                for _lbl, _det, _fpm, _loss in c.get('items', ()):
+                    run_detail_lines.append('{:<18} {:>7} {:>9.3f}  {}'.format(
+                        _lbl, '{:.0f}'.format(float(_fpm)) if _fpm else '-',
+                        float(_loss or 0.0), _det))
+                run_detail_lines.append('{:<18} {:>7} {:>9.3f}  {}'.format(
+                    'Subtotal', '', float(c['subtotal_inwc']),
+                    'before the {:.0f}% safety factor'.format(float(safety_pct))))
                 if c.get('truncated'):
                     summary_lines.append(
                         '      WARNING: path search hit its step limit, so this '
@@ -3286,6 +3343,9 @@ def main():
     output.print_md('---')
     output.print_md('### System Summary')
     output.print_code('\n'.join(summary_lines[1:]))
+    if run_detail_lines:
+        output.print_md('### Index Run Detail')
+        output.print_code('\n'.join(run_detail_lines))
 
     # 5. One plan per level the ductwork reaches, each with its source sheet.
     # The view the tool was run from covers its own level; a roof plan run

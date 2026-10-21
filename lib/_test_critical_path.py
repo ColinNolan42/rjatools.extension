@@ -202,6 +202,10 @@ check("case1 duct_count is 3 (ducts 1,3,4)",
       sa1.get('duct_count') == 3, "got %r" % sa1.get('duct_count'))
 check("case1 length_ft is 90.0 (20+10+60)",
       abs(sa1.get('length_ft', -1) - 90.0) < 1e-9, "got %r" % sa1.get('length_ft'))
+_item_sum = sum(i[3] or 0.0 for i in sa1.get('items', ()))
+check("case1 index run items add up to the subtotal",
+      abs(_item_sum - sa1.get('subtotal_inwc', -1)) < 1e-9,
+      "items %r vs subtotal %r" % (_item_sum, sa1.get('subtotal_inwc')))
 
 
 # ══════════════════════════════════════════════════════════════════════════
