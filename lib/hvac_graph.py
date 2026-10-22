@@ -1535,8 +1535,12 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
                 net.root       = selected_elem
                 net.ahu_method = 'fallback: selected element used as root'
                 net.nodes      = all_nodes
-            net.children   = all_children
-            net.traverse_log = all_log
+                # Only here: in the re-rooted branch above these two lines
+                # used to sit one level out and overwrote the re-rooted
+                # children (directed away from the equipment) with the
+                # undirected pass's, directed away from the selection.
+                net.children   = all_children
+                net.traverse_log = all_log
 
     if equipment_level:
         pruned_oa = sum(1 for ln in net.traverse_log if 'PRUNED OA branch' in ln)
