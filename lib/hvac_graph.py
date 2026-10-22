@@ -18,13 +18,14 @@ import logging
 from Autodesk.Revit.DB import (
     BuiltInCategory, BuiltInParameter,
     FillPatternElement, ElementId, Domain, ConnectorProfileType,
-    FlowDirectionType
+    FlowDirectionType, ConnectorType
 )
 
 from revit_helpers import eid_int
 
 import diffuser_tables
 import fitting_tables
+import vav_checks
 
 log = logging.getLogger(__name__)
 
@@ -1235,7 +1236,7 @@ def traverse(root, allowed_ids=None, equipment_level=False):
                                 '  PRUNED OA branch id={} parent={} '
                                 '(equipment-level mode)'.format(owner_id, eid))
                             continue
-                        if branch_cls == 'Supply Air':
+                        if vav_checks.is_supply_class(branch_cls):
                             try:
                                 conn_dir = conn.Direction
                             except Exception:
@@ -1273,6 +1274,31 @@ def traverse(root, allowed_ids=None, equipment_level=False):
 
 
 # ── post-order CFM accumulation (iterative) ──────────────────────────────────
+def _upward_children(nid, root_id, nodes, children, parents):
+    """Children of nid whose flow and terminals count toward nid's own total.
+
+    Every child, except at NON-ROOT equipment: there only the children on the
+    same side as the class the walk entered it from (vav_checks
+    .counted_children). A fan powered box entered from a supply duct passes
+    up its supply diffusers, never its own ducted return, so the return can
+    neither inflate the MP inlet cfm nor block Size Duct through a return
+    grille with no Flow (code review C1, 2026-10-22). The root keeps its
+    combined total. An unknown class on either side matches anything.
+    """
+    kids = children.get(nid, [])
+    elem = nodes.get(nid)
+    if nid == root_id or elem is None or not is_equipment(elem):
+        return kids
+
+    def _own_class(n):
+        e = nodes.get(n)
+        return elem_sys_class(e) if e is not None else None
+
+    entry = vav_checks.entry_class(nid, parents, _own_class)
+    return vav_checks.counted_children(
+        kids, entry, lambda c: _branch_sys_class(c, nodes, children))
+
+
 def compute_cfm(root_id, nodes, children, terminal_cfms):
     """Iterative post-order DFS. Returns (cfm_map, equip_class_cfm).
 
@@ -1292,6 +1318,7 @@ def compute_cfm(root_id, nodes, children, terminal_cfms):
     """
     cfm_map = {}
     equip_class_cfm = {}
+    parents = vav_checks.parents_of(children)
     stack   = [(root_id, False)]
     while stack:
         nid, done = stack.pop()
@@ -1306,7 +1333,11 @@ def compute_cfm(root_id, nodes, children, terminal_cfms):
                     by_class[cls] = by_class.get(cls, 0.0) + cfm_map.get(cid, 0.0)
                 equip_class_cfm[nid] = by_class
                 # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
-                cfm_map[nid] = sum(by_class.values(), 0.0)
+                if nid == root_id:
+                    cfm_map[nid] = sum(by_class.values(), 0.0)
+                else:
+                    cfm_map[nid] = sum((cfm_map.get(c, 0.0) for c in _upward_children(
+                        nid, root_id, nodes, children, parents)), 0.0)
             else:
                 # sum(..., 0.0) forces float — sum([]) returns int 0 in Python 2.7
                 cfm_map[nid] = sum((cfm_map.get(c, 0.0) for c in children.get(nid, [])), 0.0)
@@ -1342,6 +1373,7 @@ def compute_downstream_terminal_ids(root_id, nodes, children, terminal_ids):
     use .get(nid, ...) rather than indexing.
     """
     result = {}
+    parents = vav_checks.parents_of(children)
     stack  = [(root_id, False)]
     while stack:
         nid, done = stack.pop()
@@ -1349,7 +1381,8 @@ def compute_downstream_terminal_ids(root_id, nodes, children, terminal_ids):
             acc = set()
             if nid in terminal_ids:
                 acc.add(nid)
-            for cid in children.get(nid, []):
+            # Same side filter at mid tree equipment as compute_cfm().
+            for cid in _upward_children(nid, root_id, nodes, children, parents):
                 acc.update(result.get(cid, ()))
             result[nid] = acc
         else:
@@ -1369,6 +1402,298 @@ def solid_fill_pattern_id(doc):
         except Exception:
             pass
     return ElementId.InvalidElementId
+
+
+# ── VAV: the Revit side of vav_checks ───────────────────────────────────────
+#
+# vav_checks.py holds every rule and is pure Python. Everything below only
+# reads connectors and hands it ids, strings and numbers.
+
+def connector_size_in(conn):
+    """Largest dimension of a connector, inches: the diameter if round, else
+    the larger of width and height. 0.0 if unreadable.
+
+    Moved here from duct_size_run (2026-10-22) so Size Duct's tap sizing and
+    the VAV straight duct rule (D = box connector size) read it the same way.
+    """
+    try:
+        if conn.Shape == ConnectorProfileType.Round:
+            return conn.Radius * 2.0 * 12.0
+        return max(conn.Width, conn.Height) * 12.0
+    except Exception:
+        return 0.0
+
+
+def _ref_owners(conn, exclude_id):
+    """[(owner element, the owner's connector)] joined to conn, skipping
+    exclude_id and anything that is not ductwork, a terminal or equipment
+    (the MEP system's own logical connector, for one)."""
+    out = []
+    try:
+        refs = list(conn.AllRefs)
+    except Exception:
+        return out
+    for ref in refs:
+        try:
+            owner = ref.Owner
+            if owner is None or eid_int(owner.Id) == exclude_id:
+                continue
+            if not (is_duct(owner) or is_fitting_or_accessory(owner)
+                    or is_terminal(owner) or is_equipment(owner)):
+                continue
+            out.append((owner, ref))
+        except Exception:
+            continue
+    return out
+
+
+def _hvac_connectors(elem):
+    cm = _connector_manager(elem)
+    if cm is None:
+        return []
+    out = []
+    try:
+        for c in cm.Connectors:
+            try:
+                if c.Domain == Domain.DomainHvac:
+                    out.append(c)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _connector_to(elem, other_id):
+    """elem's HVAC connector joined to element other_id, or None."""
+    own = eid_int(elem.Id)
+    for c in _hvac_connectors(elem):
+        for owner, _ref in _ref_owners(c, own):
+            if eid_int(owner.Id) == other_id:
+                return c
+    return None
+
+
+def _direction_word(conn):
+    """'in', 'out' or None (unreadable or bidirectional)."""
+    try:
+        d = conn.Direction
+    except Exception:
+        return None
+    if d == FlowDirectionType.In:
+        return 'in'
+    # UNVERIFIED API: FlowDirectionType.Out. FlowDirectionType.In is already
+    # used by traverse(); Out is believed to be its sibling member.
+    if d == FlowDirectionType.Out:
+        return 'out'
+    return None
+
+
+def equipment_entry_direction(equip, parent_id):
+    """Direction of the equipment connector the walk entered it through.
+
+    'in' is a VAV box entered through its supply inlet, 'out' is equipment
+    entered through its supply outlet (parallel units). None when the
+    connector cannot be found or its Direction reads Bidirectional; the plan
+    treats that as a box and logs it. Connector.Direction is believed to read
+    In / Out reliably on Price and Trane box families, unverified.
+    """
+    eid = eid_int(equip.Id)
+    if parent_id is None:
+        log.info('equipment_entry_direction: id=%s NOT FOUND (no parent)', eid)
+        return None
+    conn = _connector_to(equip, parent_id)
+    if conn is None:
+        log.info('equipment_entry_direction: id=%s NOT FOUND (no connector to %s)',
+                 eid, parent_id)
+        return None
+    word = _direction_word(conn)
+    log.info('equipment_entry_direction: id=%s via %s -> %s', eid, parent_id, word)
+    return word
+
+
+def is_fed_from_upstream_supply(equip):
+    """True when this equipment takes Supply Air IN from a duct: a VAV or fan
+    powered box, not the RTU or AHU that serves it.
+
+    Same test traverse() prunes on at equipment level: a connected connector
+    whose Direction is In, on a branch that peeks as supply
+    (vav_checks.is_supply_class).
+    """
+    eid = eid_int(equip.Id)
+    for c in _hvac_connectors(equip):
+        if _direction_word(c) != 'in':
+            continue
+        for owner, _ref in _ref_owners(c, eid):
+            if vav_checks.is_supply_class(_peek_branch_class(owner, eid)):
+                log.info('is_fed_from_upstream_supply: id=%s yes (via %s)',
+                         eid, eid_int(owner.Id))
+                return True
+    log.info('is_fed_from_upstream_supply: id=%s no', eid)
+    return False
+
+
+def _far_connectors(elem, prev_id, ends_only):
+    """elem's connectors NOT joined to prev_id (End connectors only for a
+    duct, so a tap's Curve connector is never taken as the far end)."""
+    out = []
+    own = eid_int(elem.Id)
+    for c in _hvac_connectors(elem):
+        try:
+            if ends_only and c.ConnectorType != ConnectorType.End:
+                continue
+        except Exception:
+            continue
+        joined = [eid_int(o.Id) for o, _r in _ref_owners(c, own)]
+        if prev_id in joined:
+            continue
+        out.append(c)
+    return out
+
+
+def _first_tap_ft(duct, entry_origin):
+    """Distance from entry_origin to the nearest tap on this duct (a joined
+    Curve connector), or None when the duct carries no tap."""
+    best = None
+    own = eid_int(duct.Id)
+    for c in _hvac_connectors(duct):
+        try:
+            if c.ConnectorType != ConnectorType.Curve:
+                continue
+        except Exception:
+            continue
+        for _owner, ref in _ref_owners(c, own):
+            try:
+                d = ref.Origin.DistanceTo(entry_origin)
+            except Exception:
+                continue
+            if best is None or d < best:
+                best = d
+    return best
+
+
+def straight_steps(start_conn, start_owner_id, max_steps=50):
+    """Walk out of one box connector for vav_checks.straight_length().
+
+    Yields (kind, length_ft, tap_at_ft, element id), kind one of the
+    vav_checks STEP_ values: a rigid duct with its length (or the distance to
+    its first tap), flex, a union, a transition or an accessory (the walk goes
+    on through these), or 'stop' for anything else (elbow, tee, takeoff,
+    terminal, equipment), which ends the walk. Whether a kind ends the RUN is
+    vav_checks' call; it stops reading, and so this walk, as soon as it does.
+    """
+    conn, prev_id = start_conn, start_owner_id
+    for _ in range(max_steps):
+        joined = _ref_owners(conn, prev_id)
+        if not joined:
+            return
+        owner, ref = joined[0]
+        oid = eid_int(owner.Id)
+        if is_duct(owner):
+            far = _far_connectors(owner, prev_id, True)
+            length = 0.0
+            if far:
+                try:
+                    length = far[0].Origin.DistanceTo(ref.Origin)
+                except Exception:
+                    length = _duct_length_ft(owner)
+            else:
+                length = _duct_length_ft(owner)
+            tap_at = _first_tap_ft(owner, ref.Origin)
+            kind = vav_checks.STEP_FLEX if is_flex_duct(owner) else vav_checks.STEP_DUCT
+            yield (kind, length, tap_at, oid)
+            if tap_at is not None or not far:
+                return
+            conn, prev_id = far[0], oid
+            continue
+        kind = 'stop'
+        if is_fitting(owner):
+            role = fitting_tables.classify_fitting(fitting_family_name(owner))
+            if role == 'union':
+                kind = vav_checks.STEP_UNION
+            elif role == 'transition':
+                kind = vav_checks.STEP_TRANSITION
+        elif is_accessory(owner):
+            kind = vav_checks.STEP_ACCESSORY
+        far = _far_connectors(owner, prev_id, False) if kind != 'stop' else []
+        yield (kind, 0.0, None, oid)
+        # Only a two connector element is walked through.
+        if kind == 'stop' or len(far) != 1:
+            return
+        conn, prev_id = far[0], oid
+
+
+def box_straight_runs(box, parent_id, child_ids):
+    """{'inlet': StraightRun or None, 'outlet': [StraightRun]} for one box.
+
+    The inlet is the connector joined to the parent the walk came from. The
+    outlets are connectors joined to the box's children whose Direction is
+    not In (so a fan powered box's ducted return inlet is not measured).
+    """
+    eid = eid_int(box.Id)
+    out = {'inlet': None, 'outlet': []}
+    child_set = set(child_ids or [])
+    for c in _hvac_connectors(box):
+        joined = [eid_int(o.Id) for o, _r in _ref_owners(c, eid)]
+        if not joined:
+            continue
+        d_in = connector_size_in(c)
+        if parent_id is not None and parent_id in joined:
+            out['inlet'] = vav_checks.straight_length(
+                straight_steps(c, eid), d_in, 'inlet')
+        elif child_set.intersection(joined) and _direction_word(c) != 'in':
+            out['outlet'].append(vav_checks.straight_length(
+                straight_steps(c, eid), d_in, 'outlet'))
+    log.info('box_straight_runs: id=%s inlet=%s outlets=%d', eid,
+             None if out['inlet'] is None else '%.2f ft' % out['inlet'].length_ft,
+             len(out['outlet']))
+    return out
+
+
+def node_kind(elem):
+    """'duct', 'terminal', 'equipment', 'fitting', 'accessory' or None."""
+    if elem is None:
+        return None
+    if is_duct(elem):
+        return 'duct'
+    if is_terminal(elem):
+        return 'terminal'
+    if is_equipment(elem):
+        return 'equipment'
+    if is_fitting(elem):
+        return 'fitting'
+    if is_accessory(elem):
+        return 'accessory'
+    return None
+
+
+def analyze_vav(net, straight=False):
+    """vav_checks.analyze_system() on one network, plus (straight=True) the
+    straight duct measured off every box connector. Returns VavSystem."""
+    nodes, children = net.nodes, net.children
+    root_id = eid_int(net.root.Id)
+    parents = vav_checks.parents_of(children)
+
+    def kind_of(nid):
+        return node_kind(nodes.get(nid))
+
+    def class_of(nid):
+        elem = nodes.get(nid)
+        return elem_sys_class(elem) if elem is not None else None
+
+    def entry_dir_of(nid):
+        return equipment_entry_direction(nodes[nid], parents.get(nid))
+
+    vs = vav_checks.analyze_system(root_id, children, kind_of, class_of, entry_dir_of)
+    for nid in vs.unknown_direction:
+        net.warnings.append(
+            'Equipment id {}: inlet connector direction could not be read, so it '
+            'is treated as a VAV box.'.format(nid))
+    if straight:
+        for box in vs.boxes:
+            vs.straight[box] = box_straight_runs(
+                nodes[box], parents.get(box), children.get(box, []))
+    return vs
 
 
 # ── full network build (used by both Diagnose and Duct Velocity) ─────────────
@@ -1470,6 +1795,10 @@ class DuctResult(object):
             self.fpm, self.d_h_in, self.roughness_ft)
         self.length_ft          = _duct_length_ft(elem)
         self.friction_loss_inwc = self.length_ft / 100.0 * self.friction_per_100ft
+        # Medium pressure supply (between the unit and the VAV box inlets).
+        # Set by the caller from analyze_vav(), never from the System Type
+        # name: MP and LP supply usually share one System Type.
+        self.is_mp              = False
 
 
 def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False):
@@ -1514,7 +1843,12 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
             ]
 
             if equip_found:
-                net.root       = equip_found[0]
+                # Prefer the unit over a box: a VAV or fan powered box takes
+                # supply in from a duct, so rooting there would walk the MP
+                # main backwards (code review W1, 2026-10-22).
+                cands = [e for e in equip_found
+                         if not is_fed_from_upstream_supply(e)] or equip_found
+                net.root       = cands[0]
                 net.ahu_method = (
                     'found in traversal: OST_MechanicalEquipment id={}'
                     .format(eid_int(net.root.Id))

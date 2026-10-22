@@ -23,6 +23,8 @@
 
 import math
 
+import vav_checks
+
 # Standard round sizes, 2 in increments (firm), and the smallest dimension
 # ever used, rectangular or round. Up to 60 in (Colin, 2026-10-20: no reason
 # to stop at 36; large mains carry 16,000 cfm and more).
@@ -32,6 +34,7 @@ MAX_ASPECT = 4.0
 MAX_RECT_DIM = 120       # search limit, inches (large mains, Colin 2026-10-20)
 
 SHAPE_ROUND = "round"
+SKIP_INLET_RUNOUT = "VAV inlet runout (sized to the box)"
 SHAPE_RECT = "rect"
 
 
@@ -116,11 +119,12 @@ class DuctPlan(object):
         self.fpm = None          # at the new size
         self.friction = None
         self.length_ft = 0.0
+        self.limit_key = ""      # which limits row sized it (system, or MP)
 
 
 def plan_duct(element_id, shape, current, cfm, sys_class, limits,
               friction_fn, is_branch=False, is_flex=False, is_existing=False,
-              flow_missing=False):
+              flow_missing=False, limit_key=None, is_inlet_runout=False):
     """Decide one duct.
 
     Args:
@@ -128,6 +132,10 @@ def plan_duct(element_id, shape, current, cfm, sys_class, limits,
         current: inches, d for round, (w, h) for rect.
         limits: {sys_class: (max_fpm, max_friction)}; a class not listed is
             not sized.
+        limit_key: the limits row to size against when it is not the duct's
+            own system: vav_checks.MP_KEY for a VAV medium pressure main.
+        is_inlet_runout: a VAV inlet runout (MP, one box downstream). Sized
+            to the box by the engineer, so never resized, like a branch.
 
     Returns DuctPlan.
     """
@@ -136,9 +144,13 @@ def plan_duct(element_id, shape, current, cfm, sys_class, limits,
     plan.current = current
     plan.cfm = float(cfm or 0.0)
     plan.sys_class = sys_class
+    plan.limit_key = limit_key or sys_class
 
     if is_branch:
         plan.skip_reason = "branch (auto-sizing diffuser sets it)"
+        return plan
+    if is_inlet_runout:
+        plan.skip_reason = SKIP_INLET_RUNOUT
         return plan
     if is_flex:
         plan.skip_reason = "flex duct"
@@ -157,11 +169,11 @@ def plan_duct(element_id, shape, current, cfm, sys_class, limits,
     if plan.cfm <= 0.0:
         plan.skip_reason = "no airflow reaches it"
         return plan
-    if sys_class not in limits:
-        plan.skip_reason = "no limits for system '{}'".format(sys_class)
+    if plan.limit_key not in limits:
+        plan.skip_reason = "no limits for system '{}'".format(plan.limit_key)
         return plan
 
-    max_fpm, max_fric = limits[sys_class]
+    max_fpm, max_fric = limits[plan.limit_key]
     if shape == SHAPE_ROUND:
         d = size_round(plan.cfm, max_fpm, max_fric, friction_fn)
         if d is None:
@@ -315,6 +327,13 @@ def basis_lines(limits):
         "  Not sized: branches, takeoff boots and diffusers (auto-sizing "
         "diffusers), flex and oval duct, existing phase ductwork.",
     ]
+    if vav_checks.MP_KEY in limits:
+        lines.append(
+            "  VAV: supply mains between the unit and the box inlets (MP) with "
+            "two or more boxes downstream are sized to the MP limits (EDR VAV "
+            "Guide p3, p100). A box inlet runout (one box downstream) is sized "
+            "to the box by the engineer and never touched. After the box, as "
+            "above. Boxes are never touched.")
     for name in sorted(limits):
         fpm, fric = limits[name]
         lines.append("  {}: {:.0f} fpm, {:.2f} in. wc per 100 ft.".format(

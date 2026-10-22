@@ -2,10 +2,11 @@
 # duct_size_run.py
 # The Size Duct pipeline. WRITES duct and fitting sizes into the model.
 #
-#   dialog -> pick the unit or a duct -> traverse (hvac_graph, the Duct
-#   Performance engine) -> main / branch split -> size every main
-#   (duct_sizing) -> write ducts -> match the fittings between two mains ->
-#   audit every joint -> report
+#   dialog -> pick the unit (RTU or AHU only) -> traverse (hvac_graph, the
+#   Duct Performance engine) -> VAV: find the boxes and the MP supply
+#   (vav_checks) -> main / branch split -> size every main (duct_sizing) ->
+#   write ducts -> match the fittings between two mains -> audit every
+#   joint -> report
 #
 # Mains only (Colin, 2026-10-20). Branches, takeoff boots and diffusers are
 # never touched: the auto-sizing diffusers set the branch, and Duct
@@ -33,6 +34,7 @@ import duct_sizing
 import hvac_graph
 import revit_helpers
 import ui_helpers
+import vav_checks
 from revit_helpers import eid_int
 
 IN_PER_FT = 12.0
@@ -51,7 +53,7 @@ def run(doc, uidoc, output, forms):
     # Duct Performance run in this session leaks in.
     hvac_graph.set_calc_basis()
 
-    origin = _pick(uidoc, doc, output)
+    origin = _pick(uidoc, doc, output, forms)
     if origin is None:
         return False
 
@@ -68,8 +70,38 @@ def run(doc, uidoc, output, forms):
         eid_int(net.root.Id), net.ahu_method, len(net.duct_results),
         len(net.terminal_cfms)))
 
-    plans = _plan(doc, net, settings["limits"])
+    mp_ids = set()
+    runout_ids = set()
+    if settings.get("vav"):
+        vs = hvac_graph.analyze_vav(net)
+        mp_ids = vs.mp_ids
+        runout_ids = vs.inlet_runout_ids
+        output.print_md("VAV: **{}** box(es), **{}** MP supply element(s), "
+                        "**{}** of them inlet runouts (left as drawn).".format(
+                            len(vs.boxes), len(mp_ids), len(runout_ids)))
+        if not vs.is_vav:
+            output.print_md(":warning: VAV System is ticked but no VAV box was "
+                            "found on this unit's supply. Sized as a constant "
+                            "volume system.")
+        if vs.reversed:
+            output.print_md(":warning: Parallel units on one main: equipment "
+                            "{} is reached through its supply outlet.".format(
+                                ", ".join(str(i) for i in vs.reversed)))
+        if vs.mp_terminals:
+            output.print_md(":warning: {} diffuser(s) sit on an MP main with no "
+                            "box upstream. Duct Performance flags them.".format(
+                                len(vs.mp_terminals)))
+        for warning in net.warnings:
+            if warning.startswith("Equipment id"):
+                output.print_md(":warning: " + warning)
+
+    plans = _plan(doc, net, settings["limits"], mp_ids, runout_ids)
     _print_plan(output, plans)
+    runouts = sorted(p.element_id for p in plans
+                     if p.skip_reason == duct_sizing.SKIP_INLET_RUNOUT)
+    if runouts:
+        output.print_md("VAV inlet runouts, sized to the box and left as drawn: "
+                        + ", ".join(str(i) for i in runouts))
 
     to_write = [p for p in plans if p.new is not None and p.changed]
     if not to_write:
@@ -126,12 +158,12 @@ def run(doc, uidoc, output, forms):
 # Pick
 # ---------------------------------------------------------------------------
 
-class _UnitOrDuctFilter(ISelectionFilter):
-    """Only mechanical equipment and duct are clickable."""
+class _UnitFilter(ISelectionFilter):
+    """Only mechanical equipment is clickable."""
 
     def AllowElement(self, elem):
         try:
-            return hvac_graph.is_equipment(elem) or hvac_graph.is_duct(elem)
+            return hvac_graph.is_equipment(elem)
         except Exception:
             return False
 
@@ -139,20 +171,37 @@ class _UnitOrDuctFilter(ISelectionFilter):
         return False
 
 
-def _pick(uidoc, doc, output):
-    prompt = "Select the unit (RTU, AHU, fan) or a supply or return duct"
+def _pick(uidoc, doc, output, forms):
+    """One pick: the RTU or AHU (VAV plan, Colin 2026-10-22). A duct or a box
+    is refused with a message: a run rooted there sizes only part of the
+    system, and a box root never sees the MP mains above it."""
+    prompt = "Select the unit (RTU or AHU) that serves the system"
     try:
         try:
             ref = uidoc.Selection.PickObject(ObjectType.Element,
-                                             _UnitOrDuctFilter(), prompt)
+                                             _UnitFilter(), prompt)
         except TypeError:
             ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
     except Exception:
         output.print_md("Cancelled. Nothing was changed.")
         return None
     elem = doc.GetElement(ref.ElementId)
-    if elem is not None:
-        output.print_md("Picked element **{}**.".format(eid_int(elem.Id)))
+    if elem is None:
+        return None
+    output.print_md("Picked element **{}**.".format(eid_int(elem.Id)))
+    if not hvac_graph.is_equipment(elem):
+        forms.alert("Pick the RTU or AHU (Mechanical Equipment). Size Duct "
+                    "starts at the unit, not at a duct.\n\nNothing was changed.",
+                    title="Size Duct")
+        output.print_md("Refused: not mechanical equipment. Nothing was changed.")
+        return None
+    if hvac_graph.is_fed_from_upstream_supply(elem):
+        forms.alert("This unit takes supply air in from a duct, so it is a VAV "
+                    "or fan powered box. Pick the RTU or AHU that serves it.\n\n"
+                    "Nothing was changed.", title="Size Duct")
+        output.print_md("Refused: a box fed from an upstream supply duct. "
+                        "Nothing was changed.")
+        return None
     return elem
 
 
@@ -160,25 +209,34 @@ def _pick(uidoc, doc, output):
 # Plan
 # ---------------------------------------------------------------------------
 
-def _plan(doc, net, limits):
+def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
+    """mp_ids: ducts between the unit and the VAV box inlets (VAV ticked).
+    They are always mains, sized to the MP limits at the boxes' diffuser
+    total. runout_ids: the MP ducts with exactly one box downstream (inlet
+    runouts), sized to the box by the engineer and never resized."""
     root_id = eid_int(net.root.Id)
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
     no_flow = set(net.zero_terminals) | set(net.missing_flow)
     parents = _parents(net)
+    mp_ids = mp_ids or set()
+    runout_ids = runout_ids or set()
 
     plans = []
     for eid, dr in net.duct_results.items():
         nid = eid_int(eid)
         shape, current = duct_shape_and_size(dr.elem)
         below = downstream.get(nid, set())
+        is_mp = nid in mp_ids
         plan = duct_sizing.plan_duct(
             nid, shape, current, dr.cfm, dr.sys_class, limits,
             hvac_graph.duct_friction_loss_per_100ft,
-            is_branch=(len(below) == 1),
+            is_branch=(len(below) == 1 and not is_mp),
             is_flex=dr.is_flex,
             is_existing=not is_new_construction(doc, dr.elem),
-            flow_missing=bool(below & no_flow))
+            flow_missing=bool(below & no_flow),
+            limit_key=vav_checks.MP_KEY if is_mp else None,
+            is_inlet_runout=nid in runout_ids)
         plan.length_ft = dr.length_ft
         plan.sections = None
         plan.step_notes = []
@@ -199,7 +257,7 @@ def _plan_steps(net, duct, plan, limits, parents):
     taps = _taps_on(net, duct, up_pt, direction)
     if not taps:
         return
-    max_fpm, max_fric = limits[plan.sys_class]
+    max_fpm, max_fric = limits[plan.limit_key]
     sections, notes = duct_sizing.plan_sections(
         plan.shape, plan.current, plan.cfm, plan.length_ft, taps, max_fpm,
         max_fric, hvac_graph.duct_friction_loss_per_100ft)
@@ -264,22 +322,13 @@ def _taps_on(net, duct, up_pt, direction):
     return taps
 
 
-def _conn_size_in(conn):
-    """Largest dimension of a connector, inches."""
-    try:
-        if conn.Shape == ConnectorProfileType.Round:
-            return conn.Radius * 2.0 * IN_PER_FT
-        return max(conn.Width, conn.Height) * IN_PER_FT
-    except Exception:
-        return 0.0
+# Largest dimension of a connector, inches. Shared with the VAV straight duct
+# rule, so it lives in hvac_graph.
+_conn_size_in = hvac_graph.connector_size_in
 
 
 def _parents(net):
-    parents = {}
-    for parent_id, kids in net.children.items():
-        for kid in kids:
-            parents[kid] = parent_id
-    return parents
+    return vav_checks.parents_of(net.children)
 
 
 def is_new_construction(doc, elem):
@@ -746,7 +795,7 @@ def _print_plan(output, plans):
         if p.sections:
             size = " > ".join(duct_sizing.size_label(p.shape, s.size)
                               for s in p.sections)
-        rows.append([str(p.element_id), p.sys_class, "{:.0f}".format(p.cfm),
+        rows.append([str(p.element_id), p.limit_key, "{:.0f}".format(p.cfm),
                      duct_sizing.size_label(p.shape, p.current), size,
                      "{:.0f}".format(p.fpm), "{:.3f}".format(p.friction),
                      "CHANGE" if p.changed else "ok"])

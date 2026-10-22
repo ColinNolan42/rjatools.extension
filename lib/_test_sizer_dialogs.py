@@ -39,6 +39,7 @@ def _install_wpf_stubs():
 _install_wpf_stubs()
 
 import shared_params    # noqa: E402
+import vav_checks       # noqa: E402
 import sizing_engine    # noqa: E402
 import ui_helpers       # noqa: E402
 import sizer_dialogs    # noqa: E402
@@ -69,6 +70,10 @@ FUNCTIONS = {
     "performance": ["show_water_performance_dialog", "_init_project",
                     "_init_recirc"],
     "start": ["show_start_point_dialog"],
+    # The per system limits boxes are generated names ('tb_v_%d') the scan
+    # cannot see; TestSizeDuctLimitsGrid covers those. This catches the VAV
+    # names.
+    "duct": ["show_size_duct_dialog"],
 }
 
 
@@ -160,9 +165,42 @@ class TestSizeDuctLimitsGrid(unittest.TestCase):
             self.assertIn("tb_f_%d" % i, names)
 
     def test_systems_match_the_engine_defaults(self):
+        # Deliberately unchanged by the VAV plan (2026-10-22): MP is a position
+        # in the graph, not a System Type, so it is NOT a DUCT_SYSTEMS row. Its
+        # two boxes live in the VAV section (TestSizeDuctVav below).
         self.assertEqual(sorted(sizer_dialogs.DUCT_SYSTEMS),
                          sorted(["Supply Air", "Return Air", "Exhaust Air",
                                  "Transfer Air"]))
+        self.assertNotIn(vav_checks.MP_KEY, sizer_dialogs.DUCT_SYSTEMS)
+
+
+class TestSizeDuctVav(unittest.TestCase):
+    """The VAV checkbox and the MP velocity and friction rows."""
+
+    def test_vav_controls_are_in_the_xaml(self):
+        names = _names_in(sizer_dialogs._DUCT_BODY)
+        for name in ("cb_vav", "pnl_vav"):
+            self.assertIn(name, names)
+        # MP rows are generated from vav_checks.VAV_FIELDS[:2] (review S5).
+        for key, _l, _u, _d, _k in vav_checks.VAV_FIELDS[:2]:
+            self.assertIn("tb_vav_" + key, names)
+        self.assertEqual([f[0] for f in vav_checks.VAV_FIELDS[:2]],
+                         ["mp_fpm", "mp_fric"])
+
+    def test_vav_panel_starts_greyed_out(self):
+        root = ET.fromstring("<Root %s>%s</Root>" % (NS, sizer_dialogs._DUCT_BODY))
+        pnl = [el for el in root.iter() if el.get(X_NAME) == "pnl_vav"][0]
+        self.assertEqual(pnl.get("IsEnabled"), "False")
+        cb = [el for el in root.iter() if el.get(X_NAME) == "cb_vav"][0]
+        self.assertIn(cb.get("IsChecked"), (None, "False"))
+
+    def test_mp_rows_are_filled_from_vav_checks(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "sizer_dialogs.py")
+        source = open(path).read()
+        self.assertIn("vav_checks.VAV_FIELDS[:2]", source)
+        self.assertIn("limits[vav_checks.MP_KEY]", source)
+        self.assertIn("'VAV, inlet'", source)
 
 
 class TestGasCalculationBasis(unittest.TestCase):

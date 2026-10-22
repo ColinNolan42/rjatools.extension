@@ -214,19 +214,29 @@ def show_size_duct_dialog(title):
     """The Size Duct dialog (RJA themed).
 
     Fallback when no themed window can be built: run at the firm limits,
-    after saying so, rather than not run at all.
+    after saying so, rather than not run at all. The VAV choice is offered
+    as a second option, with the MP supply at its firm defaults.
     """
     import sizer_dialogs
     import hvac_graph
+    import vav_checks
     from pyrevit import forms
 
     def legacy():
-        if not forms.alert("The Size Duct dialog could not open. Size the "
-                           "mains at the firm limits (SA 800 fpm / 0.08, "
-                           "RA EA 600 / 0.05, TA 400 / 0.05)?",
-                           title=title, yes=True, no=True):
+        constant = "Size at firm limits"
+        vav = "VAV System, MP at {:.0f} fpm / {:.2f}".format(
+            float(vav_checks.MP_DEFAULT_FPM), float(vav_checks.MP_DEFAULT_FRICTION))
+        choice = forms.alert("The Size Duct dialog could not open. Choose how "
+                             "to size. Firm limits: SA 800 fpm / 0.08, RA EA "
+                             "600 / 0.05, TA 400 / 0.05.",
+                             title=title, options=[constant, vav])
+        if not choice:
             return None
-        return {"limits": dict(hvac_graph.FIRM_DEFAULTS)}
+        limits = dict(hvac_graph.FIRM_DEFAULTS)
+        if choice == vav:
+            limits[vav_checks.MP_KEY] = (vav_checks.MP_DEFAULT_FPM,
+                                         vav_checks.MP_DEFAULT_FRICTION)
+        return {"limits": limits, "vav": choice == vav}
 
     return sizer_dialogs.themed_or(
         lambda use_theme: sizer_dialogs.show_size_duct_dialog(title, use_theme),

@@ -681,6 +681,22 @@ def _duct_limits_xaml():
             '</Grid.RowDefinitions>' + cells + '</Grid>')
 
 
+def _duct_vav_rows_xaml():
+    """The MP velocity and friction rows, from vav_checks.VAV_FIELDS[:2] so
+    the labels and units live in one place. Box names tb_vav_<key>."""
+    import vav_checks
+    out = ''
+    for i, (key, label, unit, _default, _kind) in enumerate(vav_checks.VAV_FIELDS[:2]):
+        out += ('<StackPanel Orientation="Horizontal" Margin="0,%d,0,0">'
+                '<TextBlock Text="%s" Width="170" VerticalAlignment="Center"/>'
+                '<TextBox x:Name="tb_vav_%s" Width="72" Margin="0,0,6,0"'
+                ' ToolTip="%s (%s). Shall be greater than 0."/>'
+                '<TextBlock Text="%s" VerticalAlignment="Center"/>'
+                '</StackPanel>' % (0 if i == 0 else 6, _q(label), key, _q(label), _q(unit),
+                                   _q(unit)))
+    return out
+
+
 _DUCT_BODY = (
     _section('This run', 10) +
     _hint('Sizes every main (two or more terminals downstream) and writes the '
@@ -700,6 +716,24 @@ _DUCT_BODY = (
           'transition just past the tap.',
           '0,6,0,0') +
 
+    # VAV (plan approved 2026-10-22): the MP supply between the unit and the
+    # box inlets is sized to its own limits. Greyed out until ticked.
+    _section('VAV') +
+    '<CheckBox x:Name="cb_vav" Content="VAV System"'
+    ' ToolTip="Sizes the supply mains between the unit and the VAV box inlets (medium pressure) to the MP limits below."/>'
+    '<Border x:Name="pnl_vav" Style="{DynamicResource RjaGroupBorder}" Margin="20,4,0,0"'
+    ' IsEnabled="False" Opacity="0.55">'
+    '<StackPanel>' +
+    _duct_vav_rows_xaml() +
+    _hint('Found by position: every supply main between the unit and the box '
+          'inlets with two or more boxes downstream is sized to these limits (EDR '
+          'VAV Guide p3, p100). A box inlet runout (one box downstream) is sized to '
+          'the box by the engineer and left as drawn. Ductwork after the box is '
+          'sized as above. Boxes, branches and diffusers are never touched.',
+          '0,6,0,0') +
+    '</StackPanel>'
+    '</Border>' +
+
     _BASIS_XAML
 )
 
@@ -707,10 +741,12 @@ _DUCT_BODY = (
 def show_size_duct_dialog(title, use_theme=True):
     """Themed Size Duct dialog.
 
-    Returns {"limits": {system: (max fpm, max friction)}} or None.
+    Returns {"limits": {system: (max fpm, max friction)}, "vav": bool} or
+    None. With VAV ticked, limits also carries vav_checks.MP_KEY.
     """
     import duct_sizing
     import hvac_graph
+    import vav_checks
 
     win = _build_window(
         title, 'Size Duct',
@@ -726,6 +762,21 @@ def show_size_duct_dialog(title, use_theme=True):
         tb_f.Text = "{:.2f}".format(float(fric))
         boxes.append((name, tb_v, tb_f))
 
+    cb_vav = _named(win, 'cb_vav')
+    pnl_vav = _named(win, 'pnl_vav')
+    mp_boxes = []
+    for key, label, _unit, default, _kind in vav_checks.VAV_FIELDS[:2]:
+        tb = _named(win, 'tb_vav_' + key)
+        tb.Text = vav_checks.format_default(default)
+        mp_boxes.append((label, tb))
+
+    def on_vav_toggled(sender, args):
+        on = bool(cb_vav.IsChecked)
+        pnl_vav.IsEnabled = on
+        pnl_vav.Opacity = 1.0 if on else 0.55
+    cb_vav.Checked += on_vav_toggled
+    cb_vav.Unchecked += on_vav_toggled
+
     _fill_basis(win, [
         ("Sizing", "Smallest even size, %d in minimum, meeting BOTH the max "
                    "velocity and the max friction." % duct_sizing.MIN_DUCT_DIM),
@@ -740,7 +791,9 @@ def show_size_duct_dialog(title, use_theme=True):
                       "duct, existing phase ductwork, outside air ductwork, "
                       "and any main with a terminal downstream that has no "
                       "Flow value."),
-    ])
+        ("Start", "Pick the RTU or AHU. A duct or a VAV box is refused."),
+    ] + [r for r in vav_checks.basis_rows()
+         if r[0] in ('VAV, MP supply', 'VAV, LP', 'VAV, inlet')])
 
     def collect(errors):
         limits = {}
@@ -749,11 +802,17 @@ def show_size_duct_dialog(title, use_theme=True):
             fric = _number(tb_f, name + ' friction', errors)
             if fpm is not None and fric is not None:
                 limits[name] = (fpm, fric)
+        vav = bool(cb_vav.IsChecked)
+        if vav:
+            mp = [_number(tb, label, errors) for label, tb in mp_boxes]
+            if None not in mp:
+                limits[vav_checks.MP_KEY] = (mp[0], mp[1])
         if errors:
             return None
-        return {"limits": limits}
+        return {"limits": limits, "vav": vav}
 
-    return _run(win, [b for _n, v, f in boxes for b in (v, f)], collect)
+    return _run(win, [b for _n, v, f in boxes for b in (v, f)] +
+                [tb for _l, tb in mp_boxes], collect)
 
 
 # ---------------------------------------------------------------------------

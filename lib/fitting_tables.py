@@ -119,6 +119,11 @@ def c_of(key, c=None):
 # `Balancing Damper - Round` carries "Pressure Drop = 1.00 in-wg" which reads as
 # content boilerplate (15 of those would swamp the whole system, and the builtin
 # RBS_DUCT_PRESSURE_DROP is empty).
+#
+# The VAV box drop is deliberately NOT a row here: it is a field of the VAV
+# section of the Duct Performance dialog (vav_checks.DEFAULT_BOX_DROP_INWC),
+# charged under the component key 'vav_box' by _critical_path_loss. Mid tree
+# equipment that is not a VAV box is charged as 'damper' (VAV plan, 2026-10-22).
 COMPONENT_TABLE = (
     ('diffuser',    'Diffuser / grille',   0.05),
     ('damper',      'Balancing damper',    0.25),

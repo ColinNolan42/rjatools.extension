@@ -32,6 +32,7 @@ LIB_DIR = os.path.join(EXT_ROOT, "lib")
 # fitting_tables.py has no Revit imports -> import the real thing.
 sys.path.insert(0, LIB_DIR)
 import fitting_tables  # noqa: E402  (real module, pure Python)
+import vav_checks      # noqa: E402  (real module, pure Python)
 
 src = io.open(SCRIPT_PATH, encoding="utf-8").read()
 m = re.search(r"^def _critical_path_loss\(.*?\n    return result$", src, re.S | re.M)
@@ -88,6 +89,11 @@ def _is_accessory(elem):
     return elem is not None and elem.kind in _ACCESSORY_KINDS
 
 
+def _is_equipment(elem):
+    """Mid tree equipment (a VAV box, a duct heater): kind 'equipment'."""
+    return elem is not None and elem.kind == 'equipment'
+
+
 def _fitting_family_name(elem):
     return elem.family_name
 
@@ -116,12 +122,14 @@ hvac_graph.takeoff_child_ids       = _takeoff_child_ids
 hvac_graph.duct_continues_past     = _duct_continues_past
 hvac_graph.is_fitting              = _is_fitting
 hvac_graph.is_accessory            = _is_accessory
+hvac_graph.is_equipment            = _is_equipment
 hvac_graph.fitting_family_name     = _fitting_family_name
 hvac_graph.fitting_is_round        = _fitting_is_round
 hvac_graph.transition_areas        = _transition_areas
 hvac_graph.velocity_pressure_inwg  = _velocity_pressure_inwg
 
-ns = {'hvac_graph': hvac_graph, 'fitting_tables': fitting_tables}
+ns = {'hvac_graph': hvac_graph, 'fitting_tables': fitting_tables,
+      'vav_checks': vav_checks}
 exec(fn_src, ns)
 crit = ns['_critical_path_loss']
 
@@ -724,6 +732,130 @@ r16o = crit([900], ch16, dc16, {910: (210.0, 'Supply Air', 'T-16')}, {},
 check("case16 the dialog override of flex_bend reaches the walker",
       abs(r16o['fitting_inwc'] - 0.9 * pv(600.0)) < 1e-9,
       "got %r" % r16o['fitting_inwc'])
+
+
+# ── case 17: VAV box mid tree (VAV plan, Colin 2026-10-22) ───────────────────
+#
+#   AHU 1000 (root, equipment) -> MP duct 1001 (1800 FPM, 0.20 fric)
+#     -> BOX 1002 -> elbow 1003 (round) -> LP duct 1004 (600 FPM, 0.05) -> T1010
+# The box is priced at the VAV box drop, the elbow right on its discharge is
+# priced at the OUTLET duct's 600 FPM (not the MP 1800), and the MP loss to the
+# box inlet is reported per box.
+children17 = {1000: [1001], 1001: [1002], 1002: [1003], 1003: [1004], 1004: [1010]}
+nodes17 = {1000: Elem(kind='equipment'), 1002: Elem(kind='equipment'),
+           1003: Elem(kind='elbow', family_name='Round Elbow', is_round=True)}
+ducts17 = build([(1001, 0.20, 40.0, 1800.0, 0.5, 'Supply Air'),
+                 (1004, 0.05, 15.0, 600.0, 0.6, 'Supply Air')])
+terms17 = {1010: (360.0, 'Supply Air', 'SD-17')}
+COMP17 = {'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.05}
+
+r17 = crit([1000], children17, ducts17, terms17, nodes17, safety_pct=10.0,
+           comp_values=COMP17, vav_box_ids=set([1002]), vav_box_drop_inwc=0.40)
+sa17 = r17[1000]['Supply Air']
+check("case17 box drop is a component (0.40 box + 0.05 diffuser)",
+      abs(sa17['component_inwc'] - 0.45) < 1e-9, "got %r" % sa17['component_inwc'])
+check("case17 component_keys name the box",
+      sorted(sa17['component_keys']) == ['diffuser', 'vav_box'],
+      "got %r" % (sa17['component_keys'],))
+exp_elbow17 = fitting_tables.DEFAULT_C['round_elbow_90'] * pv(600.0)
+wrong_elbow17 = fitting_tables.DEFAULT_C['round_elbow_90'] * pv(1800.0)
+check("case17 the elbow on the box discharge is priced at the OUTLET duct velocity",
+      abs(sa17['fitting_inwc'] - exp_elbow17) < 1e-9
+      and abs(sa17['fitting_inwc'] - wrong_elbow17) > 1e-6,
+      "expected %.6f got %r (inlet velocity would give %.6f)"
+      % (exp_elbow17, sa17['fitting_inwc'], wrong_elbow17))
+check("case17 the root AHU itself is not priced as a component",
+      'damper' not in sa17['component_keys'])
+box17 = sa17.get('boxes', {}).get(1002)
+check("case17 MP loss to the box inlet is the MP duct only (0.20), x1.10 with SF",
+      box17 is not None and abs(box17[0] - 0.20) < 1e-9
+      and abs(box17[1] - 0.22) < 1e-9, "got %r" % (box17,))
+_item_sum17 = sum(i[3] or 0.0 for i in sa17.get('items', ()))
+check("case17 index run items still add up to the subtotal",
+      abs(_item_sum17 - sa17['subtotal_inwc']) < 1e-9,
+      "items %r vs subtotal %r" % (_item_sum17, sa17['subtotal_inwc']))
+r17d = crit([1000], children17, ducts17, terms17, nodes17, comp_values=COMP17,
+            vav_box_ids=set([1002]))
+check("case17 box drop defaults to the balancing damper value",
+      abs(r17d[1000]['Supply Air']['component_inwc'] - (0.25 + 0.05)) < 1e-9,
+      "got %r" % r17d[1000]['Supply Air']['component_inwc'])
+
+# VAV OFF: the same equipment is priced as a balancing damper, and nothing is
+# reset (the elbow keeps the inlet duct's velocity, as before).
+r17off = crit([1000], children17, ducts17, terms17, nodes17, comp_values=COMP17)
+sa17off = r17off[1000]['Supply Air']
+check("case17 VAV off: mid tree equipment has its own key, at the damper value",
+      sorted(sa17off['component_keys']) == ['diffuser', 'mid_equip']
+      and abs(sa17off['component_inwc'] - 0.30) < 1e-9,
+      "keys %r comp %r" % (sa17off['component_keys'], sa17off['component_inwc']))
+check("case17 VAV off: no box list",
+      sa17off.get('boxes') == {}, "got %r" % (sa17off.get('boxes'),))
+
+# Worst full path across two boxes: MP to box, box, worst LP inside.
+#   AHU 1100 -> MP 1101 -> tap A 1102 -> MP 1103 (0.10) -> BOX 1104 -> LP 1105 (0.30) -> T1110
+#                       -> tap B 1106 -> MP 1107 (0.25) -> BOX 1108 -> LP 1109 (0.05) -> T1111
+children18 = {1100: [1101], 1101: [1102, 1106], 1102: [1103], 1103: [1104],
+              1104: [1105], 1105: [1110], 1106: [1107], 1107: [1108],
+              1108: [1109], 1109: [1111]}
+nodes18 = {1100: Elem(kind='equipment'),
+           1102: Elem(kind='tap', family_name='Round Takeoff'),
+           1106: Elem(kind='tap', family_name='Round Takeoff'),
+           1104: Elem(kind='equipment'), 1108: Elem(kind='equipment')}
+ducts18 = build([(1101, 0.0, 10.0, 0.0, 1.0, 'Supply Air'),
+                 (1103, 0.10, 10.0, 0.0, 0.3, 'Supply Air'),
+                 (1105, 0.30, 30.0, 0.0, 0.5, 'Supply Air'),
+                 (1107, 0.25, 30.0, 0.0, 0.3, 'Supply Air'),
+                 (1109, 0.05, 5.0, 0.0, 0.5, 'Supply Air')])
+terms18 = {1110: (300.0, 'Supply Air', 'SD-A'), 1111: (300.0, 'Supply Air', 'SD-B')}
+r18 = crit([1100], children18, ducts18, terms18, nodes18,
+           comp_values=COMP17, vav_box_ids=set([1104, 1108]), vav_box_drop_inwc=0.25)
+sa18 = r18[1100]['Supply Air']
+check("case18 the worst FULL path wins (0.10 + 0.30 beats 0.25 + 0.05)",
+      sa18['terminal_name'] == 'SD-A' and abs(sa18['friction_inwc'] - 0.40) < 1e-9,
+      "terminal %r friction %r" % (sa18['terminal_name'], sa18['friction_inwc']))
+check("case18 each box gets its own MP loss (0.10 and 0.25)",
+      abs(sa18['boxes'][1104][0] - 0.10) < 1e-9
+      and abs(sa18['boxes'][1108][0] - 0.25) < 1e-9,
+      "got %r" % (sa18['boxes'],))
+
+
+# ── case 19: through a fan powered box the walk stays on its own side (C2) ───
+#
+#   AHU 1200 -> MP 1201 (SA) -> FPB 1202 -> LP 1203 (SA, 0.05) -> diffuser T1210
+#                                        `-> return duct 1204 (RA, 0.90) -> grille T1211
+# Before the fix the walk went MP -> box -> ducted return, and that 0.90 return
+# duct turned up as a Return Air index run of the AHU.
+children19 = {1200: [1201], 1201: [1202], 1202: [1203, 1204], 1203: [1210],
+              1204: [1211]}
+nodes19 = {1200: Elem(kind='equipment'), 1202: Elem(kind='equipment')}
+ducts19 = build([(1201, 0.20, 40.0, 1800.0, 0.5, 'Supply Air'),
+                 (1203, 0.05, 10.0, 600.0, 0.6, 'Supply Air'),
+                 (1204, 0.90, 10.0, 500.0, 0.6, 'Return Air')])
+terms19 = {1210: (400.0, 'Supply Air', 'SD-19'), 1211: (300.0, 'Return Air', 'RG-19')}
+for _box19 in (set([1202]), set()):
+    r19 = crit([1200], children19, ducts19, terms19, nodes19,
+               comp_values=COMP17, vav_box_ids=_box19)
+    check("case19 (%s) the FPB's ducted return is NOT a Return Air run of the AHU"
+          % ('VAV on' if _box19 else 'VAV off'),
+          set(r19.get(1200, {}).keys()) == set(['Supply Air']),
+          "got classes %r" % (list(r19.get(1200, {}).keys()),))
+check("case19 the supply run through the box is still found",
+      r19[1200]['Supply Air']['terminal_name'] == 'SD-19')
+
+
+# ── case 20: a box that is ALSO a picked root is still priced in the AHU walk (C3)
+r20 = crit([1000, 1002], children17, ducts17, terms17, nodes17, safety_pct=0.0,
+           comp_values=COMP17, vav_box_ids=set([1002]), vav_box_drop_inwc=0.40)
+sa20 = r20[1000]['Supply Air']
+check("case20 the AHU's walk still charges the box (picked as a root too)",
+      'vav_box' in sa20['component_keys']
+      and abs(sa20['component_inwc'] - 0.45) < 1e-9,
+      "keys %r comp %r" % (sa20['component_keys'], sa20['component_inwc']))
+check("case20 and records the MP loss to it",
+      1002 in sa20.get('boxes', {}), "got %r" % (sa20.get('boxes'),))
+check("case20 the box's own walk does not charge itself",
+      'vav_box' not in r20[1002]['Supply Air']['component_keys'],
+      "got %r" % (r20[1002]['Supply Air']['component_keys'],))
 
 
 # ── summary ──────────────────────────────────────────────────────────────────

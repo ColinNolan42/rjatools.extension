@@ -23,6 +23,14 @@ Mains and branches are judged by two different methods:
 The diffuser/duct height clearance check still applies to both, and still
 overrides either verdict - it is an installability problem, not a sizing one.
 
+VAV System (dialog checkbox, plan approved 2026-10-22, lib/vav_checks.py):
+supply equipment entered mid tree through its inlet is a VAV box. The supply
+between the unit and the box inlets is medium pressure (MP): always a main,
+judged against the MP limits, never purple. After the box, as above. Flex
+upstream of a box, short straight duct at a box connector and a diffuser on an
+MP main are red. External static prices each box and reports the pressure
+left at it.
+
 Which columns appear in the output tables is chosen in the settings dialog;
 the same selection drives both the drafting-view schedule placed on the sheet
 and the console table.
@@ -85,6 +93,7 @@ import hvac_graph
 import fitting_tables
 import revit_helpers
 import rja_drafting
+import vav_checks
 from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
@@ -201,10 +210,25 @@ _SETTINGS_XAML = '''
                           ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
                            Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
-                <CheckBox x:Name="cb_oa" Content="Multi System (pending)" IsEnabled="False"
-                          ToolTip="Pending. Checks several connected systems in one run."/>
+                <CheckBox x:Name="cb_vav" Content="VAV System"
+                          ToolTip="Supply mains between the unit and the VAV box inlets are checked as medium pressure (MP). Single duct and fan powered boxes alike."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Pending, for AHU, DOAS, VAV and FPB systems."/>
+                           Text="Boxes are found by position: supply equipment entered through its inlet. Ductwork after a box is checked as usual."/>
+                <Expander x:Name="exp_vav" IsExpanded="False" Margin="20,4,0,0"
+                          ToolTip="VAV limits and checks. Greyed out until VAV System is ticked.">
+                    <Expander.Header>
+                        <TextBlock FontWeight="SemiBold" Text="VAV"/>
+                    </Expander.Header>
+                    <Border Style="{DynamicResource RjaGroupBorder}" Margin="0,6,0,0">
+                        <Grid x:Name="grid_vav">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                        </Grid>
+                    </Border>
+                </Expander>
 
                 <!-- Main duct limits -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
@@ -361,8 +385,36 @@ def _wpf_named(win, name):
     return el
 
 
+def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
+                     safety_pct, c_values, comp_values, calc_basis, filter_inwc,
+                     vav, vav_settings):
+    """The settings dialog's answer, a dict, built in ONE place for both the
+    themed and the legacy dialog so main() reads the same keys from either.
+
+    With VAV ticked, the MP limits are also added to limits under
+    vav_checks.MP_KEY, so every limit lookup finds them in one dict.
+    """
+    limits = dict(limits)
+    if vav:
+        limits[vav_checks.MP_KEY] = (vav_settings['mp_fpm'], vav_settings['mp_fric'])
+    return {
+        'limits':        limits,
+        'tol_pct':       tol_pct,
+        'selected_cols': selected_cols,
+        'full_diag':     full_diag,
+        'ext_static':    ext_static,
+        'safety_pct':    safety_pct,
+        'c_values':      c_values,
+        'comp_values':   comp_values,
+        'calc_basis':    calc_basis,
+        'filter_inwc':   filter_inwc,
+        'vav':           bool(vav),
+        'vav_settings':  vav_settings,
+    }
+
+
 def _show_velocity_settings_xaml(use_theme):
-    """The XAML settings dialog. Returns the 11 element tuple or None (cancel).
+    """The XAML settings dialog. Returns the _settings_result dict or None (cancel).
 
     Raises if the window cannot be built, which show_velocity_settings_dialog
     catches and answers with the next simpler dialog.
@@ -381,7 +433,9 @@ def _show_velocity_settings_xaml(use_theme):
     N = lambda name: _wpf_named(win, name)
     img_logo = N('img_logo')
     cb_full_diag = N('cb_full_diag')
-    cb_oa = N('cb_oa')
+    cb_vav = N('cb_vav')
+    exp_vav = N('exp_vav')
+    grid_vav = N('grid_vav')
     grid_limits = N('grid_limits')
     tb_tol = N('tb_tol')
     grid_cols = N('grid_cols')
@@ -441,7 +495,7 @@ def _show_velocity_settings_xaml(use_theme):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
-    cb_oa.IsChecked = False
+    cb_vav.IsChecked = False
     cb_static.IsChecked = False
     cb_filter.IsChecked = False
 
@@ -534,6 +588,22 @@ def _show_velocity_settings_xaml(use_theme):
           hvac_graph.STANDARD_AIR_DENSITY_LB_FT3)],
         basis_boxes, basis_order, '%g')
 
+    # ── VAV rows (vav_checks.VAV_FIELDS; unit max ESP may be blank) ─────────
+    vav_boxes = {}
+    for r, (key, label, unit, default, _kind) in enumerate(vav_checks.VAV_FIELDS):
+        _add_row_def(grid_vav)
+        lb = TextBlock()
+        lb.Text = label
+        lb.Margin = Thickness(0, 2, 12, 2)
+        lb.VerticalAlignment = VerticalAlignment.Center
+        _put(grid_vav, lb, 0, r)
+        tb = _box(vav_checks.format_default(default), 64, Thickness(0, 2, 8, 2))
+        _put(grid_vav, tb, 1, r)
+        vav_boxes[key] = tb
+        ex = ui_helpers.rja_hint_block(win, unit)
+        ex.VerticalAlignment = VerticalAlignment.Center
+        _put(grid_vav, ex, 2, r)
+
     # ── calculation basis reference (condensed) ─────────────────────────────
     ref_rows = [
         ('Limits', 'Checked on main ducts only. Branches are judged against the '
@@ -559,7 +629,7 @@ def _show_velocity_settings_xaml(use_theme):
                             'the safety factor. Excludes the coil and cabinet (already '
                             'in the published ESP), fire and backdraft dampers, and the '
                             'filter unless Include return filter is ticked.'),
-    ]
+    ] + vav_checks.basis_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
         a = TextBlock()
@@ -582,7 +652,18 @@ def _show_velocity_settings_xaml(use_theme):
     cb_static.Unchecked += sync_enable
     cb_filter.Checked += sync_enable
     cb_filter.Unchecked += sync_enable
+
+    # The VAV section stays greyed out until VAV System is ticked.
+    def sync_vav(s=None, e=None):
+        on = bool(cb_vav.IsChecked)
+        exp_vav.IsEnabled = on
+        exp_vav.Opacity = 1.0 if on else 0.55
+        if not on:
+            exp_vav.IsExpanded = False
+    cb_vav.Checked += sync_vav
+    cb_vav.Unchecked += sync_vav
     sync_enable()
+    sync_vav()
 
     # ── OK: validate every field, report inline, window stays open ──────────
     def _collect():
@@ -654,12 +735,21 @@ def _show_velocity_settings_xaml(use_theme):
             if f is not None:
                 filter_inwc = f
 
-        include_oa = bool(cb_oa.IsChecked)
+        vav = bool(cb_vav.IsChecked)
+        vav_settings = vav_checks.default_settings()
+        if vav:
+            for key, label, _unit, _default, kind in vav_checks.VAV_FIELDS:
+                v, err = vav_checks.parse_field(vav_boxes[key].Text, kind)
+                if err:
+                    errors.append((vav_boxes[key], label + ' ' + err + '.', (exp_vav,)))
+                else:
+                    vav_settings[key] = v
+
         selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
         full_diag = bool(cb_full_diag.IsChecked)
-        values = (out, gpct, include_oa, selected_cols, full_diag,
-                  ext_static, safety_pct, c_values, comp_values, calc_basis,
-                  filter_inwc)
+        values = _settings_result(out, gpct, selected_cols, full_diag,
+                                  ext_static, safety_pct, c_values, comp_values,
+                                  calc_basis, filter_inwc, vav, vav_settings)
         return errors, values
 
     def on_ok(s, e):
@@ -702,13 +792,12 @@ def _show_velocity_settings_xaml(use_theme):
 
 
 def show_velocity_settings_dialog():
-    """The settings dialog. Returns ({sys_class: (max_fpm, max_friction_inwc)},
-    tol_pct, include_oa, selected_column_keys, full_diag, ext_static, safety_pct,
-    c_values, comp_values, calc_basis, filter_inwc) or None if cancelled.
+    """The settings dialog. Returns the _settings_result() dict, or None if
+    cancelled.
 
     Tries the themed XAML dialog first, then the same dialog without the theme
     file, then the original code-built dialog, so the tool always opens. The
-    meaning of every returned element is documented on
+    meaning of every returned value is documented on
     _show_velocity_settings_dialog_legacy.
     """
     log = script.get_logger()
@@ -722,12 +811,14 @@ def show_velocity_settings_dialog():
 
 
 def _show_velocity_settings_dialog_legacy():
-    """FALLBACK ONLY. Code-built WPF dialog — Outside Air scope, per-system max velocity + friction,
+    """FALLBACK ONLY. Code-built WPF dialog — VAV System, per-system max velocity + friction,
     a yellow/red tolerance %, and which columns the output tables show.
 
-    Returns ({sys_class: (max_fpm, max_friction_inwc)}, tol_pct, include_oa,
-    selected_column_keys, full_diag, ext_static, safety_pct,
-    c_values, comp_values, calc_basis, filter_inwc) or None.
+    Returns the _settings_result() dict or None. Keys: limits
+    ({sys_class: (max_fpm, max_friction_inwc)}, plus vav_checks.MP_KEY when VAV
+    is ticked), tol_pct, selected_cols, full_diag, ext_static, safety_pct,
+    c_values, comp_values, calc_basis, filter_inwc, vav, vav_settings
+    ({vav_checks.VAV_FIELDS key: value}; unit_max_esp None means no check).
 
     filter_inwc is 0.0 unless "Include return filter" is ticked, else the known
     drop in in. wc, added once to the RETURN path total.
@@ -745,12 +836,10 @@ def _show_velocity_settings_dialog_legacy():
     module docstring. Slot-diffuser branches are the one exception and do use
     these limits.
 
-    include_oa is False by default (equipment-level: Supply Air +
-    Return Air only — any mechanical equipment node's Outside Air branch is
-    skipped entirely by hvac_graph.traverse(), not sized/colored, for
-    projects where the OA network isn't modeled to completion). Checking
-    the Outside Air box switches to system-level: full traversal including
-    OA, for VAV/FCU networks where OA is actually being traced.
+    The run is always equipment-level (Supply Air + Return Air only, any
+    mechanical equipment node's Outside Air branch skipped by
+    hvac_graph.traverse()). The old disabled "Multi System (pending)" box is
+    now the VAV System box (VAV plan, Colin 2026-10-22).
 
     Color bands:
       Green  : value <= max
@@ -821,19 +910,52 @@ def _show_velocity_settings_dialog_legacy():
     full_diag_sep.Margin = Thickness(0, 8, 0, 10)
     outer.Children.Add(full_diag_sep)
 
-    # ── 2. Outside Air: equipment-level (SA+RA only, default) vs ────────────
-    # ── system-level (traces OA too) ─────────────────────────────────────
-    cb_oa = CheckBox()
-    cb_oa_text = TextBlock()
-    cb_oa_text.Text = ('Multi System (AHU/DOAS/VAV/FPB).  PENDING, under '
-                       'development.')
-    cb_oa_text.TextWrapping = TextWrapping.Wrap
-    cb_oa_text.Width = CONTENT_W - 20
-    cb_oa.Content = cb_oa_text
-    cb_oa.IsChecked = False
-    cb_oa.IsEnabled = False
-    cb_oa.Margin  = Thickness(2, 0, 0, 2)
-    outer.Children.Add(cb_oa)
+    # ── 2. VAV System, with its fields greyed out until ticked ─────────────
+    cb_vav = CheckBox()
+    cb_vav_text = TextBlock()
+    cb_vav_text.Text = ('VAV System.  Supply mains between the unit and the box '
+                        'inlets are checked as medium pressure (MP).')
+    cb_vav_text.TextWrapping = TextWrapping.Wrap
+    cb_vav_text.Width = CONTENT_W - 20
+    cb_vav.Content = cb_vav_text
+    cb_vav.IsChecked = False
+    cb_vav.Margin  = Thickness(2, 0, 0, 2)
+    outer.Children.Add(cb_vav)
+
+    vav_panel = StackPanel()
+    vav_panel.Margin = Thickness(22, 2, 0, 2)
+    vav_boxes = {}
+    for key, label, unit, default, _kind in vav_checks.VAV_FIELDS:
+        rp = StackPanel()
+        rp.Orientation = Orientation.Horizontal
+        rp.Margin = Thickness(0, 1, 0, 1)
+        lb = TextBlock()
+        lb.Text = label
+        lb.Width = 250
+        lb.VerticalAlignment = VerticalAlignment.Center
+        rp.Children.Add(lb)
+        tb = TextBox()
+        tb.Text = vav_checks.format_default(default)
+        tb.Width = 55
+        tb.Margin = Thickness(4, 0, 6, 0)
+        tb.VerticalAlignment = VerticalAlignment.Center
+        rp.Children.Add(tb)
+        ex = TextBlock()
+        ex.Text = unit
+        ex.Foreground = SolidColorBrush(Colors.DimGray)
+        ex.VerticalAlignment = VerticalAlignment.Center
+        rp.Children.Add(ex)
+        vav_panel.Children.Add(rp)
+        vav_boxes[key] = tb
+    outer.Children.Add(vav_panel)
+
+    def _sync_vav(s=None, e=None):
+        on = bool(cb_vav.IsChecked)
+        vav_panel.IsEnabled = on
+        vav_panel.Opacity = 1.0 if on else 0.55
+    cb_vav.Checked += _sync_vav
+    cb_vav.Unchecked += _sync_vav
+    _sync_vav()
 
     oa_sep = Separator()
     oa_sep.Margin = Thickness(0, 8, 0, 10)
@@ -1174,6 +1296,8 @@ def _show_velocity_settings_dialog_legacy():
     _info_row('  excludes:',      'filter (unless Include return filter is ticked), coil '
                                   'and cabinet (already in the published ESP). Fire and '
                                   'backdraft dampers.')
+    for _lab, _val in vav_checks.basis_rows():
+        _info_row(_lab + ':', _val)
 
     # OK / Cancel
     btn_panel = StackPanel()
@@ -1204,7 +1328,15 @@ def _show_velocity_settings_dialog_legacy():
                     forms.alert('All values must be greater than 0.', title='Invalid Input')
                     return
                 out[sys_class] = (max_fpm, max_fric)
-            include_oa = bool(cb_oa.IsChecked)
+            vav = bool(cb_vav.IsChecked)
+            vav_settings = vav_checks.default_settings()
+            if vav:
+                for key, label, _unit, _default, kind in vav_checks.VAV_FIELDS:
+                    v, err = vav_checks.parse_field(vav_boxes[key].Text, kind)
+                    if err:
+                        forms.alert('{} {}.'.format(label, err), title='Invalid Input')
+                        return
+                    vav_settings[key] = v
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
             ext_static = bool(cb_static.IsChecked)
@@ -1244,9 +1376,10 @@ def _show_velocity_settings_dialog_legacy():
                     forms.alert('The return filter drop cannot be negative.',
                                 title='Invalid Input')
                     return
-            result[0] = (out, gpct, include_oa, selected_cols, full_diag,
-                         ext_static, safety_pct, c_values, comp_values, calc_basis,
-                         filter_inwc)
+            result[0] = _settings_result(out, gpct, selected_cols, full_diag,
+                                         ext_static, safety_pct, c_values,
+                                         comp_values, calc_basis, filter_inwc,
+                                         vav, vav_settings)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -1362,7 +1495,7 @@ def _pick_side(duct):
         name = (hvac_graph.duct_sys_class(duct) or '').lower()
     except Exception:
         return None
-    if 'supply' in name:
+    if vav_checks.is_supply_class(name):
         return 'supply'
     if 'return' in name or 'exhaust' in name:
         return 'return'
@@ -1744,7 +1877,8 @@ def _root_class_airflow(root_id, all_children, all_terminals):
 def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         all_terminals, all_nodes, safety_pct=0.0,
                         c_values=None, comp_values=None,
-                        duct_rooted_ids=None, return_filter_inwc=0.0):
+                        duct_rooted_ids=None, return_filter_inwc=0.0,
+                        vav_box_ids=None, vav_box_drop_inwc=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -1805,10 +1939,72 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     equipment." Every unit gets its own fan, so its own index run and its own
     external static; merging two AHUs would let the bigger one's run hide the
     smaller one's entirely.
+
+    Mid tree equipment (VAV plan, Colin 2026-10-22): equipment the run passes
+    THROUGH (anything but this walk's own root, so a box that is also a picked
+    root is still priced in its AHU's walk) is a component. One in vav_box_ids
+    is a VAV box, priced at vav_box_drop_inwc (default: the balancing damper
+    value) under component key 'vav_box', and the velocity the next fitting
+    sees is reset to the box's outlet duct. Any other mid tree equipment (VAV
+    off, or a duct heater and the like) is charged under 'mid_equip' at the
+    balancing damper value. Through any mid tree equipment the walk only
+    continues on its own side (supply stays supply).
+    Each leaf also carries 'boxes': {box id: (MP loss to the box inlet,
+    same with the safety factor)}, the worst path to each box of that root.
     """
     dr_by_int_id = {}
     for dr in all_duct_results.values():
         dr_by_int_id[dr.element_id] = dr
+
+    box_ids  = vav_box_ids or set()
+    box_drop = (vav_box_drop_inwc if vav_box_drop_inwc is not None
+                else fitting_tables.component_of('damper', comp_values))
+
+    def _comp(key):
+        """One component's drop: the VAV box value, mid tree equipment at the
+        balancing damper value, else the component table."""
+        if key == 'vav_box':
+            return box_drop
+        if key == 'mid_equip':
+            return fitting_tables.component_of('damper', comp_values)
+        return fitting_tables.component_of(key, comp_values)
+
+    def _kind(n):
+        """Node kind for vav_checks' graph helpers."""
+        if n in dr_by_int_id:
+            return 'duct'
+        if n in all_terminals:
+            return 'terminal'
+        e = all_nodes.get(n)
+        if e is None:
+            return None
+        if hvac_graph.is_equipment(e):
+            return 'equipment'
+        if hvac_graph.is_fitting(e):
+            return 'fitting'
+        if hvac_graph.is_accessory(e):
+            return 'accessory'
+        return None
+
+    first_duct_cache = {}
+    def _first_duct(start):
+        """DuctResult at start, or the nearest one below it through fittings
+        and accessories (vav_checks.nearest_ducts_down), or None."""
+        if start not in first_duct_cache:
+            if start in dr_by_int_id:
+                found = dr_by_int_id[start]
+            else:
+                below = vav_checks.nearest_ducts_down(start, all_children, _kind)
+                found = dr_by_int_id.get(below[0]) if below else None
+            first_duct_cache[start] = found
+        return first_duct_cache[start]
+
+    def _side_below(start):
+        """System class of the branch starting at start, or None."""
+        if start in all_terminals:
+            return all_terminals[start][1]
+        d = _first_duct(start)
+        return d.sys_class if d is not None else None
 
     # Cache per-duct take-off children and end-of-main, so a duct reached by
     # several candidate paths is not re-walked for each one.
@@ -1929,6 +2125,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return (fric, fit, n_fit, n_duct, dlen, unpriced)
 
     best = {}              # root_id -> {sys_class: {...}}
+    box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
     truncated_roots = set()  # PER ROOT: one unit truncating must not label the
                              # others, now that results print per equipment.
 
@@ -1940,6 +2137,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
     for root_id in all_root_ids:
         best_here = {}     # this equipment's own per-system-class winners
+        boxes_here = {}    # box id -> worst MP loss reaching its inlet
         # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
         #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
         #  nodes already on THIS path)
@@ -2037,13 +2235,39 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     unpriced = unpriced + (
                         (fam or '?') + ': accessory on the run, not priced',)
 
+            box_here = False
+            mid_equip = False
+            # nid != root_id, not "not a picked root": a box picked alongside
+            # its AHU is still priced inside the AHU's walk (review C3).
+            if (dr is None and elem is not None and nid != root_id
+                    and hvac_graph.is_equipment(elem)):
+                mid_equip = True
+                if nid in box_ids:
+                    # What the MP supply costs to reach this box's inlet, before
+                    # the box's own drop: the unit's max ESP less this is the
+                    # pressure left at the box.
+                    _reach = fric + fit + sum([_comp(_k) for _k in comp_keys], 0.0)
+                    if _reach > boxes_here.get(nid, -1.0):
+                        boxes_here[nid] = _reach
+                    comp_keys = comp_keys + ('vav_box',)
+                    items = items + ((
+                        'VAV box {}'.format(nid), 'VAV box drop', None, box_drop),)
+                    box_here = True
+                else:
+                    # VAV off, or not a box: its own key, at the balancing
+                    # damper value for now (VAV plan item 9, review S4).
+                    comp_keys = comp_keys + ('mid_equip',)
+                    items = items + ((
+                        'Equipment {}'.format(nid),
+                        'Mid tree equipment (as damper)', None, _comp('mid_equip')),)
+
             term = all_terminals.get(nid)
             if term is not None:
                 # The diffuser the run ends at is itself a component drop.
                 keys_here = comp_keys + ('diffuser',)
                 comp_here = 0.0
                 for _k in keys_here:
-                    comp_here += fitting_tables.component_of(_k, comp_values)
+                    comp_here += _comp(_k)
                 _cfm, term_class, _family = term
                 key     = term_class or sys_class or 'Unknown'
                 # Known drop added once to the RETURN path only (the "Include
@@ -2085,6 +2309,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # critical path was 0.52.
                 if child_id in path:
                     continue
+                # Through mid tree equipment the walk only goes on along its
+                # own side: MP supply into a fan powered box never carries on
+                # out through the box's ducted return (review C2).
+                if mid_equip and not vav_checks.same_side(
+                        sys_class, _side_below(child_id)):
+                    continue
                 extra_fit = fit
                 extra_t   = tcount
                 extra_items = items
@@ -2119,27 +2349,105 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 'End of main tap', 'C {:.2f} in place of {:.2f}'.format(
                                     end_c, typ_c),
                                 dr.fpm, _sw),)
+                c_fpm, c_area = up_fpm, up_area
+                if box_here:
+                    # Past a box the air moves at the box OUTLET duct's
+                    # velocity, not the inlet runout's, so a fitting right on
+                    # the box discharge is priced at the right Pv.
+                    _od = _first_duct(child_id)
+                    if _od is not None:
+                        c_fpm, c_area = _od.fpm, _od.area_ft2
                 stack.append((child_id, fric, extra_fit, comp_keys, dcount,
-                              fcount, extra_t, dlen, up_fpm, up_area,
+                              fcount, extra_t, dlen, c_fpm, c_area,
                               sys_class, unpriced,
                               path | frozenset([child_id]), in_flex,
                               extra_items))
 
         if best_here:
             best[root_id] = best_here
+        if boxes_here:
+            box_reach[root_id] = boxes_here
 
     result = {}
+    sf = 1.0 + safety_pct / 100.0
     for root_id, per_class in best.items():
         out = {}
+        boxes = dict((bid, (v, v * sf))
+                     for bid, v in box_reach.get(root_id, {}).items())
         for sys_class, b in per_class.items():
             sub = (b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc'] +
                    b['filter_inwc'])
             b['subtotal_inwc'] = sub
-            b['total_inwc']    = sub * (1.0 + safety_pct / 100.0)
+            b['total_inwc']    = sub * sf
             b['truncated']     = root_id in truncated_roots
+            b['boxes']         = boxes
             out[sys_class]     = b
         result[root_id] = out
     return result
+
+
+def _vav_summary_lines(root_ids, vav_by_root, root_labels, critical, vav_set):
+    """The VAV BOXES block of the System Summary: per unit, each box's
+    straight duct at inlet and outlet, and (external static on) the MP loss to
+    its inlet and the pressure left at it.
+
+    Pressure left = unit max external static less the MP loss WITH the safety
+    factor, the same basis as the external static total it is compared to.
+    Only shown when the engineer entered the unit's max (VAV plan item 8).
+    """
+    mult = float(vav_set['straight_mult'])
+    umax = vav_set.get('unit_max_esp')
+    minimum = float(vav_set['min_box_inwc'])
+    lines = ['', 'VAV BOXES (MP supply {:.0f} FPM, {:.2f} in. wc per 100 ft; '
+                 'straight duct {:g} D at each box connector)'.format(
+                     float(vav_set['mp_fpm']), float(vav_set['mp_fric']), mult)]
+
+    def _run_text(run):
+        if run is None:
+            return 'not found'
+        if run.d_in <= 0:
+            return '{:.1f} ft (connector size unreadable)'.format(run.length_ft)
+        return '{:.1f} ft of {:.1f} ft{}'.format(
+            run.length_ft, run.required_ft(mult),
+            '' if run.ok(mult) else ' SHORT')
+
+    for rid in root_ids:
+        vs = vav_by_root.get(rid)
+        if vs is None or not vs.boxes:
+            continue
+        lines.append('  === {} ==='.format(root_labels.get(rid, 'id {}'.format(rid))))
+        boxes = {}
+        if critical is not None:
+            for leaf in (critical.get(rid) or {}).values():
+                boxes = leaf.get('boxes') or {}
+                break
+        for box in vs.boxes:
+            runs = vs.straight.get(box) or {}
+            outs = runs.get('outlet') or []
+            lines.append('    Box {}: inlet straight {}, outlet straight {}'.format(
+                box, _run_text(runs.get('inlet')),
+                ', '.join(_run_text(r) for r in outs) if outs else 'not found'))
+            if critical is None:
+                continue
+            reach = boxes.get(box)
+            if reach is None:
+                lines.append('      MP loss to inlet: not reached by the index run search')
+                continue
+            text = '      MP loss to inlet {:.3f} in. wc ({:.3f} with safety factor)'.format(
+                reach[0], reach[1])
+            left = vav_checks.pressure_left(umax, reach[1])
+            if left is None:
+                text += ', pressure left not checked (no unit max entered)'
+            else:
+                text += ', pressure left {:.3f} in. wc'.format(left)
+                if vav_checks.pressure_low(left, minimum):
+                    text += ', LOW: under the {:.2f} in. wc minimum'.format(minimum)
+            lines.append(text)
+        if vs.mp_terminals:
+            lines.append('    {} diffuser(s) on an MP main with no box upstream '
+                         '(flagged red on the duct feeding each).'.format(
+                             len(vs.mp_terminals)))
+    return lines
 
 
 # Minimum transition clearance between a duct and a genuinely smaller real
@@ -2167,6 +2475,14 @@ def _fails_height_clearance(dr, downstream_height_in):
             and my_height < downstream_height_in + _CLEARANCE_MARGIN_IN)
 
 
+def _limits_of(dr, custom_limits):
+    """(max_fpm, max_friction) for one duct: the one lookup every check uses
+    (vav_checks.limits_for), MP limits for a VAV medium pressure duct."""
+    return vav_checks.limits_for(dr.sys_class, custom_limits,
+                                 hvac_graph.FIRM_DEFAULTS,
+                                 getattr(dr, 'is_mp', False))
+
+
 def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     """Worst of velocity and friction checks (one-sided, unchanged), then
     downgraded to PURPLE if the duct is GREEN but oversized (a smaller
@@ -2191,9 +2507,12 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
 
     Returns (label, max_cap_cfm, reason) — reason is 'Velocity', 'Friction',
     'Oversized', 'Diffuser/Duct Clearance', or '' (GREEN/GRAY, nothing to flag).
+
+    A VAV medium pressure duct (dr.is_mp) is judged against the MP limits and
+    is never PURPLE: MP supply is sized for the boxes' minimum inlet pressure,
+    so a low velocity there is not an oversize to report.
     """
-    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-    max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
+    max_fpm, max_friction = _limits_of(dr, custom_limits)
     tol_fac = tol_pct / 100.0
 
     # Velocity check (CFM vs capacity at max FPM)
@@ -2229,7 +2548,7 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     # GREEN ducts get downgraded to PURPLE if a smaller standard size — both
     # width and height at least one nominal size down — would still satisfy
     # both max FPM and max friction. i.e. it's oversized.
-    if combined == 'GREEN':
+    if combined == 'GREEN' and not getattr(dr, 'is_mp', False):
         _, sugg_area = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
         if sugg_area is not None:
             combined = 'PURPLE'
@@ -2406,8 +2725,7 @@ def _suggest_shrink_info(dr, custom_limits, downstream_height_in=None):
     downstream_height_in is actually smaller than the candidate — a
     same-size or larger downstream connection needs no transition margin.
     """
-    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-    max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
+    max_fpm, max_friction = _limits_of(dr, custom_limits)
     if dr.cfm <= 0 or max_fpm <= 0:
         return '-', None
 
@@ -2488,8 +2806,7 @@ def _suggest_size_info(dr, custom_limits, downstream_height_in=None):
     candidate that would leave less than the required 2" clearance margin
     wherever downstream_height_in is actually smaller than the candidate.
     """
-    defaults = hvac_graph.FIRM_DEFAULTS.get(dr.sys_class, (600, 0.05))
-    max_fpm, max_friction = custom_limits.get(dr.sys_class, defaults)
+    max_fpm, max_friction = _limits_of(dr, custom_limits)
     if dr.cfm <= 0 or max_fpm <= 0:
         return '-', None
 
@@ -2633,7 +2950,7 @@ _LEFT_COLUMNS = ('reason', 'role')
 
 def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id,
-                        show_r_marker_note=False):
+                        show_r_marker_note=False, legend_notes=()):
     """Create a Drafting View with a System Summary block + flagged-duct table
     + color legend, in the RJA table look.
 
@@ -2709,6 +3026,10 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                             '(R): Most restrictive diffuser. It ends the index '
                             'run that sets the required external static '
                             'pressure for its equipment or system.')
+            y -= row_h
+        # Extra lines under the swatches, e.g. the VAV limits and sources.
+        for note in legend_notes:
+            rja_drafting._t(st, sched_view, swatch + pad * 3.0, y, note)
             y -= row_h
         rja_drafting._outline(st, sched_view, 0.0, legend_top, total_w, y)
 
@@ -2898,9 +3219,18 @@ def main():
     if dialog_result is None:
         output.print_md('**Cancelled.**')
         return
-    (custom_limits, tol_pct, include_oa, selected_cols, full_diag,
-     ext_static, safety_pct, c_values, comp_values, calc_basis,
-     filter_inwc) = dialog_result
+    custom_limits = dialog_result['limits']
+    tol_pct       = dialog_result['tol_pct']
+    selected_cols = dialog_result['selected_cols']
+    full_diag     = dialog_result['full_diag']
+    ext_static    = dialog_result['ext_static']
+    safety_pct    = dialog_result['safety_pct']
+    c_values      = dialog_result['c_values']
+    comp_values   = dialog_result['comp_values']
+    calc_basis    = dialog_result['calc_basis']
+    filter_inwc   = dialog_result['filter_inwc']
+    vav_on        = dialog_result['vav']
+    vav_set       = dialog_result['vav_settings']
 
     # Every run, even at the standard values, so nothing set by an earlier run
     # in the same session carries over.
@@ -2916,8 +3246,11 @@ def main():
                 calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                 calc_basis['air_density']))
 
-    if include_oa:
-        output.print_md('Scope: **System-level (Supply, Return, Outside Air — upstream and downstream)**')
+    if vav_on:
+        output.print_md(
+            '**VAV System is on:** supply mains between the unit and the VAV box '
+            'inlets are checked as medium pressure at {:.0f} FPM and {:.2f} in. '
+            'wc/100 ft.'.format(float(vav_set['mp_fpm']), float(vav_set['mp_fric'])))
     if full_diag:
         output.print_md('**Full System Diagnostic is on** — the table below and the '
                         'sheet schedule will list every duct, and every duct will '
@@ -2980,11 +3313,13 @@ def main():
     all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
     all_zero_terms   = set()
     all_missing_flow = set()
+    nodes_by_root    = {}   # root int_id -> set of node ids (parallel unit check)
+    vav_by_root      = {}   # root int_id -> vav_checks.VavSystem (VAV on only)
 
     for sel_elem in sel_elems:
         output.print_md('Traversing **{}** (id {})...'.format(
             _elem_name(sel_elem), eid_int(sel_elem.Id)))
-        net = hvac_graph.build_network(sel_elem, doc, equipment_level=(not include_oa))
+        net = hvac_graph.build_network(sel_elem, doc, equipment_level=True)
 
         if net.errors:
             for e in net.errors:
@@ -3005,6 +3340,19 @@ def main():
         # way can be added into ONE system's external static further down.
         if str(net.ahu_method).startswith('fallback'):
             duct_rooted_ids.add(eid_int(net.root.Id))
+
+        # VAV: boxes, the MP supply and the straight duct off each box. Run
+        # before the warnings print so an unreadable box direction is listed.
+        if vav_on:
+            vs = hvac_graph.analyze_vav(net, straight=True)
+            vav_by_root[eid_int(net.root.Id)] = vs
+            output.print_md('  VAV: {} box(es), {} MP supply element(s).'.format(
+                len(vs.boxes), len(vs.mp_ids)))
+            if not vs.is_vav:
+                output.print_md('  :warning: VAV System is ticked but no VAV box '
+                                'was found on this unit\'s supply. Judged as a '
+                                'constant volume system.')
+        nodes_by_root[eid_int(net.root.Id)] = set(net.nodes.keys())
 
         if net.warnings:
             for w in net.warnings:
@@ -3054,6 +3402,44 @@ def main():
     output.print_md('**Total: {} systems  |  {} ducts**'.format(
         len(ahu_labels), len(all_duct_results)))
 
+    # 4-VAV. Parallel units, the MP set, and the VAV red rules.
+    #
+    # Parallel: two picked units sharing any ductwork, or (VAV on) equipment
+    # reached through its supply OUTLET. Either way that unit's external
+    # static is not one fan against one path, so it is marked unreliable.
+    parallel_roots = vav_checks.overlapping_roots(nodes_by_root)
+    for rid, vs in vav_by_root.items():
+        if vs.reversed:
+            parallel_roots.add(rid)
+    for rid in sorted(parallel_roots):
+        output.print_md(':warning: **Parallel units on one main** at {}. Its '
+                        'external static is unreliable.'.format(
+                            root_labels.get(rid, 'id {}'.format(rid))))
+
+    mp_ids = set()
+    vav_box_ids = set()
+    inlet_runout_ids = set()   # MP with exactly one box downstream (review W5)
+    for vs in vav_by_root.values():
+        mp_ids |= vs.mp_ids
+        vav_box_ids |= set(vs.boxes)
+        inlet_runout_ids |= vs.inlet_runout_ids
+    for dr in all_duct_results.values():
+        dr.is_mp = dr.element_id in mp_ids
+
+    # int duct id -> RED reason. First rule to claim a duct keeps it, in this
+    # order: flex at a box inlet, short straight inlet, short straight outlet,
+    # a diffuser on an MP main. Applied after the normal label, so it
+    # overrides it (these are installation faults, like the clearance rule).
+    vav_red = {}
+    if vav_on:
+        vav_red = vav_checks.red_reasons(
+            vav_by_root.values(),
+            set(dr.element_id for dr in all_duct_results.values()
+                if dr.is_mp and getattr(dr, 'is_flex', False)),
+            vav_set['straight_mult'],
+            lambda n: hvac_graph.node_kind(all_nodes.get(n)),
+            all_children, vav_checks.parents_of(all_children))
+
     # 4a. Branch vs main, against the merged graph.
     #
     # A duct is a BRANCH when exactly one terminal is reachable downstream of
@@ -3089,6 +3475,16 @@ def main():
     role_counts   = {'Main': 0, 'Branch': 0}
 
     for eid in all_duct_results.keys():
+        if all_duct_results[eid].is_mp:
+            # VAV medium pressure: always a main. With two or more boxes
+            # downstream it is judged against the MP limits; with one it is
+            # that box's inlet runout, sized to the box (Colin 2026-10-22).
+            branch_ctx[eid] = None
+            duct_roles[eid] = (vav_checks.ROLE_INLET
+                               if eid_int(eid) in inlet_runout_ids
+                               else vav_checks.ROLE_MP)
+            role_counts['Main'] += 1
+            continue
         tset = downstream_terms.get(eid_int(eid), set())
         term_elem = None
         if len(tset) == 1:
@@ -3157,11 +3553,14 @@ def main():
     # of the diffuser's real pass/fail color — never replacing it.
     restrictive_terminal_ids = set()
 
+    critical = None
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
             all_nodes, safety_pct, c_values, comp_values,
-            duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc)
+            duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc,
+            vav_box_ids=vav_box_ids,
+            vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
 
@@ -3207,6 +3606,13 @@ def main():
                         parts.append('{} x{} @ {:.3f}'.format(
                             _lbl, tally[_key],
                             fitting_tables.component_of(_key, comp_values)))
+                if 'vav_box' in tally:
+                    parts.append('VAV box x{} @ {:.3f}'.format(
+                        tally['vav_box'], float(vav_set['box_drop'])))
+                if 'mid_equip' in tally:
+                    parts.append('Mid tree equipment (as damper) x{} @ {:.3f}'.format(
+                        tally['mid_equip'],
+                        fitting_tables.component_of('damper', comp_values)))
                 summary_lines.append(
                     '      Components         {:.3f} in. wc   ({})'.format(
                         c['component_inwc'],
@@ -3281,6 +3687,18 @@ def main():
                 # One side only. Held back, not warned about yet: whether it is
                 # half of a system depends on what else was selected.
                 one_sided.append((root_id, unit_total, sides, supply is not None))
+            if (vav_on and sides and vav_set.get('unit_max_esp') is not None
+                    and root_id in vav_by_root and vav_by_root[root_id].is_vav):
+                _umax = float(vav_set['unit_max_esp'])
+                summary_lines.append(
+                    '    Unit max external static {:.3f} in. wc: computed {:.3f} in. wc '
+                    '({}), {}.'.format(_umax, unit_total, ' + '.join(sides),
+                                       'within it' if unit_total <= _umax + 1e-9
+                                       else 'EXCEEDS IT'))
+            if root_id in parallel_roots:
+                summary_lines.append(
+                    '    WARNING: Parallel units on one main. This external static '
+                    'is unreliable.')
 
         # One-sided roots. A picked supply duct and return duct that reach a
         # unit both re-root at it and are complete above. With NO unit
@@ -3335,10 +3753,20 @@ def main():
                 '  NOT INCLUDED: filter, coil and cabinet, already in the published '
                 'ESP. Fire and backdraft dampers not priced.')
 
+    if vav_on and any(vs.boxes for vs in vav_by_root.values()):
+        summary_lines.extend(_vav_summary_lines(
+            all_root_ids, vav_by_root, root_labels, critical, vav_set))
+
     # Folded once here so the drafting view and the console render identical
     # text. print_code, not print_md: markdown collapses leading whitespace, and
     # the per-equipment blocks are indented to show what belongs to which unit.
     summary_lines = _wrap_summary_lines(summary_lines)
+
+    # The legend names the MP limits and their sources when VAV is on.
+    legend_notes = []
+    if vav_on:
+        legend_notes = _wrap_summary_lines(
+            ['{}: {}'.format(lab, val) for lab, val in vav_checks.basis_rows(vav_set)])
 
     output.print_md('---')
     output.print_md('### System Summary')
@@ -3435,8 +3863,19 @@ def main():
         for eid, dr in all_duct_results.items():
             downstream_h = hvac_graph.max_downstream_height_in(eid_int(eid), all_nodes, all_children)
             downstream_heights[eid] = downstream_h
-            label, green_cap, reason, branch_res = _label_duct(
-                dr, custom_limits, tol_pct, downstream_h, branch_ctx.get(eid))
+            if dr.element_id in inlet_runout_ids:
+                # A VAV inlet runout is sized to its box by the engineer: not
+                # judged on the MP limits, never purple. Only the clearance
+                # rule and the VAV red rules below can override it.
+                label, green_cap, reason, branch_res = (
+                    'GREEN', 0.0, vav_checks.REASON_INLET_OK, None)
+                if _fails_height_clearance(dr, downstream_h):
+                    label, reason = 'RED', 'Diffuser/Duct Clearance'
+            else:
+                label, green_cap, reason, branch_res = _label_duct(
+                    dr, custom_limits, tol_pct, downstream_h, branch_ctx.get(eid))
+            if dr.element_id in vav_red:
+                label, reason = 'RED', vav_red[dr.element_id]
             duct_labels[eid]    = (label, green_cap, reason)
             branch_results[eid] = branch_res
             if reason == 'Diffuser/Duct Clearance':
@@ -3517,6 +3956,8 @@ def main():
             cells = _row_cells(lbl, dr, reason, duct_roles.get(eid, 'Main'),
                                branch_results.get(eid), custom_limits, tol_pct,
                                downstream_heights.get(eid))
+            if dr.element_id in inlet_runout_ids:
+                cells['required'] = '-'   # sized to the box, no MP suggestion
             row_cells_by_eid[eid] = cells
             flagged_items.append((lbl, dr, cells))
 
@@ -3679,7 +4120,8 @@ def main():
                 sched_view, content_h, total_w = _build_summary_view(
                     doc, summary_lines, [item[2] for item in flagged_items],
                     selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
-                    show_r_marker_note=bool(restrictive_terminal_ids))
+                    show_r_marker_note=bool(restrictive_terminal_ids),
+                    legend_notes=legend_notes)
                 if sched_view is not None:
                     # X fixed by hand in Revit (see diagram note above) and read
                     # back via Revit MCP. Y keeps the original bottom-anchored,
@@ -3725,10 +4167,18 @@ def main():
     output.print_md('| System | Max Velocity | Max Friction |')
     output.print_md('| --- | --- | --- |')
     for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air', 'Transfer Air'):
-        defaults = hvac_graph.FIRM_DEFAULTS.get(sys_class, (600, 0.05))
-        mx_fpm, mx_fric = custom_limits.get(sys_class, defaults)
+        mx_fpm, mx_fric = vav_checks.limits_for(
+            sys_class, custom_limits, hvac_graph.FIRM_DEFAULTS)
         output.print_md('| {} | {:.0f} FPM | {:.3f} iwc/100 |'.format(
             sys_class, mx_fpm, mx_fric))
+    if vav_on:
+        mx_fpm, mx_fric = vav_checks.limits_for(
+            'Supply Air', custom_limits, hvac_graph.FIRM_DEFAULTS, is_mp=True)
+        output.print_md('| Supply Air, MP (VAV, unit to box inlets) | {:.0f} FPM | '
+                        '{:.3f} iwc/100 |'.format(mx_fpm, mx_fric))
+        output.print_md('')
+        output.print_md('**VAV System.** ' + ' '.join(
+            '{}: {}'.format(lab, val) for lab, val in vav_checks.basis_rows(vav_set)))
     output.print_md('')
     output.print_md('**Branch ducts — checked against the diffuser sizing tables '
                     '(MEP Design Standards, section 1), not against velocity or friction.** '

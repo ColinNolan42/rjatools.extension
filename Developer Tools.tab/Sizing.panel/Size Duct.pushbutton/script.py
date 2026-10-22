@@ -2,7 +2,9 @@
 # Size Duct.pushbutton/script.py
 # Sizes every main duct to the RJA velocity and friction limits and writes
 # the sizes into the model. Branches, takeoff boots and diffusers are never
-# touched.
+# touched. The pick is the RTU or AHU only; a duct or a VAV box is refused.
+# With VAV System ticked, the supply mains between the unit and the box
+# inlets are sized to the MP limits (lib/vav_checks.py).
 #
 # The pipeline lives in lib/duct_size_run.py, the sizing rules in
 # lib/duct_sizing.py, and the traversal is the Duct Performance engine
