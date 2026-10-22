@@ -8,9 +8,10 @@
 #   write ducts -> match the fittings between two mains -> audit every
 #   joint -> report
 #
-# Mains only (Colin, 2026-10-20). Branches, takeoff boots and diffusers are
-# never touched: the auto-sizing diffusers set the branch, and Duct
-# Performance reports one that is off. A fitting is only resized when every
+# Mains only (Colin, 2026-10-20). Branches to an RJA auto-sizing diffuser,
+# takeoff boots and diffusers are never touched: the auto-sizing diffuser
+# sets the branch, and Duct Performance reports one that is off. A branch to
+# any other diffuser is sized like a main (Colin, 2026-10-22). A fitting is only resized when every
 # duct it joins is a main, so a tap (main on one side, branch on the other)
 # is left alone without needing its family name.
 #
@@ -228,10 +229,17 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
         shape, current = duct_shape_and_size(dr.elem)
         below = downstream.get(nid, set())
         is_mp = nid in mp_ids
+        # A branch is left alone only when it feeds an RJA auto-sizing
+        # diffuser; a branch to any other diffuser is sized like a main
+        # (Colin, 2026-10-22).
+        is_branch = len(below) == 1 and not is_mp
+        if is_branch:
+            term = net.nodes.get(next(iter(below)))
+            is_branch = term is not None and hvac_graph.is_auto_sizing_diffuser(term)
         plan = duct_sizing.plan_duct(
             nid, shape, current, dr.cfm, dr.sys_class, limits,
             hvac_graph.duct_friction_loss_per_100ft,
-            is_branch=(len(below) == 1 and not is_mp),
+            is_branch=is_branch,
             is_flex=dr.is_flex,
             is_existing=not is_new_construction(doc, dr.elem),
             flow_missing=bool(below & no_flow),
