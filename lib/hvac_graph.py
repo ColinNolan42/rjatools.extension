@@ -900,6 +900,23 @@ def _ge_in(a, b):
 _SIZING_WARNING_PARAM = 'Sizing Warning'
 
 
+def is_auto_sizing_diffuser(elem):
+    """True when the terminal is one of RJA's CFM auto-sizing families, read
+    from the Sizing Warning instance parameter all seven carry (confirmed live
+    2026-10-22). A parameter, not a family name. Any other diffuser is not
+    trusted to size itself, so its branch gets the main duct check (Colin,
+    2026-10-22)."""
+    for holder in (elem, getattr(elem, 'Symbol', None)):
+        if holder is None:
+            continue
+        try:
+            if holder.LookupParameter(_SIZING_WARNING_PARAM) is not None:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
     """Branch to an auto-sized linear slot diffuser (Colin, 2026-10-22).
 

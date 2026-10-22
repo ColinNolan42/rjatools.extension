@@ -2650,6 +2650,12 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
 
     kind, terminal_elem, terminal_cfm = branch_ctx
 
+    if terminal_elem is not None and not hvac_graph.is_auto_sizing_diffuser(terminal_elem):
+        # Not an RJA auto-sizing diffuser: nothing sized the branch to it, so
+        # the branch gets the main duct check (Colin, 2026-10-22).
+        label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
+        return label, cap, reason, None
+
     if kind == 'round_sidewall':
         # Round sidewall diffusers have no table yet; Colin plans to add round
         # diffuser data later (2026-10-16). Fall back to the main check.
@@ -4192,6 +4198,9 @@ def main():
                     'slot family: the branch duct shall be at least the slot inlet '
                     'diameter, and a filled Sizing Warning on the slot is red. No '
                     'neck table is published for slots.')
+    output.print_md('')
+    output.print_md('Branches feeding a diffuser that is **not an RJA auto-sizing family** '
+                    '(no Sizing Warning parameter) get the main velocity/friction check.')
     output.print_md('')
     output.print_md('| Color | Ducts | Fittings, Accessories & Diffusers | Meaning |')
     output.print_md('| --- | --- | --- | --- |')
