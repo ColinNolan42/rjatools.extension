@@ -895,6 +895,71 @@ def _ge_in(a, b):
     return float(a) >= float(b) - diffuser_tables.SIZE_TOL_IN
 
 
+# Text parameter the auto-sizing families fill when the Flow is past the Type's
+# Max CFM (Smart Diffuser Family over-capacity warning). Blank means in range.
+_SIZING_WARNING_PARAM = 'Sizing Warning'
+
+
+def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
+    """Branch to an auto-sized linear slot diffuser (Colin, 2026-10-22).
+
+    The design standard publishes no neck table for slots, and the slot
+    family sizes its own round inlet, so the family is trusted the same way
+    the ceiling and sidewall tables are: (a) the diffuser passes unless its
+    Sizing Warning text is filled, and (b) the branch duct must be at least
+    the inlet diameter. No velocity or friction verdict, like every branch.
+    """
+    res.sys_class = terminal_sys_class(terminal_elem)
+    if geom[0] != 'round' or not geom[1]:
+        res.status = 'GRAY'
+        res.reason = 'Cannot check: slot inlet unreadable'
+        log.warning('branch_diffuser_check: slot id=%s NOT CHECKED, inlet %s', tid, geom[0])
+        return res
+    inlet_dia = geom[1]
+    res.diffuser_size = diffuser_tables.round_size_label(inlet_dia)
+    res.required_size = res.diffuser_size
+
+    warning = ''
+    for holder in (terminal_elem, getattr(terminal_elem, 'Symbol', None)):
+        if holder is None:
+            continue
+        try:
+            p = holder.LookupParameter(_SIZING_WARNING_PARAM)
+        except Exception:
+            p = None
+        if p is not None:
+            warning = (p.AsString() or '').strip()
+            break
+    diffuser_ok = not warning
+
+    branch_ok = None
+    if installed_branch_size is None:
+        unverified = 'branch duct size unreadable'
+    elif isinstance(installed_branch_size, (tuple, list)):
+        res.installed_size = diffuser_tables.rect_size_label(
+            installed_branch_size[0], installed_branch_size[1])
+        unverified = 'rect duct on round inlet'
+    else:
+        duct_dia = float(installed_branch_size)
+        res.installed_size = diffuser_tables.round_size_label(duct_dia)
+        branch_ok = _ge_in(duct_dia, inlet_dia)
+        unverified = ''
+
+    if not diffuser_ok and branch_ok is False:
+        res.status, res.reason = 'RED', 'Diffuser + branch undersized'
+    elif not diffuser_ok:
+        res.status, res.reason = 'RED', 'Diffuser undersized for CFM'
+    elif branch_ok is False:
+        res.status, res.reason = 'RED', 'Branch smaller than diffuser'
+    elif branch_ok is None:
+        res.status, res.reason = 'GRAY', 'Cannot check: ' + unverified
+    else:
+        res.status, res.reason = 'GREEN', 'BRANCH DUCTING SIZED OFF DIFFUSER'
+    log.info('branch_diffuser_check: slot id=%s inlet=%s installed=%s warning=%r -> %s %s',
+             tid, res.diffuser_size, res.installed_size, warning, res.status, res.reason)
+    return res
+
+
 def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
     """Judge one branch duct against the published diffuser tables.
 
@@ -943,6 +1008,9 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
     # Same classifier the caller used, so a slot or round sidewall can never
     # be re-read here as a ceiling diffuser from its round neck.
     res.category = classify_diffuser_branch(terminal_elem)
+
+    if res.category == 'slot':
+        return _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid)
 
     if res.category not in ('ceiling', 'sidewall'):
         res.status = 'GRAY'

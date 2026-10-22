@@ -16,9 +16,9 @@ Mains and branches are judged by two different methods:
           feeds that one diffuser is redundant and produces false flags. What
           actually matters on a branch is whether the diffuser is big enough
           for its own CFM and whether the duct is big enough for the diffuser.
-          Slot diffusers are the exception: the design standard publishes no
-          duct/neck size breakpoints for them, so a slot branch falls back to
-          the same velocity/friction check a main gets.
+          Slot diffusers have no published neck table, so a slot branch is
+          judged off the auto-sized slot family: its inlet diameter and its
+          Sizing Warning (Colin, 2026-10-22).
 
 The diffuser/duct height clearance check still applies to both, and still
 overrides either verdict - it is an installability problem, not a sizing one.
@@ -2494,8 +2494,8 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     independent of velocity/friction).
 
     MAIN DUCTS ONLY as of the branch/diffuser split, with one exception: a
-    branch feeding a slot diffuser also comes through here, because the design
-    standard publishes no duct/neck size table to check a slot branch against.
+    branch feeding a round sidewall diffuser also comes through here (no table
+    yet). Slot branches are judged off the slot family since 2026-10-22.
     Behaviour is unchanged from before the split — see _branch_duct_label()
     for what every other branch gets instead, and _label_duct() for the
     dispatch between them.
@@ -2650,13 +2650,11 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
 
     kind, terminal_elem, terminal_cfm = branch_ctx
 
-    if kind in ('slot', 'round_sidewall'):
-        # No published duct/neck size breakpoints exist for slot diffusers
-        # (the standard gives capacity per slot length and open-slot count
-        # instead), so there is nothing to size-match against. Fall back to
-        # the main check rather than report the branch as unverifiable.
-        # Round sidewall diffusers have no table yet either; Colin plans to
-        # add round diffuser data later (2026-10-16).
+    if kind == 'round_sidewall':
+        # Round sidewall diffusers have no table yet; Colin plans to add round
+        # diffuser data later (2026-10-16). Fall back to the main check.
+        # Slots are judged off the auto-sized family instead, in
+        # hvac_graph.branch_diffuser_check (Colin, 2026-10-22).
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
         return label, cap, reason, None
 
@@ -4190,9 +4188,10 @@ def main():
                     'failing is red; there is no yellow band on a size match. Oversize is '
                     'not checked on branches.')
     output.print_md('')
-    output.print_md('Branches feeding a **slot diffuser** fall back to the main '
-                    'velocity/friction check above — the design standard publishes no '
-                    'duct or neck size breakpoints for slot diffusers to check against.')
+    output.print_md('Branches feeding a **slot diffuser** are judged off the auto-sized '
+                    'slot family: the branch duct shall be at least the slot inlet '
+                    'diameter, and a filled Sizing Warning on the slot is red. No '
+                    'neck table is published for slots.')
     output.print_md('')
     output.print_md('| Color | Ducts | Fittings, Accessories & Diffusers | Meaning |')
     output.print_md('| --- | --- | --- | --- |')
