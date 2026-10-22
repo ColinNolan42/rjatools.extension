@@ -79,6 +79,7 @@ from System.Windows.Controls import (
 from System.Windows.Media import SolidColorBrush, Colors
 from System.Windows import FontWeights
 from System.Windows import GridLength
+from System.Windows import Visibility
 
 doc    = __revit__.ActiveUIDocument.Document
 uidoc  = __revit__.ActiveUIDocument
@@ -281,6 +282,16 @@ _SETTINGS_XAML = '''
                                      ToolTip="Known filter drop in in. wc. Cannot be negative."/>
                             <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
                         </StackPanel>
+                        <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
+                            <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
+                            <Grid x:Name="grid_vav_static" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                            </Grid>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
@@ -436,6 +447,8 @@ def _show_velocity_settings_xaml(use_theme):
     cb_vav = N('cb_vav')
     exp_vav = N('exp_vav')
     grid_vav = N('grid_vav')
+    pnl_vav_static = N('pnl_vav_static')
+    grid_vav_static = N('grid_vav_static')
     grid_limits = N('grid_limits')
     tb_tol = N('tb_tol')
     grid_cols = N('grid_cols')
@@ -588,21 +601,24 @@ def _show_velocity_settings_xaml(use_theme):
           hvac_graph.STANDARD_AIR_DENSITY_LB_FT3)],
         basis_boxes, basis_order, '%g')
 
-    # ── VAV rows (vav_checks.VAV_FIELDS; unit max ESP may be blank) ─────────
+    # ── VAV rows: limits in the VAV section, box and static fields under the
+    #    external static option (unit max ESP may be blank) ─────────────────
     vav_boxes = {}
-    for r, (key, label, unit, default, _kind) in enumerate(vav_checks.VAV_FIELDS):
-        _add_row_def(grid_vav)
-        lb = TextBlock()
-        lb.Text = label
-        lb.Margin = Thickness(0, 2, 12, 2)
-        lb.VerticalAlignment = VerticalAlignment.Center
-        _put(grid_vav, lb, 0, r)
-        tb = _box(vav_checks.format_default(default), 64, Thickness(0, 2, 8, 2))
-        _put(grid_vav, tb, 1, r)
-        vav_boxes[key] = tb
-        ex = ui_helpers.rja_hint_block(win, unit)
-        ex.VerticalAlignment = VerticalAlignment.Center
-        _put(grid_vav, ex, 2, r)
+    for grid, fields in ((grid_vav, vav_checks.VAV_LIMIT_FIELDS),
+                         (grid_vav_static, vav_checks.VAV_STATIC_FIELDS)):
+        for r, (key, label, unit, default, _kind) in enumerate(fields):
+            _add_row_def(grid)
+            lb = TextBlock()
+            lb.Text = label
+            lb.Margin = Thickness(0, 2, 12, 2)
+            lb.VerticalAlignment = VerticalAlignment.Center
+            _put(grid, lb, 0, r)
+            tb = _box(vav_checks.format_default(default), 64, Thickness(0, 2, 8, 2))
+            _put(grid, tb, 1, r)
+            vav_boxes[key] = tb
+            ex = ui_helpers.rja_hint_block(win, unit)
+            ex.VerticalAlignment = VerticalAlignment.Center
+            _put(grid, ex, 2, r)
 
     # ── calculation basis reference (condensed) ─────────────────────────────
     ref_rows = [
@@ -648,6 +664,10 @@ def _show_velocity_settings_xaml(use_theme):
         pnl_static.IsEnabled = master
         pnl_static.Opacity = 1.0 if master else 0.55
         tb_filter.IsEnabled = bool(cb_filter.IsChecked)
+        # VAV box and static fields appear only with VAV and external static
+        # both ticked (Colin, 2026-10-22).
+        both = master and bool(cb_vav.IsChecked)
+        pnl_vav_static.Visibility = Visibility.Visible if both else Visibility.Collapsed
     cb_static.Checked += sync_enable
     cb_static.Unchecked += sync_enable
     cb_filter.Checked += sync_enable
@@ -660,6 +680,7 @@ def _show_velocity_settings_xaml(use_theme):
         exp_vav.Opacity = 1.0 if on else 0.55
         if not on:
             exp_vav.IsExpanded = False
+        sync_enable()
     cb_vav.Checked += sync_vav
     cb_vav.Unchecked += sync_vav
     sync_enable()
@@ -738,10 +759,13 @@ def _show_velocity_settings_xaml(use_theme):
         vav = bool(cb_vav.IsChecked)
         vav_settings = vav_checks.default_settings()
         if vav:
-            for key, label, _unit, _default, kind in vav_checks.VAV_FIELDS:
+            fields = [(f, (exp_vav,)) for f in vav_checks.VAV_LIMIT_FIELDS]
+            if ext_static:
+                fields += [(f, ()) for f in vav_checks.VAV_STATIC_FIELDS]
+            for (key, label, _unit, _default, kind), exps in fields:
                 v, err = vav_checks.parse_field(vav_boxes[key].Text, kind)
                 if err:
-                    errors.append((vav_boxes[key], label + ' ' + err + '.', (exp_vav,)))
+                    errors.append((vav_boxes[key], label + ' ' + err + '.', exps))
                 else:
                     vav_settings[key] = v
 
@@ -922,40 +946,49 @@ def _show_velocity_settings_dialog_legacy():
     cb_vav.Margin  = Thickness(2, 0, 0, 2)
     outer.Children.Add(cb_vav)
 
+    vav_boxes = {}
+
+    def _vav_rows(panel, fields):
+        for key, label, unit, default, _kind in fields:
+            rp = StackPanel()
+            rp.Orientation = Orientation.Horizontal
+            rp.Margin = Thickness(0, 1, 0, 1)
+            lb = TextBlock()
+            lb.Text = label
+            lb.Width = 250
+            lb.VerticalAlignment = VerticalAlignment.Center
+            rp.Children.Add(lb)
+            tb = TextBox()
+            tb.Text = vav_checks.format_default(default)
+            tb.Width = 55
+            tb.Margin = Thickness(4, 0, 6, 0)
+            tb.VerticalAlignment = VerticalAlignment.Center
+            rp.Children.Add(tb)
+            ex = TextBlock()
+            ex.Text = unit
+            ex.Foreground = SolidColorBrush(Colors.DimGray)
+            ex.VerticalAlignment = VerticalAlignment.Center
+            rp.Children.Add(ex)
+            panel.Children.Add(rp)
+            vav_boxes[key] = tb
+
     vav_panel = StackPanel()
     vav_panel.Margin = Thickness(22, 2, 0, 2)
-    vav_boxes = {}
-    for key, label, unit, default, _kind in vav_checks.VAV_FIELDS:
-        rp = StackPanel()
-        rp.Orientation = Orientation.Horizontal
-        rp.Margin = Thickness(0, 1, 0, 1)
-        lb = TextBlock()
-        lb.Text = label
-        lb.Width = 250
-        lb.VerticalAlignment = VerticalAlignment.Center
-        rp.Children.Add(lb)
-        tb = TextBox()
-        tb.Text = vav_checks.format_default(default)
-        tb.Width = 55
-        tb.Margin = Thickness(4, 0, 6, 0)
-        tb.VerticalAlignment = VerticalAlignment.Center
-        rp.Children.Add(tb)
-        ex = TextBlock()
-        ex.Text = unit
-        ex.Foreground = SolidColorBrush(Colors.DimGray)
-        ex.VerticalAlignment = VerticalAlignment.Center
-        rp.Children.Add(ex)
-        vav_panel.Children.Add(rp)
-        vav_boxes[key] = tb
+    _vav_rows(vav_panel, vav_checks.VAV_LIMIT_FIELDS)
     outer.Children.Add(vav_panel)
+
+    # Box and static fields, placed under the external static option below and
+    # shown only with VAV and external static both ticked (Colin, 2026-10-22).
+    vav_static_panel = StackPanel()
+    vav_static_panel.Margin = Thickness(22, 2, 0, 6)
+    _vav_rows(vav_static_panel, vav_checks.VAV_STATIC_FIELDS)
 
     def _sync_vav(s=None, e=None):
         on = bool(cb_vav.IsChecked)
         vav_panel.IsEnabled = on
         vav_panel.Opacity = 1.0 if on else 0.55
-    cb_vav.Checked += _sync_vav
-    cb_vav.Unchecked += _sync_vav
-    _sync_vav()
+        both = on and bool(cb_static.IsChecked)
+        vav_static_panel.Visibility = Visibility.Visible if both else Visibility.Collapsed
 
     oa_sep = Separator()
     oa_sep.Margin = Thickness(0, 8, 0, 10)
@@ -1129,6 +1162,13 @@ def _show_velocity_settings_dialog_legacy():
     filt_suffix.VerticalAlignment = VerticalAlignment.Center
     filt_panel.Children.Add(filt_suffix)
     outer.Children.Add(filt_panel)
+
+    outer.Children.Add(vav_static_panel)
+    cb_vav.Checked += _sync_vav
+    cb_vav.Unchecked += _sync_vav
+    cb_static.Checked += _sync_vav
+    cb_static.Unchecked += _sync_vav
+    _sync_vav()
 
     # Fitting C values and component drops are GIVENS with an override, not
     # questions the dialog asks every run. Colin, 2026-09-24: "remove diffuser
@@ -1331,7 +1371,10 @@ def _show_velocity_settings_dialog_legacy():
             vav = bool(cb_vav.IsChecked)
             vav_settings = vav_checks.default_settings()
             if vav:
-                for key, label, _unit, _default, kind in vav_checks.VAV_FIELDS:
+                fields = vav_checks.VAV_LIMIT_FIELDS
+                if bool(cb_static.IsChecked):
+                    fields = vav_checks.VAV_FIELDS
+                for key, label, _unit, _default, kind in fields:
                     v, err = vav_checks.parse_field(vav_boxes[key].Text, kind)
                     if err:
                         forms.alert('{} {}.'.format(label, err), title='Invalid Input')

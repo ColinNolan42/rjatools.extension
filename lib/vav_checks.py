@@ -60,17 +60,23 @@ REASON_FLEX_AT_INLET = 'Flex at VAV inlet'
 # Dialog fields: (key, label, unit hint, default, kind). kind is one of
 # 'pos' (> 0), 'nonneg' (>= 0) or 'pos_or_blank' (blank allowed, else > 0).
 # One list for the themed dialog, the legacy dialog and the tests.
-VAV_FIELDS = (
+# Limit fields sit in the VAV section; static fields sit under the external
+# static option and show only when VAV and external static are both ticked
+# (Colin, 2026-10-22).
+VAV_LIMIT_FIELDS = (
     ('mp_fpm', 'MP supply max velocity', 'FPM', MP_DEFAULT_FPM, 'pos'),
     ('mp_fric', 'MP supply max friction', 'in. wc/100 ft', MP_DEFAULT_FRICTION, 'pos'),
     ('straight_mult', 'Straight duct at box inlet and outlet', 'x D',
      DEFAULT_STRAIGHT_MULTIPLIER, 'pos'),
+)
+VAV_STATIC_FIELDS = (
     ('box_drop', 'VAV box pressure drop', 'in. wc', DEFAULT_BOX_DROP_INWC, 'nonneg'),
     ('unit_max_esp', 'Unit max external static', 'in. wc, blank for no check',
      DEFAULT_UNIT_MAX_ESP_INWC, 'pos_or_blank'),
     ('min_box_inwc', 'Minimum pressure available at a box', 'in. wc',
      DEFAULT_MIN_BOX_PRESSURE_INWC, 'nonneg'),
 )
+VAV_FIELDS = VAV_LIMIT_FIELDS + VAV_STATIC_FIELDS
 
 
 def default_settings():
