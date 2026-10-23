@@ -93,6 +93,7 @@ if _lib not in sys.path:
 import hvac_graph
 import fitting_tables
 import ashrae_fittings
+import diffuser_tables
 import revit_helpers
 import rja_drafting
 import vav_checks
@@ -314,6 +315,11 @@ _SETTINGS_XAML = '''
                                       ToolTip="Each fitting's C is looked up from its table at that fitting's own geometry and flows. Open a fitting to see its table. Read only.">
                                 <StackPanel x:Name="pnl_ctab" Margin="16,4,0,4"/>
                             </Expander>
+                            <Expander x:Name="exp_dtab" IsExpanded="False" Margin="0,4,0,0"
+                                      Header="Diffuser sizing tables (MEP Design Standards)"
+                                      ToolTip="The capacities branch ducts are checked against. Reference only, read only.">
+                                <StackPanel x:Name="pnl_dtab" Margin="16,4,0,4"/>
+                            </Expander>
                             <Expander x:Name="exp_c" IsExpanded="False" Margin="0,4,0,0"
                                       Header="Fallback C values (RJA SP loss worksheet)"
                                       ToolTip="Used only where a fitting's geometry or flows cannot be read; the report flags each one as FALLBACK. Cannot be negative.">
@@ -472,6 +478,7 @@ def _show_velocity_settings_xaml(use_theme):
     exp_basis = N('exp_basis')
     grid_c = N('grid_c')
     pnl_ctab = N('pnl_ctab')
+    pnl_dtab = N('pnl_dtab')
     grid_comp = N('grid_comp')
     grid_basis = N('grid_basis')
     grid_ref = N('grid_ref')
@@ -667,6 +674,45 @@ def _show_velocity_settings_xaml(use_theme):
                 body.Children.Add(_table_view(k))
         ex.Expanded += _fill
         pnl_ctab.Children.Add(ex)
+
+    # Diffuser sizing tables, reference only (Colin, 2026-10-23). Straight from
+    # diffuser_tables, the same data the branch check reads. Filled on expand.
+    for d_title, d_basis, d_head, d_rows in diffuser_tables.reference_tables():
+        dex = Expander()
+        dex.Header = d_title
+        dex.IsExpanded = False
+        dex.Margin = Thickness(0, 2, 0, 2)
+        dbody = StackPanel()
+        dbody.Margin = Thickness(18, 2, 0, 4)
+        dex.Content = dbody
+
+        def _fill_d(sender, e, body=dbody, basis=d_basis, head=d_head, rows=d_rows):
+            if body.Children.Count:
+                return
+            body.Children.Add(ui_helpers.rja_hint_block(win, basis))
+            if not head:
+                return
+            g = Grid()
+            g.Margin = Thickness(0, 2, 0, 0)
+            for _c in range(len(head)):
+                cd = ColumnDefinition()
+                cd.Width = GridLength.Auto
+                g.ColumnDefinitions.Add(cd)
+            for r, row in enumerate([head] + rows):
+                _add_row_def(g)
+                for c, text in enumerate(row):
+                    tb = TextBlock()
+                    tb.Text = text
+                    tb.FontSize = 11
+                    tb.Margin = Thickness(0, 0, 16, 0)
+                    if c > 0:
+                        tb.HorizontalAlignment = HorizontalAlignment.Right
+                    if r == 0:
+                        tb.FontWeight = _FW.SemiBold
+                    _put(g, tb, c, r)
+            body.Children.Add(g)
+        dex.Expanded += _fill_d
+        pnl_dtab.Children.Add(dex)
 
     comp_boxes = {}
     comp_order = []

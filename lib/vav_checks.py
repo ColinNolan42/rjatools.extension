@@ -121,8 +121,7 @@ def basis_rows(settings=None):
         ('VAV, LP',
          'After the box: the Supply Air limits (EDR p99, Taylor 2019 p54).'),
         ('VAV, red',
-         'Flex upstream of a box (EDR p3, DSDG p33, p41). A diffuser on an MP '
-         'main.'),
+         'A diffuser on an MP main.'),
         ('VAV, inlet',
          'An MP duct with one box downstream is the box inlet runout, sized to '
          'the box by the engineer: not judged on the MP limits, never resized.'),

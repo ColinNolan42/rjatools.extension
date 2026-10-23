@@ -228,7 +228,7 @@ class TestLimitsAndFields(unittest.TestCase):
         joined = ' '.join(a + ' ' + b for a, b in rows)
         joined.encode('ascii')
         for needle in ('EDR VAV Guide p3, p100', 'EDR p99', 'Taylor 2019 p54',
-                       'DSDG p33, p41', '2000 fpm', '0.30', '1.50'):
+                       '2000 fpm', '0.30', '1.50'):
             self.assertIn(needle, joined)
         self.assertNotIn(' - ', joined)
         self.assertNotIn('straight', joined.lower())

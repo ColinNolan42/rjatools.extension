@@ -392,6 +392,48 @@ def largest_sidewall_row(table):
 
 
 # ---------------------------------------------------------------------------
+# Reference listing (Duct Performance dialog, Advanced; read only)
+# ---------------------------------------------------------------------------
+
+def reference_tables():
+    """Every diffuser table, for display only (Colin, 2026-10-23).
+
+    Returns [(title, basis, headers, rows)] with rows as text, straight from
+    the tables above so the dialog can never show a value the branch check
+    does not use. Linear slots have no published table and are listed with
+    the rule that applies to them instead (rows empty).
+    """
+    def _round(table):
+        return [['%d in.' % d, '{:,}'.format(int(c))] for d, c in table]
+
+    def _face(table):
+        return [['%d x %d' % (w, h), '{:,}'.format(int(c)), str(nc)]
+                for w, h, c, nc in table]
+
+    return [
+        ('Ceiling supply, round neck',
+         'Flex duct manufacturer maximum airflow per neck. 4 in. is residential only.',
+         ['Neck', 'Max CFM'], _round(CEILING_SUPPLY_NECK_TABLE)),
+        ('Ceiling return / exhaust grate, round neck',
+         'Titus PAR perforated face grate.',
+         ['Neck', 'Max CFM'], _round(CEILING_RETURN_EXHAUST_NECK_TABLE)),
+        ('Round supply grille (sidewall circle)',
+         'Price RSG, 1 in. blade spacing; smaller of 800 fpm and 0.08 in. wc/100 ft.',
+         ['Neck', 'Max CFM'], _round(ROUND_GRILLE_SUPPLY_NECK_TABLE)),
+        ('Sidewall supply grille',
+         'Square, 2:1 and 3:1 faces in source order. NC for reference.',
+         ['Face (W x H)', 'Max CFM', 'NC'], _face(SIDEWALL_SUPPLY_TABLE)),
+        ('Sidewall return / exhaust grille',
+         'Square, 2:1 and 3:1 faces in source order. NC for reference.',
+         ['Face (W x H)', 'Max CFM', 'NC'], _face(SIDEWALL_RETURN_EXHAUST_TABLE)),
+        ('Linear slot (supply and return)',
+         'No published table. The auto-sizing slot family sizes its own inlet; '
+         'the branch duct shall be at least the slot inlet diameter.',
+         [], []),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
 
@@ -418,6 +460,9 @@ def _self_test():
     assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 201) == 10
     assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 751) is None
     assert largest_diameter(CEILING_SUPPLY_NECK_TABLE) == 14
+    ref = reference_tables()
+    assert len(ref) == 6 and ref[0][3][2] == ['8 in.', '200'], 'reference tables'
+    assert len(ref[3][3]) == len(SIDEWALL_SUPPLY_TABLE)
 
     # Sidewall lookups
     assert sidewall_row(SIDEWALL_SUPPLY_TABLE, 18, 10) == (18, 10, 735, 28)
