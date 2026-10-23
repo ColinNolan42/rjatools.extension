@@ -3483,11 +3483,122 @@ _LEGEND_ROWS = [
 _LEFT_COLUMNS = ('reason', 'role')
 
 
-def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
+# Sheet column proportions of the table width (the flagged duct table's).
+_SHEET_EQUIP_COLS = (0.34, 0.16, 0.12, 0.38)
+_SHEET_CLASS_W = 0.40       # by system class table, left of the types table
+_SHEET_TYPES_W = 0.56       # diffuser types table, right of it
+_SHEET_CLASS_COLS = (0.50, 0.30, 0.20)
+_SHEET_TYPES_COLS = (0.64, 0.14, 0.22)
+_SHEET_TAKEOFF_COLS = (0.34, 0.24, 0.14, 0.12, 0.16)
+_SHEET_VAV_COLS = (0.22, 0.14, 0.16, 0.16, 0.18, 0.14)
+
+
+def _sheet_columns(headers, fractions, width):
+    return [(h, width * f) for h, f in zip(headers, fractions)]
+
+
+def _draw_system_summary(st, view, y, total_w, rep):
+    """SYSTEM SUMMARY: equipment table, by system class and diffuser types
+    side by side, warnings. Returns the y under it."""
+    draft = rja_drafting
+    y = draft._band(st, view, 0.0, y, total_w, 'SYSTEM SUMMARY',
+                    duct_perf_console.summary_band_text(rep), draft.SUB_BAND_H)
+    if rep.get('equipment'):
+        y = draft._styled_table(
+            st, view, 0.0, y, _sheet_columns(
+                ['Equipment', 'Supply CFM', 'Diffusers', 'Other air feeding it'],
+                _SHEET_EQUIP_COLS, total_w),
+            rep['equipment'], left_cols=(0, 3), clip=True)
+        y -= draft.GAP
+    bottoms = []
+    if rep.get('by_class'):
+        w = total_w * _SHEET_CLASS_W
+        bottoms.append(draft._styled_table(
+            st, view, 0.0, y, _sheet_columns(['System', 'CFM', 'Diffusers'],
+                                             _SHEET_CLASS_COLS, w),
+            rep['by_class'], clip=True))
+    if rep.get('types'):
+        w = total_w * _SHEET_TYPES_W
+        ox = total_w - w if rep.get('by_class') else 0.0
+        bottoms.append(draft._styled_table(
+            st, view, ox, y, _sheet_columns(['Diffuser type', 'Count', 'CFM'],
+                                            _SHEET_TYPES_COLS, w),
+            rep['types'], clip=True))
+    if bottoms:
+        y = min(bottoms) - draft.GAP
+    if rep.get('warnings'):
+        y = draft._note_panel(st, view, 0.0, y, total_w, duct_perf_console.sheet_lines(
+            [('warn', w) for w in rep['warnings']]))
+        y -= draft.GAP
+    return y
+
+
+def _draw_external_static(st, view, y, total_w, esp_rec):
+    """EXTERNAL STATIC PRESSURE: per unit one take-off table (supply then
+    return, ending in the unit total) with its notes, then picked duct
+    pairings, run wide warnings, and METHOD / NOT INCLUDED. The rows come
+    from duct_perf_console.esp_unit_rows, the same rows the console table
+    shows. Returns the y under it."""
+    draft = rja_drafting
+    cols = _sheet_columns(duct_perf_console.TAKEOFF_HEADERS, _SHEET_TAKEOFF_COLS,
+                          total_w)
+    for unit in esp_rec.get('units') or []:
+        y = draft._band(st, view, 0.0, y, total_w,
+                        'EXTERNAL STATIC PRESSURE - ' + unit['label'], None,
+                        draft.SUB_BAND_H)
+        if unit.get('classes'):
+            rows, total_row = duct_perf_console.esp_unit_rows(unit, sheet=True)
+            if total_row is not None:
+                rows.append(total_row)
+            y = draft._styled_table(st, view, 0.0, y, cols, rows,
+                                    totals_row=total_row is not None,
+                                    left_cols=(0, 1), clip=True)
+        notes = duct_perf_console.sheet_lines(
+            duct_perf_console.esp_unit_notes(unit, sheet=True))
+        if notes:
+            y = draft._note_panel(st, view, 0.0, y, total_w, notes)
+        y -= draft.GAP
+    for comb in esp_rec.get('combined') or []:
+        y = draft._band(st, view, 0.0, y, total_w,
+                        'EXTERNAL STATIC PRESSURE - ' + comb['title'], None,
+                        draft.SUB_BAND_H)
+        y = draft._note_panel(st, view, 0.0, y, total_w, [comb['text']])
+        y -= draft.GAP
+    tail = duct_perf_console.sheet_lines(
+        [('warn', w) for w in esp_rec.get('warnings') or []])
+    tail.extend(t for t in (esp_rec.get('method'), esp_rec.get('not_included')) if t)
+    if tail:
+        y = draft._note_panel(st, view, 0.0, y, total_w, tail)
+        y -= draft.GAP
+    return y
+
+
+def _draw_vav_boxes(st, view, y, total_w, vav_rep):
+    """VAV BOXES table, one row per box, with its notes. Returns the y under it."""
+    draft = rja_drafting
+    rows = duct_perf_console.vav_rows(vav_rep, sheet=True)
+    if not rows:
+        return y
+    y = draft._band(st, view, 0.0, y, total_w, 'VAV BOXES', vav_rep.get('basis'),
+                    draft.SUB_BAND_H)
+    y = draft._styled_table(
+        st, view, 0.0, y, _sheet_columns(duct_perf_console.VAV_HEADERS,
+                                         _SHEET_VAV_COLS, total_w),
+        rows, left_cols=(0, 1), clip=True)
+    notes = duct_perf_console.sheet_lines(duct_perf_console.vav_notes(vav_rep, sheet=True))
+    if notes:
+        y = draft._note_panel(st, view, 0.0, y, total_w, notes)
+    return y - draft.GAP
+
+
+def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id,
-                        show_r_marker_note=False, esp_takeoffs=()):
-    """Create a Drafting View with a System Summary block + flagged-duct table
-    + note legend, in the RJA table look.
+                        show_r_marker_note=False):
+    """Create a Drafting View in the RJA table look: the System Summary,
+    External Static Pressure and VAV Boxes sections drawn as tables from the
+    same records the console renders (rep, esp_rec, vav_rep; the last two
+    None when not computed), then the flagged-duct table and the note legend
+    (Colin, 2026-10-23: the summary looks as good as the rest of the sheet).
 
     flagged_rows: list of per-duct cell dicts from _row_cells(), already in
     the order they should appear, the same order the numbered keynote circles
@@ -3519,30 +3630,22 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
             st, sched_view, 0.0, 0.0, total_w,
             'DUCT PERFORMANCE - DV-{}'.format(source_sheet_num), None,
             rja_drafting.BAND_H)
-        if summary_lines:
-            y = rja_drafting._note_panel(st, sched_view, 0.0, y, total_w,
-                                         summary_lines)
         y -= rja_drafting.GAP
 
-        # External static take-off, one table per unit and system class, like
-        # the WSFU take-off (Colin, 2026-10-23).
-        for to in esp_takeoffs:
-            y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
-                                   'EXTERNAL STATIC TAKE-OFF - ' + to['title'], None,
-                                   rja_drafting.SUB_BAND_H)
-            to_cols = [(h, total_w * f) for h, f in zip(
-                duct_perf_console.TAKEOFF_HEADERS, (0.34, 0.24, 0.14, 0.12, 0.16))]
-            to_rows = [list(r) for r in to['rows']]
-            if to.get('filter') is not None:
-                to_rows.append(['Return filter', 'known drop', '1', '-',
-                                '{:.3f}'.format(float(to['filter']))])
-            to_rows.append(['Subtotal', '', '', '', '{:.3f}'.format(float(to['subtotal']))])
-            to_rows.append(['Safety factor', to.get('safety_detail') or '', '', '',
-                            '{:.3f}'.format(float(to['safety']))])
-            to_rows.append(['TOTAL', '', '', '', '{:.3f}'.format(float(to['total']))])
-            y = rja_drafting._styled_table(st, sched_view, 0.0, y, to_cols, to_rows,
-                                           totals_row=True, left_cols=(0, 1))
-            y -= rja_drafting.GAP
+        # Each section fails soft on its own: a record shape this code did
+        # not expect loses that section, never the sheet.
+        sections = [(_draw_system_summary, rep)]
+        if esp_rec is not None:
+            sections.append((_draw_external_static, esp_rec))
+        if vav_rep is not None:
+            sections.append((_draw_vav_boxes, vav_rep))
+        for draw, record in sections:
+            try:
+                y = draw(st, sched_view, y, total_w, record)
+            except Exception as ex:
+                hvac_graph.log.warning('Duct Performance sheet: %s not drawn: %s',
+                                       draw.__name__, ex)
+                y -= rja_drafting.GAP
 
         y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
                                'DUCTS NEEDING ATTENTION', None,
@@ -4041,16 +4144,16 @@ def main():
         t[1] += cfm
 
     # The summary is built ONCE into two forms from the same values:
-    # summary_lines is the drafting view text (its layout shall not change),
-    # rep holds the same content as records for the themed console sections
-    # (lib/duct_perf_console.py). Every number below is worked out once and
+    # summary_lines is the plain text form (the console fallback when
+    # print_html fails); rep, esp_rec and vav_rep hold the same content as
+    # records for the themed console sections (lib/duct_perf_console.py) and
+    # the drafting view tables. Every number below is worked out once and
     # handed to both.
     rep = {'grand': [], 'equipment': [], 'by_class': [], 'types': [],
            'warnings': []}
     esp_rec = None       # External Static Pressure records, when computed
     vav_rep = None       # VAV Boxes records, when VAV is on with boxes
     summary_lines = ['SYSTEM SUMMARY']
-    esp_takeoffs = []       # drafting view take-off tables, one per unit and class
     for name, aid, discharge_cfm, term_count, other_class_cfm in ahu_totals:
         summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM supply air discharge ({} diffusers)'.format(
             name, aid, discharge_cfm, term_count))
@@ -4206,14 +4309,6 @@ def main():
                                            unit_label, sys_class, _msg)
                     cls_warnings.append(_msg[0].upper() + _msg[1:])
                 _filt = c['filter_inwc'] if c.get('filter_inwc', 0.0) > 0.0 else None
-                esp_takeoffs.append({
-                    'title': '{} | {} | {}'.format(
-                        unit_label, sys_class,
-                        '{:,.0f} CFM'.format(float(a_cfm))),
-                    'rows': _to_rows, 'filter': _filt,
-                    'subtotal': c['subtotal_inwc'], 'safety': safety_inwc,
-                    'safety_detail': safety_det, 'total': c['total_inwc'],
-                    'total_detail': total_det})
                 if c.get('truncated'):
                     _msg = ('path search hit its step limit, so this '
                             'may not be the true worst run.')
@@ -4354,12 +4449,10 @@ def main():
             all_root_ids, vav_by_root, root_labels, critical, vav_set)
         summary_lines.extend(_vav_summary_lines(vav_rep))
 
-    # Folded once here so the drafting view keeps its fixed width text. The
-    # console no longer prints this text except as the fallback below, per
-    # section, from the same lines (folding is per line, so a slice folds the
-    # same as the whole).
+    # The plain text is only the console fallback below, folded per section
+    # (folding is per line, so a slice folds the same as the whole). The
+    # drafting view draws tables from rep, esp_rec and vav_rep instead.
     raw_summary = summary_lines
-    summary_lines = _wrap_summary_lines(summary_lines)
 
     def _text_fallback(title, lines):
         def _print():
@@ -4721,10 +4814,9 @@ def main():
             # viewport on every sheet (the table covers all levels).
             if tn_type_id is not None:
                 sched_view, content_h, total_w = _build_summary_view(
-                    doc, summary_lines, [item[2] for item in flagged_items],
+                    doc, rep, esp_rec, vav_rep, [item[2] for item in flagged_items],
                     selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
-                    show_r_marker_note=bool(restrictive_terminal_ids),
-                    esp_takeoffs=esp_takeoffs)
+                    show_r_marker_note=bool(restrictive_terminal_ids))
                 if sched_view is not None:
                     # X fixed by hand in Revit (see diagram note above) and read
                     # back via Revit MCP. Y keeps the original bottom-anchored,

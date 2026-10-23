@@ -129,10 +129,15 @@ def takeoff_rows(items):
     return rows, losses
 
 
-def _class_rows(cls, counted):
+def _class_rows(cls, counted, sheet=False):
     """One system class inside the unit's combined table: a heading band, its
     items, Subtotal, Safety factor and the class total. counted False marks a
-    side that does not go into the unit total (the lesser of return/exhaust)."""
+    side that does not go into the unit total (the lesser of return/exhaust).
+
+    sheet True is the drafting view form: the class total row is returned as
+    {'cells': [...], 'bold': True} and its long 'worst run ends at ...'
+    detail is left out (the sheet puts it in the note panel under the table,
+    see esp_unit_notes, because drafting view cells do not wrap)."""
     head = cls['sys_class']
     if cls.get('airflow'):
         head = '{}, {}'.format(head, cls['airflow'])
@@ -148,26 +153,90 @@ def _class_rows(cls, counted):
     rows.append(['Subtotal', '', '', '', _f3(cls['subtotal'])])
     rows.append(['Safety factor', cls.get('safety_detail') or '', '', '',
                  _f3(cls['safety'])])
-    rows.append(['{} total'.format(cls['sys_class']), cls.get('total_detail') or '',
-                 '', '', _f3(cls['total'])])
+    total = ['{} total'.format(cls['sys_class']),
+             '' if sheet else (cls.get('total_detail') or ''),
+             '', '', _f3(cls['total'])]
+    rows.append({'cells': total, 'bold': True} if sheet else total)
     return rows
+
+
+def esp_unit_rows(unit, sheet=False):
+    """The rows of one unit's external static table, shared by the console
+    (_esp_unit_table) and the drafting view: (rows, total_row). rows holds
+    TAKEOFF_HEADERS lists and {'band': text} class headings (sheet True:
+    see _class_rows). total_row is the TOTAL EXTERNAL STATIC PRESSURE row, or
+    None when only one side was traced."""
+    sides = unit.get('esp_sides')
+    rows = []
+    for cls in unit.get('classes') or []:
+        counted = sides is None or cls['sys_class'] in sides
+        rows.extend(_class_rows(cls, counted, sheet))
+    total_row = None
+    if unit.get('esp_total') is not None:
+        total_row = ['TOTAL EXTERNAL STATIC PRESSURE', ' + '.join(sides or []),
+                     '', '', _f3(unit['esp_total'])]
+    return rows, total_row
 
 
 def _esp_unit_table(unit):
     """Supply and return in ONE table per unit, ending in the unit's total
     external static pressure (Colin, 2026-10-23). With only one side traced the
     table ends at that side's total and the one sided callout says so."""
-    sides = unit.get('esp_sides')
-    rows = []
-    for cls in unit.get('classes') or []:
-        counted = sides is None or cls['sys_class'] in sides
-        rows.extend(_class_rows(cls, counted))
-    total_row = None
-    if unit.get('esp_total') is not None:
-        total_row = ['TOTAL EXTERNAL STATIC PRESSURE', ' + '.join(sides or []),
-                     '', '', _f3(unit['esp_total'])]
+    rows, total_row = esp_unit_rows(unit)
     return cr.table(TAKEOFF_HEADERS, rows, align=['l', 'l', 'r', 'r', 'r'],
                     total_row=total_row, widths=W_TAKEOFF)
+
+
+def esp_unit_notes(unit, sheet=False):
+    """Everything said under a unit's table, in console order, as
+    [(kind, text)] with kind 'note', 'warn', 'ok' or 'error'. sheet True
+    first adds where each class's index run ends ('note'), which the sheet
+    table leaves out of its total row."""
+    out = []
+    for cls in unit.get('classes') or []:
+        if sheet and cls.get('total_detail'):
+            out.append(('note', '{}: {}.'.format(cls['sys_class'], cls['total_detail'])))
+        for n in cls.get('notes') or []:
+            out.append(('note', '{}: {}'.format(cls['sys_class'], n)))
+        for w in cls.get('warnings') or []:
+            out.append(('warn', w))
+    for w in unit.get('untraced') or []:
+        out.append(('warn', w))
+    if unit.get('one_sided'):
+        out.append(('warn', unit['one_sided']))
+    for ok, text in unit.get('checks') or []:
+        out.append(('ok' if ok else 'error', text))
+    for w in unit.get('warnings') or []:
+        out.append(('warn', w))
+    return out
+
+
+# Text that already names what it is keeps its own lead on the sheet.
+_OWN_LEADS = ('WARNING', 'UNPRICED', 'FALLBACK', 'NOTE', 'EXTERNAL STATIC', 'LOW')
+
+
+def sheet_lines(notes):
+    """[(kind, text)] as plain drafting view note lines: a warning reads
+    'WARNING: ...', a failed check 'CHECK FAILED: ...', a passed one
+    'CHECK: ...', a note as is."""
+    lines = []
+    for kind, text in notes:
+        if kind == 'warn' and not text.upper().startswith(_OWN_LEADS):
+            text = 'WARNING: ' + text
+        elif kind == 'error':
+            text = 'CHECK FAILED: ' + text
+        elif kind == 'ok':
+            text = 'CHECK: ' + text
+        lines.append(text)
+    return lines
+
+
+def summary_band_text(rec):
+    """The System Summary grand totals as one line for the right end of the
+    sheet's SYSTEM SUMMARY band, e.g. 'Grand total airflow 5,250 CFM |
+    Diffusers 14 | Ducts 60'."""
+    return ' | '.join('{} {}'.format(label, value)
+                      for label, value in rec.get('grand') or [])
 
 
 def external_static(rec):
@@ -179,19 +248,8 @@ def external_static(rec):
         out.append(cr.subsection(unit['label']))
         if unit.get('classes'):
             out.append(_esp_unit_table(unit))
-        for cls in unit.get('classes') or []:
-            for n in cls.get('notes') or []:
-                out.append(cr.note('{}: {}'.format(cls['sys_class'], n)))
-            for w in cls.get('warnings') or []:
-                out.append(cr.callout(w, 'warn'))
-        for w in unit.get('untraced') or []:
-            out.append(cr.callout(w, 'warn'))
-        if unit.get('one_sided'):
-            out.append(cr.callout(unit['one_sided'], 'warn'))
-        for ok, text in unit.get('checks') or []:
-            out.append(cr.callout(text, 'ok' if ok else 'error'))
-        for w in unit.get('warnings') or []:
-            out.append(cr.callout(w, 'warn'))
+        for kind, text in esp_unit_notes(unit):
+            out.append(cr.note(text) if kind == 'note' else cr.callout(text, kind))
     for comb in rec.get('combined') or []:
         out.append(cr.subsection(comb['title']))
         out.append(cr.callout(comb['text'], 'info'))
@@ -204,33 +262,59 @@ def external_static(rec):
     return ''.join(out)
 
 
-def vav_boxes(rep):
-    """Section c: VAV Boxes, one table over every unit."""
-    out = [cr.section('VAV Boxes', rep.get('basis'))]
+VAV_HEADERS = ['Unit', 'Box', 'MP loss to inlet', 'with safety factor',
+               'Pressure left', 'Status']
+
+
+def vav_rows(rep, sheet=False):
+    """One row per VAV box over every unit, VAV_HEADERS columns. sheet True
+    writes the two long cell texts short ('not reached', 'not checked'); the
+    sheet explains them in vav_notes."""
     rows = []
     for unit in rep.get('units') or []:
         for b in unit.get('boxes') or []:
             status = b.get('status')
             if status == 'NOT CHECKED':
-                left = 'not checked (no unit max entered)'
+                left = 'not checked' if sheet else 'not checked (no unit max entered)'
             else:
                 left = _f3(b.get('left'))
             if status == 'NOT REACHED':
-                loss = 'not reached by the index run search'
+                loss = 'not reached' if sheet else 'not reached by the index run search'
             else:
                 loss = _f3(b.get('loss'))
             rows.append([unit['label'], str(b['box']), loss, _f3(b.get('loss_sf')),
                          left, status or '-'])
-    out.append(cr.table(
-        ['Unit', 'Box', 'MP loss to inlet', 'with safety factor', 'Pressure left', 'Status'],
-        rows, align=['l', 'l', 'r', 'r', 'r', 'c'], status_col=5, widths=W_VAV))
+    return rows
+
+
+def vav_notes(rep, sheet=False):
+    """The notes under the VAV table as [(kind, text)]. sheet True adds what
+    the short 'not reached' and 'not checked' cells mean, when present."""
+    out = []
     if rep.get('minimum') is not None:
-        out.append(cr.note('LOW: pressure left under the {:.2f} in. wc minimum. '
-                           'Values in in. wc.'.format(float(rep['minimum']))))
+        out.append(('note', 'LOW: pressure left under the {:.2f} in. wc minimum. '
+                            'Values in in. wc.'.format(float(rep['minimum']))))
+    if sheet:
+        statuses = set(b.get('status') for u in rep.get('units') or []
+                       for b in u.get('boxes') or [])
+        if 'NOT REACHED' in statuses:
+            out.append(('note', 'Not reached: the index run search did not reach the box.'))
+        if 'NOT CHECKED' in statuses:
+            out.append(('note', 'Not checked: no unit max external static entered.'))
     for unit in rep.get('units') or []:
         if unit.get('mp_terminal_text'):
-            out.append(cr.callout('{}: {}'.format(unit['label'], unit['mp_terminal_text']),
-                                  'warn'))
+            out.append(('warn', '{}: {}'.format(unit['label'], unit['mp_terminal_text'])))
+    return out
+
+
+def vav_boxes(rep):
+    """Section c: VAV Boxes, one table over every unit."""
+    out = [cr.section('VAV Boxes', rep.get('basis'))]
+    out.append(cr.table(
+        VAV_HEADERS, vav_rows(rep), align=['l', 'l', 'r', 'r', 'r', 'c'],
+        status_col=5, widths=W_VAV))
+    for kind, text in vav_notes(rep):
+        out.append(cr.note(text) if kind == 'note' else cr.callout(text, kind))
     return ''.join(out)
 
 

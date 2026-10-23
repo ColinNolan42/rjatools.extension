@@ -35,6 +35,8 @@ WHITE = (255, 255, 255)
 BAND_H = 0.036                  # title band, about 7/16 in
 SUB_BAND_H = 0.028              # section band, about 11/32 in
 OUTER_WEIGHT = 5                # outer border line weight
+CHAR_W = 0.0062                 # average character width, plain text
+BOLD_CHAR_W = 0.0068            # average character width, bold text
 
 
 class _Style(object):
@@ -155,7 +157,7 @@ def _note_panel(st, view, ox, top, width, lines, chars=None):
     """Plain lines in a lightly shaded, outlined panel. Returns its bottom."""
     wrapped = []
     for line in lines:
-        wrapped.extend(_wrap(line, chars or int(width / 0.0062)))
+        wrapped.extend(_wrap(line, chars or int(width / CHAR_W)))
     bottom = top - TEXT_H * len(wrapped) - 2.0 * PAD
     _fill(st, view, ox, top, ox + width, bottom, ZEBRA_FILL)
     y = top - PAD
@@ -172,14 +174,34 @@ def _outline(st, view, x0, top, x1, bottom):
         _line(st, view, a[0], a[1], b[0], b[1], OUTER_WEIGHT)
 
 
+def _clip(text, width, bold=False):
+    """text cut to fit a cell width wide (feet), ending in '...' when cut.
+    Drafting view TextNotes do not wrap inside a cell, so a long value would
+    run over the next column. The character width is an average, on the
+    generous side, so a value that fits is never cut."""
+    text = str(text)
+    chars = int((width - 2.0 * PAD) / (BOLD_CHAR_W if bold else CHAR_W))
+    if chars < 4 or len(text) <= chars:
+        return text
+    return text[:chars - 3].rstrip() + "..."
+
+
 def _styled_table(st, view, ox, top, columns, rows, groups=None,
-                  totals_row=False, left_cols=(0,)):
+                  totals_row=False, left_cols=(0,), clip=False):
     """A gridded table in the RJA look.
 
     columns: [(header, width)]. rows: [[cell, ...]]. groups: optional
     [(label, column span)] drawn as a row above the headers. With totals_row
     the last row is shaded and bold. Columns in left_cols are left aligned,
     the rest centred. Returns the y of the bottom edge.
+
+    A row may also be a dict:
+      {'band': text}                  a full width heading row, shaded like
+                                      the header, bold text from the left;
+                                      the banding of the rows under it
+                                      starts again
+      {'cells': [...], 'bold': True}  a body row drawn in bold
+    clip True cuts every cell (and band text) to its width, see _clip.
     """
     widths = [c[1] for c in columns]
     xs = [ox]
@@ -209,34 +231,65 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
     bottom = row_tops[-1]
 
     last = len(rows) - 1
+    band = [isinstance(row, dict) and "band" in row for row in rows]
+    stripe = 0
     for r in range(len(rows)):
+        if band[r]:
+            _fill(st, view, ox, row_tops[r], right, row_tops[r + 1],
+                  HEAD_FILL)
+            stripe = 0
+            continue
         if totals_row and r == last:
             _fill(st, view, ox, row_tops[r], right, row_tops[r + 1],
                   TOTALS_FILL)
-        elif r % 2 == 1:
+        elif stripe % 2 == 1:
             _fill(st, view, ox, row_tops[r], right, row_tops[r + 1],
                   ZEBRA_FILL)
+        stripe += 1
 
     _line(st, view, ox, head_bottom, right, head_bottom)
     for y in row_tops[1:-1]:
         _line(st, view, ox, y, right, y)
     if totals_row and rows:
         _line(st, view, ox, row_tops[last], right, row_tops[last], 3)
-    for x in xs[1:-1]:
-        _line(st, view, x, head_top, x, bottom)
+    # Column lines stop at a heading row so its text reads as one band.
+    seg_top = head_top
+    for r in range(len(rows) + 1):
+        if r == len(rows) or band[r]:
+            seg_bottom = row_tops[r]
+            if seg_bottom < seg_top:
+                for x in xs[1:-1]:
+                    _line(st, view, x, seg_top, x, seg_bottom)
+            if r < len(rows):
+                seg_top = row_tops[r + 1]
     _outline(st, view, ox, top, right, bottom)
 
     for c, column in enumerate(columns):
+        header = _clip(column[0], widths[c], True) if clip else column[0]
         if c in left_cols:
-            _t(st, view, xs[c], head_top, column[0], "bold")
+            _t(st, view, xs[c], head_top, header, "bold")
         else:
-            _t(st, view, (xs[c] + xs[c + 1]) / 2.0, head_top, column[0],
+            _t(st, view, (xs[c] + xs[c + 1]) / 2.0, head_top, header,
                "bold", "center")
     for r, row in enumerate(rows):
-        kind = "bold" if (totals_row and r == last) else "text"
+        if band[r]:
+            text = row.get("band")
+            if clip and text:
+                text = _clip(text, right - ox, True)
+            _t(st, view, ox, row_tops[r], text, "bold")
+            continue
+        bold = (totals_row and r == last)
+        if isinstance(row, dict):
+            bold = bold or bool(row.get("bold"))
+            row = row.get("cells") or []
+        kind = "bold" if bold else "text"
         for c, value in enumerate(row):
+            if c >= len(widths):
+                break
             if not value:   # TextNote.Create rejects an empty string
                 continue
+            if clip:
+                value = _clip(value, widths[c], bold)
             if c in left_cols:
                 _t(st, view, xs[c], row_tops[r], value, kind)
             else:
