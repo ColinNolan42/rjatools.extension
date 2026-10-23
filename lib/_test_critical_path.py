@@ -33,6 +33,8 @@ LIB_DIR = os.path.join(EXT_ROOT, "lib")
 sys.path.insert(0, LIB_DIR)
 import fitting_tables  # noqa: E402  (real module, pure Python)
 import vav_checks      # noqa: E402  (real module, pure Python)
+import ashrae_fittings # noqa: E402  (real module, pure Python, reads the JSON tables)
+import math            # noqa: E402
 
 src = io.open(SCRIPT_PATH, encoding="utf-8").read()
 m = re.search(r"^def _critical_path_loss\(.*?\n    return result$", src, re.S | re.M)
@@ -56,11 +58,16 @@ class Elem(object):
     calls is_fitting() on a duct node) -- they're included here anyway so
     those two lookups can tell a continuing main from a dead-end tap.
     """
-    def __init__(self, kind, family_name=None, is_round=True, down_area=None):
+    def __init__(self, kind, family_name=None, is_round=True, down_area=None,
+                 angle=None, geom=None, tgeom=None, tap_pos=None):
         self.kind = kind
+        self.geom = geom          # elbow_geometry() answer, None = unreadable
+        self.tgeom = tgeom        # (ends, theta) for transition_geometry()
+        self.tap_pos = tap_pos or {}   # duct only: {tap id: feet}
         self.family_name = family_name
         self.is_round = is_round
         self.down_area = down_area
+        self.angle = angle
 
 
 _FITTING_KINDS = frozenset(['tap', 'elbow', 'unknown_fitting', 'transition'])
@@ -102,6 +109,26 @@ def _fitting_is_round(elem):
     return elem.is_round
 
 
+def _fitting_angle_deg(elem):
+    return elem.angle
+
+
+def _elbow_geometry(elem):
+    return elem.geom
+
+
+def _transition_geometry(elem):
+    return elem.tgeom if elem.tgeom else (None, None)
+
+
+def _connector_areas_ft2(elem):
+    return []      # tap openings unknown: the single branch duct's area is used
+
+
+def _tap_positions_ft(duct, from_id):
+    return dict(duct.tap_pos)
+
+
 def _transition_areas(elem, up_area):
     return (up_area, elem.down_area)
 
@@ -125,11 +152,17 @@ hvac_graph.is_accessory            = _is_accessory
 hvac_graph.is_equipment            = _is_equipment
 hvac_graph.fitting_family_name     = _fitting_family_name
 hvac_graph.fitting_is_round        = _fitting_is_round
+hvac_graph.fitting_angle_deg       = _fitting_angle_deg
+hvac_graph.elbow_geometry          = _elbow_geometry
+hvac_graph.transition_geometry     = _transition_geometry
+hvac_graph.tap_positions_ft        = _tap_positions_ft
+hvac_graph.connector_areas_ft2     = _connector_areas_ft2
 hvac_graph.transition_areas        = _transition_areas
 hvac_graph.velocity_pressure_inwg  = _velocity_pressure_inwg
 
 ns = {'hvac_graph': hvac_graph, 'fitting_tables': fitting_tables,
-      'vav_checks': vav_checks}
+      'vav_checks': vav_checks, 'ashrae_fittings': ashrae_fittings,
+      're': re, 'math': math}
 exec(fn_src, ns)
 crit = ns['_critical_path_loss']
 
@@ -145,6 +178,7 @@ class DuctResult(object):
         self.fpm                = fpm
         self.area_ft2           = area_ft2
         self.sys_class          = sys_class
+        self.cfm                = fpm * area_ft2   # as the real DuctResult
 
 
 class EID(object):
@@ -857,6 +891,190 @@ check("case20 the box's own walk does not charge itself",
       'vav_box' not in r20[1002]['Supply Air']['component_keys'],
       "got %r" % (r20[1002]['Supply Air']['component_keys'],))
 
+
+# ── case 21: elbow angle factor (ASHRAE 2001 CR3-1, Colin 2026-10-23) ─────────
+af = fitting_tables.elbow_angle_factor
+check("case21 K table rows: 30 -> 0.45, 45 -> 0.60, 90 -> 1.00",
+      abs(af(30) - 0.45) < 1e-9 and abs(af(45) - 0.60) < 1e-9
+      and abs(af(90) - 1.00) < 1e-9)
+check("case21 K interpolates: 35.6 deg between 0.45 and 0.60",
+      abs(af(35.6) - (0.45 + 0.15 * 5.6 / 15.0)) < 1e-9, "got %r" % af(35.6))
+check("case21 unreadable angle is priced as a 90 (K 1.0)", af(None) == 1.0)
+check("case21 angles past the table clamp to its ends",
+      af(-5) == 0.0 and af(200) == 1.40)
+# Same path as case 4, elbow now 45 deg: priced at 0.60 x the 90 deg C.
+nodes21 = {101: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                     angle=45.0)}
+sa21 = crit([100], children4, ducts4, terms4, nodes21).get(100, {}).get('Supply Air', {})
+exp21 = 0.60 * fitting_tables.DEFAULT_C['round_elbow_90'] * pv(1000.0)
+check("case21 a 45 deg round elbow costs 0.60 x the 90 deg loss",
+      abs(sa21.get('fitting_inwc', -1) - exp21) < 1e-9,
+      "expected %.6f got %r" % (exp21, sa21.get('fitting_inwc')))
+nodes21r = {101: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered',
+                      is_round=False, angle=30.0)}
+sa21r = crit([100], children4, ducts4, terms4, nodes21r).get(100, {}).get('Supply Air', {})
+exp21r = 0.45 * fitting_tables.DEFAULT_C['rect_elbow_90'] * pv(1000.0)
+check("case21 a 30 deg rect elbow costs 0.45 x the 90 deg loss",
+      abs(sa21r.get('fitting_inwc', -1) - exp21r) < 1e-9,
+      "expected %.6f got %r" % (exp21r, sa21r.get('fitting_inwc')))
+
+
+
+# ── case 22 to 27: ASHRAE 2001 lookups (Colin, 2026-10-23) ───────────────────
+A = ashrae_fittings
+def _sa(r, root):
+    return r.get(root, {}).get('Supply Air', {})
+
+# 22: round elbow, 12 in., r/D 1.5, 90 deg -> CD3-1 0.11 at the upstream Pv.
+n22 = {101: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                 geom={'round': True, 'd_in': 12.0, 'w_in': None, 'h_in': None,
+                       'r_in': 18.0, 'angle': 90.0})}
+sa22 = _sa(crit([100], children4, ducts4, terms4, n22), 100)
+check("case22 round 1.5D 90 deg elbow is CD3-1 0.11 x Pv",
+      abs(sa22.get('fitting_inwc', -1) - 0.11 * pv(1000.0)) < 1e-9,
+      "got %r" % sa22.get('fitting_inwc'))
+check("case22 and raises no FALLBACK note", not sa22.get('unpriced'),
+      "got %r" % (sa22.get('unpriced'),))
+
+# 23: 1D round elbow at 45 deg -> CD3-1 x CD3-12(1.0)/CD3-12(1.5) x K(45).
+n23 = {101: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                 geom={'round': True, 'd_in': 12.0, 'w_in': None, 'h_in': None,
+                       'r_in': 12.0, 'angle': 45.0})}
+sa23 = _sa(crit([100], children4, ducts4, terms4, n23), 100)
+exp23 = 0.11 * (0.42 / 0.34) * 0.60 * pv(1000.0)
+check("case23 1D round elbow at 45 deg: CD3-1 x 0.42/0.34 x K 0.60",
+      abs(sa23.get('fitting_inwc', -1) - exp23) < 1e-9,
+      "expected %.6f got %r" % (exp23, sa23.get('fitting_inwc')))
+
+# 24: rect mitered at 30 deg (no vanes, CR3-6) and at 90 deg (vanes, CR3-9).
+def _mit(angle):
+    return {101: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered - Single Thickness Vanes',
+                      is_round=False,
+                      geom={'round': False, 'd_in': None, 'w_in': 16.0, 'h_in': 16.0,
+                            'r_in': None, 'angle': angle})}
+sa24a = _sa(crit([100], children4, ducts4, terms4, _mit(30.0)), 100)
+sa24b = _sa(crit([100], children4, ducts4, terms4, _mit(90.0)), 100)
+check("case24 mitered 30 deg, H/W 1.0 is CR3-6 0.16 x Pv",
+      abs(sa24a.get('fitting_inwc', -1) - 0.16 * pv(1000.0)) < 1e-9,
+      "got %r" % sa24a.get('fitting_inwc'))
+check("case24 mitered 90 deg is CR3-9 vaned 0.11 x Pv",
+      abs(sa24b.get('fitting_inwc', -1) - 0.11 * pv(1000.0)) < 1e-9,
+      "got %r" % sa24b.get('fitting_inwc'))
+
+# 25: supply rect transition 1.0 ft2 -> 0.5 ft2 at 30 deg: SR4-1 Ao/A1 0.50,
+#     30 deg = 0.05, referenced to section o (downstream, 2000 fpm).
+n25 = {101: Elem(kind='transition', family_name='Rectangular Transition - Length',
+                 is_round=False, down_area=0.5,
+                 tgeom=([(1.0, 'rect', 12.0, 12.0, None), (0.5, 'rect', 6.0, 12.0, None)], 30.0))}
+sa25 = _sa(crit([100], children4, ducts4, terms4, n25), 100)
+check("case25 supply transition is SR4-1 0.05 at the section o (downstream) Pv",
+      abs(sa25.get('fitting_inwc', -1) - 0.05 * pv(2000.0)) < 1e-9,
+      "expected %.6f got %r" % (0.05 * pv(2000.0), sa25.get('fitting_inwc')))
+
+# 26: two rect taps on one unbroken rect main, in order along the duct.
+#   root 299 -> main 300 (1000 cfm, 1.0 ft2) -> tap 301 at 2 ft -> 311 (300 cfm) -> T1
+#                                            -> tap 302 at 5 ft -> 312 (400 cfm) -> T2
+ch26 = {299: [300], 300: [301, 302], 301: [311], 302: [312], 311: [321], 312: [322]}
+n26 = {300: Elem(kind='duct', tap_pos={301: 2.0, 302: 5.0}),
+       301: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       302: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       311: Elem(kind='duct'), 312: Elem(kind='duct')}
+# 0.50 in. wc of friction on the far branch makes it the worst run, so the
+# far tap's pricing (ordering, local flow) is what the result reports.
+d26 = build([(300, 0.0, 10.0, 1000.0, 1.0, 'Supply Air'),
+             (311, 0.0, 5.0, 600.0, 0.5, 'Supply Air'),
+             (312, 0.5, 5.0, 800.0, 0.5, 'Supply Air')])
+t26 = {321: (300.0, 'Supply Air', 'SD-1'), 322: (400.0, 'Supply Air', 'SD-2')}
+r26 = crit([299], ch26, d26, t26, n26)
+sa26 = _sa(r26, 299)
+# The printed Cb (branch reference) and Cs (straight reference) are converted
+# to the main (Eq. 34) and multiplied by the main Pv at each tap. On a full
+# SR5-13 grid that equals Cb x branch Pv: far branch 400 cfm / 0.5 ft2 =
+# 800 fpm. Cs is read on the As/Ac 0.9 row, so Vs/Vc = 0.7 / 0.9.
+ccb_far, _l, _n = A.tap_branch_c(True, 'rect', 'rect', True, 0.5, 400.0 / 700.0)
+ccs_near, _l, _n = A.tap_main_c(True, 'rect', 'rect', True, 1.0, 0.7)
+cb_far_printed = 0.73 + (0.54 - 0.73) * ((400.0 / 700.0) - 0.5) / 0.1
+check("case26 Cc,b x main Pv equals printed Cb x branch Pv on a full grid",
+      abs(ccb_far * pv(700.0) - cb_far_printed * pv(800.0)) < 1e-9,
+      "%r vs %r" % (ccb_far * pv(700.0), cb_far_printed * pv(800.0)))
+exp26 = ccs_near * pv(1000.0) + ccb_far * pv(700.0)
+check("case26 worst run leaves through the FAR tap",
+      sa26.get('terminal_id') == 322, "got %r" % sa26.get('terminal_id'))
+check("case26 far tap: near tap passed (Cc,s x main Pv) plus the far tap Cc,b at the LOCAL 700 cfm x main Pv",
+      abs(sa26.get('fitting_inwc', -1) - exp26) < 1e-9,
+      "expected %.6f got %r" % (exp26, sa26.get('fitting_inwc')))
+check("case26 only the tap AHEAD of the exit is counted as passed",
+      sa26.get('tap_bypass_count') == 1, "got %r" % sa26.get('tap_bypass_count'))
+# and the near tap, made the worst run instead, sees the duct's full 1000 cfm
+# and passes no tap.
+d26b = build([(300, 0.0, 10.0, 1000.0, 1.0, 'Supply Air'),
+              (311, 0.5, 5.0, 600.0, 0.5, 'Supply Air'),
+              (312, 0.0, 5.0, 800.0, 0.5, 'Supply Air')])
+sa26b = _sa(crit([299], ch26, d26b, t26, n26), 299)
+ccb_near, _l, _n = A.tap_branch_c(True, 'rect', 'rect', True, 0.5, 0.3)
+check("case26 near tap: Cb 2.07 (SR5-13 Ab/Ac 0.5, Qb/Qc 0.3) = 2.07 x branch Pv (600 fpm), no tap passed",
+      sa26b.get('terminal_id') == 321 and sa26b.get('tap_bypass_count') == 0
+      and abs(ccb_near - 2.07 * 0.36) < 1e-9
+      and abs(sa26b.get('fitting_inwc', -1) - 2.07 * pv(600.0)) < 1e-9,
+      "term %r taps %r fit %r" % (sa26b.get('terminal_id'), sa26b.get('tap_bypass_count'),
+                                   sa26b.get('fitting_inwc')))
+
+# 27: elbow with unreadable geometry falls back to the worksheet, flagged.
+n27 = {101: Elem(kind='elbow', family_name='Round Elbow', is_round=True)}
+sa27 = _sa(crit([100], children4, ducts4, terms4, n27), 100)
+check("case27 unreadable elbow is priced at the RJA worksheet 0.33",
+      abs(sa27.get('fitting_inwc', -1) - 0.33 * pv(1000.0)) < 1e-9,
+      "got %r" % sa27.get('fitting_inwc'))
+check("case27 and is reported as a FALLBACK",
+      any(u.startswith('FALLBACK') for u in sa27.get('unpriced', ())),
+      "got %r" % (sa27.get('unpriced'),))
+
+
+# 28: a tap taking 900 of 1000 cfm, the run continuing on the main with the
+#     last 100 cfm. Cs (As/Ac 0.9 row, Qs/Qc 0.1) is 51.37, referenced to the
+#     straight-through Pv at 100 fpm: about 0.032 in. wc, not 3.2 (review C1).
+ch28 = {399: [400], 400: [401, 402], 401: [411], 402: [422], 411: [431]}
+n28 = {400: Elem(kind='duct', tap_pos={401: 2.0}),
+       401: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       402: Elem(kind='duct'), 411: Elem(kind='duct')}
+d28 = build([(400, 0.0, 10.0, 1000.0, 1.0, 'Supply Air'),
+             (402, 0.5, 10.0, 100.0, 1.0, 'Supply Air'),
+             (411, 0.0, 5.0, 1800.0, 0.5, 'Supply Air')])
+t28 = {422: (100.0, 'Supply Air', 'SD-end'), 431: (900.0, 'Supply Air', 'SD-big')}
+sa28 = _sa(crit([399], ch28, d28, t28, n28), 399)
+ccs28, _l, _n = A.tap_main_c(True, 'rect', 'rect', True, 1.0, 0.1)
+check("case28 low split: printed SR5-13 Cs 51.37 (As/Ac 0.9, Qs/Qc 0.1) is Cc,s 51.37 x (0.1/0.9)^2",
+      abs(ccs28 - 51.37 * (0.1 / 0.9) ** 2) < 1e-9, "got %r" % ccs28)
+check("case28 and costs Cc,s x main Pv (1000 fpm), about 0.04 in. wc, not 3.2",
+      sa28.get('terminal_id') == 422
+      and abs(sa28.get('fitting_inwc', -1) - ccs28 * pv(1000.0)) < 1e-9
+      and sa28.get('fitting_inwc', 9) < 0.05,
+      "term %r fit %r" % (sa28.get('terminal_id'), sa28.get('fitting_inwc')))
+
+
+# 29: ER5-3 at its printed geometry (Ab/Ac 0.5), whatever the real branch,
+#     and return tap losses floored at zero (Colin, 2026-10-23).
+#   Small grille branch: 300 of 3000 cfm (Qb/Qc 0.1) through a 0.35 ft2 branch
+#   on a 4 ft2 return main (real Ab/Ac 0.09). Printed Cb -18.00 at Qb/Qc 0.1;
+#   at the printed Ab/Ac 0.5, Cc,b = -18 x (0.1/0.5)^2 = -0.72, floored to 0.
+ccb29, _l, _n = A.tap_branch_c(False, 'rect', 'rect', True, 0.09, 0.1)
+check("case29 ER5-3 is read at its printed Ab/Ac 0.5: Cc,b -0.72, not -18 x (0.1/0.09)^2",
+      abs(ccb29 - (-18.0 * (0.1 / 0.5) ** 2)) < 1e-9, "got %r" % ccb29)
+ccb29b, _l, _n = A.tap_branch_c(False, 'rect', 'rect', True, 0.09, 0.5)
+check("case29 ER5-3 at Qb/Qc 0.5: Cc,b = 0.76 x (0.5/0.5)^2 = 0.76",
+      abs(ccb29b - 0.76) < 1e-9, "got %r" % ccb29b)
+ch29 = {499: [500], 500: [501], 501: [511], 511: [521]}
+n29 = {500: Elem(kind='duct', tap_pos={501: 2.0}),
+       501: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       511: Elem(kind='duct')}
+d29 = build([(500, 0.0, 10.0, 750.0, 4.0, 'Return Air'),
+             (511, 0.0, 5.0, 857.0, 0.35, 'Return Air')])
+t29 = {521: (300.0, 'Return Air', 'RG-1')}
+ra29 = crit([499], ch29, d29, t29, n29).get(499, {}).get('Return Air', {})
+check("case29 the negative return tap loss is floored at 0 and named in the report",
+      abs(ra29.get('fitting_inwc', -1)) < 1e-12
+      and any('floored at 0' in u for u in ra29.get('unpriced', ())),
+      "fit %r notes %r" % (ra29.get('fitting_inwc'), ra29.get('unpriced')))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

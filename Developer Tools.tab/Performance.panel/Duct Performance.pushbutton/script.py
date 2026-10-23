@@ -42,6 +42,7 @@ IronPython 2.7 / pyRevit  --  no f-strings, no walrus, no nonlocal.
 import os
 import sys
 import math
+import re
 import traceback
 import datetime
 
@@ -91,9 +92,12 @@ if _lib not in sys.path:
 
 import hvac_graph
 import fitting_tables
+import ashrae_fittings
 import revit_helpers
 import rja_drafting
 import vav_checks
+import console_report
+import duct_perf_console
 from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
@@ -108,14 +112,15 @@ _COLOR_MAP = {'GREEN': GREEN, 'YELLOW': YELLOW, 'RED': RED, 'PURPLE': PURPLE, 'G
 
 # ── output table columns ───────────────────────────────────────────────────────
 # ONE definition list drives BOTH output tables: the drafting-view schedule
-# placed on the sheet and the console print_code table. They are rendered by
-# different code (detail lines + TextNotes vs. padded monospace text) and have
+# placed on the sheet and the console table. They are rendered by different
+# code (detail lines + TextNotes vs. an HTML table) and have
 # drifted apart before, so the column set, the headers and the cell values all
 # come from here and from _row_cells() rather than being written out twice.
 #
 #   view_w     column width in feet at the schedule view's 1:1 scale
 #              (= printed inches / 12)
-#   console_w  column width in monospace characters
+#   console_w  column width in monospace characters (plain text console
+#              fallback, used only when output.print_html fails)
 #   default_on starting checkbox state in the settings dialog (selectable
 #              columns only - see _FIXED_COLUMN_KEYS)
 #
@@ -304,9 +309,14 @@ _SETTINGS_XAML = '''
                         <StackPanel>
                             <TextBlock x:Name="tb_adv_note" Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap"
                                        Text="Overrides apply to every duct in the run. Leave at standard values unless the project needs otherwise."/>
-                            <Expander x:Name="exp_c" IsExpanded="False" Margin="0,8,0,0"
-                                      Header="Fitting loss coefficients (C)"
-                                      ToolTip="Defaults from the RJA SP loss worksheet (1985 ASHRAE fitting numbers). Cannot be negative.">
+                            <Expander x:Name="exp_ctab" IsExpanded="False" Margin="0,8,0,0"
+                                      Header="Fitting loss coefficient tables (2001 ASHRAE Fundamentals)"
+                                      ToolTip="Each fitting's C is looked up from its table at that fitting's own geometry and flows. Open a fitting to see its table. Read only.">
+                                <StackPanel x:Name="pnl_ctab" Margin="16,4,0,4"/>
+                            </Expander>
+                            <Expander x:Name="exp_c" IsExpanded="False" Margin="0,4,0,0"
+                                      Header="Fallback C values (RJA SP loss worksheet)"
+                                      ToolTip="Used only where a fitting's geometry or flows cannot be read; the report flags each one as FALLBACK. Cannot be negative.">
                                 <Grid x:Name="grid_c" Margin="16,4,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -461,6 +471,7 @@ def _show_velocity_settings_xaml(use_theme):
     exp_comp = N('exp_comp')
     exp_basis = N('exp_basis')
     grid_c = N('grid_c')
+    pnl_ctab = N('pnl_ctab')
     grid_comp = N('grid_comp')
     grid_basis = N('grid_basis')
     grid_ref = N('grid_ref')
@@ -579,6 +590,84 @@ def _show_velocity_settings_xaml(use_theme):
         grid_c,
         [(k, lbl, 'ASHRAE ' + no, v) for k, lbl, no, v in fitting_tables.C_TABLE],
         c_boxes, c_order, '%.2f')
+    # ── one collapsed row per fitting, opening to the ASHRAE table it reads
+    #    (Colin, 2026-10-23). Filled on first open so the dialog stays quick.
+    def _table_view(key):
+        panel = StackPanel()
+        panel.Margin = Thickness(0, 2, 0, 8)
+        t = ashrae_fittings.table(key)
+        title = TextBlock()
+        title.Text = ashrae_fittings.table_label(key)
+        title.FontWeight = _FW.SemiBold
+        title.TextWrapping = TextWrapping.Wrap
+        panel.Children.Add(title)
+        if t is None:
+            panel.Children.Add(ui_helpers.rja_hint_block(win, 'Not transcribed.'))
+            return panel
+        coef = t.get('coef') or 'C'
+        if t['kind'] == 'const':
+            panel.Children.Add(ui_helpers.rja_hint_block(
+                win, '%s = %s' % (coef, t['C'])))
+            return panel
+        if t['kind'] == '3d':
+            panel.Children.Add(ui_helpers.rja_hint_block(win, (
+                '%s by %s (layers %s), %s (rows) and %s (columns). Three '
+                'dimensional, see the book pages.') % (
+                    coef, t['layers']['name'],
+                    ', '.join('%g' % v for v in t['layers']['values']),
+                    t['rows']['name'], t['cols']['name'])))
+            return panel
+        if t['kind'] == '1d':
+            head = [t['x']['name']] + ['%g' % v for v in t['x']['values']]
+            body = [[coef] + ['-' if v is None else '%.2f' % v for v in t['C']]]
+        else:
+            head = ['%s  x  %s' % (t['rows']['name'], t['cols']['name'])] + [
+                '%g' % v for v in t['cols']['values']]
+            body = [['%g' % rv] + ['' if v is None else '%.2f' % v for v in row]
+                    for rv, row in zip(t['rows']['values'], t['C'])]
+        g = Grid()
+        g.Margin = Thickness(0, 2, 0, 0)
+        for _c in range(len(head)):
+            cd = ColumnDefinition()
+            cd.Width = GridLength.Auto
+            g.ColumnDefinitions.Add(cd)
+        for r, row in enumerate([head] + body):
+            _add_row_def(g)
+            for c, text in enumerate(row):
+                tb = TextBlock()
+                tb.Text = text
+                tb.FontSize = 11
+                tb.Margin = Thickness(0, 0, 10, 0)
+                if r == 0 or c == 0:
+                    tb.FontWeight = _FW.SemiBold
+                _put(g, tb, c, r)
+        panel.Children.Add(g)
+        return panel
+
+    for label, family, keys, _fallback in ashrae_fittings.FITTING_ROWS:
+        ex = Expander()
+        ex.Header = '%s   (%s)' % (label, ', '.join(k.split('_')[0] for k in keys
+                                                     if not k.endswith('_K')))
+        ex.IsExpanded = False
+        ex.Margin = Thickness(0, 2, 0, 2)
+        ex.ToolTip = 'Model family: ' + family
+        body = StackPanel()
+        body.Margin = Thickness(18, 2, 0, 4)
+        ex.Content = body
+
+        def _fill(sender, e, body=body, keys=keys, family=family):
+            if body.Children.Count:
+                return
+            body.Children.Add(ui_helpers.rja_hint_block(win, 'Model family: ' + family))
+            seen = set()
+            for k in keys:
+                if k in seen:
+                    continue
+                seen.add(k)
+                body.Children.Add(_table_view(k))
+        ex.Expanded += _fill
+        pnl_ctab.Children.Add(ex)
+
     comp_boxes = {}
     comp_order = []
     _fill_value_grid(
@@ -633,11 +722,15 @@ def _show_velocity_settings_xaml(use_theme):
                       'plus one flex bend per flex run. Editable under Advanced.'
                       % (hvac_graph.STANDARD_RIGID_ROUGHNESS_FT,
                          hvac_graph.STANDARD_FLEX_ROUGHNESS_FT)),
-        ('Fittings', 'C x Pv, with C from the RJA SP loss worksheet (1985 ASHRAE '
-                     'fitting numbers), plus one flex bend (C 3.3, ASHRAE Duct '
-                     'Systems Design Guide) per flex run. Return and exhaust '
-                     'transitions are priced in the direction the air flows. '
-                     'Editable under Advanced.'),
+        ('Fittings', 'C x Pv, with C looked up per fitting from the 2001 ASHRAE '
+                     'Fundamentals Ch. 34 tables at its own angle, radius, aspect, '
+                     'area and flow ratios (tables shown under Advanced). Round '
+                     'elbows: die stamped r/D 1.5 (CD3-1), 1 D corrected by CD3-12. '
+                     'Rect mitered elbows: no vanes to 45 deg (CR3-6), vanes above '
+                     '(CR3-9). Transitions at the section o Pv, taps at the common '
+                     'section Pv. RJA SP loss worksheet C where geometry is '
+                     'unreadable. One flex bend (C 3.3, ASHRAE Duct Systems Design '
+                     'Guide) per flex run.'),
         ('External static', 'The most restrictive run (index run) from the unit to '
                             'a terminal, supply path plus return path. Includes duct '
                             'friction, fittings, balancing dampers, the diffuser and '
@@ -1218,7 +1311,7 @@ def _show_velocity_settings_dialog_legacy():
 
     c_boxes = {}
     _value_expander(
-        'Fitting loss coefficients (C)',
+        'Fallback C values (RJA SP loss worksheet, used where geometry is unreadable)',
         [(k, lbl, 'ASHRAE ' + no, v) for k, lbl, no, v in fitting_tables.C_TABLE],
         c_boxes, 250, '%.2f')
 
@@ -1884,6 +1977,43 @@ def _wrap_summary_lines(lines, width=SUMMARY_WRAP_CHARS):
     return out
 
 
+def _esp_text_line(item, inwc, detail=None):
+    """One external static line of the drafting view summary.
+
+    Item padded to 19 so every value starts in the same column, e.g.
+    '      Duct friction      0.123 in. wc   (12 ducts, 140 ft)'.
+    """
+    line = '      {:<19}{:.3f} in. wc'.format(item, inwc)
+    if detail:
+        line += '   ({})'.format(detail)
+    return line
+
+
+def _esp_console_text(total_inwc, sides_text):
+    """The highlighted external static total in the console."""
+    return 'EXTERNAL STATIC PRESSURE = {:.3f} in. wc ({})'.format(
+        float(total_inwc), sides_text)
+
+
+def _emit_html(html, fallback):
+    """Print one themed console section, or its plain text when print_html
+    is missing or throws. The failure is logged, never silent."""
+    try:
+        output.print_html(html)
+        return True
+    except Exception as ex:
+        script.get_logger().warning(
+            'Duct Performance: output.print_html failed ({}: {}), plain text '
+            'printed instead.'.format(type(ex).__name__, ex))
+    try:
+        fallback()
+    except Exception as ex:
+        script.get_logger().error(
+            'Duct Performance: plain text fallback failed too ({}: {}).'.format(
+                type(ex).__name__, ex))
+    return False
+
+
 def _root_class_airflow(root_id, all_children, all_terminals):
     """Total CFM and terminal count per system class, downstream of ONE root.
 
@@ -2062,36 +2192,349 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             cont_cache[nid] = hvac_graph.duct_continues_past(nid, all_nodes, all_children)
         return cont_cache[nid]
 
-    def _price_fitting(elem, sys_class, up_fpm, up_area, against_flow=False):
-        """(loss in. wc, counted 0/1, unpriced note or None, downstream area).
+    # ── ASHRAE 2001 lookups (Colin, 2026-10-23) ─────────────────────────────
+    # Every elbow, transition and tap is priced from the 2001 Fundamentals
+    # table for its own geometry and flows (ashrae_fittings). When the geometry
+    # cannot be read, or no 2001 table fits, the RJA worksheet C is used and a
+    # FALLBACK note is reported, so the total is never silently short.
+    parent_of = {}
+    for _p, _cs in all_children.items():
+        for _c in _cs:
+            parent_of.setdefault(_c, _p)
+
+    def _is_round_duct(dr):
+        return 'dia' in (getattr(dr, 'size', '') or '')
+
+    def _round_d_in(dr):
+        """Diameter of a round main in inches, or None."""
+        if not _is_round_duct(dr) or not dr.area_ft2:
+            return None
+        return math.sqrt(4.0 * dr.area_ft2 / math.pi) * 12.0
+
+    def _is_45_tap(fam):
+        f = (fam or '').lower()
+        return 'shoe' in f or 'bevel' in f or '45' in f
+
+    def _tap_branch_area(tap_id):
+        """Area ft2 of a tap's branch opening: the smaller of its connectors
+        (a beveled tap widens toward the main), or None."""
+        elem = all_nodes.get(tap_id)
+        if elem is None:
+            return None
+        try:
+            areas = [a for a, _r in hvac_graph.connector_areas_ft2(elem) if a > 0]
+        except Exception:
+            areas = []
+        return min(areas) if areas else None
+
+    def _branch_flow(tap_id):
+        """(cfm, area ft2) of the branch a tap feeds, or (None, None).
+
+        The cfm is every duct the branch splits into below the tap (a tap
+        feeding a tee counts both legs), else the terminals right on it. The
+        area is the tap's own branch opening, else the one branch duct's."""
+        below = vav_checks.nearest_ducts_down(tap_id, all_children, _kind)
+        ducts = [dr_by_int_id[d] for d in below if d in dr_by_int_id]
+        q = sum([d.cfm for d in ducts], 0.0)
+        if q <= 0.0:
+            q = sum([all_terminals[ch][0] for ch in all_children.get(tap_id, [])
+                     if ch in all_terminals], 0.0)
+        if q <= 0.0:
+            return None, None
+        ab = _tap_branch_area(tap_id)
+        if ab is None and len(ducts) == 1:
+            ab = ducts[0].area_ft2
+        return q, ab
+
+    tapflow_cache = {}
+    def _tap_flows(duct_id):
+        """({tap id: (local common cfm, branch cfm, branch area, feet)}, ordered).
+
+        On an unbroken Revit main the duct's cfm is the flow at its unit end;
+        each tap sees that less the branches taken off ahead of it, so taps are
+        put in order along the duct (hvac_graph.tap_positions_ft). When the
+        order cannot be read every tap sees the duct's own cfm (NOTE)."""
+        if duct_id in tapflow_cache:
+            return tapflow_cache[duct_id]
+        dr = dr_by_int_id[duct_id]
+        taps = _taps(duct_id)
+        pos = {}
+        elem = all_nodes.get(duct_id)
+        par = parent_of.get(duct_id)
+        if elem is not None and par is not None and taps:
+            try:
+                pos = hvac_graph.tap_positions_ft(elem, par)
+            except Exception:
+                pos = {}
+        ordered = bool(taps) and all(t in pos for t in taps)
+        order = sorted(taps, key=lambda t: pos[t]) if ordered else list(taps)
+        q = dr.cfm
+        out = {}
+        for t in order:
+            qb, ab = _branch_flow(t)
+            out[t] = (q, qb, ab, pos.get(t))
+            if ordered and qb:
+                q = max(q - qb, 0.0)
+        tapflow_cache[duct_id] = (out, ordered)
+        return tapflow_cache[duct_id]
+
+    def _floor_return(loss, sys_class, what):
+        """(loss, notes). ASHRAE prints negative converging junction C for
+        the slower stream, a credit. On return and exhaust a tap loss is
+        floored at zero for external static, a conservative estimate (Colin,
+        2026-10-23); the report names each one floored."""
+        if loss < 0.0 and not fitting_tables._is_supply(sys_class):
+            return 0.0, ['%s %.3f in. wc from the 2001 table, floored at 0'
+                         % (what, loss)]
+        return loss, []
+
+    tapprice_cache = {}
+    def _tap_turn(tap_id):
+        """(loss in. wc, label, notes) for the air turning off through tap_id,
+        or None when no 2001 table fits.
+
+        The printed Cb is referenced to the branch section (2001 Example 8,
+        Eq. 35). ashrae_fittings converts it to Cc,b, referenced to the main,
+        at the Ab/Ac the table was read at (Eq. 34), so ER5-2 / ER5-3 keep
+        their printed Ab/Ac 0.5 geometry; the loss is Cc,b x the main's Pv
+        (Colin, 2026-10-23: mains are designed at 600 fpm return and 800 fpm
+        supply, low pressure). Return and exhaust losses floor at zero."""
+        if tap_id in tapprice_cache:
+            return tapprice_cache[tap_id]
+        res = None
+        main = parent_of.get(tap_id)
+        dr = dr_by_int_id.get(main)
+        elem = all_nodes.get(tap_id)
+        if dr is not None and elem is not None and dr.area_ft2:
+            flows, _ord = _tap_flows(main)
+            qc, qb, ab, _ft = flows.get(tap_id, (dr.cfm, None, None, None))
+            if qc and qb and ab:
+                fam = hvac_graph.fitting_family_name(elem)
+                cb, label, notes = ashrae_fittings.tap_branch_c(
+                    fitting_tables._is_supply(dr.sys_class),
+                    'round' if hvac_graph.fitting_is_round(elem) else 'rect',
+                    'round' if _is_round_duct(dr) else 'rect',
+                    _is_45_tap(fam), ab / dr.area_ft2, min(qb / qc, 1.0),
+                    main_d_in=_round_d_in(dr))
+                if cb is not None:
+                    vc = qc / dr.area_ft2
+                    loss, fl = _floor_return(
+                        cb * hvac_graph.velocity_pressure_inwg(vc), dr.sys_class,
+                        'tap %s branch loss' % tap_id)
+                    res = (loss, '%s at main %.0f fpm' % (label, vc),
+                           list(notes) + fl)
+        tapprice_cache[tap_id] = res
+        return res
+
+    passprice_cache = {}
+    def _tap_pass(duct_id, t):
+        """(loss in. wc, table, C, notes, fallback) for the air continuing past
+        tap t on main duct_id: Cc,s (converted from the printed Cs at the
+        As/Ac the table was read at) x the main's Pv at the tap. On an
+        unbroken main As = Ac; the Cs tables stop at As/Ac 0.9 and are read on
+        that row (stated in the METHOD)."""
+        key = (duct_id, t)
+        if key in passprice_cache:
+            return passprice_cache[key]
+        dr = dr_by_int_id[duct_id]
+        flows, _ord = _tap_flows(duct_id)
+        qc, qb, ab, _ft = flows.get(t, (dr.cfm, None, None, None))
+        elem = all_nodes.get(t)
+        res = None
+        if qc and qb and dr.area_ft2 and elem is not None:
+            fam = hvac_graph.fitting_family_name(elem)
+            qs = max(qc - qb, 0.0)
+            cs, lbl, _n = ashrae_fittings.tap_main_c(
+                fitting_tables._is_supply(dr.sys_class),
+                'round' if hvac_graph.fitting_is_round(elem) else 'rect',
+                'round' if _is_round_duct(dr) else 'rect',
+                _is_45_tap(fam), 1.0, qs / qc,
+                ab / dr.area_ft2 if ab else None, main_d_in=_round_d_in(dr))
+            if cs is not None:
+                vc = qc / dr.area_ft2
+                one, fl = _floor_return(
+                    cs * hvac_graph.velocity_pressure_inwg(vc), dr.sys_class,
+                    'tap %s straight-through loss' % t)
+                res = (one, lbl.split(' ')[0] + ' Cc,s', cs, fl, None)
+        if res is None:
+            c_ws = fitting_tables.takeoff_main_c(dr.sys_class, c_values)
+            one = c_ws * hvac_graph.velocity_pressure_inwg(dr.fpm)
+            res = (one, 'RJA worksheet', c_ws, [],
+                   'FALLBACK: tap %s passed on duct %s, RJA worksheet C %.2f '
+                   '(flows or branch area unreadable)' % (t, duct_id, c_ws))
+        passprice_cache[key] = res
+        return res
+
+    def _taps_passed(duct_id, child_id):
+        """(loss in. wc, count, [(table, C, loss)], report notes) for the taps
+        on main duct_id the run passes before leaving through child_id. Only
+        taps AHEAD of the exit are passed when the order is known; a run
+        continuing on the main passes all."""
+        taps = _taps(duct_id)
+        flows, ordered = _tap_flows(duct_id)
+        notes = []
+        if child_id in taps:
+            if ordered:
+                mine = flows[child_id][3]
+                passed = [t for t in taps if t != child_id and flows[t][3] < mine]
+            else:
+                passed = [t for t in taps if t != child_id]
+                notes.append('NOTE: tap order on duct %s unreadable, every tap '
+                             'priced at the full duct flow' % duct_id)
+        else:
+            passed = list(taps)
+        loss, parts = 0.0, []
+        for t in passed:
+            one, table, c, n, fb = _tap_pass(duct_id, t)
+            loss += one
+            parts.append((table, c, one))
+            notes.extend(['NOTE: ' + x for x in n])
+            if fb:
+                notes.append(fb)
+        return loss, len(passed), parts, notes
+
+    def _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area):
+        """(loss in. wc, label, notes, downstream area) from the 2001 tables,
+        or None to fall back to the worksheet."""
+        if role == 'elbow':
+            g = hvac_graph.elbow_geometry(elem)
+            if g is None:
+                return None
+            f = (fam or '').lower()
+            if g['round']:
+                if not g['d_in']:
+                    return None
+                rd = (g['r_in'] / g['d_in']) if g['r_in'] else None
+                c, label, notes = ashrae_fittings.round_elbow_c(g['d_in'], rd, g['angle'])
+            else:
+                if not g['w_in'] or not g['h_in']:
+                    return None
+                hw = g['h_in'] / g['w_in']
+                if 'radius' in f and 'miter' not in f:
+                    if not g['r_in']:
+                        return None
+                    c, label, notes = ashrae_fittings.rect_smooth_elbow_c(
+                        g['r_in'] / g['w_in'], hw, g['angle'])
+                else:
+                    c, label, notes = ashrae_fittings.rect_mitered_elbow_c(hw, g['angle'])
+            if c is None:
+                return None
+            return (c * hvac_graph.velocity_pressure_inwg(up_fpm),
+                    '%s, C %.2f' % (label, c), notes, None)
+        if role == 'transition':
+            ends, theta = hvac_graph.transition_geometry(elem)
+            if not ends or theta is None or not up_area or not up_fpm:
+                return None
+            # Section 1 is the walk-upstream (unit side) end and o the far end,
+            # for supply (air 1 -> o) and return (air o -> 1, 1 toward the fan)
+            # alike, so the walk order IS the table order.
+            e1, eo = sorted(ends, key=lambda e: abs(e[0] - up_area))
+            c, label, notes = ashrae_fittings.transition_c(
+                fitting_tables._is_supply(sys_class), e1[1], eo[1], e1[0], eo[0], theta)
+            if c is None:
+                return None
+            vo = up_fpm * up_area / eo[0]
+            return (c * hvac_graph.velocity_pressure_inwg(vo),
+                    '%s, Co %.2f at %.0f fpm' % (label, c, vo), notes, eo[0])
+        return None
+
+    _COMP_LABEL = dict((k, lbl) for k, lbl, _v in fitting_tables.COMPONENT_TABLE)
+    _C_IN_DETAIL = re.compile(r'\b(?:C|Cb|Co|Cs)\s+(-?\d+\.\d+)')
+    _CC_IN_DETAIL = re.compile(r'Cc,[bs]\s+(-?\d+\.\d+)')
+    _TABLE_ID = re.compile(r'^([A-Z]{2}\d+-\d+)')
+
+    def _takeoff_key(elem, fam, detail, counted, note):
+        """(row name, table, C, feet) grouping one fitting into the external
+        static take-off table: fittings of one kind, one table and one C share
+        a row, the way the WSFU take-off groups fixtures."""
+        role = fitting_tables.classify_fitting(fam)
+        f = (fam or '').lower()
+        if role == 'elbow':
+            ang = hvac_graph.fitting_angle_deg(elem)
+            ang = 90.0 if ang is None else ang
+            if hvac_graph.fitting_is_round(elem):
+                kind = 'Round elbow'
+            elif 'radius' in f and 'miter' not in f:
+                kind = 'Rect radius elbow'
+            else:
+                kind = 'Rect mitered elbow'
+            name = '%s, %.0f deg' % (kind, ang)
+        elif role == 'transition':
+            name = 'Transition'
+        elif role == 'takeoff':
+            name = 'Tap, into branch'
+        elif role in ('tee', 'cross', 'wye', 'offset'):
+            name = role.capitalize()
+        else:
+            name = fam or 'Fitting'
+        m = _TABLE_ID.match(detail or '')
+        if note and 'UNPRICED' in note and not note.startswith(('FALLBACK', 'NOTE')):
+            table = 'UNPRICED'
+        elif m:
+            table = m.group(1)
+        else:
+            table = 'RJA worksheet'
+        # A tap's take-off C is Cc,b: the value that multiplies the main Pv.
+        cm = _CC_IN_DETAIL.search(detail or '') or _C_IN_DETAIL.search(detail or '')
+        return (name, table, float(cm.group(1)) if cm else None, None)
+
+    def _notes_text(notes):
+        """Lookup notes (clamped read, blank cell, negative credit) as one
+        NOTE line for the report, or None."""
+        notes = [n for n in (notes or []) if n]
+        return ('NOTE: ' + '; '.join(notes)) if notes else None
+
+    def _price_fitting(elem, sys_class, up_fpm, up_area, against_flow=False,
+                       nid=None):
+        """(loss in. wc, counted 0/1, unpriced note or None, downstream area,
+        detail text).
 
         One place that prices a fitting the path passes THROUGH, used by the main
         walk and by the unit-side chain below so the two can never disagree.
+        Elbows, transitions and taps come from the ASHRAE 2001 tables first;
+        the RJA worksheet prices anything else and anything unreadable (the
+        note then starts FALLBACK).
 
-        against_flow: the walk is going the opposite way to the air. A transition
-        then has its two areas swapped before it is classified, so a return
+        against_flow: the walk is going the opposite way to the air (the unit
+        side chain of a picked supply duct). The 2001 transition tables are
+        keyed to the walk order for the main walk only, so a reversed walk
+        prices transitions on the worksheet, with its areas swapped so a return
         transition that grows toward the unit is priced as the contraction the
-        air actually sees, not as an expansion (Colin, 2026-10-21). The returned
-        downstream area stays in WALK order, because the caller tracks area
-        along the walk.
+        air sees (Colin, 2026-10-21). The returned downstream area stays in
+        WALK order, because the caller tracks area along the walk.
         """
         fam  = hvac_graph.fitting_family_name(elem)
         role = fitting_tables.classify_fitting(fam)
+        if role == 'takeoff' and nid is not None:
+            t = _tap_turn(nid)
+            if t is not None:
+                return t[0], 1, _notes_text(t[2]), None, t[1]
+        reversed_walk = against_flow != fitting_tables.flows_toward_unit(sys_class)
+        if role in ('elbow', 'transition') and not (role == 'transition' and reversed_walk):
+            a = _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area)
+            if a is not None:
+                return a[0], 1, _notes_text(a[2]), a[3], a[1]
         up_a, down_a = (None, None)
         flow_up, flow_down = (None, None)
         if role == 'transition':
             up_a, down_a = hvac_graph.transition_areas(elem, up_area)
             flow_up, flow_down = (down_a, up_a) if against_flow else (up_a, down_a)
+        angle = hvac_graph.fitting_angle_deg(elem) if role == 'elbow' else None
         c, note = fitting_tables.fitting_c(
             role, sys_class,
             is_round=hvac_graph.fitting_is_round(elem),
             upstream_area_ft2=flow_up, downstream_area_ft2=flow_down,
-            is_end_of_main=False, c=c_values)
+            is_end_of_main=False, c=c_values, angle_deg=angle)
+        fb = None
+        if role in ('elbow', 'takeoff') or (role == 'transition' and not reversed_walk):
+            fb = 'FALLBACK: %s: %s, RJA worksheet C %.2f (geometry or flows unreadable)' % (
+                fam or '?', note, c)
         if c > 0.0:
-            return c * hvac_graph.velocity_pressure_inwg(up_fpm), 1, None, down_a
+            return (c * hvac_graph.velocity_pressure_inwg(up_fpm), 1, fb, down_a,
+                    '%s, C %.2f worksheet' % (note, c))
         if 'UNPRICED' in note:
-            return 0.0, 0, (fam or '?') + ': ' + note, down_a
-        return 0.0, 0, None, down_a
+            return 0.0, 0, (fam or '?') + ': ' + note, down_a, 'UNPRICED'
+        return 0.0, 0, None, down_a, note
 
     def _unit_side_chain(root_id):
         """Duct and fittings BEHIND a picked duct, on the unit side.
@@ -2154,7 +2597,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     # This stretch is walked from the picked duct back TOWARD the
                     # unit, the reverse of the main walk, so supply air runs
                     # against it and return air runs with it.
-                    loss, counted, note, down_a = _price_fitting(
+                    loss, counted, note, down_a, _detail = _price_fitting(
                         elem, root_dr.sys_class, up_fpm, up_area,
                         against_flow=not fitting_tables.flows_toward_unit(
                             root_dr.sys_class))
@@ -2196,7 +2639,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         pre_items = ()
         if pre[1] or pre[0]:
             pre_items = (('Unit side stretch', '{} fitting(s), {} duct(s), {:.0f} ft'.format(
-                pre[2], pre[3], pre[4]), None, pre[0] + pre[1]),)
+                pre[2], pre[3], pre[4]), None, pre[0] + pre[1],
+                ('Unit side stretch (picked duct to unit)', 'mixed', None, pre[4])),)
         stack = [(root_id, pre[0], pre[1], (), pre[3], pre[2], 0, pre[4], 0.0,
                   0.0, None, pre[5], frozenset([root_id]), False, pre_items)]
         steps = 0
@@ -2225,7 +2669,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     'Duct {}'.format(nid),
                     '{}, {:.1f} ft'.format(getattr(dr, 'size', '?'),
                                            float(dr.length_ft)),
-                    dr.fpm, dr.friction_loss_inwc),)
+                    dr.fpm, dr.friction_loss_inwc,
+                    ('Flex duct' if getattr(dr, 'is_flex', False) else 'Straight duct',
+                     'Darcy-Weisbach', None, float(dr.length_ft))),)
                 # Straight flex friction alone covers far less than one real
                 # bend (ASHRAE Duct Systems Design Guide Ch. 2: flex bend C 0.9 to
                 # 3.3). Colin, 2026-10-21: charge one bend per continuous flex
@@ -2239,25 +2685,32 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     items  = items + ((
                         'Flex bend', 'C {:.2f}'.format(
                             fitting_tables.flex_bend_c(c_values)),
-                        dr.fpm, bend),)
+                        dr.fpm, bend,
+                        ('Flex bend, one per flex run', 'DSDG Ch. 2',
+                         fitting_tables.flex_bend_c(c_values), None)),)
                 in_flex = is_flex_here
 
             elif elem is not None and hvac_graph.is_fitting(elem):
-                loss, counted, note, _down_a = _price_fitting(
+                loss, counted, note, _down_a, detail = _price_fitting(
                     elem, sys_class, up_fpm, up_area,
-                    against_flow=fitting_tables.flows_toward_unit(sys_class))
+                    against_flow=fitting_tables.flows_toward_unit(sys_class),
+                    nid=nid)
                 fit    = fit + loss
                 fcount = fcount + counted
                 if note:
                     unpriced = unpriced + (note,)
-                _pv = hvac_graph.velocity_pressure_inwg(up_fpm) if up_fpm else 0.0
+                _fam = hvac_graph.fitting_family_name(elem) or '?'
                 items = items + ((
                     'Fitting {}'.format(nid),
-                    '{}, {}'.format(
-                        hvac_graph.fitting_family_name(elem) or '?',
-                        'UNPRICED' if note else 'C {:.2f}'.format(
-                            loss / _pv if _pv else 0.0)),
-                    up_fpm, loss),)
+                    '{}, {}'.format(_fam, detail),
+                    up_fpm, loss,
+                    _takeoff_key(elem, _fam, detail, counted, note)),)
+                # Past a transition the air moves at its far end's velocity, so
+                # the next fitting (or transition) is priced and oriented there.
+                # Same airflow, new area.
+                if _down_a and up_area and up_fpm:
+                    up_fpm = up_fpm * up_area / _down_a
+                    up_area = _down_a
 
             elif elem is not None and hvac_graph.is_accessory(elem):
                 # Accessories are components, not fittings: the drop is a
@@ -2272,7 +2725,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     comp_keys = comp_keys + (akey,)
                     items = items + ((
                         'Accessory {}'.format(nid), fam or '?', None,
-                        fitting_tables.component_of(akey, comp_values)),)
+                        fitting_tables.component_of(akey, comp_values),
+                        (_COMP_LABEL.get(akey, akey), 'known drop', None, None)),)
                 else:
                     unpriced = unpriced + (
                         (fam or '?') + ': accessory on the run, not priced',)
@@ -2293,7 +2747,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         boxes_here[nid] = _reach
                     comp_keys = comp_keys + ('vav_box',)
                     items = items + ((
-                        'VAV box {}'.format(nid), 'VAV box drop', None, box_drop),)
+                        'VAV box {}'.format(nid), 'VAV box drop', None, box_drop,
+                        ('VAV box', 'known drop', None, None)),)
                     box_here = True
                 else:
                     # VAV off, or not a box: its own key, at the balancing
@@ -2301,7 +2756,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     comp_keys = comp_keys + ('mid_equip',)
                     items = items + ((
                         'Equipment {}'.format(nid),
-                        'Mid tree equipment (as damper)', None, _comp('mid_equip')),)
+                        'Mid tree equipment (as damper)', None, _comp('mid_equip'),
+                        ('Mid tree equipment (as damper)', 'known drop', None, None)),)
 
             term = all_terminals.get(nid)
             if term is not None:
@@ -2336,7 +2792,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'unpriced':         unpriced,
                         'items':            items + ((
                             'Terminal {}'.format(nid), _family or '-', None,
-                            fitting_tables.component_of('diffuser', comp_values)),),
+                            fitting_tables.component_of('diffuser', comp_values),
+                            ('Diffuser / grille', 'known drop', None, None)),),
                     }
 
             for child_id in all_children.get(nid, []):
@@ -2360,24 +2817,32 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 extra_fit = fit
                 extra_t   = tcount
                 extra_items = items
+                extra_unpriced = unpriced
                 if dr is not None:
-                    # Every tap on this main that the run does NOT leave
-                    # through restricts it, and gets the main-duct coefficient.
+                    # Every tap on this main that the run passes before it
+                    # leaves restricts it: Cs from the tap's 2001 table at its
+                    # own flow split (worksheet C where flows are unreadable).
+                    # A run leaving through a tap passes only the taps AHEAD
+                    # of it on the duct when their order is known.
                     taps = _taps(nid)
-                    n_by = len(taps) - (1 if child_id in taps else 0)
+                    _tl, n_by, _parts, _fbs = _taps_passed(nid, child_id)
                     if n_by > 0:
-                        _mc = fitting_tables.takeoff_main_c(dr.sys_class, c_values)
-                        _tl = _mc * hvac_graph.velocity_pressure_inwg(dr.fpm) * n_by
                         extra_fit = extra_fit + _tl
                         extra_t = extra_t + n_by
-                        extra_items = extra_items + ((
-                            'Taps passed', '{} on duct {}, C {:.2f} each'.format(
-                                n_by, nid, _mc),
-                            dr.fpm, _tl),)
+                        extra_unpriced = extra_unpriced + tuple(_fbs)
+                        for _tbl, _c, _one in _parts:
+                            extra_items = extra_items + ((
+                                'Tap passed', 'on duct {}, {} {:.2f}'.format(nid, _tbl, _c),
+                                dr.fpm, _one,
+                                ('Tap passed on main (straight through)', _tbl, _c, None)),)
                     # A tap at the terminus of a main is the worksheet's "end of
                     # main branch" case and carries a different C, so the swing
-                    # is applied here where the parent duct is known.
-                    if child_id in taps and not _continues(nid):
+                    # is applied here where the parent duct is known. A tap
+                    # priced from its 2001 table already reads the end of a
+                    # main through its flow split (Qb/Qc at 1.0), so it gets
+                    # no swing.
+                    if (child_id in taps and not _continues(nid)
+                            and _tap_turn(child_id) is None):
                         ch = all_nodes.get(child_id)
                         if ch is not None:
                             end_c = fitting_tables.takeoff_c(
@@ -2390,7 +2855,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             extra_items = extra_items + ((
                                 'End of main tap', 'C {:.2f} in place of {:.2f}'.format(
                                     end_c, typ_c),
-                                dr.fpm, _sw),)
+                                dr.fpm, _sw,
+                                ('End of main tap adjustment', 'RJA worksheet', None, None)),)
                 c_fpm, c_area = up_fpm, up_area
                 if box_here:
                     # Past a box the air moves at the box OUTLET duct's
@@ -2401,7 +2867,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         c_fpm, c_area = _od.fpm, _od.area_ft2
                 stack.append((child_id, fric, extra_fit, comp_keys, dcount,
                               fcount, extra_t, dlen, c_fpm, c_area,
-                              sys_class, unpriced,
+                              sys_class, extra_unpriced,
                               path | frozenset([child_id]), in_flex,
                               extra_items))
 
@@ -2428,51 +2894,90 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     return result
 
 
-def _vav_summary_lines(root_ids, vav_by_root, root_labels, critical, vav_set):
-    """The VAV BOXES block of the System Summary: per unit, each box and
-    (external static on) the MP loss to its inlet and the pressure left at it.
+def _vav_box_report(root_ids, vav_by_root, root_labels, critical, vav_set):
+    """The VAV BOXES block of the System Summary, as structured data: per unit,
+    each box and (external static on) the MP loss to its inlet and the
+    pressure left at it.
 
     Pressure left = unit max external static less the MP loss WITH the safety
     factor, the same basis as the external static total it is compared to.
     Only shown when the engineer entered the unit's max (VAV plan item 8).
+
+    Every value is worked out once here. _vav_summary_lines() flattens the
+    'lines' of each record into the drafting view text; the console renders
+    the other fields as a table.
+
+    Returns {'title', 'basis', 'minimum', 'lines' (block header lines), 'units': [{'label',
+    'lines', 'boxes': [{'box', 'lines', 'loss', 'loss_sf', 'left',
+    'status'}], 'mp_terminals', 'mp_terminal_text'}]}. status is None
+    (external static off), 'NOT REACHED', 'NOT CHECKED', 'OK' or 'LOW'.
     """
     umax = vav_set.get('unit_max_esp')
     minimum = float(vav_set['min_box_inwc'])
-    lines = ['', 'VAV BOXES (MP supply {:.0f} FPM, {:.2f} in. wc per 100 ft)'.format(
-        float(vav_set['mp_fpm']), float(vav_set['mp_fric']))]
+    basis = 'MP supply {:.0f} FPM, {:.2f} in. wc per 100 ft'.format(
+        float(vav_set['mp_fpm']), float(vav_set['mp_fric']))
+    title = 'VAV BOXES ({})'.format(basis)
+    report = {'title': title, 'basis': basis, 'lines': ['', title], 'units': [],
+              'minimum': minimum}
 
     for rid in root_ids:
         vs = vav_by_root.get(rid)
         if vs is None or not vs.boxes:
             continue
-        lines.append('  === {} ==='.format(root_labels.get(rid, 'id {}'.format(rid))))
+        label = root_labels.get(rid, 'id {}'.format(rid))
+        unit = {'label': label, 'lines': ['  === {} ==='.format(label)],
+                'boxes': [], 'mp_terminals': 0, 'mp_terminal_text': None}
+        report['units'].append(unit)
         boxes = {}
         if critical is not None:
             for leaf in (critical.get(rid) or {}).values():
                 boxes = leaf.get('boxes') or {}
                 break
         for box in vs.boxes:
-            lines.append('    Box {}'.format(box))
+            rec = {'box': box, 'lines': ['    Box {}'.format(box)],
+                   'loss': None, 'loss_sf': None, 'left': None, 'status': None}
+            unit['boxes'].append(rec)
             if critical is None:
                 continue
             reach = boxes.get(box)
             if reach is None:
-                lines.append('      MP loss to inlet: not reached by the index run search')
+                rec['status'] = 'NOT REACHED'
+                rec['lines'].append(
+                    '      MP loss to inlet: not reached by the index run search')
                 continue
+            rec['loss'], rec['loss_sf'] = reach[0], reach[1]
             text = '      MP loss to inlet {:.3f} in. wc ({:.3f} with safety factor)'.format(
                 reach[0], reach[1])
             left = vav_checks.pressure_left(umax, reach[1])
+            rec['left'] = left
             if left is None:
+                rec['status'] = 'NOT CHECKED'
                 text += ', pressure left not checked (no unit max entered)'
             else:
                 text += ', pressure left {:.3f} in. wc'.format(left)
                 if vav_checks.pressure_low(left, minimum):
+                    rec['status'] = 'LOW'
                     text += ', LOW: under the {:.2f} in. wc minimum'.format(minimum)
-            lines.append(text)
+                else:
+                    rec['status'] = 'OK'
+            rec['lines'].append(text)
         if vs.mp_terminals:
-            lines.append('    {} diffuser(s) on an MP main with no box upstream '
-                         '(flagged red on the duct feeding each).'.format(
-                             len(vs.mp_terminals)))
+            unit['mp_terminals'] = len(vs.mp_terminals)
+            unit['mp_terminal_text'] = (
+                '{} diffuser(s) on an MP main with no box upstream '
+                '(flagged red on the duct feeding each).'.format(len(vs.mp_terminals)))
+    return report
+
+
+def _vav_summary_lines(report):
+    """Flatten a _vav_box_report() into the drafting view text lines."""
+    lines = list(report['lines'])
+    for unit in report['units']:
+        lines.extend(unit['lines'])
+        for rec in unit['boxes']:
+            lines.extend(rec['lines'])
+        if unit['mp_terminal_text']:
+            lines.append('    ' + unit['mp_terminal_text'])
     return lines
 
 
@@ -2980,7 +3485,8 @@ _LEFT_COLUMNS = ('reason', 'role')
 
 def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id,
-                        show_r_marker_note=False, legend_notes=()):
+                        show_r_marker_note=False, legend_notes=(),
+                        esp_takeoffs=()):
     """Create a Drafting View with a System Summary block + flagged-duct table
     + color legend, in the RJA table look.
 
@@ -3018,6 +3524,26 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
             y = rja_drafting._note_panel(st, sched_view, 0.0, y, total_w,
                                          summary_lines)
         y -= rja_drafting.GAP
+
+        # External static take-off, one table per unit and system class, like
+        # the WSFU take-off (Colin, 2026-10-23).
+        for to in esp_takeoffs:
+            y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
+                                   'EXTERNAL STATIC TAKE-OFF - ' + to['title'], None,
+                                   rja_drafting.SUB_BAND_H)
+            to_cols = [(h, total_w * f) for h, f in zip(
+                duct_perf_console.TAKEOFF_HEADERS, (0.34, 0.24, 0.14, 0.12, 0.16))]
+            to_rows = [list(r) for r in to['rows']]
+            if to.get('filter') is not None:
+                to_rows.append(['Return filter', 'known drop', '1', '-',
+                                '{:.3f}'.format(float(to['filter']))])
+            to_rows.append(['Subtotal', '', '', '', '{:.3f}'.format(float(to['subtotal']))])
+            to_rows.append(['Safety factor', to.get('safety_detail') or '', '', '',
+                            '{:.3f}'.format(float(to['safety']))])
+            to_rows.append(['TOTAL', '', '', '', '{:.3f}'.format(float(to['total']))])
+            y = rja_drafting._styled_table(st, sched_view, 0.0, y, to_cols, to_rows,
+                                           totals_row=True, left_cols=(0, 1))
+            y -= rja_drafting.GAP
 
         y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
                                'DUCTS NEEDING ATTENTION', None,
@@ -3548,29 +4074,53 @@ def main():
         t[0] += 1
         t[1] += cfm
 
+    # The summary is built ONCE into two forms from the same values:
+    # summary_lines is the drafting view text (its layout shall not change),
+    # rep holds the same content as records for the themed console sections
+    # (lib/duct_perf_console.py). Every number below is worked out once and
+    # handed to both.
+    rep = {'grand': [], 'equipment': [], 'by_class': [], 'types': [],
+           'warnings': []}
+    esp_rec = None       # External Static Pressure records, when computed
+    vav_rep = None       # VAV Boxes records, when VAV is on with boxes
+    run_detail = []      # Index Run Detail records, when computed
     summary_lines = ['SYSTEM SUMMARY']
     run_detail_lines = []   # filled only when external static is computed
+    esp_takeoffs = []       # drafting view take-off tables, one per unit and class
     for name, aid, discharge_cfm, term_count, other_class_cfm in ahu_totals:
         summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM supply air discharge ({} diffusers)'.format(
             name, aid, discharge_cfm, term_count))
+        others = []
         for cls in sorted(other_class_cfm.keys()):
             summary_lines.append('    + {:.0f} CFM {} feeding this equipment (not counted in discharge total)'.format(
                 other_class_cfm[cls], cls))
+            others.append('{:,.0f} CFM {}'.format(float(other_class_cfm[cls]), cls))
+        rep['equipment'].append([
+            '{} (id {})'.format(name, aid), '{:,.0f}'.format(float(discharge_cfm)),
+            str(term_count), ', '.join(others) if others else '-'])
     summary_lines.append('Grand Total Airflow: {:.0f} CFM  |  {} Diffusers  |  {} Ducts'.format(
         grand_total_cfm, len(all_terminals), len(all_duct_results)))
+    rep['grand'] = [
+        ('Grand total airflow', '{:,.0f} CFM'.format(float(grand_total_cfm))),
+        ('Diffusers', str(len(all_terminals))),
+        ('Ducts', str(len(all_duct_results)))]
     for sys_class in sorted(sys_totals.keys()):
         s_cfm, s_cnt = sys_totals[sys_class]
         summary_lines.append('  {}: {:.0f} CFM  ({} diffusers)'.format(sys_class, s_cfm, s_cnt))
+        rep['by_class'].append([sys_class, '{:,.0f}'.format(float(s_cfm)), str(s_cnt)])
     summary_lines.append('Diffuser Types:')
     for family in sorted(type_totals.keys()):
         t_cnt, t_cfm = type_totals[family]
         summary_lines.append('  {}  x{}  ({:.0f} CFM)'.format(family, t_cnt, t_cfm))
+        rep['types'].append([family, str(t_cnt), '{:,.0f}'.format(float(t_cfm))])
     if all_zero_terms:
-        summary_lines.append('WARNING: {} diffuser(s) with Flow = 0 (missing CFM data)'.format(
-            len(all_zero_terms)))
+        _msg = '{} diffuser(s) with Flow = 0 (missing CFM data)'.format(len(all_zero_terms))
+        summary_lines.append('WARNING: ' + _msg)
+        rep['warnings'].append(_msg)
     if all_missing_flow:
-        summary_lines.append('WARNING: {} diffuser(s) missing a Flow parameter entirely'.format(
-            len(all_missing_flow)))
+        _msg = '{} diffuser(s) missing a Flow parameter entirely'.format(len(all_missing_flow))
+        summary_lines.append('WARNING: ' + _msg)
+        rep['warnings'].append(_msg)
 
     # Terminal ids of the most-restrictive diffuser per equipment/system class
     # — the one the index run (_critical_path_loss) ends at, i.e. the one that
@@ -3580,6 +4130,9 @@ def main():
     # of the diffuser's real pass/fail color — never replacing it.
     restrictive_terminal_ids = set()
 
+    # Where each console section's text starts in summary_lines, so the plain
+    # text fallback can print just that section.
+    esp_start = len(summary_lines)
     critical = None
     if ext_static:
         critical = _critical_path_loss(
@@ -3590,6 +4143,9 @@ def main():
             vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
+        esp_rec = {'units': [], 'combined': [], 'warnings': [],
+                   'method': None, 'not_included': None}
+        esp_by_root = {}
 
         # Grouped by EQUIPMENT, because every unit has its own fan and so its own
         # external static. Merging them would let a big unit's index run hide a
@@ -3599,9 +4155,14 @@ def main():
             per_class = critical.get(root_id)
             if not per_class:
                 continue
+            unit_label = root_labels.get(root_id, 'id {}'.format(root_id))
             summary_lines.append('')
-            summary_lines.append('  === {} ==='.format(
-                root_labels.get(root_id, 'id {}'.format(root_id))))
+            summary_lines.append('  === {} ==='.format(unit_label))
+            unit_rec = {'label': unit_label, 'classes': [], 'untraced': [],
+                        'esp': None, 'one_sided': None, 'checks': [],
+                        'warnings': []}
+            esp_rec['units'].append(unit_rec)
+            esp_by_root[root_id] = unit_rec
 
             airflow = _root_class_airflow(root_id, all_children, all_terminals)
 
@@ -3614,13 +4175,6 @@ def main():
                 summary_lines.append(
                     '      Total airflow      {:,.0f} CFM      ({} terminals)'.format(
                         a_cfm, a_cnt))
-                summary_lines.append(
-                    '      Duct friction      {:.3f} in. wc   ({} ducts, {:.0f} ft)'.format(
-                        c['friction_inwc'], c['duct_count'], c['length_ft']))
-                summary_lines.append(
-                    '      Fitting losses     {:.3f} in. wc   ({} fittings, {} taps '
-                    'restricting the main)'.format(
-                        c['fitting_inwc'], c['fitting_count'], c['tap_bypass_count']))
                 # Name what was actually counted and at what rate, so a
                 # component left at 0.00 reads as a deliberate zero rather than
                 # as something the tool failed to find.
@@ -3640,47 +4194,98 @@ def main():
                     parts.append('Mid tree equipment (as damper) x{} @ {:.3f}'.format(
                         tally['mid_equip'],
                         fitting_tables.component_of('damper', comp_values)))
-                summary_lines.append(
-                    '      Components         {:.3f} in. wc   ({})'.format(
-                        c['component_inwc'],
-                        '; '.join(parts) if parts else 'none on this run'))
+                # (item, in. wc, detail): one list feeds the text lines and
+                # the console table.
+                esp_rows = [
+                    ('Duct friction', c['friction_inwc'], '{} ducts, {:.0f} ft'.format(
+                        c['duct_count'], c['length_ft'])),
+                    ('Fitting losses', c['fitting_inwc'],
+                     '{} fittings, {} taps restricting the main'.format(
+                         c['fitting_count'], c['tap_bypass_count'])),
+                    ('Components', c['component_inwc'],
+                     '; '.join(parts) if parts else 'none on this run'),
+                ]
                 if c.get('filter_inwc', 0.0) > 0.0:
-                    summary_lines.append(
-                        '      Return filter      {:.3f} in. wc   (known drop, '
-                        'Include Return Filter)'.format(c['filter_inwc']))
+                    esp_rows.append(('Return filter', c['filter_inwc'],
+                                     'known drop, Include Return Filter'))
+                for _item, _val, _det in esp_rows:
+                    summary_lines.append(_esp_text_line(_item, _val, _det))
+                notes = []
                 if c.get('unit_side_fittings', 0) > 0:
-                    summary_lines.append(
-                        '      (Includes {} fitting(s) between the picked duct and '
-                        'the unit connection.)'.format(c['unit_side_fittings']))
-                summary_lines.append(
-                    '      Subtotal           {:.3f} in. wc'.format(c['subtotal_inwc']))
-                summary_lines.append(
-                    '      Safety factor      {:.3f} in. wc   (+{:.0f}%)'.format(
-                        c['total_inwc'] - c['subtotal_inwc'], safety_pct))
-                summary_lines.append(
-                    '      TOTAL              {:.3f} in. wc   (worst run ends at {})'.format(
-                        c['total_inwc'], c['terminal_name']))
+                    _msg = ('(Includes {} fitting(s) between the picked duct and '
+                            'the unit connection.)'.format(c['unit_side_fittings']))
+                    summary_lines.append('      ' + _msg)
+                    notes.append(_msg)
+                safety_inwc = c['total_inwc'] - c['subtotal_inwc']
+                safety_det = '+{:.0f}%'.format(safety_pct)
+                total_det = 'worst run ends at {}'.format(c['terminal_name'])
+                summary_lines.append(_esp_text_line('Subtotal', c['subtotal_inwc']))
+                summary_lines.append(_esp_text_line('Safety factor', safety_inwc, safety_det))
+                summary_lines.append(_esp_text_line('TOTAL', c['total_inwc'], total_det))
+                cls_warnings = []
                 for u in c['unpriced']:
-                    summary_lines.append('      UNPRICED: ' + u)
+                    # A FALLBACK note is priced (RJA worksheet C), not missing.
+                    _u = (u if (u.startswith('FALLBACK') or u.startswith('NOTE'))
+                          else 'UNPRICED: ' + u)
+                    summary_lines.append('      ' + _u)
+                    cls_warnings.append(_u)
+                # The take-off: every item on the index run grouped by kind,
+                # table and C, the way the WSFU take-off lists fixtures (Colin,
+                # 2026-10-23). Its rows add up to the subtotal less the filter.
+                _to_rows, _to_loss = duct_perf_console.takeoff_rows(c.get('items', ()))
+                _to_sum = sum(_to_loss, 0.0)
+                _expect = c['subtotal_inwc'] - c.get('filter_inwc', 0.0)
+                if abs(_to_sum - _expect) > 0.0005:
+                    _msg = ('take-off rows add to {:.3f} in. wc, the run totals {:.3f}; '
+                            'check the index run detail.'.format(_to_sum, _expect))
+                    hvac_graph.log.warning('ESP take-off mismatch %s %s: %s',
+                                           unit_label, sys_class, _msg)
+                    cls_warnings.append(_msg[0].upper() + _msg[1:])
+                _filt = c['filter_inwc'] if c.get('filter_inwc', 0.0) > 0.0 else None
+                esp_takeoffs.append({
+                    'title': '{} | {} | {}'.format(
+                        unit_label, sys_class,
+                        '{:,.0f} CFM'.format(float(a_cfm))),
+                    'rows': _to_rows, 'filter': _filt,
+                    'subtotal': c['subtotal_inwc'], 'safety': safety_inwc,
+                    'safety_detail': safety_det, 'total': c['total_inwc'],
+                    'total_detail': total_det})
                 # Console only: the index run item by item, so each number in
                 # the total can be traced to a duct, fitting or tap.
+                run_title = '{} | {} | worst run ends at terminal {}'.format(
+                    unit_label, sys_class, c['terminal_id'])
+                run_items = []
+                for _it in c.get('items', ()):
+                    _lbl, _det, _fpm, _loss = _it[:4]
+                    run_items.append((_lbl, '{:.0f}'.format(float(_fpm)) if _fpm else '-',
+                                      float(_loss or 0.0), _det))
+                run_sub_det = 'before the {:.0f}% safety factor'.format(float(safety_pct))
+                run_detail.append({'title': run_title, 'items': run_items,
+                                   'subtotal': float(c['subtotal_inwc']),
+                                   'subtotal_detail': run_sub_det})
                 run_detail_lines.append('')
-                run_detail_lines.append('=== {} | {} | worst run ends at terminal {} ==='.format(
-                    root_labels.get(root_id, 'id {}'.format(root_id)), sys_class,
-                    c['terminal_id']))
+                run_detail_lines.append('=== {} ==='.format(run_title))
                 run_detail_lines.append('{:<18} {:>7} {:>9}  {}'.format(
                     'Item', 'FPM', 'in. wc', 'Detail'))
-                for _lbl, _det, _fpm, _loss in c.get('items', ()):
+                for _lbl, _fpm_txt, _loss, _det in run_items:
                     run_detail_lines.append('{:<18} {:>7} {:>9.3f}  {}'.format(
-                        _lbl, '{:.0f}'.format(float(_fpm)) if _fpm else '-',
-                        float(_loss or 0.0), _det))
+                        _lbl, _fpm_txt, _loss, _det))
                 run_detail_lines.append('{:<18} {:>7} {:>9.3f}  {}'.format(
-                    'Subtotal', '', float(c['subtotal_inwc']),
-                    'before the {:.0f}% safety factor'.format(float(safety_pct))))
+                    'Subtotal', '', float(c['subtotal_inwc']), run_sub_det))
                 if c.get('truncated'):
-                    summary_lines.append(
-                        '      WARNING: path search hit its step limit, so this '
-                        'may not be the true worst run.')
+                    _msg = ('path search hit its step limit, so this '
+                            'may not be the true worst run.')
+                    summary_lines.append('      WARNING: ' + _msg)
+                    cls_warnings.append('{}: {}{}'.format(
+                        sys_class, _msg[0].upper(), _msg[1:]))
+                unit_rec['classes'].append({
+                    'sys_class': sys_class,
+                    'airflow': '{:,.0f} CFM, {} terminals'.format(float(a_cfm), a_cnt),
+                    'rows': esp_rows, 'subtotal': c['subtotal_inwc'],
+                    'takeoff': _to_rows, 'filter': _filt,
+                    'safety': safety_inwc, 'safety_detail': safety_det,
+                    'total': c['total_inwc'], 'total_detail': total_det,
+                    'notes': notes, 'warnings': cls_warnings})
 
             # The fan sees supply and return in series, so the two index runs add.
             # Which sides went in is NAMED rather than assumed: a plenum-return
@@ -3692,10 +4297,11 @@ def main():
                 if sys_class in per_class:
                     continue
                 a_cfm, a_cnt = airflow[sys_class]
-                summary_lines.append(
-                    '    {}:  {:,.0f} CFM ({} terminals), but no index run was '
-                    'traced - no static pressure for it.'.format(
-                        sys_class, a_cfm, a_cnt))
+                _msg = ('{}:  {:,.0f} CFM ({} terminals), but no index run was '
+                        'traced - no static pressure for it.'.format(
+                            sys_class, a_cfm, a_cnt))
+                summary_lines.append('    ' + _msg)
+                unit_rec['untraced'].append(_msg.replace(':  ', ': ', 1))
 
             unit_total = 0.0
             sides = []
@@ -3710,6 +4316,7 @@ def main():
                 summary_lines.append(
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
                         unit_total, ' + '.join(sides)))
+                unit_rec['esp'] = _esp_console_text(unit_total, ' + '.join(sides))
             elif sides:
                 # One side only. Held back, not warned about yet: whether it is
                 # half of a system depends on what else was selected.
@@ -3717,15 +4324,16 @@ def main():
             if (vav_on and sides and vav_set.get('unit_max_esp') is not None
                     and root_id in vav_by_root and vav_by_root[root_id].is_vav):
                 _umax = float(vav_set['unit_max_esp'])
-                summary_lines.append(
-                    '    Unit max external static {:.3f} in. wc: computed {:.3f} in. wc '
-                    '({}), {}.'.format(_umax, unit_total, ' + '.join(sides),
-                                       'within it' if unit_total <= _umax + 1e-9
-                                       else 'EXCEEDS IT'))
+                _ok = unit_total <= _umax + 1e-9
+                _msg = ('Unit max external static {:.3f} in. wc: computed {:.3f} in. wc '
+                        '({}), {}.'.format(_umax, unit_total, ' + '.join(sides),
+                                           'within it' if _ok else 'EXCEEDS IT'))
+                summary_lines.append('    ' + _msg)
+                unit_rec['checks'].append((_ok, _msg))
             if root_id in parallel_roots:
-                summary_lines.append(
-                    '    WARNING: Parallel units on one main. This external static '
-                    'is unreliable.')
+                _msg = 'Parallel units on one main. This external static is unreliable.'
+                summary_lines.append('    WARNING: ' + _msg)
+                unit_rec['warnings'].append(_msg)
 
         # One-sided roots. A picked supply duct and return duct that reach a
         # unit both re-root at it and are complete above. With NO unit
@@ -3740,13 +4348,18 @@ def main():
         if len(sup_only) == 1 and len(ret_only) == 1:
             s_o, r_o = sup_only[0], ret_only[0]
             paired.update([s_o[0], r_o[0]])
-            summary_lines.append('')
-            summary_lines.append('  === {} + {} ==='.format(
+            _title = '{} + {}'.format(
                 root_labels.get(s_o[0], 'id {}'.format(s_o[0])),
-                root_labels.get(r_o[0], 'id {}'.format(r_o[0]))))
+                root_labels.get(r_o[0], 'id {}'.format(r_o[0])))
+            _sides = '{} + {}'.format(s_o[2][0], r_o[2][0])
+            summary_lines.append('')
+            summary_lines.append('  === {} ==='.format(_title))
             summary_lines.append(
-                '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({} + {})'.format(
-                    s_o[1] + r_o[1], s_o[2][0], r_o[2][0]))
+                '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
+                    s_o[1] + r_o[1], _sides))
+            esp_rec['combined'].append({
+                'title': _title,
+                'text': _esp_console_text(s_o[1] + r_o[1], _sides)})
         leftover = [o for o in one_sided if o[0] not in paired]
         for _rid, _tot, _sides, _is_sup in leftover:
             summary_lines.append('')
@@ -3755,38 +4368,53 @@ def main():
             summary_lines.append(
                 '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({} only)'.format(
                     _tot, ' + '.join(_sides)))
+            if _rid in esp_by_root:
+                esp_by_root[_rid]['one_sided'] = _esp_console_text(
+                    _tot, ' + '.join(_sides) + ' only')
         if len([o for o in leftover if o[0] in duct_rooted_ids]) > 1:
+            _msg = ('more than one system was selected, so these one-sided '
+                    'runs cannot be paired into a single external static. Pick one '
+                    'supply duct and one return duct per system.')
             summary_lines.append('')
-            summary_lines.append(
-                '  WARNING: more than one system was selected, so these one-sided '
-                'runs cannot be paired into a single external static. Pick one '
-                'supply duct and one return duct per system.')
+            summary_lines.append('  WARNING: ' + _msg)
+            esp_rec['warnings'].append(_msg[0].upper() + _msg[1:])
 
-        summary_lines.append('')
-        summary_lines.append(
-            '  METHOD: Darcy-Weisbach + Altshul-Tsal, eps {:g} ft rigid / '
-            '{:g} ft flex, air density {:g} lb/ft3. Fittings C x Pv per RJA '
-            'SP_LOSS_WORKSHEET (1985 ASHRAE). '
-            'Dovetail take-offs, rect elbows vaned.'.format(
-                calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
-                calc_basis['air_density']))
+        _method = ('METHOD: Darcy-Weisbach + Altshul-Tsal, eps {:g} ft rigid / '
+                   '{:g} ft flex, air density {:g} lb/ft3. Fittings C x Pv, C looked '
+                   'up per fitting from the 2001 ASHRAE Fundamentals Ch. 34 tables '
+                   '(elbows CD3-1, CR3-1, CR3-6, CR3-9; transitions SR4/SD4/ER4/ED4 '
+                   'at the section o Pv; taps SR5/SD5/ER5/ED5, printed Cb and Cs '
+                   'converted to the main Pv at the geometry each table was read at, '
+                   'Eq. 34, ER5-2 and ER5-3 at their printed Ab/Ac 0.5). Unbroken '
+                   'main: As/Ac read on the 0.9 row. Return and exhaust tap losses '
+                   'floored at 0. RJA SP_LOSS_WORKSHEET C where geometry is '
+                   'unreadable (FALLBACK).'.format(
+                       calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
+                       calc_basis['air_density']))
         if filter_inwc > 0.0:
-            summary_lines.append(
-                '  NOT INCLUDED: coil and cabinet, already in the published ESP. '
-                'Return filter IS included as a {:.3f} in. wc known drop. Fire and '
-                'backdraft dampers not priced.'.format(filter_inwc))
+            _not_inc = ('NOT INCLUDED: coil and cabinet, already in the published ESP. '
+                        'Return filter IS included as a {:.3f} in. wc known drop. Fire and '
+                        'backdraft dampers not priced.'.format(filter_inwc))
         else:
-            summary_lines.append(
-                '  NOT INCLUDED: filter, coil and cabinet, already in the published '
-                'ESP. Fire and backdraft dampers not priced.')
+            _not_inc = ('NOT INCLUDED: filter, coil and cabinet, already in the published '
+                        'ESP. Fire and backdraft dampers not priced.')
+        summary_lines.append('')
+        summary_lines.append('  ' + _method)
+        summary_lines.append('  ' + _not_inc)
+        esp_rec['method'] = _method
+        esp_rec['not_included'] = _not_inc
 
+    vav_start = len(summary_lines)
     if vav_on and any(vs.boxes for vs in vav_by_root.values()):
-        summary_lines.extend(_vav_summary_lines(
-            all_root_ids, vav_by_root, root_labels, critical, vav_set))
+        vav_rep = _vav_box_report(
+            all_root_ids, vav_by_root, root_labels, critical, vav_set)
+        summary_lines.extend(_vav_summary_lines(vav_rep))
 
-    # Folded once here so the drafting view and the console render identical
-    # text. print_code, not print_md: markdown collapses leading whitespace, and
-    # the per-equipment blocks are indented to show what belongs to which unit.
+    # Folded once here so the drafting view keeps its fixed width text. The
+    # console no longer prints this text except as the fallback below, per
+    # section, from the same lines (folding is per line, so a slice folds the
+    # same as the whole).
+    raw_summary = summary_lines
     summary_lines = _wrap_summary_lines(summary_lines)
 
     # The legend names the MP limits and their sources when VAV is on.
@@ -3795,12 +4423,25 @@ def main():
         legend_notes = _wrap_summary_lines(
             ['{}: {}'.format(lab, val) for lab, val in vav_checks.basis_rows(vav_set)])
 
-    output.print_md('---')
-    output.print_md('### System Summary')
-    output.print_code('\n'.join(summary_lines[1:]))
-    if run_detail_lines:
-        output.print_md('### Index Run Detail')
-        output.print_code('\n'.join(run_detail_lines))
+    def _text_fallback(title, lines):
+        def _print():
+            if lines:
+                output.print_md('### ' + title)
+                output.print_code('\n'.join(lines))
+        return _print
+
+    _emit_html(duct_perf_console.system_summary(rep), _text_fallback(
+        'System Summary', _wrap_summary_lines(raw_summary[1:esp_start])))
+    if esp_rec is not None:
+        _emit_html(duct_perf_console.external_static(esp_rec), _text_fallback(
+            'External Static Pressure',
+            _wrap_summary_lines(raw_summary[esp_start:vav_start])))
+    if vav_rep is not None:
+        _emit_html(duct_perf_console.vav_boxes(vav_rep), _text_fallback(
+            'VAV Boxes', _wrap_summary_lines(raw_summary[vav_start:])))
+    if run_detail:
+        _emit_html(duct_perf_console.index_run_detail(run_detail), _text_fallback(
+            'Index Run Detail', run_detail_lines))
 
     # 5. One plan per level the ductwork reaches, each with its source sheet.
     # The view the tool was run from covers its own level; a roof plan run
@@ -4148,7 +4789,7 @@ def main():
                     doc, summary_lines, [item[2] for item in flagged_items],
                     selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
                     show_r_marker_note=bool(restrictive_terminal_ids),
-                    legend_notes=legend_notes)
+                    legend_notes=legend_notes, esp_takeoffs=esp_takeoffs)
                 if sched_view is not None:
                     # X fixed by hand in Revit (see diagram note above) and read
                     # back via Revit MCP. Y keeps the original bottom-anchored,
@@ -4179,68 +4820,8 @@ def main():
         output.print_md('```\n{}\n```'.format(traceback.format_exc()))
         return
 
-    # 9. Summary
-    output.print_md('---')
-    output.print_md('## Done')
-    for s in new_sheets:
-        output.print_md('Sheet **{}** created.'.format(s.SheetNumber))
-    output.print_md('')
-    output.print_md('**Mains and branches were checked by different methods.** '
-                    'A duct is a branch when exactly one terminal is reachable '
-                    'downstream of it, a main when two or more are.')
-    output.print_md('')
-    output.print_md('**Main ducts — design limits used  (green ≤ max,  yellow = within {}% above max,  red > max+{}%,  purple = a smaller standard size still fits):**'.format(
-        int(tol_pct), int(tol_pct)))
-    output.print_md('| System | Max Velocity | Max Friction |')
-    output.print_md('| --- | --- | --- |')
-    for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air', 'Transfer Air'):
-        mx_fpm, mx_fric = vav_checks.limits_for(
-            sys_class, custom_limits, hvac_graph.FIRM_DEFAULTS)
-        output.print_md('| {} | {:.0f} FPM | {:.3f} iwc/100 |'.format(
-            sys_class, mx_fpm, mx_fric))
-    if vav_on:
-        mx_fpm, mx_fric = vav_checks.limits_for(
-            'Supply Air', custom_limits, hvac_graph.FIRM_DEFAULTS, is_mp=True)
-        output.print_md('| Supply Air, MP (VAV, unit to box inlets) | {:.0f} FPM | '
-                        '{:.3f} iwc/100 |'.format(mx_fpm, mx_fric))
-        output.print_md('')
-        output.print_md('**VAV System.** ' + ' '.join(
-            '{}: {}'.format(lab, val) for lab, val in vav_checks.basis_rows(vav_set)))
-    output.print_md('')
-    output.print_md('**Branch ducts — checked against the diffuser sizing tables '
-                    '(MEP Design Standards, section 1), not against velocity or friction.** '
-                    'An auto-sizing diffuser is selected on static pressure and NC rather '
-                    'than duct velocity, so velocity-checking a run that feeds only that one '
-                    'diffuser is redundant. Two things are checked instead: whether the '
-                    'diffuser\'s own neck/face is big enough for its own CFM, and whether the '
-                    'branch duct is at least as big as the diffuser connects with. Either one '
-                    'failing is red; there is no yellow band on a size match. Oversize is '
-                    'not checked on branches.')
-    output.print_md('')
-    output.print_md('Branches feeding a **slot diffuser** are judged off the auto-sized '
-                    'slot family: the branch duct shall be at least the slot inlet '
-                    'diameter, and a filled Sizing Warning on the slot is red. No '
-                    'neck table is published for slots.')
-    output.print_md('')
-    output.print_md('Branches feeding a diffuser that is **not an RJA auto-sizing family** '
-                    '(no Sizing Warning parameter) get the main velocity/friction check.')
-    output.print_md('')
-    output.print_md('| Color | Ducts | Fittings, Accessories & Diffusers | Meaning |')
-    output.print_md('| --- | --- | --- | --- |')
-    output.print_md('| Green  | {} | {} | Main: within limit. Branch: diffuser and duct both correctly sized |'.format(
-        counts.get('GREEN',  0), fitting_counts.get('GREEN',  0)))
-    output.print_md('| Purple | {} | {} | Main only: oversized (low velocity, review for cost) |'.format(
-        counts.get('PURPLE', 0), fitting_counts.get('PURPLE', 0)))
-    output.print_md('| Yellow | {} | {} | Main only: approaching limit |'.format(
-        counts.get('YELLOW', 0), fitting_counts.get('YELLOW', 0)))
-    output.print_md('| Red    | {} | {} | Main: exceeds limit. Branch: diffuser or duct undersized |'.format(
-        counts.get('RED',    0), fitting_counts.get('RED',    0)))
-    output.print_md('| Gray   | {} | {} | No airflow data: broken or disconnected system (not in the flagged table) |'.format(
-        counts.get('GRAY',   0), fitting_counts.get('GRAY',   0)))
-    output.print_md('')
-    output.print_md('**Diffuser/duct height clearance issues (flagged Red): {}**'.format(
-        clearance_count))
-
+    # 9. Console report: flagged ducts, design limits and legend, sheets.
+    #
     # Flagged duct list — RED first, then YELLOW, then PURPLE.
     # RED/YELLOW sorted by velocity descending (worst overrun first);
     # PURPLE sorted by velocity ascending (worst oversizing first).
@@ -4271,26 +4852,119 @@ def main():
         flagged.sort(key=_flag_sort_key)
 
         # Same shared column definitions and same user selection as the
-        # schedule view — only the fixed monospace widths differ, since this
-        # table is padded text rather than ruled cells.
+        # schedule view.
         cols = _selected_columns(selected_cols)
-
-        def _fmt_row(cells):
-            return '  '.join(str(c).ljust(col[3]) for c, col in zip(cells, cols))
-
-        header    = _fmt_row([col[1] for col in cols])
-        separator = _fmt_row(['-' * col[3] for col in cols])
-        rows      = [header, separator]
-
+        duct_rows = []
         for idx, (label, fpm, cells) in enumerate(flagged, 1):
-            rows.append(_fmt_row([
+            duct_rows.append([
                 str(idx) if col[0] == 'num' else cells.get(col[0], '')
-                for col in cols
-            ]))
+                for col in cols])
+        duct_title = 'All Ducts' if full_diag else 'Flagged Ducts'
+        keys = [col[0] for col in cols]
 
-        output.print_md('')
-        output.print_md('### All Ducts' if full_diag else '### Flagged Ducts')
-        output.print_code('\n'.join(rows))
+        def _ducts_text():
+            # Padded monospace text, console widths from _COLUMN_DEFS.
+            def _fmt_row(cells):
+                return '  '.join(str(c).ljust(col[3]) for c, col in zip(cells, cols))
+            rows = [_fmt_row([col[1] for col in cols]),
+                    _fmt_row(['-' * col[3] for col in cols])]
+            rows.extend(_fmt_row(r) for r in duct_rows)
+            output.print_md('### ' + duct_title)
+            output.print_code('\n'.join(rows))
+
+        _emit_html(duct_perf_console.duct_table(
+            duct_title, [col[1] for col in cols], duct_rows,
+            status_col=keys.index('status') if 'status' in keys else None,
+            align=['r' if k in ('num', 'cfm', 'fpm', 'fric', 'length') else 'l'
+                   for k in keys]), _ducts_text)
+
+    # Design limits and legend. One set of rows feeds the themed tables and
+    # the markdown fallback.
+    limit_rows = []
+    for sys_class in ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air', 'Transfer Air'):
+        mx_fpm, mx_fric = vav_checks.limits_for(
+            sys_class, custom_limits, hvac_graph.FIRM_DEFAULTS)
+        limit_rows.append([sys_class, '{:.0f} FPM'.format(float(mx_fpm)),
+                           '{:.3f} iwc/100'.format(float(mx_fric))])
+    vav_basis = []
+    if vav_on:
+        mx_fpm, mx_fric = vav_checks.limits_for(
+            'Supply Air', custom_limits, hvac_graph.FIRM_DEFAULTS, is_mp=True)
+        limit_rows.append(['Supply Air, MP (VAV, unit to box inlets)',
+                           '{:.0f} FPM'.format(float(mx_fpm)),
+                           '{:.3f} iwc/100'.format(float(mx_fric))])
+        vav_basis = list(vav_checks.basis_rows(vav_set))
+    legend_rows = [
+        ['Green', str(counts.get('GREEN', 0)), str(fitting_counts.get('GREEN', 0)),
+         'Main: within limit. Branch: diffuser and duct both correctly sized'],
+        ['Purple', str(counts.get('PURPLE', 0)), str(fitting_counts.get('PURPLE', 0)),
+         'Main only: oversized (low velocity, review for cost)'],
+        ['Yellow', str(counts.get('YELLOW', 0)), str(fitting_counts.get('YELLOW', 0)),
+         'Main only: approaching limit'],
+        ['Red', str(counts.get('RED', 0)), str(fitting_counts.get('RED', 0)),
+         'Main: exceeds limit. Branch: diffuser or duct undersized'],
+        ['Gray', str(counts.get('GRAY', 0)), str(fitting_counts.get('GRAY', 0)),
+         'No airflow data: broken or disconnected system (not in the flagged table)'],
+    ]
+    legend_rec = {
+        'roles_note': ('Mains and branches were checked by different methods.',
+                       'A duct is a branch when exactly one terminal is reachable '
+                       'downstream of it, a main when two or more are.'),
+        'limits_caption': ('Main ducts, design limits used (green at or under max, '
+                           'yellow within {}% above max, red over max + {}%, purple '
+                           'when a smaller standard size still fits)'.format(
+                               int(tol_pct), int(tol_pct))),
+        'limits': limit_rows,
+        'vav_basis': vav_basis,
+        'notes': [
+            ('Branch ducts are checked against the diffuser sizing tables '
+             '(MEP Design Standards, section 1), not against velocity or friction.',
+             'An auto-sizing diffuser is selected on static pressure and NC rather '
+             'than duct velocity, so velocity-checking a run that feeds only that one '
+             'diffuser is redundant. Two things are checked instead: whether the '
+             'diffuser\'s own neck/face is big enough for its own CFM, and whether the '
+             'branch duct is at least as big as the diffuser connects with. Either one '
+             'failing is red; there is no yellow band on a size match. Oversize is '
+             'not checked on branches.'),
+            ('Branches feeding a slot diffuser',
+             'are judged off the auto-sized slot family: the branch duct shall be at '
+             'least the slot inlet diameter, and a filled Sizing Warning on the slot '
+             'is red. No neck table is published for slots.'),
+            ('Branches feeding a diffuser that is not an RJA auto-sizing family',
+             '(no Sizing Warning parameter) get the main velocity/friction check.'),
+        ],
+        'legend': legend_rows,
+        'clearance': (clearance_count > 0,
+                      'Diffuser/duct height clearance issues (flagged Red): {}'.format(
+                          clearance_count)),
+    }
+
+    def _legend_text():
+        output.print_md('### Design Limits and Legend')
+        output.print_md('**{}** {}'.format(*legend_rec['roles_note']))
+        output.print_md('**{}:**'.format(legend_rec['limits_caption']))
+        output.print_md(console_report.markdown_table(
+            ['System', 'Max Velocity', 'Max Friction'], limit_rows))
+        if vav_basis:
+            output.print_md('**VAV System.** ' + ' '.join(
+                '{}: {}'.format(lab, val) for lab, val in vav_basis))
+        for lead, text in legend_rec['notes']:
+            output.print_md('**{}** {}'.format(lead, text))
+        output.print_md(console_report.markdown_table(
+            ['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
+            legend_rows))
+        output.print_md('**{}**'.format(legend_rec['clearance'][1]))
+
+    _emit_html(duct_perf_console.limits_and_legend(legend_rec), _legend_text)
+
+    sheet_numbers = [s.SheetNumber for s in new_sheets]
+
+    def _sheets_text():
+        output.print_md('### Sheets Created')
+        for num in sheet_numbers:
+            output.print_md('Sheet **{}** created.'.format(num))
+
+    _emit_html(duct_perf_console.sheets_created(sheet_numbers), _sheets_text)
 
     if new_sheets:
         uidoc.ActiveView = new_sheets[0]

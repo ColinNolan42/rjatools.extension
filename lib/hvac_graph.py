@@ -18,7 +18,7 @@ import logging
 from Autodesk.Revit.DB import (
     BuiltInCategory, BuiltInParameter,
     FillPatternElement, ElementId, Domain, ConnectorProfileType,
-    FlowDirectionType
+    FlowDirectionType, ConnectorType, MEPSystem
 )
 
 from revit_helpers import eid_int
@@ -776,6 +776,181 @@ def fitting_is_round(elem):
     if not shapes:
         return True
     return shapes.count(True) >= shapes.count(False)
+
+
+def fitting_angle_deg(elem):
+    """Turning angle of an elbow in degrees, or None if unreadable.
+
+    Reads the family's 'Angle' instance parameter (internal radians), which the
+    stock Rectangular Elbow - Mitered / Radius and Round Elbow families carry
+    (live-checked 2026-10-23, 13 elbows, matched the connector geometry on
+    all). Falls back to the angle between the two connectors' outward
+    directions: a straight run reads 0, a 90 degree elbow 90.
+    """
+    eid = None
+    try:
+        eid = eid_int(elem.Id)
+    except Exception:
+        pass
+    try:
+        p = elem.LookupParameter('Angle')
+        if p is not None and p.HasValue:
+            a = math.degrees(p.AsDouble())
+            if a > 0.0:
+                log.info('fitting_angle_deg: %s Angle param %.1f deg', eid, a)
+                return a
+    except Exception as ex:
+        log.info('fitting_angle_deg: %s Angle param unreadable: %s', eid, ex)
+    try:
+        conns = list(elem.MEPModel.ConnectorManager.Connectors)
+        if len(conns) == 2:
+            z0 = conns[0].CoordinateSystem.BasisZ
+            z1 = conns[1].CoordinateSystem.BasisZ
+            dot = max(-1.0, min(1.0, -z0.DotProduct(z1)))
+            a = math.degrees(math.acos(dot))
+            log.info('fitting_angle_deg: %s from connectors %.1f deg', eid, a)
+            return a
+    except Exception as ex:
+        log.info('fitting_angle_deg: %s connectors unreadable: %s', eid, ex)
+    log.info('fitting_angle_deg: %s NOT FOUND, priced as 90 deg', eid)
+    return None
+
+
+def _fitting_connectors(elem):
+    """Connectors of a family instance fitting, [] if unreadable."""
+    try:
+        return list(elem.MEPModel.ConnectorManager.Connectors)
+    except Exception:
+        return []
+
+
+def elbow_geometry(elem):
+    """What the ASHRAE elbow tables need, or None if unreadable.
+
+    Returns {'round': bool, 'd_in', 'w_in', 'h_in', 'r_in', 'angle'}.
+    Live checked 2026-10-23 on 5 rect elbows, a vertical turn included: the
+    connector BasisX (its Width) always lies in the plane of the turn, so W is
+    Duct Width and H is Duct Height, as CR3-1 and CR3-6 define them. r is the
+    family's 'Center Radius' (centerline), so r/W on a '1.5 W' type is 1.5.
+    """
+    eid = None
+    try:
+        eid = eid_int(elem.Id)
+    except Exception:
+        pass
+    conns = _fitting_connectors(elem)
+    if not conns:
+        log.info('elbow_geometry: %s no connectors, NOT FOUND', eid)
+        return None
+    c0 = conns[0]
+    out = {'angle': fitting_angle_deg(elem), 'r_in': None,
+           'round': False, 'd_in': None, 'w_in': None, 'h_in': None}
+    try:
+        if c0.Shape == ConnectorProfileType.Round:
+            out['round'] = True
+            out['d_in'] = c0.Radius * 24.0
+        else:
+            w, h = c0.Width * 12.0, c0.Height * 12.0
+            if len(conns) == 2:
+                n = c0.CoordinateSystem.BasisZ.CrossProduct(
+                    conns[1].CoordinateSystem.BasisZ)
+                if not n.IsZeroLength() and abs(
+                        c0.CoordinateSystem.BasisX.DotProduct(n.Normalize())) > 0.5:
+                    w, h = h, w      # Width lies across the turn: swap
+            out['w_in'], out['h_in'] = w, h
+    except Exception as ex:
+        log.info('elbow_geometry: %s connector size unreadable: %s', eid, ex)
+        return None
+    try:
+        p = elem.LookupParameter('Center Radius')
+        if p is not None and p.HasValue and p.AsDouble() > 0:
+            out['r_in'] = p.AsDouble() * 12.0
+    except Exception:
+        pass
+    log.info('elbow_geometry: %s %r', eid, out)
+    return out
+
+
+def transition_geometry(elem):
+    """Both ends of a transition and its included angle, or None.
+
+    Returns [(area_ft2, shape, w_in, h_in, origin), (...)] in connector order
+    and theta_deg: the included angle between opposite walls, the larger of
+    the two side pairs (SR4-1 / SD4-2 "theta is larger of theta1 and theta2"),
+    from the two connector origins and sizes, so no family parameter is
+    needed. A round end is compared on its diameter. Coincident ends (no
+    length) read as an abrupt 180 deg change.
+    """
+    conns = _fitting_connectors(elem)
+    if len(conns) != 2:
+        return None, None
+    ends = []
+    try:
+        for c in conns:
+            if c.Shape == ConnectorProfileType.Round:
+                d = c.Radius * 24.0
+                ends.append((math.pi * c.Radius * c.Radius, 'round', d, d, c.Origin))
+            else:
+                ends.append((c.Width * c.Height, 'rect', c.Width * 12.0,
+                             c.Height * 12.0, c.Origin))
+        length_in = ends[0][4].DistanceTo(ends[1][4]) * 12.0
+    except Exception as ex:
+        log.info('transition_geometry: unreadable: %s', ex)
+        return None, None
+    if length_in < 0.01:
+        return ends, 180.0
+    dw = abs(ends[0][2] - ends[1][2]) / 2.0
+    dh = abs(ends[0][3] - ends[1][3]) / 2.0
+    theta = 2.0 * math.degrees(math.atan(max(dw, dh) / length_in))
+    return ends, theta
+
+
+def tap_positions_ft(duct, from_id):
+    """Distance in feet of each tap on an unbroken main from the duct's end
+    joined to node from_id (the walk's parent: the unit side).
+
+    A Revit tap adds a ConnectorType.Curve connector to the main duct, sitting
+    on the centerline at the tap (live checked 2026-10-23, ducts 3681405 and
+    3713669). Returns {tap element int id: feet}, or {} when the duct end
+    facing from_id cannot be found (taps then keep the unordered pricing).
+    """
+    try:
+        curve = duct.Location.Curve
+        conns = list(duct.ConnectorManager.Connectors)
+    except Exception:
+        return {}
+    start = None
+    taps = []
+    for c in conns:
+        owners = []
+        try:
+            for r in c.AllRefs:
+                o = r.Owner
+                if o is not None and o.Id != duct.Id and not isinstance(o, MEPSystem):
+                    owners.append(eid_int(o.Id))
+        except Exception:
+            continue
+        try:
+            is_curve = c.ConnectorType == ConnectorType.Curve
+        except Exception:
+            is_curve = False
+        if is_curve:
+            for o in owners:
+                taps.append((o, c.Origin))
+        elif from_id in owners:
+            start = c.Origin
+    if start is None:
+        log.info('tap_positions_ft: duct %s end toward %s NOT FOUND',
+                 eid_int(duct.Id), from_id)
+        return {}
+    p0 = curve.Project(start).Parameter
+    out = {}
+    for tid, origin in taps:
+        try:
+            out[tid] = abs(curve.Project(origin).Parameter - p0)
+        except Exception:
+            continue
+    return out
 
 
 def takeoff_child_ids(node_id, nodes, children):

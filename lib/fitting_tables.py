@@ -279,6 +279,45 @@ def elbow_c(is_round, c=None):
     return c_of('round_elbow_90' if is_round else 'rect_elbow_90', c)
 
 
+# FALLBACK PATH ONLY since 2026-10-23: elbows are priced from the 2001 tables
+# in ashrae_fittings, and this worksheet C x K is used only when an elbow's
+# geometry cannot be read.
+# Elbow angle factor K: C at angle = K x the 90 degree C. Source: 2001 ASHRAE
+# Fundamentals, p. 34.54, fitting CR3-1 (Elbow, Smooth Radius, Without Vanes),
+# "Angle Factor K" table; CR3-3 repeats the same K at 30/45/60/90. Colin,
+# 2026-10-23: apply it to every elbow, round and rectangular. ASHRAE publishes
+# the vaned mitered elbows (CR3-9 on) at 90 degrees only and gives no separate K
+# for round elbows, so CR3-1's K is applied to both as the firm's correction
+# (2001 CD3-3 45 deg die stamped over CD3-1 90 deg reads about 0.64, in line
+# with K 0.60). Linear between rows. An angle that cannot be read gets K 1.0,
+# the full 90 degree C, so an unreadable elbow is never priced low.
+ELBOW_ANGLE_FACTORS = (
+    (0.0, 0.00), (20.0, 0.31), (30.0, 0.45), (45.0, 0.60), (60.0, 0.78),
+    (75.0, 0.90), (90.0, 1.00), (110.0, 1.13), (130.0, 1.20), (150.0, 1.28),
+    (180.0, 1.40),
+)
+
+
+def elbow_angle_factor(angle_deg):
+    """ASHRAE CR3-1 angle factor K for an elbow turning angle_deg degrees.
+
+    None (angle unreadable) returns 1.0, the 90 degree value. Angles outside
+    0 to 180 are clamped to the table ends.
+    """
+    if angle_deg is None:
+        return 1.0
+    a = float(angle_deg)
+    rows = ELBOW_ANGLE_FACTORS
+    if a <= rows[0][0]:
+        return rows[0][1]
+    for i in range(1, len(rows)):
+        a1, k1 = rows[i]
+        if a <= a1:
+            a0, k0 = rows[i - 1]
+            return k0 + (k1 - k0) * (a - a0) / (a1 - a0)
+    return rows[-1][1]
+
+
 def transition_c(upstream_area_ft2, downstream_area_ft2, c=None):
     """C for a transition, expansion or contraction by which way the air goes.
 
@@ -301,8 +340,12 @@ def transition_c(upstream_area_ft2, downstream_area_ft2, c=None):
 
 
 def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
-              downstream_area_ft2=None, is_end_of_main=False, c=None):
+              downstream_area_ft2=None, is_end_of_main=False, c=None,
+              angle_deg=None):
     """One dispatch point: C for a fitting the traced path passes THROUGH.
+
+    angle_deg: an elbow's turning angle. The 90 degree C is scaled by
+    elbow_angle_factor(); None prices it as a 90.
 
     Returns (c_value, note). `note` names what was priced, or why nothing was,
     so the caller can print it and the total is never silently short.
@@ -310,8 +353,12 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
     if role in ZERO_LOSS_ROLES:
         return 0.0, 'no loss (%s)' % role
     if role == 'elbow':
-        return (elbow_c(is_round, c),
-                '90 deg %s elbow' % ('round' if is_round else 'rect'))
+        shape = 'round' if is_round else 'rect'
+        if angle_deg is None:
+            return elbow_c(is_round, c), '90 deg %s elbow (angle unreadable)' % shape
+        k = elbow_angle_factor(angle_deg)
+        return (k * elbow_c(is_round, c),
+                '%.0f deg %s elbow, K %.2f' % (float(angle_deg), shape, k))
     if role == 'takeoff':
         return (takeoff_c(sys_class, is_end_of_main=is_end_of_main, c=c),
                 'take-off into branch%s' % (' (end of main)' if is_end_of_main else ''))
