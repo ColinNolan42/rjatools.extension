@@ -146,7 +146,9 @@ def table(headers, rows, align=None, total_row=None, status_col=None,
     """A compact bordered table.
 
     headers     list of header texts
-    rows        list of row lists (text values, escaped here)
+    rows        list of row lists (text values, escaped here); a dict
+                {'band': text} is a full width group heading row
+                ({'strong': True} draws it as a solid blue band)
     align       list of 'l' / 'r' / 'c' per column, default left
     total_row   optional row list, drawn bold on a shaded band at the bottom
     status_col  optional column index whose cell is colored by status_key()
@@ -191,6 +193,18 @@ def table(headers, rows, align=None, total_row=None, status_col=None,
     out.append('</tr>')
 
     for r, row in enumerate(rows):
+        if isinstance(row, dict):
+            # Band row: one cell across the table, a heading inside it.
+            # {'band': text} for a group heading, {'band': text, 'strong': True}
+            # for a group total line.
+            style = ('padding:4px 8px;border:1px solid {};text-align:left;'
+                     'font-weight:bold;color:{};background:{};'
+                     'word-wrap:break-word;').format(
+                         BORDER, '#FFFFFF' if row.get('strong') else RJA_BLUE,
+                         RJA_BLUE if row.get('strong') else HEADER_BG)
+            out.append('<tr><td colspan="{}" style="{}">{}</td></tr>'.format(
+                ncol, style, esc(row.get('band'))))
+            continue
         bg = ZEBRA_BG if r % 2 else '#FFFFFF'
         out.append('<tr>')
         cells = list(row) + [''] * (ncol - len(row))

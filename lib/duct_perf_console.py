@@ -13,14 +13,15 @@ Kept out of script.py so the layout can be exercised under CPython
 Record shapes (all text already formatted unless noted):
 
   system summary  {'grand': [(label, value)], 'equipment': [[unit, cfm,
-                  diffusers, other]], 'by_class': [[system, cfm, diffusers]],
-                  'types': [[family, count, cfm]], 'warnings': [text]}
+                  diffusers, other]], 'warnings': [text]} (by_class and types
+                  may be present; the console no longer shows them)
 
   external static {'units': [unit], 'combined': [{'title', 'text'}],
                   'warnings': [text], 'method': text, 'not_included': text}
                   unit = {'label', 'classes': [cls], 'untraced': [text],
                   'esp': text or None, 'one_sided': text or None,
-                  'checks': [(ok bool, text)], 'warnings': [text]}
+                  'checks': [(ok bool, text)], 'warnings': [text],
+                  'esp_total': float or None, 'esp_sides': [class names]}
                   cls = {'sys_class', 'airflow', 'rows': [(item, inwc float,
                   detail)], 'subtotal' float, 'safety' float, 'safety_detail',
                   'total' float, 'total_detail', 'notes': [text],
@@ -29,9 +30,6 @@ Record shapes (all text already formatted unless noted):
                   'rows' when present), 'filter': float or None}
 
   VAV boxes       the dict returned by script.py _vav_box_report()
-
-  index run       [{'title', 'items': [(item, fpm, inwc float, detail)],
-                  'subtotal' float, 'subtotal_detail'}]
 
 IronPython 2.7: no f-strings; floats are cast with float() before '{:.3f}'.
 """
@@ -42,12 +40,8 @@ import console_report as cr
 # Relative column widths per table kind. Every table of one kind is built with
 # the same widths (fixed layout), so stacked tables line up column for column.
 W_EQUIPMENT = [40, 18, 12, 30]
-W_BY_CLASS = [50, 25, 25]
-W_TYPES = [60, 15, 25]
 W_TAKEOFF = [24, 42, 12, 10, 12]
-W_ESP = [24, 12, 64]
 W_VAV = [22, 14, 16, 16, 18, 14]
-W_RUN = [22, 8, 10, 60]
 W_LIMITS = [50, 25, 25]
 W_LEGEND = [12, 8, 18, 62]
 NARROW = '60%'
@@ -67,14 +61,6 @@ def system_summary(rec):
         out.append(cr.table(
             ['Equipment', 'Supply discharge CFM', 'Diffusers', 'Other air feeding it'],
             rec['equipment'], align=['l', 'r', 'r', 'l'], widths=W_EQUIPMENT))
-    if rec.get('by_class'):
-        out.append(cr.table(['System', 'CFM', 'Diffusers'], rec['by_class'],
-                            align=['l', 'r', 'r'], caption='By system class',
-                            widths=W_BY_CLASS, width=NARROW))
-    if rec.get('types'):
-        out.append(cr.table(['Family', 'Count', 'CFM'], rec['types'],
-                            align=['l', 'r', 'r'], caption='Diffuser types',
-                            widths=W_TYPES, width=NARROW))
     for w in rec.get('warnings') or []:
         out.append(cr.callout(w, 'warn'))
     return ''.join(out)
@@ -143,53 +129,63 @@ def takeoff_rows(items):
     return rows, losses
 
 
-def _esp_takeoff_table(cls):
-    """The class's take-off table with Subtotal, Safety factor and TOTAL."""
-    rows = [list(r) for r in cls['takeoff']]
+def _class_rows(cls, counted):
+    """One system class inside the unit's combined table: a heading band, its
+    items, Subtotal, Safety factor and the class total. counted False marks a
+    side that does not go into the unit total (the lesser of return/exhaust)."""
+    head = cls['sys_class']
+    if cls.get('airflow'):
+        head = '{}, {}'.format(head, cls['airflow'])
+    if not counted:
+        head += '  (not counted, the larger return side governs)'
+    rows = [{'band': head}]
+    if cls.get('takeoff'):
+        rows.extend(list(r) for r in cls['takeoff'])
+    else:
+        rows.extend([item, det or '', '', '', _f3(val)] for item, val, det in cls['rows'])
     if cls.get('filter') is not None:
         rows.append(['Return filter', 'known drop', '1', '-', _f3(cls['filter'])])
     rows.append(['Subtotal', '', '', '', _f3(cls['subtotal'])])
     rows.append(['Safety factor', cls.get('safety_detail') or '', '', '',
                  _f3(cls['safety'])])
-    caption = cls['sys_class']
-    if cls.get('airflow'):
-        caption = '{}, {}'.format(caption, cls['airflow'])
+    rows.append(['{} total'.format(cls['sys_class']), cls.get('total_detail') or '',
+                 '', '', _f3(cls['total'])])
+    return rows
+
+
+def _esp_unit_table(unit):
+    """Supply and return in ONE table per unit, ending in the unit's total
+    external static pressure (Colin, 2026-10-23). With only one side traced the
+    table ends at that side's total and the one sided callout says so."""
+    sides = unit.get('esp_sides')
+    rows = []
+    for cls in unit.get('classes') or []:
+        counted = sides is None or cls['sys_class'] in sides
+        rows.extend(_class_rows(cls, counted))
+    total_row = None
+    if unit.get('esp_total') is not None:
+        total_row = ['TOTAL EXTERNAL STATIC PRESSURE', ' + '.join(sides or []),
+                     '', '', _f3(unit['esp_total'])]
     return cr.table(TAKEOFF_HEADERS, rows, align=['l', 'l', 'r', 'r', 'r'],
-                    total_row=['TOTAL', cls.get('total_detail') or '', '', '',
-                               _f3(cls['total'])],
-                    caption=caption, widths=W_TAKEOFF)
-
-
-def _esp_class_table(cls):
-    if cls.get('takeoff'):
-        return _esp_takeoff_table(cls)
-    rows = [[item, _f3(val), det or ''] for item, val, det in cls['rows']]
-    rows.append(['Subtotal', _f3(cls['subtotal']), ''])
-    rows.append(['Safety factor', _f3(cls['safety']), cls.get('safety_detail') or ''])
-    caption = cls['sys_class']
-    if cls.get('airflow'):
-        caption = '{}, {}'.format(caption, cls['airflow'])
-    return cr.table(['Item', 'in. wc', 'Detail'], rows, align=['l', 'r', 'l'],
-                    total_row=['TOTAL', _f3(cls['total']), cls.get('total_detail') or ''],
-                    caption=caption, widths=W_ESP)
+                    total_row=total_row, widths=W_TAKEOFF)
 
 
 def external_static(rec):
-    """Section b: External Static Pressure, per equipment then per pairing."""
+    """Section b: External Static Pressure, one combined table per equipment,
+    then any picked duct pairing."""
     out = [cr.section('External Static Pressure',
                       'index run, per RJA SP_LOSS_WORKSHEET')]
     for unit in rec.get('units') or []:
         out.append(cr.subsection(unit['label']))
+        if unit.get('classes'):
+            out.append(_esp_unit_table(unit))
         for cls in unit.get('classes') or []:
-            out.append(_esp_class_table(cls))
             for n in cls.get('notes') or []:
-                out.append(cr.note(n))
+                out.append(cr.note('{}: {}'.format(cls['sys_class'], n)))
             for w in cls.get('warnings') or []:
                 out.append(cr.callout(w, 'warn'))
         for w in unit.get('untraced') or []:
             out.append(cr.callout(w, 'warn'))
-        if unit.get('esp'):
-            out.append(cr.callout(unit['esp'], 'info'))
         if unit.get('one_sided'):
             out.append(cr.callout(unit['one_sided'], 'warn'))
         for ok, text in unit.get('checks') or []:
@@ -235,20 +231,6 @@ def vav_boxes(rep):
         if unit.get('mp_terminal_text'):
             out.append(cr.callout('{}: {}'.format(unit['label'], unit['mp_terminal_text']),
                                   'warn'))
-    return ''.join(out)
-
-
-def index_run_detail(runs):
-    """Section d: Index Run Detail, item by item per run."""
-    out = [cr.section('Index Run Detail')]
-    for run in runs:
-        out.append(cr.subsection(run['title']))
-        rows = [[lbl, fpm, _f3(loss), det] for lbl, fpm, loss, det in run['items']]
-        out.append(cr.table(['Item', 'FPM', 'in. wc', 'Detail'], rows,
-                            align=['l', 'r', 'r', 'l'],
-                            total_row=['Subtotal', '', _f3(run['subtotal']),
-                                       run.get('subtotal_detail') or ''],
-                            widths=W_RUN))
     return ''.join(out)
 
 

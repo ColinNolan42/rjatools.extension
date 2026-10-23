@@ -241,6 +241,7 @@ def _sample_esp():
            'warnings': ['UNPRICED: Fitting 777']}
     return {'units': [{'label': 'RTU-1 (id 1)', 'classes': [cls], 'untraced': [],
                        'esp': 'EXTERNAL STATIC PRESSURE = 1.257 in. wc (Supply Air + Return Air)',
+                       'esp_total': 0.8943, 'esp_sides': ['Supply Air'],
                        'one_sided': None, 'checks': [(False, 'Unit max ... EXCEEDS IT.')],
                        'warnings': ['Parallel units on one main.']}],
             'combined': [{'title': 'Duct 3 + Duct 4', 'text': 'EXTERNAL STATIC PRESSURE = 0.700'}],
@@ -249,20 +250,49 @@ def _sample_esp():
 
 class DuctPerfSectionTests(unittest.TestCase):
 
-    def test_esp_class_table_rows_and_total(self):
+    def test_esp_unit_table_rows_and_total(self):
         p = shape(dpc.external_static(_sample_esp()))
         self.assertEqual(p.errors, [])
         body = [[c[2] for c in r] for r in p.rows]
-        self.assertEqual(body[0], ['Item', 'in. wc', 'Detail'])
+        self.assertEqual(body[0], dpc.TAKEOFF_HEADERS)
         self.assertEqual([r[0] for r in body[1:]],
-                         ['Duct friction', 'Fitting losses', 'Components',
-                          'Subtotal', 'Safety factor', 'TOTAL'])
-        self.assertEqual(body[-1], ['TOTAL', '0.894', 'worst run ends at CD-1 [12]'])
+                         ['Supply Air, 950 CFM, 3 terminals', 'Duct friction',
+                          'Fitting losses', 'Components', 'Subtotal', 'Safety factor',
+                          'Supply Air total', 'TOTAL EXTERNAL STATIC PRESSURE'])
+        self.assertEqual(body[-1], ['TOTAL EXTERNAL STATIC PRESSURE', 'Supply Air',
+                                    '', '', '0.894'])
         html = dpc.external_static(_sample_esp())
-        self.assertIn(cr.CALLOUT_STYLES['info'][1], html)
+        self.assertIn('colspan="5"', html)
         self.assertIn(cr.CALLOUT_STYLES['error'][1], html)
         self.assertIn(cr.CALLOUT_STYLES['warn'][1], html)
         self.assertIn('Duct 3 + Duct 4', html)
+
+    def test_supply_and_return_in_one_table(self):
+        """Colin, 2026-10-23: one chart per unit, supply then return, ending in
+        the unit's total external static pressure; the lesser return side is
+        shown but marked not counted."""
+        def cls(name, total):
+            return {'sys_class': name, 'rows': [('Duct friction', total / 1.1, '')],
+                    'subtotal': total / 1.1, 'safety': total - total / 1.1,
+                    'total': total, 'total_detail': ''}
+        unit = {'label': 'RTU-1', 'classes': [cls('Supply Air', 0.5), cls('Return Air', 0.3),
+                                              cls('Exhaust Air', 0.1)],
+                'esp_total': 0.8, 'esp_sides': ['Supply Air', 'Return Air']}
+        html = dpc.external_static({'units': [unit]})
+        self.assertEqual(html.count('<table'), 1)
+        self.assertIn('Exhaust Air  (not counted, the larger return side governs)', html)
+        self.assertNotIn('Return Air  (not counted', html)
+        body = [[c[2] for c in r] for r in shape(html).rows]
+        self.assertEqual(body[-1], ['TOTAL EXTERNAL STATIC PRESSURE',
+                                    'Supply Air + Return Air', '', '', '0.800'])
+
+    def test_one_sided_unit_has_no_grand_total(self):
+        unit = {'label': 'Duct 9', 'classes': [{'sys_class': 'Supply Air', 'rows': [],
+                'subtotal': 0.2, 'safety': 0.02, 'total': 0.22}],
+                'one_sided': 'EXTERNAL STATIC PRESSURE = 0.220 in. wc (Supply Air only)'}
+        html = dpc.external_static({'units': [unit]})
+        self.assertNotIn('TOTAL EXTERNAL STATIC PRESSURE</td>', html)
+        self.assertIn('Supply Air only', html)
 
     def test_vav_status_and_low(self):
         rep = {'basis': 'MP supply 1500 FPM', 'minimum': 0.5, 'units': [
@@ -292,19 +322,22 @@ class DuctPerfSectionTests(unittest.TestCase):
         p = shape(dpc.vav_boxes(rep))
         self.assertEqual([c[2] for c in p.rows[1]], ['RTU-1', '7', '-', '-', '-', '-'])
 
-    def test_index_run_subtotal(self):
-        runs = [{'title': 'RTU-1 | Supply Air | worst run ends at terminal 12',
-                 'items': [('Duct', '812', 0.0213, '24x14')],
-                 'subtotal': 0.813, 'subtotal_detail': 'before the 10% safety factor'}]
-        p = shape(dpc.index_run_detail(runs))
-        self.assertEqual([c[2] for c in p.rows[-1]],
-                         ['Subtotal', '', '0.813', 'before the 10% safety factor'])
+    def test_summary_is_compact(self):
+        """Colin, 2026-10-23: only totals and the equipment table; the by system
+        and diffuser type breakdowns stay on the sheet."""
+        rec = {'grand': [('Grand total airflow', '5,250 CFM')],
+               'equipment': [['RTU-1 (id 1)', '950', '3', '-']],
+               'by_class': [['Supply Air', '2,700', '6']],
+               'types': [['CD', '4', '1,500']]}
+        html = dpc.system_summary(rec)
+        self.assertNotIn('By system class', html)
+        self.assertNotIn('Diffuser types', html)
+        self.assertIn('RTU-1 (id 1)', html)
 
     def test_summary_and_legend_and_sheets(self):
         rec = {'grand': [('Grand total airflow', '5,250 CFM')],
                'equipment': [['RTU-1 (id 1)', '950', '3', '-']],
-               'by_class': [['Supply Air', '2,700', '6']],
-               'types': [['CD', '4', '1,500']], 'warnings': ['1 diffuser(s) with Flow = 0']}
+               'warnings': ['1 diffuser(s) with Flow = 0']}
         for html in (dpc.system_summary(rec),
                      dpc.limits_and_legend({'limits': [['Supply Air', '800 FPM', '0.080']],
                                             'legend': [['Red', '3', '1', 'exceeds']],
@@ -346,7 +379,8 @@ class TakeoffTests(unittest.TestCase):
                'takeoff': rows, 'filter': None, 'subtotal': 0.076,
                'safety': 0.0076, 'safety_detail': '+10%', 'total': 0.0836,
                'total_detail': 'worst run'}
-        html = dpc._esp_class_table(cls)
+        html = dpc._esp_unit_table({'classes': [cls], 'esp_total': 0.0836,
+                                    'esp_sides': ['Supply Air']})
         self.assertIn('Table / basis', html)
         self.assertIn('CD3-1', html)
         self.assertIn('0.084', html)
@@ -376,13 +410,19 @@ class WidthTests(unittest.TestCase):
         self.assertNotIn('<colgroup>', html)
 
     def test_same_kind_tables_share_widths(self):
-        a = dpc._esp_class_table({'sys_class': 'Supply Air', 'rows': [('Duct friction', 0.1, '')],
-                                  'subtotal': 0.1, 'safety': 0.01, 'total': 0.11})
-        b = dpc._esp_class_table({'sys_class': 'Return Air', 'rows': [('A much longer item name', 0.2, 'x')],
-                                  'subtotal': 0.2, 'safety': 0.02, 'total': 0.22})
+        def unit(name, item):
+            return {'classes': [{'sys_class': name, 'rows': [(item, 0.1, '')],
+                                 'subtotal': 0.1, 'safety': 0.01, 'total': 0.11}]}
+        a = dpc._esp_unit_table(unit('Supply Air', 'Duct friction'))
+        b = dpc._esp_unit_table(unit('Return Air', 'A much longer item name'))
         cols = lambda h: re.findall(r'<col style="width:\d+%;" />', h)
         self.assertEqual(cols(a), cols(b))
         self.assertTrue(cols(a))
+
+    def test_band_row_spans_the_table(self):
+        html = cr.table(['A', 'B'], [{'band': 'Group'}, ['x', '1']])
+        self.assertIn('<td colspan="2"', html)
+        self.assertEqual(shape(html).errors, [])
 
 
 class SourceTests(unittest.TestCase):

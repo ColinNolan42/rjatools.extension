@@ -3759,7 +3759,6 @@ def _file_like_source_sheet(new_sheet, source_sheet):
 
 def main():
     output.print_md('## Duct Performance')
-    output.print_md('_Tip: run HVAC Diagnose first to verify CFM values and network._')
     output.print_md('---')
 
     # 1. Validate active view
@@ -3802,15 +3801,6 @@ def main():
                 calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                 calc_basis['air_density']))
 
-    if vav_on:
-        output.print_md(
-            '**VAV System is on:** supply mains between the unit and the VAV box '
-            'inlets are checked as medium pressure at {:.0f} FPM and {:.2f} in. '
-            'wc/100 ft.'.format(float(vav_set['mp_fpm']), float(vav_set['mp_fric'])))
-    if full_diag:
-        output.print_md('**Full System Diagnostic is on** — the table below and the '
-                        'sheet schedule will list every duct, and every duct will '
-                        'get a numbered circle in the plan, not just flagged ones.')
 
     # 3. Find AHUs in active view and let user pick systems
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
@@ -3852,10 +3842,6 @@ def main():
             output.print_md('**Cancelled.**')
             return
         _warn_if_same_side(sel_elems)
-        output.print_md(
-            '_Rooted from the picked duct(s): the traversal still walks back '
-            'to the base equipment for each one, so airflow direction and '
-            'downstream CFM sums are unchanged._')
 
     # 4. Traverse each system and merge results
     all_duct_results = {}   # ElementId -> DuctResult  (worst-wins on overlap)
@@ -3864,7 +3850,6 @@ def main():
     all_root_ids     = []   # one per successfully traversed system
     root_labels      = {}   # root int_id -> equipment label, for per-unit output
     duct_rooted_ids  = set()  # roots that are a picked duct, not equipment (no unit connected)
-    ahu_labels       = []
     ahu_totals       = []   # (ahu_name, ahu_id, discharge_cfm, terminal_count, other_class_cfm)
     all_terminals    = {}   # int_id -> (cfm, sys_class, family_name)  (dedup across AHUs)
     all_zero_terms   = set()
@@ -3873,23 +3858,21 @@ def main():
     vav_by_root      = {}   # root int_id -> vav_checks.VavSystem (VAV on only)
 
     for sel_elem in sel_elems:
-        output.print_md('Traversing **{}** (id {})...'.format(
-            _elem_name(sel_elem), eid_int(sel_elem.Id)))
         net = hvac_graph.build_network(sel_elem, doc, equipment_level=True)
 
         if net.errors:
             for e in net.errors:
-                output.print_md('- :warning: {}'.format(e))
+                output.print_md(':warning: **{}**: {}'.format(_elem_name(sel_elem), e))
             continue
 
         # Two picked ducts on the same system re-root at the same AHU. Without
         # this the unit would be listed, totalled and summed twice.
         if eid_int(net.root.Id) in all_root_ids:
-            output.print_md('  already covered by **{}** - skipped.'.format(
+            output.print_md('{} is already covered by **{}**, skipped.'.format(
+                _elem_name(sel_elem),
                 root_labels.get(eid_int(net.root.Id), _elem_name(net.root))))
             continue
 
-        ahu_labels.append('{} (id {})'.format(_elem_name(net.root), eid_int(net.root.Id)))
 
         # No unit anywhere on the picked ductwork: build_network rooted at the
         # duct itself. Remembered so a supply duct and a return duct picked this
@@ -3902,10 +3885,8 @@ def main():
         if vav_on:
             vs = hvac_graph.analyze_vav(net)
             vav_by_root[eid_int(net.root.Id)] = vs
-            output.print_md('  VAV: {} box(es), {} MP supply element(s).'.format(
-                len(vs.boxes), len(vs.mp_ids)))
             if not vs.is_vav:
-                output.print_md('  :warning: VAV System is ticked but no VAV box '
+                output.print_md(':warning: VAV System is ticked but no VAV box '
                                 'was found on this unit\'s supply. Judged as a '
                                 'constant volume system.')
         nodes_by_root[eid_int(net.root.Id)] = set(net.nodes.keys())
@@ -3914,8 +3895,6 @@ def main():
             for w in net.warnings:
                 output.print_md(':warning: {}'.format(w))
 
-        output.print_md('  {} ducts  |  {} terminals'.format(
-            len(net.duct_results), len(net.terminal_cfms)))
 
         root_id = eid_int(net.root.Id)
         all_root_ids.append(root_id)
@@ -3954,9 +3933,6 @@ def main():
     if not all_duct_results:
         output.print_md('**No duct results — check errors above.**')
         return
-
-    output.print_md('**Total: {} systems  |  {} ducts**'.format(
-        len(ahu_labels), len(all_duct_results)))
 
     # 4-VAV. Parallel units, the MP set, and the VAV red rules.
     #
@@ -4025,7 +4001,6 @@ def main():
     branch_ctx    = {}   # ElementId -> (category, terminal_elem, terminal_cfm) or None
     duct_roles    = {}   # ElementId -> Duct Role display string
     kind_cache    = {}   # terminal int_id -> category  (many ducts share one terminal)
-    role_counts   = {'Main': 0, 'Branch': 0}
 
     for eid in all_duct_results.keys():
         if all_duct_results[eid].is_mp:
@@ -4036,7 +4011,6 @@ def main():
             duct_roles[eid] = (vav_checks.ROLE_INLET
                                if eid_int(eid) in inlet_runout_ids
                                else vav_checks.ROLE_MP)
-            role_counts['Main'] += 1
             continue
         tset = downstream_terms.get(eid_int(eid), set())
         term_elem = None
@@ -4048,7 +4022,6 @@ def main():
             # the pre-existing velocity/friction treatment.
             branch_ctx[eid] = None
             duct_roles[eid] = _duct_role_label(False, None)
-            role_counts['Main'] += 1
             continue
         term_id = eid_int(term_elem.Id)
         if term_id not in kind_cache:
@@ -4056,11 +4029,6 @@ def main():
         kind = kind_cache[term_id]
         branch_ctx[eid] = (kind, term_elem, all_terminals.get(term_id, (0.0, '', ''))[0])
         duct_roles[eid] = _duct_role_label(True, kind)
-        role_counts['Branch'] += 1
-
-    output.print_md('Duct roles: **{} main**, **{} branch** '
-                    '(branch = exactly one terminal downstream).'.format(
-                        role_counts['Main'], role_counts['Branch']))
 
     # 4b. System summary — total flow to each equipment, diffuser counts/types
     grand_total_cfm = sum(cfm for cfm, _, _ in all_terminals.values())
@@ -4083,9 +4051,7 @@ def main():
            'warnings': []}
     esp_rec = None       # External Static Pressure records, when computed
     vav_rep = None       # VAV Boxes records, when VAV is on with boxes
-    run_detail = []      # Index Run Detail records, when computed
     summary_lines = ['SYSTEM SUMMARY']
-    run_detail_lines = []   # filled only when external static is computed
     esp_takeoffs = []       # drafting view take-off tables, one per unit and class
     for name, aid, discharge_cfm, term_count, other_class_cfm in ahu_totals:
         summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM supply air discharge ({} diffusers)'.format(
@@ -4250,28 +4216,6 @@ def main():
                     'subtotal': c['subtotal_inwc'], 'safety': safety_inwc,
                     'safety_detail': safety_det, 'total': c['total_inwc'],
                     'total_detail': total_det})
-                # Console only: the index run item by item, so each number in
-                # the total can be traced to a duct, fitting or tap.
-                run_title = '{} | {} | worst run ends at terminal {}'.format(
-                    unit_label, sys_class, c['terminal_id'])
-                run_items = []
-                for _it in c.get('items', ()):
-                    _lbl, _det, _fpm, _loss = _it[:4]
-                    run_items.append((_lbl, '{:.0f}'.format(float(_fpm)) if _fpm else '-',
-                                      float(_loss or 0.0), _det))
-                run_sub_det = 'before the {:.0f}% safety factor'.format(float(safety_pct))
-                run_detail.append({'title': run_title, 'items': run_items,
-                                   'subtotal': float(c['subtotal_inwc']),
-                                   'subtotal_detail': run_sub_det})
-                run_detail_lines.append('')
-                run_detail_lines.append('=== {} ==='.format(run_title))
-                run_detail_lines.append('{:<18} {:>7} {:>9}  {}'.format(
-                    'Item', 'FPM', 'in. wc', 'Detail'))
-                for _lbl, _fpm_txt, _loss, _det in run_items:
-                    run_detail_lines.append('{:<18} {:>7} {:>9.3f}  {}'.format(
-                        _lbl, _fpm_txt, _loss, _det))
-                run_detail_lines.append('{:<18} {:>7} {:>9.3f}  {}'.format(
-                    'Subtotal', '', float(c['subtotal_inwc']), run_sub_det))
                 if c.get('truncated'):
                     _msg = ('path search hit its step limit, so this '
                             'may not be the true worst run.')
@@ -4317,6 +4261,8 @@ def main():
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
                         unit_total, ' + '.join(sides)))
                 unit_rec['esp'] = _esp_console_text(unit_total, ' + '.join(sides))
+                unit_rec['esp_total'] = unit_total
+                unit_rec['esp_sides'] = list(sides)
             elif sides:
                 # One side only. Held back, not warned about yet: whether it is
                 # half of a system depends on what else was selected.
@@ -4439,9 +4385,6 @@ def main():
     if vav_rep is not None:
         _emit_html(duct_perf_console.vav_boxes(vav_rep), _text_fallback(
             'VAV Boxes', _wrap_summary_lines(raw_summary[vav_start:])))
-    if run_detail:
-        _emit_html(duct_perf_console.index_run_detail(run_detail), _text_fallback(
-            'Index Run Detail', run_detail_lines))
 
     # 5. One plan per level the ductwork reaches, each with its source sheet.
     # The view the tool was run from covers its own level; a roof plan run
