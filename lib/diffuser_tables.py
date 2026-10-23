@@ -189,6 +189,37 @@ SIDEWALL_RETURN_EXHAUST_TABLE = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Linear slot diffusers - (length_in, [max cfm for 1..8 slots])
+# ---------------------------------------------------------------------------
+#
+# From the MEP Design Standards "Slot Diffuser, Supply / Return" tables
+# (build_doc.py, matched to the docx 2026-10-23). The same numbers drive the
+# slot families' slot count and Max CFM. Reference only: the branch check
+# for a slot trusts the auto-sizing family's own inlet (Colin, 2026-10-22).
+#
+# Supply basis: Titus ML-38, 3/4 in. slot (catalog F25), cfm/ft interpolated
+# between the published 0.065 and 0.102 in. w.g. rows to 0.08 in. w.g.,
+# times length, rounded to the nearest 5 CFM.
+SLOT_SUPPLY_TABLE = [
+    (24, [55, 110, 165, 220, 275, 330, 385, 435]),
+    (36, [80, 165, 245, 325, 410, 490, 575, 655]),
+    (48, [110, 220, 325, 435, 545, 655, 765, 875]),
+    (60, [135, 275, 410, 545, 685, 820, 955, 1090]),
+    (72, [165, 330, 490, 655, 820, 985, 1150, 1310]),
+]
+
+# Return basis: Titus MLR-38, 3/4 in. slot (catalog F27), interpolated
+# between the published 0.040 and 0.070 in. w.g. rows to 0.05 in. w.g.
+SLOT_RETURN_TABLE = [
+    (24, [65, 135, 200, 265, 335, 400, 465, 535]),
+    (36, [100, 200, 300, 400, 500, 600, 700, 800]),
+    (48, [135, 265, 400, 535, 665, 800, 935, 1065]),
+    (60, [165, 335, 500, 665, 835, 1000, 1165, 1335]),
+    (72, [200, 400, 600, 800, 1000, 1200, 1400, 1600]),
+]
+
+
 # Dimensional match tolerance, inches. Callers snap to the nominal 2" grid
 # before calling in, so anything reaching a lookup should already be an exact
 # even number; this only absorbs float representation noise from the Revit
@@ -395,16 +426,22 @@ def largest_sidewall_row(table):
 # Reference listing (Duct Performance dialog, Advanced; read only)
 # ---------------------------------------------------------------------------
 
+_SLOT_HEAD = ['Length'] + ['%d slot%s' % (n, '' if n == 1 else 's') for n in range(1, 9)]
+
+
 def reference_tables():
     """Every diffuser table, for display only (Colin, 2026-10-23).
 
     Returns [(title, basis, headers, rows)] with rows as text, straight from
     the tables above so the dialog can never show a value the branch check
-    does not use. Linear slots have no published table and are listed with
-    the rule that applies to them instead (rows empty).
+    does not use.
     """
     def _round(table):
         return [['%d in.' % d, '{:,}'.format(int(c))] for d, c in table]
+
+    def _slots(table):
+        return [['%d in.' % length] + ['{:,}'.format(int(c)) for c in cfms]
+                for length, cfms in table]
 
     def _face(table):
         return [['%d x %d' % (w, h), '{:,}'.format(int(c)), str(nc)]
@@ -426,10 +463,14 @@ def reference_tables():
         ('Sidewall return / exhaust grille',
          'Square, 2:1 and 3:1 faces in source order. NC for reference.',
          ['Face (W x H)', 'Max CFM', 'NC'], _face(SIDEWALL_RETURN_EXHAUST_TABLE)),
-        ('Linear slot (supply and return)',
-         'No published table. The auto-sizing slot family sizes its own inlet; '
-         'the branch duct shall be at least the slot inlet diameter.',
-         [], []),
+        ('Linear slot, supply',
+         'Titus ML-38, 3/4 in. slot, at 0.08 in. w.g. Max CFM by length and '
+         'number of slots. The branch duct shall be at least the slot inlet diameter.',
+         _SLOT_HEAD, _slots(SLOT_SUPPLY_TABLE)),
+        ('Linear slot, return',
+         'Titus MLR-38, 3/4 in. slot, at 0.05 in. w.g. Max CFM by length and '
+         'number of slots.',
+         _SLOT_HEAD, _slots(SLOT_RETURN_TABLE)),
     ]
 
 
@@ -461,7 +502,9 @@ def _self_test():
     assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 751) is None
     assert largest_diameter(CEILING_SUPPLY_NECK_TABLE) == 14
     ref = reference_tables()
-    assert len(ref) == 6 and ref[0][3][2] == ['8 in.', '200'], 'reference tables'
+    assert len(ref) == 7 and ref[0][3][2] == ['8 in.', '200'], 'reference tables'
+    assert ref[5][3][2][-1] == '875' and ref[6][3][4][-1] == '1,600', 'slot tables'
+    assert all(len(r) == 9 for _l, cfms in SLOT_SUPPLY_TABLE for r in [[_l] + cfms])
     assert len(ref[3][3]) == len(SIDEWALL_SUPPLY_TABLE)
 
     # Sidewall lookups
