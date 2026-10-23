@@ -52,7 +52,8 @@ REASON_INLET_OK = 'VAV INLET, SIZED TO BOX'
 
 # Red reasons. Each fits the 34 character Reason column of Duct Performance.
 REASON_DIFFUSER_ON_MP = 'Diffuser on MP main'
-REASON_FLEX_AT_INLET = 'Flex at VAV inlet'
+# The "flex at the VAV inlet" RED rule was removed (Colin, 2026-10-23:
+# "nobody does that"), so it is no longer checked.
 
 # Dialog fields: (key, label, unit hint, default, kind). kind is one of
 # 'pos' (> 0), 'nonneg' (>= 0) or 'pos_or_blank' (blank allowed, else > 0).
@@ -372,20 +373,15 @@ def overlapping_roots(nodes_by_root):
     return out
 
 
-def red_reasons(systems, flex_mp_ids):
-    """{duct id: RED reason} for the VAV rules, over every unit's VavSystem.
-
-    The first rule to claim a duct keeps it, in this order: flex upstream of a
-    box, then a diffuser on an MP main. The caller applies these after the
+def red_reasons(systems):
+    """{duct id: RED reason} for the VAV rules, over every unit's VavSystem:
+    a diffuser fed straight off an MP main. The caller applies these after the
     normal label, so they override it.
 
     Args:
         systems: iterable of VavSystem.
-        flex_mp_ids: ids of MP ducts that are flex.
     """
     out = {}
-    for nid in sorted(flex_mp_ids):
-        out.setdefault(nid, REASON_FLEX_AT_INLET)
     for vs in systems:
         for _tid, feed in sorted(vs.mp_terminals.items()):
             if feed is not None:

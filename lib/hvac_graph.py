@@ -201,22 +201,50 @@ def _nominal_even_in(inches):
     return round(inches / 2.0) * 2.0
 
 
+# Diffuser/duct height clearance (RJA rule, Colin 2026-10-23): a duct that
+# steps down to a smaller duct or diffuser neck needs at least this much
+# height difference to build the transition. A 12 in. duct feeding a 10 in.
+# neck PASSES; 11 in. to 10 in. fails.
+CLEARANCE_MARGIN_IN = 2.0
+
+
+def _clearance_height_in(inches):
+    """A raw dimension in inches, rounded to the nearest 1/16 in.
+
+    Removes Revit's floating point noise (a true 10 in. duct can read
+    10.000000000000002 in., confirmed 2026-08-26) WITHOUT snapping to the 2 in.
+    grid: snapping both heights to even inches made every step 0, 2, 4 in.,
+    so the under-2-in. test could never fire (found 2026-10-23)."""
+    return round(inches * 16.0) / 16.0
+
+
+def fails_height_clearance(duct_height_in, downstream_height_in,
+                           margin_in=CLEARANCE_MARGIN_IN):
+    """True when a duct steps down to a smaller downstream height by less
+    than the margin. An equal or larger downstream height is a continuous run
+    and needs no margin. Heights already rounded by _clearance_height_in."""
+    if duct_height_in is None or downstream_height_in is None:
+        return False
+    step = duct_height_in - downstream_height_in
+    return 0.0 < step < margin_in - 1e-9
+
+
 def effective_height_in(elem):
     """Height (rectangular) or diameter (round) in inches, used for the
     diffuser/duct height clearance check. Ducts read RBS_CURVE_* built-in
     params directly; terminals (which don't have those params) read their
     neck connector geometry instead. Returns None if not determinable.
 
-    Snapped to the nearest 2" nominal increment via _nominal_even_in() —
-    see that function's docstring for why.
+    Rounded to the nearest 1/16 in. by _clearance_height_in(), NOT snapped to
+    the 2 in. grid (see that function's docstring for why).
     """
     if is_duct(elem):
         d = elem.get_Parameter(BuiltInParameter.RBS_CURVE_DIAMETER_PARAM)
         if d is not None and d.AsDouble() > 0:
-            return _nominal_even_in(d.AsDouble() * 12.0)
+            return _clearance_height_in(d.AsDouble() * 12.0)
         h = elem.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM)
         if h is not None and h.AsDouble() > 0:
-            return _nominal_even_in(h.AsDouble() * 12.0)
+            return _clearance_height_in(h.AsDouble() * 12.0)
         return None
     if is_terminal(elem):
         cm = _connector_manager(elem)
@@ -225,9 +253,9 @@ def effective_height_in(elem):
         try:
             for c in cm.Connectors:
                 if c.Shape == ConnectorProfileType.Round:
-                    return _nominal_even_in(c.Radius * 2.0 * 12.0)
+                    return _clearance_height_in(c.Radius * 2.0 * 12.0)
                 elif c.Shape == ConnectorProfileType.Rectangular:
-                    return _nominal_even_in(c.Height * 12.0)
+                    return _clearance_height_in(c.Height * 12.0)
         except Exception:
             pass
     return None

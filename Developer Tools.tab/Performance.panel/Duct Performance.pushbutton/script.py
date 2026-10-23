@@ -3045,11 +3045,9 @@ def _fails_height_clearance(dr, downstream_height_in):
     the duct, and it overrides both of them. Keeping it in one function is
     what stops the two paths' clearance behaviour drifting apart.
     """
-    my_height = hvac_graph.effective_height_in(dr.elem)
-    if my_height is None or downstream_height_in is None:
-        return False
-    return (downstream_height_in < my_height
-            and my_height < downstream_height_in + _CLEARANCE_MARGIN_IN)
+    return hvac_graph.fails_height_clearance(
+        hvac_graph.effective_height_in(dr.elem), downstream_height_in,
+        _CLEARANCE_MARGIN_IN)
 
 
 def _limits_of(dr, custom_limits):
@@ -4105,16 +4103,13 @@ def main():
     for dr in all_duct_results.values():
         dr.is_mp = dr.element_id in mp_ids
 
-    # int duct id -> RED reason. First rule to claim a duct keeps it, in this
-    # order: flex at a box inlet, then a diffuser on an MP main. Applied after
-    # the normal label, so it overrides it (these are installation faults,
-    # like the clearance rule).
+    # int duct id -> RED reason: a diffuser on an MP main. Applied after the
+    # normal label, so it overrides it (an installation fault, like the
+    # clearance rule). The flex at a box inlet rule was removed (Colin,
+    # 2026-10-23).
     vav_red = {}
     if vav_on:
-        vav_red = vav_checks.red_reasons(
-            vav_by_root.values(),
-            set(dr.element_id for dr in all_duct_results.values()
-                if dr.is_mp and getattr(dr, 'is_flex', False)))
+        vav_red = vav_checks.red_reasons(vav_by_root.values())
 
     # 4a. Branch vs main, against the merged graph.
     #

@@ -220,7 +220,7 @@ class TestLimitsAndFields(unittest.TestCase):
         self.assertIsNotNone(vc.parse_field('nan', 'pos')[1])
 
     def test_reasons_fit_the_34_char_reason_column(self):
-        for text in (vc.REASON_DIFFUSER_ON_MP, vc.REASON_FLEX_AT_INLET, vc.ROLE_MP):
+        for text in (vc.REASON_DIFFUSER_ON_MP, vc.ROLE_MP):
             self.assertLessEqual(len(text), 34, text)
 
     def test_basis_rows_name_sources_and_are_ascii(self):
@@ -384,31 +384,26 @@ class TestRedReasons(unittest.TestCase):
         self.vs = vs
 
     def test_nothing_to_flag(self):
-        self.assertEqual(vc.red_reasons([self.vs], set()), {})
+        self.assertEqual(vc.red_reasons([self.vs]), {})
 
-    def test_flex_at_inlet(self):
-        self.assertEqual(vc.red_reasons([self.vs], set([2])),
-                         {2: vc.REASON_FLEX_AT_INLET})
+    def test_flex_at_inlet_is_not_flagged(self):
+        # Rule removed (Colin, 2026-10-23): flex 2 at the box inlet is fine.
+        self.assertFalse(hasattr(vc, 'REASON_FLEX_AT_INLET'))
+        self.assertEqual(vc.red_reasons([self.vs]), {})
 
     def test_diffuser_on_mp(self):
         self.vs.mp_terminals = {7: 6}
-        self.assertEqual(vc.red_reasons([self.vs], set()),
+        self.assertEqual(vc.red_reasons([self.vs]),
                          {6: vc.REASON_DIFFUSER_ON_MP})
-
-    def test_first_rule_wins(self):
-        self.vs.mp_terminals = {7: 2}
-        out = vc.red_reasons([self.vs], set([2]))
-        self.assertEqual(out, {2: vc.REASON_FLEX_AT_INLET})
 
     def test_terminal_with_no_feed_duct_is_skipped(self):
         self.vs.mp_terminals = {7: None}
-        self.assertEqual(vc.red_reasons([self.vs], set()), {})
+        self.assertEqual(vc.red_reasons([self.vs]), {})
 
     def test_systems_may_be_a_generator(self):
         self.vs.mp_terminals = {7: 6}
-        out = vc.red_reasons((v for v in [self.vs]), set([2]))
-        self.assertEqual(out, {2: vc.REASON_FLEX_AT_INLET,
-                               6: vc.REASON_DIFFUSER_ON_MP})
+        out = vc.red_reasons((v for v in [self.vs]))
+        self.assertEqual(out, {6: vc.REASON_DIFFUSER_ON_MP})
 
 
 # -- W5: VAV inlet runouts -------------------------------------------------------
