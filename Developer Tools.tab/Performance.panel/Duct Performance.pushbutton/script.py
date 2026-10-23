@@ -27,9 +27,8 @@ VAV System (dialog checkbox, plan approved 2026-10-22, lib/vav_checks.py):
 supply equipment entered mid tree through its inlet is a VAV box. The supply
 between the unit and the box inlets is medium pressure (MP): always a main,
 judged against the MP limits, never purple. After the box, as above. Flex
-upstream of a box, short straight duct at a box connector and a diffuser on an
-MP main are red. External static prices each box and reports the pressure
-left at it.
+upstream of a box and a diffuser on an MP main are red. External static
+prices each box and reports the pressure left at it.
 
 Which columns appear in the output tables is chosen in the settings dialog;
 the same selection drives both the drafting-view schedule placed on the sheet
@@ -2430,29 +2429,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
 
 def _vav_summary_lines(root_ids, vav_by_root, root_labels, critical, vav_set):
-    """The VAV BOXES block of the System Summary: per unit, each box's
-    straight duct at inlet and outlet, and (external static on) the MP loss to
-    its inlet and the pressure left at it.
+    """The VAV BOXES block of the System Summary: per unit, each box and
+    (external static on) the MP loss to its inlet and the pressure left at it.
 
     Pressure left = unit max external static less the MP loss WITH the safety
     factor, the same basis as the external static total it is compared to.
     Only shown when the engineer entered the unit's max (VAV plan item 8).
     """
-    mult = float(vav_set['straight_mult'])
     umax = vav_set.get('unit_max_esp')
     minimum = float(vav_set['min_box_inwc'])
-    lines = ['', 'VAV BOXES (MP supply {:.0f} FPM, {:.2f} in. wc per 100 ft; '
-                 'straight duct {:g} D at each box connector)'.format(
-                     float(vav_set['mp_fpm']), float(vav_set['mp_fric']), mult)]
-
-    def _run_text(run):
-        if run is None:
-            return 'not found'
-        if run.d_in <= 0:
-            return '{:.1f} ft (connector size unreadable)'.format(run.length_ft)
-        return '{:.1f} ft of {:.1f} ft{}'.format(
-            run.length_ft, run.required_ft(mult),
-            '' if run.ok(mult) else ' SHORT')
+    lines = ['', 'VAV BOXES (MP supply {:.0f} FPM, {:.2f} in. wc per 100 ft)'.format(
+        float(vav_set['mp_fpm']), float(vav_set['mp_fric']))]
 
     for rid in root_ids:
         vs = vav_by_root.get(rid)
@@ -2465,11 +2452,7 @@ def _vav_summary_lines(root_ids, vav_by_root, root_labels, critical, vav_set):
                 boxes = leaf.get('boxes') or {}
                 break
         for box in vs.boxes:
-            runs = vs.straight.get(box) or {}
-            outs = runs.get('outlet') or []
-            lines.append('    Box {}: inlet straight {}, outlet straight {}'.format(
-                box, _run_text(runs.get('inlet')),
-                ', '.join(_run_text(r) for r in outs) if outs else 'not found'))
+            lines.append('    Box {}'.format(box))
             if critical is None:
                 continue
             reach = boxes.get(box)
@@ -3388,10 +3371,10 @@ def main():
         if str(net.ahu_method).startswith('fallback'):
             duct_rooted_ids.add(eid_int(net.root.Id))
 
-        # VAV: boxes, the MP supply and the straight duct off each box. Run
-        # before the warnings print so an unreadable box direction is listed.
+        # VAV: boxes and the MP supply. Run before the warnings print so an
+        # unreadable box direction is listed.
         if vav_on:
-            vs = hvac_graph.analyze_vav(net, straight=True)
+            vs = hvac_graph.analyze_vav(net)
             vav_by_root[eid_int(net.root.Id)] = vs
             output.print_md('  VAV: {} box(es), {} MP supply element(s).'.format(
                 len(vs.boxes), len(vs.mp_ids)))
@@ -3474,18 +3457,15 @@ def main():
         dr.is_mp = dr.element_id in mp_ids
 
     # int duct id -> RED reason. First rule to claim a duct keeps it, in this
-    # order: flex at a box inlet, short straight inlet, short straight outlet,
-    # a diffuser on an MP main. Applied after the normal label, so it
-    # overrides it (these are installation faults, like the clearance rule).
+    # order: flex at a box inlet, then a diffuser on an MP main. Applied after
+    # the normal label, so it overrides it (these are installation faults,
+    # like the clearance rule).
     vav_red = {}
     if vav_on:
         vav_red = vav_checks.red_reasons(
             vav_by_root.values(),
             set(dr.element_id for dr in all_duct_results.values()
-                if dr.is_mp and getattr(dr, 'is_flex', False)),
-            vav_set['straight_mult'],
-            lambda n: hvac_graph.node_kind(all_nodes.get(n)),
-            all_children, vav_checks.parents_of(all_children))
+                if dr.is_mp and getattr(dr, 'is_flex', False)))
 
     # 4a. Branch vs main, against the merged graph.
     #

@@ -330,8 +330,7 @@ def _taps_on(net, duct, up_pt, direction):
     return taps
 
 
-# Largest dimension of a connector, inches. Shared with the VAV straight duct
-# rule, so it lives in hvac_graph.
+# Largest dimension of a connector, inches (lives in hvac_graph).
 _conn_size_in = hvac_graph.connector_size_in
 
 

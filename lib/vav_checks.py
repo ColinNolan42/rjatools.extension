@@ -3,9 +3,8 @@
 vav_checks.py  --  VAV mode for Duct Performance and Size Duct
 
 Pure Python, no Revit imports, so every rule here tests in plain CPython
-(lib/_test_vav_checks.py). The Revit side (connector directions, the straight
-duct walk off a box connector) lives in hvac_graph.py and hands this module
-plain ids, strings and numbers.
+(lib/_test_vav_checks.py). The Revit side (connector directions) lives in
+hvac_graph.py and hands this module plain ids, strings and numbers.
 
 Approved by Colin, 2026-10-22 (.claude/docs/Duct Velocity/VAV_PLAN.md). Single
 duct and fan powered boxes are treated the same. Dual duct is ignored.
@@ -18,7 +17,6 @@ What it decides:
     never by System Type name, because MP and LP supply usually share one
     System Type.
   - supply terminals with no box upstream (a diffuser on an MP main)
-  - the straight duct length off a box connector
   - two picked units that share ductwork
 
 Sources (VAV design values come only from these):
@@ -41,7 +39,6 @@ MP_KEY = 'Supply Air (MP)'
 
 MP_DEFAULT_FPM = 2000.0          # EDR VAV Guide p100, ducts in ceiling plenums
 MP_DEFAULT_FRICTION = 0.30       # EDR VAV Guide p3, p100 (start at 0.25 to 0.30)
-DEFAULT_STRAIGHT_MULTIPLIER = 5.0   # Colin's firm rule, stricter than DSDG p31 (3 D)
 DEFAULT_BOX_DROP_INWC = 0.25     # Colin: priced like a balancing damper for now
 DEFAULT_MIN_BOX_PRESSURE_INWC = 0.75   # Colin's firm rule of thumb
 DEFAULT_UNIT_MAX_ESP_INWC = None       # blank: no check, engineer enters the unit's value
@@ -66,8 +63,6 @@ REASON_FLEX_AT_INLET = 'Flex at VAV inlet'
 VAV_LIMIT_FIELDS = (
     ('mp_fpm', 'MP supply max velocity', 'FPM', MP_DEFAULT_FPM, 'pos'),
     ('mp_fric', 'MP supply max friction', 'in. wc/100 ft', MP_DEFAULT_FRICTION, 'pos'),
-    ('straight_mult', 'Straight duct at box inlet and outlet', 'x D',
-     DEFAULT_STRAIGHT_MULTIPLIER, 'pos'),
 )
 VAV_STATIC_FIELDS = (
     ('box_drop', 'VAV box pressure drop', 'in. wc', DEFAULT_BOX_DROP_INWC, 'nonneg'),
@@ -110,11 +105,6 @@ def parse_field(text, kind):
     return v, None
 
 
-def straight_reason(side, multiplier):
-    """'VAV inlet straight < 5D' or 'VAV outlet straight < 5D'."""
-    return 'VAV {} straight < {:g}D'.format(side, float(multiplier))
-
-
 def basis_rows(settings=None):
     """(label, text) rows naming the VAV limits and their sources, for the
     dialogs' Calculation basis, the sheet legend and the console."""
@@ -131,10 +121,8 @@ def basis_rows(settings=None):
         ('VAV, LP',
          'After the box: the Supply Air limits (EDR p99, Taylor 2019 p54).'),
         ('VAV, red',
-         'Flex upstream of a box (EDR p3, DSDG p33, p41). Under {:g} D of straight '
-         'duct at a box inlet, or at a box outlet before an elbow, tee, diffuser, '
-         'damper or takeoff, transitions ignored (RJA rule, stricter than DSDG '
-         'p31). A diffuser on an MP main.'.format(float(s['straight_mult']))),
+         'Flex upstream of a box (EDR p3, DSDG p33, p41). A diffuser on an MP '
+         'main.'),
         ('VAV, inlet',
          'An MP duct with one box downstream is the box inlet runout, sized to '
          'the box by the engineer: not judged on the MP limits, never resized.'),
@@ -224,8 +212,6 @@ class VavSystem(object):
                        terminal with no box upstream (a diffuser on an MP main)
     box_inlet          box id -> nearest duct id upstream (its inlet runout)
     box_outlets        box id -> [nearest duct ids downstream]
-    straight           box id -> {'inlet': StraightRun, 'outlet': [StraightRun]}
-                       (filled by the Revit side, hvac_graph.analyze_vav)
     """
 
     def __init__(self):
@@ -237,7 +223,6 @@ class VavSystem(object):
         self.mp_terminals = {}
         self.box_inlet = {}
         self.box_outlets = {}
-        self.straight = {}
 
     @property
     def is_vav(self):
@@ -388,135 +373,20 @@ def overlapping_roots(nodes_by_root):
     return out
 
 
-# -- Straight duct off a box connector -----------------------------------------
-
-class StraightRun(object):
-    """Straight duct off one box connector.
-
-    length_ft  measured duct length out of the connector
-    d_in       box connector diameter, or its largest side if rectangular
-    duct_id    first duct on the walk (the duct touching the box), or None
-    stopped_by what ended the run: 'fitting', 'tap', 'flex' or 'end'
-    first_id   first element on the walk, whatever it is (None: open connector).
-               Used to find the duct a short run is reported on when the run
-               stops before reaching one (an elbow right on the box).
-    """
-
-    def __init__(self, length_ft=0.0, d_in=0.0, duct_id=None, stopped_by='end',
-                 first_id=None):
-        self.length_ft = float(length_ft)
-        self.d_in = float(d_in or 0.0)
-        self.duct_id = duct_id
-        self.stopped_by = stopped_by
-        self.first_id = first_id if first_id is not None else duct_id
-
-    def required_ft(self, multiplier):
-        return float(multiplier) * self.d_in / 12.0
-
-    def ok(self, multiplier):
-        """True / False, or None when the connector size is unreadable."""
-        if self.d_in <= 0:
-            return None
-        return self.length_ft >= self.required_ft(multiplier) - 1e-6
-
-
-# Step kinds the Revit walk yields (hvac_graph.straight_steps).
-STEP_DUCT = 'duct'              # rigid duct
-STEP_FLEX = 'flex'              # flex duct: never straight duct, ends the run
-STEP_UNION = 'union'
-STEP_TRANSITION = 'transition'
-STEP_ACCESSORY = 'accessory'    # damper and the like
-# anything else (elbow, tee, wye, takeoff, terminal, equipment) ends the run
-
-
-def straight_length(steps, d_in, side='inlet'):
-    """Measure the straight run out of a box connector.
-
-    steps: iterable of (kind, length_ft, tap_at_ft, element_id) in walk order.
-      A duct adds its length, or only up to tap_at_ft when a tap sits on it.
-
-    Inlet (unchanged): straight rigid duct and unions only. Anything else ends
-    the run.
-
-    Outlet (Colin, 2026-10-22): transitions are ignored anywhere in the run
-    (some sit on the discharge, some are dropped in after the 5 D), passing at
-    no length with unions. The run ends at the first elbow, tee, diffuser,
-    damper, boot, takeoff or tap, or flex duct.
-
-    Consumed lazily, so the Revit walk stops as soon as the run does.
-    Returns StraightRun.
-    """
-    total = 0.0
-    first_duct = None
-    first_id = None
-    passes = (STEP_UNION,) if side == 'inlet' else (STEP_UNION, STEP_TRANSITION)
-    for kind, length_ft, tap_at_ft, eid in steps:
-        if first_id is None:
-            first_id = eid
-        if kind == STEP_DUCT:
-            if first_duct is None:
-                first_duct = eid
-            if tap_at_ft is not None:
-                return StraightRun(total + float(tap_at_ft), d_in, first_duct, 'tap',
-                                   first_id)
-            total += float(length_ft or 0.0)
-            continue
-        if kind in passes:
-            continue
-        return StraightRun(total, d_in, first_duct,
-                           'flex' if kind == STEP_FLEX else 'fitting', first_id)
-    return StraightRun(total, d_in, first_duct, 'end', first_id)
-
-
-def _report_duct(run, side, kind_of, children, parents):
-    """The duct a short straight run is reported on: the duct touching the box
-    if the walk reached one, else the nearest duct past the first element
-    (downstream for an outlet, upstream for an inlet, since the inlet walk
-    heads up the tree), else None."""
-    if run.duct_id is not None:
-        return run.duct_id
-    first = run.first_id
-    if first is None:
-        return None
-    if kind_of(first) == 'duct':
-        return first
-    if side == 'outlet':
-        below = nearest_ducts_down(first, children, kind_of)
-        return below[0] if below else None
-    return nearest_duct_up(first, parents, kind_of)
-
-
-def red_reasons(systems, flex_mp_ids, multiplier, kind_of, children, parents):
+def red_reasons(systems, flex_mp_ids):
     """{duct id: RED reason} for the VAV rules, over every unit's VavSystem.
 
     The first rule to claim a duct keeps it, in this order: flex upstream of a
-    box, short straight inlet, short straight outlet, a diffuser on an MP main.
-    The caller applies these after the normal label, so they override it.
+    box, then a diffuser on an MP main. The caller applies these after the
+    normal label, so they override it.
 
     Args:
-        systems: iterable of VavSystem (with .straight filled).
+        systems: iterable of VavSystem.
         flex_mp_ids: ids of MP ducts that are flex.
-        multiplier: straight duct multiplier (x D).
-        kind_of, children, parents: the merged graph, as for analyze_system.
     """
     out = {}
     for nid in sorted(flex_mp_ids):
         out.setdefault(nid, REASON_FLEX_AT_INLET)
-    systems = list(systems)
-    for vs in systems:
-        for box in vs.boxes:
-            runs = vs.straight.get(box) or {}
-            inlet = runs.get('inlet')
-            if inlet is not None and inlet.ok(multiplier) is False:
-                target = (_report_duct(inlet, 'inlet', kind_of, children, parents)
-                          or vs.box_inlet.get(box))
-                if target is not None:
-                    out.setdefault(target, straight_reason('inlet', multiplier))
-            for run in runs.get('outlet') or []:
-                if run.ok(multiplier) is False:
-                    target = _report_duct(run, 'outlet', kind_of, children, parents)
-                    if target is not None:
-                        out.setdefault(target, straight_reason('outlet', multiplier))
     for vs in systems:
         for _tid, feed in sorted(vs.mp_terminals.items()):
             if feed is not None:

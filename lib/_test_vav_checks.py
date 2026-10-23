@@ -1,6 +1,6 @@
 # -*- coding: ascii -*-
-"""Tests for vav_checks: VAV box detection, the MP set, the straight duct
-rule, the parallel unit check and the shared limits lookup.
+"""Tests for vav_checks: VAV box detection, the MP set, the VAV red rules,
+the parallel unit check and the shared limits lookup.
 
 vav_checks is pure Python, so the real module is tested against small fake
 networks built from ids, kinds and system classes.
@@ -184,47 +184,6 @@ class TestParallel(unittest.TestCase):
         self.assertEqual(vc.overlapping_roots({1: ahu, 5: box}), set())
 
 
-class TestStraightLength(unittest.TestCase):
-
-    def test_ducts_through_unions_add_up(self):
-        steps = [('duct', 2.0, None, 41), ('union', 0.0, None, 42),
-                 ('duct', 3.0, None, 43), ('other', 0.0, None, 44)]
-        run = vc.straight_length(iter(steps), 10.0)
-        self.assertAlmostEqual(run.length_ft, 5.0)
-        self.assertEqual(run.duct_id, 41)
-        self.assertEqual(run.stopped_by, 'fitting')
-
-    def test_a_tap_cuts_the_run_where_it_sits(self):
-        steps = [('duct', 2.0, None, 41), ('duct', 8.0, 1.5, 43)]
-        run = vc.straight_length(steps, 10.0)
-        self.assertAlmostEqual(run.length_ft, 3.5)
-        self.assertEqual(run.stopped_by, 'tap')
-
-    def test_a_fitting_on_the_box_is_zero(self):
-        run = vc.straight_length([('other', 0.0, None, 9)], 12.0)
-        self.assertEqual(run.length_ft, 0.0)
-        self.assertIsNone(run.duct_id)
-        self.assertFalse(run.ok(5.0))
-
-    def test_walk_stops_reading_at_the_first_other_element(self):
-        read = []
-
-        def steps():
-            for s in [('duct', 1.0, None, 1), ('other', 0.0, None, 2),
-                      ('duct', 99.0, None, 3)]:
-                read.append(s[3])
-                yield s
-        vc.straight_length(steps(), 8.0)
-        self.assertEqual(read, [1, 2])
-
-    def test_5d_rule(self):
-        run = vc.StraightRun(4.0, 10.0)            # 5D of a 10 in. inlet = 4.17 ft
-        self.assertAlmostEqual(run.required_ft(5.0), 50.0 / 12.0)
-        self.assertFalse(run.ok(5.0))
-        self.assertTrue(vc.StraightRun(50.0 / 12.0, 10.0).ok(5.0))
-        self.assertIsNone(vc.StraightRun(4.0, 0.0).ok(5.0))
-
-
 class TestLimitsAndFields(unittest.TestCase):
 
     def test_mp_duct_takes_mp_limits_whatever_its_name(self):
@@ -246,7 +205,6 @@ class TestLimitsAndFields(unittest.TestCase):
         d = vc.default_settings()
         self.assertEqual(d['mp_fpm'], 2000.0)
         self.assertEqual(d['mp_fric'], 0.30)
-        self.assertEqual(d['straight_mult'], 5.0)
         self.assertEqual(d['box_drop'], 0.25)
         self.assertIsNone(d['unit_max_esp'])
         self.assertEqual(d['min_box_inwc'], 0.75)
@@ -262,21 +220,18 @@ class TestLimitsAndFields(unittest.TestCase):
         self.assertIsNotNone(vc.parse_field('nan', 'pos')[1])
 
     def test_reasons_fit_the_34_char_reason_column(self):
-        for text in (vc.REASON_DIFFUSER_ON_MP, vc.REASON_FLEX_AT_INLET,
-                     vc.straight_reason('inlet', 5), vc.straight_reason('outlet', 5),
-                     vc.straight_reason('outlet', 3.5), vc.ROLE_MP):
+        for text in (vc.REASON_DIFFUSER_ON_MP, vc.REASON_FLEX_AT_INLET, vc.ROLE_MP):
             self.assertLessEqual(len(text), 34, text)
-        self.assertEqual(vc.straight_reason('inlet', 5.0), 'VAV inlet straight < 5D')
-        self.assertEqual(vc.straight_reason('outlet', 5), 'VAV outlet straight < 5D')
 
     def test_basis_rows_name_sources_and_are_ascii(self):
         rows = vc.basis_rows({'unit_max_esp': 1.5})
         joined = ' '.join(a + ' ' + b for a, b in rows)
         joined.encode('ascii')
         for needle in ('EDR VAV Guide p3, p100', 'EDR p99', 'Taylor 2019 p54',
-                       'DSDG p33, p41', 'DSDG p31', '2000 fpm', '0.30', '1.50'):
+                       'DSDG p33, p41', '2000 fpm', '0.30', '1.50'):
             self.assertIn(needle, joined)
         self.assertNotIn(' - ', joined)
+        self.assertNotIn('straight', joined.lower())
 
     def test_pressure_left(self):
         self.assertIsNone(vc.pressure_left(None, 0.4))
@@ -419,117 +374,41 @@ class TestMidTreeEquipmentFlow(unittest.TestCase):
 # -- W3 / S1: red_reasons ------------------------------------------------------
 
 class TestRedReasons(unittest.TestCase):
-    """AHU 1 -> duct 2 -> transition 3 -> BOX 4 -> transition 5 -> duct 6 -> T7
-    with the straight runs as the Revit walk would report them."""
+    """AHU 1 -> flex 2 -> fitting 3 -> BOX 4 -> fitting 5 -> duct 6 -> T7."""
 
     def setUp(self):
-        self.children = {1: [2], 2: [3], 3: [4], 4: [5], 5: [6], 6: [7]}
-        self.parents = vc.parents_of(self.children)
-        kinds = {1: 'equipment', 2: 'duct', 3: 'fitting', 4: 'equipment',
-                 5: 'fitting', 6: 'duct', 7: 'terminal'}
-        self.kind_of = kinds.get
         vs = vc.VavSystem()
         vs.boxes = [4]
         vs.box_inlet = {4: 2}
         vs.box_outlets = {4: [6]}
-        # both walks stop at the transition right on the box: 0 ft, no duct
-        vs.straight = {4: {'inlet': vc.straight_length([('other', 0, None, 3)], 10.0),
-                           'outlet': [vc.straight_length([('other', 0, None, 5)], 10.0)]}}
         self.vs = vs
 
-    def test_first_id_is_recorded(self):
-        self.assertEqual(self.vs.straight[4]['inlet'].first_id, 3)
-        self.assertIsNone(self.vs.straight[4]['inlet'].duct_id)
+    def test_nothing_to_flag(self):
+        self.assertEqual(vc.red_reasons([self.vs], set()), {})
 
-    def test_reasons_go_on_the_nearest_duct_past_the_first_element(self):
-        out = vc.red_reasons([self.vs], set(), 5.0, self.kind_of, self.children,
-                             self.parents)
-        self.assertEqual(out, {2: 'VAV inlet straight < 5D',
-                               6: 'VAV outlet straight < 5D'})
-
-    def test_first_rule_wins(self):
-        self.vs.mp_terminals = {7: 6}
-        out = vc.red_reasons([self.vs], set([2]), 5.0, self.kind_of, self.children,
-                             self.parents)
-        self.assertEqual(out[2], vc.REASON_FLEX_AT_INLET)
-        self.assertEqual(out[6], 'VAV outlet straight < 5D')
-
-    def test_long_enough_runs_are_not_flagged(self):
-        self.vs.straight[4] = {
-            'inlet': vc.straight_length([('duct', 5.0, None, 2)], 10.0),
-            'outlet': [vc.straight_length([('duct', 5.0, None, 6)], 10.0)]}
-        out = vc.red_reasons([self.vs], set(), 5.0, self.kind_of, self.children,
-                             self.parents)
-        self.assertEqual(out, {})
+    def test_flex_at_inlet(self):
+        self.assertEqual(vc.red_reasons([self.vs], set([2])),
+                         {2: vc.REASON_FLEX_AT_INLET})
 
     def test_diffuser_on_mp(self):
-        self.vs.straight = {}
         self.vs.mp_terminals = {7: 6}
-        out = vc.red_reasons([self.vs], set(), 5.0, self.kind_of, self.children,
-                             self.parents)
-        self.assertEqual(out, {6: vc.REASON_DIFFUSER_ON_MP})
+        self.assertEqual(vc.red_reasons([self.vs], set()),
+                         {6: vc.REASON_DIFFUSER_ON_MP})
 
+    def test_first_rule_wins(self):
+        self.vs.mp_terminals = {7: 2}
+        out = vc.red_reasons([self.vs], set([2]))
+        self.assertEqual(out, {2: vc.REASON_FLEX_AT_INLET})
 
-# -- Outlet straight run: transitions ignored, dampers end it -----------------
+    def test_terminal_with_no_feed_duct_is_skipped(self):
+        self.vs.mp_terminals = {7: None}
+        self.assertEqual(vc.red_reasons([self.vs], set()), {})
 
-class TestOutletRun(unittest.TestCase):
-
-    def test_transition_on_the_box_is_ignored_on_the_outlet(self):
-        steps = [('transition', 0, None, 5), ('duct', 4.0, None, 6),
-                 ('elbow', 0, None, 7)]
-        run = vc.straight_length(steps, 10.0, 'outlet')
-        self.assertAlmostEqual(run.length_ft, 4.0)
-        self.assertEqual(run.duct_id, 6)
-
-    def test_transition_after_unions_is_ignored_too(self):
-        steps = [('union', 0, None, 4), ('transition', 0, None, 5),
-                 ('duct', 5.0, None, 6), ('stop', 0, None, 7)]
-        self.assertAlmostEqual(vc.straight_length(steps, 10.0, 'outlet').length_ft, 5.0)
-
-    def test_inlet_rule_unchanged_a_transition_ends_it(self):
-        steps = [('transition', 0, None, 3), ('duct', 9.0, None, 2)]
-        run = vc.straight_length(steps, 10.0, 'inlet')
-        self.assertEqual(run.length_ft, 0.0)
-
-    def test_outlet_passes_transitions_inside_the_run(self):
-        steps = [('duct', 2.0, None, 6), ('transition', 0, None, 9),
-                 ('duct', 2.5, None, 10), ('stop', 0, None, 11),
-                 ('duct', 50.0, None, 12)]
-        run = vc.straight_length(steps, 10.0, 'outlet')
-        self.assertAlmostEqual(run.length_ft, 4.5)
-
-    def test_damper_ends_the_outlet_run(self):
-        steps = [('transition', 0, None, 5), ('duct', 2.0, None, 6),
-                 ('accessory', 0, None, 8), ('duct', 9.0, None, 10)]
-        run = vc.straight_length(steps, 10.0, 'outlet')
-        self.assertAlmostEqual(run.length_ft, 2.0)
-        self.assertEqual(run.stopped_by, 'fitting')
-
-    def test_several_transitions_all_ignored(self):
-        steps = [('transition', 0, None, 5), ('transition', 0, None, 6),
-                 ('duct', 5.0, None, 7)]
-        run = vc.straight_length(steps, 10.0, 'outlet')
-        self.assertAlmostEqual(run.length_ft, 5.0)
-
-    def test_flex_ends_the_run_both_sides(self):
-        for side in ('inlet', 'outlet'):
-            run = vc.straight_length([('duct', 1.0, None, 6), ('flex', 8.0, None, 7)],
-                                     10.0, side)
-            self.assertAlmostEqual(run.length_ft, 1.0)
-            self.assertEqual(run.stopped_by, 'flex')
-
-    def test_tap_and_diffuser_end_the_outlet_run(self):
-        run = vc.straight_length([('transition', 0, None, 5), ('duct', 8.0, 2.0, 6)],
-                                 10.0, 'outlet')
-        self.assertAlmostEqual(run.length_ft, 2.0)
-        run = vc.straight_length([('duct', 3.0, None, 6), ('stop', 0, None, 7)],
-                                 10.0, 'outlet')
-        self.assertAlmostEqual(run.length_ft, 3.0)
-
-    def test_basis_text_names_the_outlet_rule(self):
-        joined = ' '.join(v for _l, v in vc.basis_rows())
-        self.assertIn('transitions ignored', joined)
-        self.assertIn('elbow, tee, diffuser, damper or takeoff', joined)
+    def test_systems_may_be_a_generator(self):
+        self.vs.mp_terminals = {7: 6}
+        out = vc.red_reasons((v for v in [self.vs]), set([2]))
+        self.assertEqual(out, {2: vc.REASON_FLEX_AT_INLET,
+                               6: vc.REASON_DIFFUSER_ON_MP})
 
 
 # -- W5: VAV inlet runouts -------------------------------------------------------
