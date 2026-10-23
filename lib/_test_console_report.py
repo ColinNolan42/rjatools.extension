@@ -352,6 +352,39 @@ class TakeoffTests(unittest.TestCase):
         self.assertIn('0.084', html)
 
 
+class WidthTests(unittest.TestCase):
+
+    def test_widths_fix_layout_and_sum_to_100(self):
+        html = cr.table(['A', 'B', 'C'], [['x', '1', 'y']], align=['l', 'r', 'l'],
+                        widths=[1, 1, 1])
+        self.assertIn('table-layout:fixed;width:100%;', html)
+        pct = [int(v) for v in re.findall(r'<col style="width:(\d+)%;" />', html)]
+        self.assertEqual(len(pct), 3)
+        self.assertEqual(sum(pct), 100)
+        self.assertEqual(shape(html).errors, [])
+
+    def test_number_cells_never_wrap(self):
+        html = cr.table(['A', 'B'], [['long name', '0.123']], align=['l', 'r'],
+                        widths=[3, 1])
+        self.assertIn('text-align:right;vertical-align:top;background:#FFFFFF;'
+                      'white-space:nowrap;', html)
+        self.assertIn('word-wrap:break-word;', html)
+
+    def test_no_widths_keeps_auto_layout(self):
+        html = cr.table(['A'], [['x']])
+        self.assertNotIn('table-layout', html)
+        self.assertNotIn('<colgroup>', html)
+
+    def test_same_kind_tables_share_widths(self):
+        a = dpc._esp_class_table({'sys_class': 'Supply Air', 'rows': [('Duct friction', 0.1, '')],
+                                  'subtotal': 0.1, 'safety': 0.01, 'total': 0.11})
+        b = dpc._esp_class_table({'sys_class': 'Return Air', 'rows': [('A much longer item name', 0.2, 'x')],
+                                  'subtotal': 0.2, 'safety': 0.02, 'total': 0.22})
+        cols = lambda h: re.findall(r'<col style="width:\d+%;" />', h)
+        self.assertEqual(cols(a), cols(b))
+        self.assertTrue(cols(a))
+
+
 class SourceTests(unittest.TestCase):
 
     def test_no_f_strings_and_no_revit(self):

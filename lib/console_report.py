@@ -129,8 +129,20 @@ def _cell_style(align, extra=''):
             'vertical-align:top;{}').format(BORDER, align, extra)
 
 
+def _widths_pct(widths, ncol):
+    """Column widths as whole percentages summing to 100, or None."""
+    if not widths or len(widths) != ncol:
+        return None
+    total = float(sum(widths))
+    if total <= 0:
+        return None
+    pct = [int(round(100.0 * w / total)) for w in widths]
+    pct[pct.index(max(pct))] += 100 - sum(pct)
+    return pct
+
+
 def table(headers, rows, align=None, total_row=None, status_col=None,
-          caption=None, swatch_col=None):
+          caption=None, swatch_col=None, widths=None, width='100%'):
     """A compact bordered table.
 
     headers     list of header texts
@@ -141,23 +153,41 @@ def table(headers, rows, align=None, total_row=None, status_col=None,
     caption     optional bold line above the table
     swatch_col  optional column index whose cell gets a color swatch, keyed by
                 status_key() of the cell text
+    widths      optional relative column widths (any units, scaled to 100%).
+                Fixed layout: every table built with the same widths lines up
+                column for column, whatever its content. Long text wraps in
+                its own column; right aligned (number) cells never wrap.
+    width       table width when widths is given ('100%' or e.g. '60%')
     """
     ncol = len(headers)
     align = list(align or [])
     align = [({'r': 'right', 'c': 'center'}.get(a, 'left')) for a in align]
     align += ['left'] * (ncol - len(align))
+    pct = _widths_pct(widths, ncol)
+    num_extra = ['white-space:nowrap;' if a == 'right' else
+                 'word-wrap:break-word;' for a in align]
 
     out = []
     if caption:
-        out.append('<div style="font-weight:bold;margin:6px 0 2px 0;">{}</div>'
-                   .format(esc(caption)))
+        out.append('<div style="font-family:{};font-size:12px;font-weight:bold;'
+                   'color:{};margin:8px 0 2px 0;">{}</div>'
+                   .format(FONT, RJA_BLUE, esc(caption)))
+    layout = ''
+    if pct is not None:
+        layout = 'table-layout:fixed;width:{};'.format(width)
     out.append('<table style="border-collapse:collapse;font-family:{};'
-               'font-size:12px;margin:2px 0 6px 0;">'.format(FONT))
+               'font-size:12px;margin:2px 0 6px 0;{}">'.format(FONT, layout))
+    if pct is not None:
+        out.append('<colgroup>')
+        for p in pct:
+            out.append('<col style="width:{}%;" />'.format(p))
+        out.append('</colgroup>')
     out.append('<tr>')
     for i, h in enumerate(headers):
+        wrap = 'word-wrap:break-word;' if pct is not None else 'white-space:nowrap;'
         out.append('<th style="{}">{}</th>'.format(
-            _cell_style(align[i], 'background:{};font-weight:bold;color:{};'
-                        'white-space:nowrap;'.format(HEADER_BG, TEXT)), esc(h)))
+            _cell_style(align[i], 'background:{};font-weight:bold;color:{};{}'
+                        .format(HEADER_BG, TEXT, wrap)), esc(h)))
     out.append('</tr>')
 
     for r, row in enumerate(rows):
@@ -165,7 +195,7 @@ def table(headers, rows, align=None, total_row=None, status_col=None,
         out.append('<tr>')
         cells = list(row) + [''] * (ncol - len(row))
         for i, cell in enumerate(cells[:ncol]):
-            extra = 'background:{};'.format(bg)
+            extra = 'background:{};{}'.format(bg, num_extra[i])
             body = esc(cell)
             if status_col is not None and i == status_col:
                 key = status_key(cell)
@@ -185,7 +215,8 @@ def table(headers, rows, align=None, total_row=None, status_col=None,
         for i, cell in enumerate(cells[:ncol]):
             out.append('<td style="{}">{}</td>'.format(
                 _cell_style(align[i], 'background:{};font-weight:bold;'
-                            'border-top:2px solid {};'.format(TOTAL_BG, RJA_BLUE)),
+                            'border-top:2px solid {};{}'.format(
+                                TOTAL_BG, RJA_BLUE, num_extra[i])),
                 esc(cell)))
         out.append('</tr>')
     out.append('</table>')

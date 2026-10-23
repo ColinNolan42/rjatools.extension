@@ -4876,7 +4876,8 @@ def main():
             duct_title, [col[1] for col in cols], duct_rows,
             status_col=keys.index('status') if 'status' in keys else None,
             align=['r' if k in ('num', 'cfm', 'fpm', 'fric', 'length') else 'l'
-                   for k in keys]), _ducts_text)
+                   for k in keys],
+            widths=[col[3] for col in cols]), _ducts_text)
 
     # Design limits and legend. One set of rows feeds the themed tables and
     # the markdown fallback.

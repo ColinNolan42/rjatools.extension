@@ -39,6 +39,20 @@ IronPython 2.7: no f-strings; floats are cast with float() before '{:.3f}'.
 import console_report as cr
 
 
+# Relative column widths per table kind. Every table of one kind is built with
+# the same widths (fixed layout), so stacked tables line up column for column.
+W_EQUIPMENT = [40, 18, 12, 30]
+W_BY_CLASS = [50, 25, 25]
+W_TYPES = [60, 15, 25]
+W_TAKEOFF = [24, 42, 12, 10, 12]
+W_ESP = [24, 12, 64]
+W_VAV = [22, 14, 16, 16, 18, 14]
+W_RUN = [22, 8, 10, 60]
+W_LIMITS = [50, 25, 25]
+W_LEGEND = [12, 8, 18, 62]
+NARROW = '60%'
+
+
 def _f3(value):
     if value is None:
         return '-'
@@ -52,13 +66,15 @@ def system_summary(rec):
     if rec.get('equipment'):
         out.append(cr.table(
             ['Equipment', 'Supply discharge CFM', 'Diffusers', 'Other air feeding it'],
-            rec['equipment'], align=['l', 'r', 'r', 'l']))
+            rec['equipment'], align=['l', 'r', 'r', 'l'], widths=W_EQUIPMENT))
     if rec.get('by_class'):
         out.append(cr.table(['System', 'CFM', 'Diffusers'], rec['by_class'],
-                            align=['l', 'r', 'r'], caption='By system class'))
+                            align=['l', 'r', 'r'], caption='By system class',
+                            widths=W_BY_CLASS, width=NARROW))
     if rec.get('types'):
         out.append(cr.table(['Family', 'Count', 'CFM'], rec['types'],
-                            align=['l', 'r', 'r'], caption='Diffuser types'))
+                            align=['l', 'r', 'r'], caption='Diffuser types',
+                            widths=W_TYPES, width=NARROW))
     for w in rec.get('warnings') or []:
         out.append(cr.callout(w, 'warn'))
     return ''.join(out)
@@ -141,7 +157,7 @@ def _esp_takeoff_table(cls):
     return cr.table(TAKEOFF_HEADERS, rows, align=['l', 'l', 'r', 'r', 'r'],
                     total_row=['TOTAL', cls.get('total_detail') or '', '', '',
                                _f3(cls['total'])],
-                    caption=caption)
+                    caption=caption, widths=W_TAKEOFF)
 
 
 def _esp_class_table(cls):
@@ -155,7 +171,7 @@ def _esp_class_table(cls):
         caption = '{}, {}'.format(caption, cls['airflow'])
     return cr.table(['Item', 'in. wc', 'Detail'], rows, align=['l', 'r', 'l'],
                     total_row=['TOTAL', _f3(cls['total']), cls.get('total_detail') or ''],
-                    caption=caption)
+                    caption=caption, widths=W_ESP)
 
 
 def external_static(rec):
@@ -211,7 +227,7 @@ def vav_boxes(rep):
                          left, status or '-'])
     out.append(cr.table(
         ['Unit', 'Box', 'MP loss to inlet', 'with safety factor', 'Pressure left', 'Status'],
-        rows, align=['l', 'l', 'r', 'r', 'r', 'c'], status_col=5))
+        rows, align=['l', 'l', 'r', 'r', 'r', 'c'], status_col=5, widths=W_VAV))
     if rep.get('minimum') is not None:
         out.append(cr.note('LOW: pressure left under the {:.2f} in. wc minimum. '
                            'Values in in. wc.'.format(float(rep['minimum']))))
@@ -231,14 +247,16 @@ def index_run_detail(runs):
         out.append(cr.table(['Item', 'FPM', 'in. wc', 'Detail'], rows,
                             align=['l', 'r', 'r', 'l'],
                             total_row=['Subtotal', '', _f3(run['subtotal']),
-                                       run.get('subtotal_detail') or '']))
+                                       run.get('subtotal_detail') or ''],
+                            widths=W_RUN))
     return ''.join(out)
 
 
-def duct_table(title, headers, rows, status_col=None, align=None):
-    """Section e: Flagged Ducts / All Ducts."""
+def duct_table(title, headers, rows, status_col=None, align=None, widths=None):
+    """Section e: Flagged Ducts / All Ducts. widths: the _COLUMN_DEFS console
+    widths, so the columns keep the same proportions as the sheet table."""
     return cr.section(title, '{} duct(s)'.format(len(rows))) + cr.table(
-        headers, rows, align=align, status_col=status_col)
+        headers, rows, align=align, status_col=status_col, widths=widths)
 
 
 def limits_and_legend(rec):
@@ -252,7 +270,8 @@ def limits_and_legend(rec):
     if rec.get('roles_note'):
         out.append(cr.paragraph(rec['roles_note'][1], rec['roles_note'][0]))
     out.append(cr.table(['System', 'Max Velocity', 'Max Friction'], rec.get('limits') or [],
-                        align=['l', 'r', 'r'], caption=rec.get('limits_caption')))
+                        align=['l', 'r', 'r'], caption=rec.get('limits_caption'),
+                        widths=W_LIMITS, width=NARROW))
     if rec.get('vav_basis'):
         out.append(cr.subsection('VAV System'))
         out.append(cr.keyvalue(rec['vav_basis']))
@@ -260,7 +279,7 @@ def limits_and_legend(rec):
         out.append(cr.paragraph(text, lead))
     out.append(cr.table(['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
                         rec.get('legend') or [], align=['l', 'r', 'r', 'l'],
-                        swatch_col=0, caption='Color legend'))
+                        swatch_col=0, caption='Color legend', widths=W_LEGEND))
     if rec.get('clearance'):
         out.append(cr.callout(rec['clearance'][1],
                               'error' if rec['clearance'][0] else 'ok'))
