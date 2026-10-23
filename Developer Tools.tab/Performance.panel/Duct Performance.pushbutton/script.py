@@ -3485,10 +3485,9 @@ _LEFT_COLUMNS = ('reason', 'role')
 
 def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id,
-                        show_r_marker_note=False, legend_notes=(),
-                        esp_takeoffs=()):
+                        show_r_marker_note=False, esp_takeoffs=()):
     """Create a Drafting View with a System Summary block + flagged-duct table
-    + color legend, in the RJA table look.
+    + note legend, in the RJA table look.
 
     flagged_rows: list of per-duct cell dicts from _row_cells(), already in
     the order they should appear, the same order the numbered keynote circles
@@ -3562,8 +3561,9 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
         y -= rja_drafting.GAP
 
         # Legend: the plan colour as a swatch, then its meaning, boxed.
+        # Named NOTE LEGEND and kept to the plan marks only (Colin, 2026-10-23).
         y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
-                               'COLOR LEGEND', None, rja_drafting.SUB_BAND_H)
+                               'NOTE LEGEND', None, rja_drafting.SUB_BAND_H)
         legend_top = y
         row_h = rja_drafting.ROW_H
         pad = rja_drafting.PAD
@@ -3578,14 +3578,12 @@ def _build_summary_view(doc, summary_lines, flagged_rows, selected_cols,
                             '{}: {}'.format(color_key.title(), meaning))
             y -= row_h
         if show_r_marker_note:
-            rja_drafting._t(st, sched_view, swatch + pad * 3.0, y,
+            # Starts in the swatch column so '(R)' lines up with the colour
+            # squares above it.
+            rja_drafting._t(st, sched_view, pad * 2.0, y,
                             '(R): Most restrictive diffuser. It ends the index '
                             'run that sets the required external static '
                             'pressure for its equipment or system.')
-            y -= row_h
-        # Extra lines under the swatches, e.g. the VAV limits and sources.
-        for note in legend_notes:
-            rja_drafting._t(st, sched_view, swatch + pad * 3.0, y, note)
             y -= row_h
         rja_drafting._outline(st, sched_view, 0.0, legend_top, total_w, y)
 
@@ -4363,12 +4361,6 @@ def main():
     raw_summary = summary_lines
     summary_lines = _wrap_summary_lines(summary_lines)
 
-    # The legend names the MP limits and their sources when VAV is on.
-    legend_notes = []
-    if vav_on:
-        legend_notes = _wrap_summary_lines(
-            ['{}: {}'.format(lab, val) for lab, val in vav_checks.basis_rows(vav_set)])
-
     def _text_fallback(title, lines):
         def _print():
             if lines:
@@ -4732,7 +4724,7 @@ def main():
                     doc, summary_lines, [item[2] for item in flagged_items],
                     selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
                     show_r_marker_note=bool(restrictive_terminal_ids),
-                    legend_notes=legend_notes, esp_takeoffs=esp_takeoffs)
+                    esp_takeoffs=esp_takeoffs)
                 if sched_view is not None:
                     # X fixed by hand in Revit (see diagram note above) and read
                     # back via Revit MCP. Y keeps the original bottom-anchored,

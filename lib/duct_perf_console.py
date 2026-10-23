@@ -261,7 +261,7 @@ def limits_and_legend(rec):
         out.append(cr.paragraph(text, lead))
     out.append(cr.table(['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
                         rec.get('legend') or [], align=['l', 'r', 'r', 'l'],
-                        swatch_col=0, caption='Color legend', widths=W_LEGEND))
+                        swatch_col=0, caption='Note legend', widths=W_LEGEND))
     if rec.get('clearance'):
         out.append(cr.callout(rec['clearance'][1],
                               'error' if rec['clearance'][0] else 'ok'))
