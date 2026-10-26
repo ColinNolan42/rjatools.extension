@@ -145,6 +145,7 @@ class WaterGraph(object):
         self.last_phase_id              = None    # the project's last phase (new work)
         self.upstream_ids               = set()   # service piping behind the RPZ inlet
         self.cross_ties                 = []      # (from id, pipe id, pipe system, walked system)
+        self.parallel_backflow          = []      # other backflow preventers in parallel with the picked RPZ
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -1193,6 +1194,80 @@ def _assign_demand(graph):
         node.demand_wsfu = total
 
     _assign_parallel_hot_demand(graph, groups)
+    _assign_parallel_backflow_demand(graph)
+
+
+def _is_backflow_preventer(node):
+    name = (node.family_name or "").lower()
+    return node.kind in (KIND_ACCESSORY, KIND_EQUIPMENT) and (
+        "rpz" in name or "backflow" in name)
+
+
+def _assign_parallel_backflow_demand(graph):
+    """Size the leg behind a second backflow preventer for the full demand.
+
+    Two RPZs in parallel off one service each feed the same main, so either
+    one can carry the whole load. From the picked RPZ the other one's outlet
+    leg hangs off the main as a dead end with nothing downstream, which would
+    leave it at zero demand and size a pipe that really carries flow at the
+    minimum. That leg takes the demand of the picked RPZ's own outlet pipe, so
+    the result is the same from either pick (E18, Colin 2026-10-26).
+    """
+    cold = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+    graph.parallel_backflow = []
+    origin = graph.nodes.get(graph.origin_id)
+    if origin is None or origin.kind != KIND_ORIGIN:
+        return
+    full = 0.0
+    for child_id in origin.children_by_system.get(cold, []):
+        child = graph.nodes.get(child_id)
+        if child is not None and child.kind == KIND_PIPE:
+            full = max(full, float(child.demand_wsfu or 0.0))
+    if full <= 0.0:
+        return
+    # Where a leg starts: the other backflow preventer itself when the walk
+    # came up through its outlet, or the dead end of the leg when the walk
+    # reached the preventer from its inlet side and the outlet leg closed a
+    # loop joint back to it.
+    starts = []
+    for nid, node in graph.nodes.items():
+        if (nid != graph.origin_id and nid not in graph.upstream_ids and
+                _is_backflow_preventer(node)):
+            starts.append((nid, nid))
+    for a, b, system in graph.loop_edges:
+        if system != cold:
+            continue
+        for end, preventer in ((a, b), (b, a)):
+            other = graph.nodes.get(preventer)
+            if (other is not None and preventer != graph.origin_id and
+                    end in graph.nodes and end not in graph.upstream_ids and
+                    _is_backflow_preventer(other)):
+                starts.append((end, preventer))
+
+    done = set()
+    for start_id, preventer_id in starts:
+        leg = []
+        seen = set()
+        current = start_id
+        while current is not None and current not in seen:
+            seen.add(current)
+            node = graph.nodes.get(current)
+            if node is None or current in graph.upstream_ids:
+                break
+            if node.kind == KIND_PIPE:
+                if float(node.demand_wsfu or 0.0) > 0.0:
+                    break
+                leg.append(current)
+            current = node.parent_by_system.get(cold)
+        if not leg:
+            continue
+        for pid in leg:
+            graph.nodes[pid].demand_wsfu = full
+        if preventer_id not in done:
+            done.add(preventer_id)
+            graph.parallel_backflow.append(preventer_id)
+        graph.log("PARALLEL BACKFLOW {}: {} pipe(s) behind it sized for the "
+                  "full demand.".format(preventer_id, len(leg)))
 
 
 def _assign_parallel_hot_demand(graph, groups):

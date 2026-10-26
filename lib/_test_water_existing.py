@@ -208,6 +208,59 @@ class TestUnloadedHeater(unittest.TestCase):
         by_id = dict((s.element_id, s) for s in result["segments"])
         self.assertFalse(by_id[4].flag and "serves no hot" in by_id[4].flag)
 
+class TestParallelBackflow(unittest.TestCase):
+
+    def _graph(self):
+        """Pick RPZ B (1). Its outlet pipe 2 feeds a tee 3: the main (4, one
+        WC) and a dead end leg 5, 7 that ends at RPZ A (8)."""
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=3.0)
+        add_node(g, 3, water_graph.KIND_FITTING, parent=2)
+        add_node(g, 4, water_graph.KIND_PIPE, parent=3, length_feet=20.0)
+        wc = add_node(g, 9, water_graph.KIND_FIXTURE, parent=4,
+                      cw=5.0, hw=0.0, total=5.0)
+        wc.type_name = "Water Closet, Flush Tank"
+        wc.is_public = True
+        add_node(g, 5, water_graph.KIND_PIPE, parent=3, length_feet=2.0)
+        add_node(g, 6, water_graph.KIND_FITTING, parent=5)
+        add_node(g, 7, water_graph.KIND_PIPE, parent=6, length_feet=2.0)
+        rpz = add_node(g, 8, water_graph.KIND_ACCESSORY, parent=7)
+        rpz.family_name = "RPZ 1-INCH"
+        return g
+
+    def test_the_other_rpz_leg_takes_the_full_demand(self):
+        g = self._graph()
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[2].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[5].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[7].demand_wsfu, 5.0)
+        self.assertEqual(g.parallel_backflow, [8])
+
+    def test_leg_that_ends_in_a_loop_joint_to_the_other_rpz(self):
+        # The walk reached RPZ A from its inlet side (upstream), so the outlet
+        # leg 5, 7 is a dead end with a loop joint back to RPZ A.
+        g = self._graph()
+        g.nodes[7].children_by_system[COLD] = []
+        add_node(g, 20, water_graph.KIND_PIPE, parent=1)
+        g.nodes[8].parent_by_system[COLD] = 20
+        g.nodes[20].children_by_system[COLD] = [8]
+        g.upstream_ids = set([20, 8])
+        g.loop_edges.append((7, 8, COLD))
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[5].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[7].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[20].demand_wsfu, 0.0)
+        self.assertEqual(g.parallel_backflow, [8])
+
+    def test_no_second_rpz_changes_nothing(self):
+        g = self._graph()
+        g.nodes[8].family_name = "BALL VALVE"
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[5].demand_wsfu, 0.0)
+        self.assertEqual(g.parallel_backflow, [])
+
 
 if __name__ == "__main__":
     unittest.main()

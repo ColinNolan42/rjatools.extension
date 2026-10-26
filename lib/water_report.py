@@ -232,6 +232,11 @@ def exceptions_compact(graph, sizing_result):
         lines.append("{} EXISTING device(s) inside the new run, walked "
                      "through: {}".format(len(passthrough),
                                           _id_list(passthrough)))
+    if getattr(graph, "parallel_backflow", None):
+        lines.append("Backflow preventer(s) {} are in parallel with the "
+                     "picked one. The leg behind each is sized for the full "
+                     "demand.".format(
+                         _id_list(graph.parallel_backflow)))
     if graph.upstream_ids:
         lines.append("{} element(s) behind the RPZ inlet are outside the "
                      "scope and were not sized.".format(
