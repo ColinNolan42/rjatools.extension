@@ -414,6 +414,9 @@ def _group_notes(notes, show=4):
     lines = []
     for key in order:
         ids = groups[key]
+        if len(ids) == 1:
+            lines.append("{} {}: {}".format(key[0], ids[0], key[1]))
+            continue
         text = ", ".join(ids[:show])
         if len(ids) > show:
             text += ", +{} more".format(len(ids) - show)

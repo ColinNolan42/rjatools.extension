@@ -109,6 +109,22 @@ class TestHeadChart(unittest.TestCase):
         point = water_pump.duty_points(g, recirc)[0]
         self.assertIn("heater_id", point)
 
+    def test_heater_found_through_a_long_cold_run(self):
+        g, _recirc = network()
+        # A chain of cold fittings between the return end and the heater.
+        import _test_water_graph as t
+        for nid in (901, 902, 903):
+            t.add_node(g, nid, water_graph.KIND_FITTING)
+        g.nodes[901].connectors = [
+            {"system_type": t.COLD, "connected_element_id": 902}]
+        g.nodes[902].connectors = [
+            {"system_type": t.COLD, "connected_element_id": 901},
+            {"system_type": t.COLD, "connected_element_id": 903}]
+        g.nodes[903].connectors = [
+            {"system_type": t.COLD, "connected_element_id": 902},
+            {"system_type": t.COLD, "connected_element_id": 1}]
+        self.assertEqual(water_pump._heater_for(g, 901), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

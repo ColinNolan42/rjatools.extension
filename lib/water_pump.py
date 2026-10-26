@@ -216,9 +216,13 @@ def _heater_for(graph, root_id):
     """
     if graph.nodes.get(root_id) is None:
         return root_id
+    cold = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+    # The return ties into the heater's cold supply, so follow the cold water
+    # joints (often a tee and several pipes and elbows) to the nearest heater.
+    # A fixture is never crossed, it would lead to the hot side.
     seen = set([root_id])
     frontier = [root_id]
-    for _depth in range(4):
+    while frontier:
         following = []
         for nid in frontier:
             current = graph.nodes.get(nid)
@@ -226,16 +230,16 @@ def _heater_for(graph, root_id):
                 continue
             if current.kind == water_graph.KIND_HEATER:
                 return nid
+            if current.kind == water_graph.KIND_FIXTURE:
+                continue
             for c in current.connectors or []:
+                if c.get("system_type") not in (cold, None):
+                    continue
                 other = c.get("connected_element_id")
                 if other is not None and other not in seen:
                     seen.add(other)
                     following.append(other)
         frontier = following
-    for nid in seen:
-        other = graph.nodes.get(nid)
-        if other is not None and other.kind == water_graph.KIND_HEATER:
-            return nid
     return root_id
 
 
