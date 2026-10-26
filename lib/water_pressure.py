@@ -593,7 +593,7 @@ def outlet_summary(analysis):
     if failed:
         line += " {} {} not.".format(failed, "does" if failed == 1 else "do")
     if unchecked:
-        line += " {} not checked (no Table 604.3 row).".format(unchecked)
+        line += " {} not checked, see the notes.".format(unchecked)
     return line
 
 
