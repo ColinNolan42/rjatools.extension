@@ -144,6 +144,7 @@ class WaterGraph(object):
         self.existing_passthrough       = []      # existing devices inside the new run
         self.last_phase_id              = None    # the project's last phase (new work)
         self.upstream_ids               = set()   # service piping behind the RPZ inlet
+        self.cross_ties                 = []      # (from id, pipe id, pipe system, walked system)
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -441,6 +442,23 @@ def _walk(graph, doc, start_id, system, visited):
                 node = _make_node(graph, next_element, next_id, system)
                 node.system = system
                 graph.add(node)
+
+            if node.kind == KIND_PIPE:
+                # A pipe of the other water system reached through a fitting
+                # is a hot to cold tie. The only legal one is the return
+                # tying into the heater cold supply, which water_checks
+                # clears by System Type once the return is known.
+                own = None
+                for connector in node.connectors:
+                    own = connector.get("system_type")
+                    if own:
+                        break
+                if own in (shared_params.SYSTEM_DOMESTIC_COLD_WATER,
+                           shared_params.SYSTEM_DOMESTIC_HOT_WATER)                         and own != system:
+                    graph.cross_ties.append((current_id, next_id, own, system))
+                    graph.log("HOT/COLD TIE: pipe {} is {} but was reached "
+                              "from {} on {}.".format(
+                                  next_id, own, current_id, system))
 
             node.parent_by_system[system] = current_id
             current_node.children_by_system.setdefault(system, []).append(next_id)

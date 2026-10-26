@@ -57,6 +57,7 @@ def check_system(graph, return_system_type_ids=None):
     _check_hot_water(graph, profile, findings)
     _check_recirculation(graph, profile, returns, findings)
     _check_connectivity(graph, findings)
+    _check_hot_cold_ties(graph, returns, findings)
 
     errors = [f for f in findings if f.severity == SEVERITY_ERROR]
     warnings = [f for f in findings if f.severity == SEVERITY_WARNING]
@@ -345,6 +346,30 @@ def _check_connectivity(graph, findings):
 # ---------------------------------------------------------------------------
 # Report block
 # ---------------------------------------------------------------------------
+
+def _check_hot_cold_ties(graph, returns, findings):
+    """Hot water may only enter cold water downstream of a recirculation pump
+    (Colin, 2026-10-20). The return tying into the heater cold supply is that
+    case; any other hot pipe on a cold run, or cold on a hot run, is an error.
+    """
+    ties = []
+    for from_id, pipe_id, own, _walked in getattr(graph, "cross_ties", []):
+        node = graph.nodes.get(pipe_id)
+        if node is not None and node.system_type_id in returns:
+            continue
+        ties.append((from_id, pipe_id, own))
+    if not ties:
+        return
+    ids = ", ".join(str(t[1]) for t in ties[:8])
+    if len(ties) > 8:
+        ids += ", +{} more".format(len(ties) - 8)
+    findings.append(Finding(
+        SEVERITY_WARNING, "hot_cold_tie",
+        "{} pipe(s) tie hot water into cold water, or cold into hot, with no "
+        "recirculation pump between them: {}. Hot water may only enter the "
+        "cold system downstream of a recirculation pump.".format(
+            len(ties), ids)))
+
 
 def format_checks(result):
     """Render the check result for the pyRevit window."""

@@ -148,6 +148,28 @@ class TestCompactReport(unittest.TestCase):
         text = chr(10).join(water_report.recirc_compact(recirc))
         self.assertIn("(94.9 / 100 x 5000) / (500 x 20) = 0.47 gpm", text)
 
+class TestHotColdTie(unittest.TestCase):
+
+    def _graph(self, type_id):
+        g = build()
+        node = g.nodes[3]
+        node.system_type_id = type_id
+        g.cross_ties.append((1, 3, water_graph.shared_params.
+                             SYSTEM_DOMESTIC_HOT_WATER, COLD))
+        return g
+
+    def test_hot_pipe_on_the_cold_run_is_flagged(self):
+        import water_checks
+        result = water_checks.check_system(self._graph(None))
+        self.assertTrue(any(f.code == "hot_cold_tie"
+                            for f in result["findings"]))
+
+    def test_the_return_tie_is_not_flagged(self):
+        import water_checks
+        result = water_checks.check_system(self._graph(77), [77])
+        self.assertFalse(any(f.code == "hot_cold_tie"
+                             for f in result["findings"]))
+
 
 if __name__ == "__main__":
     unittest.main()
