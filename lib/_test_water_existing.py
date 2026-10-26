@@ -170,26 +170,5 @@ class TestHotColdTie(unittest.TestCase):
         self.assertFalse(any(f.code == "hot_cold_tie"
                              for f in result["findings"]))
 
-class TestInlineDevice(unittest.TestCase):
-
-    def test_walk_goes_through_a_device_reporting_the_other_system(self):
-        import revit_helpers
-        hot = water_graph.shared_params.SYSTEM_DOMESTIC_HOT_WATER
-        saved = (water_graph._get_element, revit_helpers.get_connectors)
-        water_graph._get_element = lambda doc, nid: object()
-        revit_helpers.get_connectors = lambda el: [{"system_type": hot}]
-        try:
-            conn = {"is_connected": True, "connected_element_id": 7}
-            self.assertTrue(
-                water_graph._inline_device_continues(None, conn, hot))
-            self.assertFalse(water_graph._inline_device_continues(
-                None, {"is_connected": False}, hot))
-            revit_helpers.get_connectors = lambda el: [{"system_type": COLD}]
-            self.assertFalse(
-                water_graph._inline_device_continues(None, conn, hot))
-        finally:
-            water_graph._get_element, revit_helpers.get_connectors = saved
-
-
 if __name__ == "__main__":
     unittest.main()

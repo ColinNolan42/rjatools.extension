@@ -352,15 +352,6 @@ def _walk(graph, doc, start_id, system, visited):
                 # system it sits on (see _looks_like_pump), so the walk used to
                 # stop dead at it and the piping beyond was never reached.
                 c_system = system
-            if (current_node.kind == KIND_ACCESSORY and
-                    current_node.connector_count == 2 and
-                    c_system != system and
-                    _inline_device_continues(doc, c, system)):
-                # An inline two connector device (a water hammer arrestor is
-                # the usual one) can report a different system than the run it
-                # sits on. It carries no load, so the walk goes through it
-                # when the piping beyond is on this system.
-                c_system = system
             if c_system is None:
                 graph.log("Element {}: connector {} has no readable system "
                           "type, skipped.".format(current_id, c.get("connector_index")))
@@ -485,27 +476,6 @@ def _pump_connector_continues(doc, connector, system):
     if connector.get("system_type") not in (None,
                                             shared_params.SYSTEM_OTHER_PIPE):
         return False
-    if not connector.get("is_connected"):
-        return False
-    next_id = connector.get("connected_element_id")
-    if next_id is None:
-        return False
-    neighbour = _get_element(doc, next_id)
-    if neighbour is None:
-        return False
-    for c in revit_helpers.get_connectors(neighbour):
-        if c.get("system_type") == system:
-            return True
-    return False
-
-
-def _inline_device_continues(doc, connector, system):
-    """True if the element beyond an inline device's connector is on `system`.
-
-    Used for two connector accessories whose connectors do not report the run
-    they sit on, so the walk is not cut at a hammer arrestor and everything
-    past it is not lost.
-    """
     if not connector.get("is_connected"):
         return False
     next_id = connector.get("connected_element_id")
