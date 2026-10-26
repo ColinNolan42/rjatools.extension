@@ -527,6 +527,9 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
             if node.element is None:
                 skipped += 1
                 continue
+            if "rpz" in (node.family_name or "").lower():
+                skipped += 1    # a backflow preventer keeps its own size
+                continue
             if "transition" in (node.family_name or "").lower():
                 # Revit's own reducer follows the pipes on either side.
                 transitions += 1
