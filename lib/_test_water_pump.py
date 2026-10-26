@@ -127,6 +127,13 @@ class TestHeadChart(unittest.TestCase):
             {"system_type": t.COLD, "connected_element_id": 1}]
         self.assertEqual(water_pump._heater_for(g, 901), 1)
 
+    def test_nearest_rate_skips_non_pipes(self):
+        rates = {5: 1.5, 9: 3.0}
+        path = [4, 6, 7, 5, 8, 9]
+        self.assertEqual(water_pump._nearest_rate(path, rates, 4), 1.5)
+        self.assertEqual(water_pump._nearest_rate(path, rates, 0), 1.5)
+        self.assertEqual(water_pump._nearest_rate([1, 2], {}, 0), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

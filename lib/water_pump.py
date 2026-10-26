@@ -192,7 +192,11 @@ def _circuit(graph, leg, supply_path, supply_gpm, return_gpm,
                 kind, size = "tee_run", water_pressure._first_size(node)
             else:
                 continue
-            rate = rates.get(next_id, rates.get(prev_id, 0.0))
+            rate = rates.get(next_id, rates.get(prev_id))
+            if rate is None:
+                # Beside the pump or a valve rather than a pipe: price it at
+                # the nearest pipe's friction rate along the path.
+                rate = _nearest_rate(path, rates, i)
             length, _why = water_pressure.equivalent_length_ft(kind, size)
             out["fitting_psi"] += length * rate / 100.0
             out["length_ft"] += length
@@ -206,6 +210,15 @@ def _circuit(graph, leg, supply_path, supply_gpm, return_gpm,
                         out["fitting_psi"] + out["setter_psi"] +
                         out["device_psi"])
     return out
+
+
+def _nearest_rate(path, rates, index):
+    """Friction rate of the pipe nearest to path[index], or 0."""
+    for step in range(1, len(path)):
+        for j in (index - step, index + step):
+            if 0 <= j < len(path) and path[j] in rates:
+                return rates[path[j]]
+    return 0.0
 
 
 def _heater_for(graph, root_id):
