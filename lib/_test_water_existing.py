@@ -328,5 +328,67 @@ class TestHoseBibs(unittest.TestCase):
                             for _s, t in out))
 
 
+class TestExistingBranchProbe(unittest.TestCase):
+
+    def setUp(self):
+        import revit_helpers
+        self.rh = revit_helpers
+        self.saved = (water_graph._get_element, revit_helpers.get_connectors,
+                      revit_helpers.get_created_phase_id)
+        self.world = {}
+        water_graph._get_element = lambda doc, nid: self.world.get(nid)
+        revit_helpers.get_connectors = lambda el: el["conns"]
+        revit_helpers.get_created_phase_id = lambda el: el["phase"]
+        self.g = make_graph()
+        self.g.origin_phase_id = 10
+
+    def tearDown(self):
+        (water_graph._get_element, self.rh.get_connectors,
+         self.rh.get_created_phase_id) = self.saved
+
+    def put(self, nid, phase, *neighbours):
+        self.world[nid] = {"phase": phase, "conns": [
+            {"system_type": COLD, "is_connected": True,
+             "connected_element_id": n} for n in neighbours]}
+
+    def test_a_branch_to_existing_fixtures_is_walkable(self):
+        self.put(2, 5, 1, 3)
+        self.put(3, 5, 2)            # the existing fixture, dead end
+        members = water_graph._probe_existing_branch(
+            self.g, None, 2, 1, COLD, set([1]))
+        self.assertEqual(members, set([2, 3]))
+
+    def test_a_branch_that_loops_back_is_not_walked(self):
+        self.put(2, 5, 1, 3)
+        self.put(3, 5, 2, 9)         # 9 was already visited
+        self.assertIsNone(water_graph._probe_existing_branch(
+            self.g, None, 2, 1, COLD, set([1, 9])))
+
+    def test_a_branch_that_meets_new_work_is_not_walked(self):
+        self.put(2, 5, 1, 3)
+        self.put(3, 10, 2)           # new phase element, not yet visited
+        self.assertIsNone(water_graph._probe_existing_branch(
+            self.g, None, 2, 1, COLD, set([1])))
+
+    def test_a_long_existing_run_is_the_main_not_a_branch(self):
+        self.put(2, 5, 1, 3)
+        for nid in range(3, 140):
+            self.put(nid, 5, nid - 1, nid + 1)
+        self.put(140, 5, 139)
+        self.assertIsNone(water_graph._probe_existing_branch(
+            self.g, None, 2, 1, COLD, set([1])))
+
+
+class TestExistingPipeRow(unittest.TestCase):
+
+    def test_existing_pipe_reason_says_existing(self):
+        import water_flagging
+        r = water_performance.PipeResult(2)
+        r.label = water_performance.RED
+        r.existing = True
+        text = water_flagging.short_reason(r, [])
+        self.assertEqual(text, "Existing pipe, undersized")
+
+
 if __name__ == "__main__":
     unittest.main()

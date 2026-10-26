@@ -222,6 +222,11 @@ def exceptions_compact(graph, sizing_result):
         lines.append("{} open connector(s), the network may be incomplete: "
                      "{}".format(len(graph.open_ends),
                                  _id_list([e for e, _s in graph.open_ends])))
+    if getattr(graph, "existing_branches", None):
+        lines.append("{} existing branch(es) reconnected to the new piping: "
+                     "{}. Their pipes are reported as existing and never "
+                     "resized.".format(len(graph.existing_branches),
+                                       _id_list(graph.existing_branches)))
     if graph.existing_connections:
         lines.append("{} connection(s) to EXISTING piping not followed: {}"
                      .format(len(graph.existing_connections),

@@ -672,6 +672,10 @@ def write_fixture_connection_sizes(doc, graph, sizing_result, transaction_factor
         for node in graph.nodes.values():
             if node.kind != water_graph.KIND_FIXTURE or node.element is None:
                 continue
+            if graph.last_phase_id is not None:
+                phase = revit_helpers.get_created_phase_id(node.element)
+                if phase is not None and phase != graph.last_phase_id:
+                    continue    # an existing fixture keeps its connections
             for connector in node.connectors:
                 system = connector.get("system_type")
                 pipe_size = size_by_pipe_id.get(

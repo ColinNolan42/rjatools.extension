@@ -145,6 +145,8 @@ class WaterGraph(object):
         self.origin_phase_id            = None    # created phase of the picked pipe
         self.existing_connections       = []      # (new element id, existing element id)
         self.existing_passthrough       = []      # existing devices inside the new run
+        self.existing_walkable          = set()   # existing branch elements the walk may enter
+        self.existing_branches          = []      # entry element of each existing branch walked
         self.last_phase_id              = None    # the project's last phase (new work)
         self.upstream_ids               = set()   # service piping behind the RPZ inlet
         self.cross_ties                 = []      # (from id, pipe id, pipe system, walked system)
@@ -430,12 +432,32 @@ def _walk(graph, doc, start_id, system, visited):
                               "phase but only new construction is beyond "
                               "it. Walked through.".format(next_id))
                 elif phase is not None and phase != graph.origin_phase_id:
-                    visited.add(next_id)
-                    graph.existing_connections.append((current_id, next_id))
-                    graph.log("EXISTING: element {} connects to existing "
-                              "phase element {} on {}. Not followed.".format(
-                                  current_id, next_id, system))
-                    continue
+                    if next_id not in graph.existing_walkable:
+                        members = _probe_existing_branch(
+                            graph, doc, next_id, current_id, system, visited)
+                        if members is None:
+                            # Not a branch to existing fixtures (it loops
+                            # back, or runs on into the existing building):
+                            # the existing main is assumed adequate and is
+                            # not walked (Colin, 2026-10-13).
+                            visited.add(next_id)
+                            graph.existing_connections.append(
+                                (current_id, next_id))
+                            graph.log("EXISTING: element {} connects to "
+                                      "existing phase element {} on {}. Not "
+                                      "followed.".format(
+                                          current_id, next_id, system))
+                            continue
+                        # An existing branch that ends at existing fixtures
+                        # being reconnected. It is walked, so its load counts
+                        # and its pipes are reported as EXISTING, but they
+                        # are never resized (Colin, 2026-10-26).
+                        graph.existing_walkable.update(members)
+                        graph.existing_branches.append(next_id)
+                        graph.log("EXISTING BRANCH: element {} off {} is "
+                                  "walked, {} existing element(s). Held at "
+                                  "its drawn size.".format(
+                                      next_id, current_id, len(members)))
 
             visited.add(next_id)
 
@@ -1085,6 +1107,53 @@ def _return_component(graph, adjacency, start_id):
             seen.add(next_id)
             queue.append(next_id)
     return sorted(seen)
+
+
+def _probe_existing_branch(graph, doc, start_id, from_id, system, visited,
+                           cap=120):
+    """The existing elements of a branch that dead ends, or None.
+
+    Explores from the existing element the walk just met. It is a branch to
+    reconnect when every element in it is existing phase and none of its
+    connectors loops back to anything the walk already visited or to new
+    work, and it stays small. Anything else is the existing main, which is
+    not walked.
+    """
+    members = set()
+    queue = [start_id]
+    seen = set([start_id])
+    while queue:
+        current = queue.pop(0)
+        element = _get_element(doc, current)
+        if element is None:
+            return None
+        phase = revit_helpers.get_created_phase_id(element)
+        if phase is None or phase == graph.origin_phase_id:
+            return None
+        members.add(current)
+        if len(members) > cap:
+            return None
+        try:
+            connectors = revit_helpers.get_connectors(element)
+        except Exception:
+            return None
+        for c in connectors:
+            if system is not None and c.get("system_type") not in (system,
+                                                                    None):
+                continue
+            neighbour = c.get("connected_element_id")
+            if neighbour is None or not c.get("is_connected"):
+                continue
+            if neighbour == from_id:
+                if current == start_id:
+                    continue
+                return None
+            if neighbour in visited:
+                return None
+            if neighbour not in seen:
+                seen.add(neighbour)
+                queue.append(neighbour)
+    return members
 
 
 def _existing_inside_new_run(graph, doc, element, came_from_id):

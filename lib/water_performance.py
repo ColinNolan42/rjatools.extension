@@ -97,6 +97,7 @@ class PipeResult(object):
         self.fps = None
         self.limit_fps = None
         self.length_feet = 0.0
+        self.existing = False   # existing phase pipe, never resized
 
 
 def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
@@ -118,6 +119,7 @@ def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
     # An existing pipe is held at its drawn size by Size Water; it is judged
     # against the size the new load calls for.
     held = bool(getattr(segment, "keep_existing", False))
+    result.existing = held
     result.required_in = (segment.required_size_in if held
                           else segment.size_inches)
     result.required_nominal = (segment.required_nominal if held

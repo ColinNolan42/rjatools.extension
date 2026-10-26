@@ -146,6 +146,9 @@ def short_reason(result, dependents, steps=()):
         text = "Velocity over limit"
     else:
         text = _gray_reason(result.reason or "")
+    if getattr(result, "existing", False):
+        # An existing pipe is reported, never resized.
+        text = "Existing pipe, " + text[:1].lower() + text[1:]
     if dependents:
         text += ", {} more pipe(s) behind it depend on this".format(
             len(dependents))
