@@ -190,6 +190,13 @@ def classify_fitting(node, from_id, to_id):
     size = _first_size(c_out, c_in, node)
     center = getattr(node, "location_xyz", None)
 
+    # Revit puts a Transition (reducer) where a pipe changes size at a fixture
+    # or heater. Its two connectors sit at one point, so there is no angle to
+    # read, and it is in line by definition.
+    name = (getattr(node, "family_name", "") or "").lower()
+    if count == 2 and ("transition" in name or "reducer" in name):
+        return "coupling", size, ""
+
     if c_in is None or c_out is None or center is None or \
             c_in.get("origin_xyz") is None or c_out.get("origin_xyz") is None:
         kind = "tee_branch" if count >= 3 else "elbow_90"

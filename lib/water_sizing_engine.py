@@ -44,6 +44,10 @@ class SegmentResult(object):
         self.is_return       = False    # hot water return, sized on gpm
         self.circ_gpm        = None     # circulation flow, return pipes only
         self.exceeds_table   = False    # load above the largest table size
+        self.keep_existing   = False    # existing phase pipe, never written
+        self.required_nominal = None    # size the load calls for (existing pipe)
+        self.required_size_in = None
+        self.upsize_needed   = False    # existing pipe smaller than required
 
 
 def size_network(graph, apply_minimums=True, return_system_type_ids=None,
@@ -74,6 +78,8 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
     for node in graph.nodes.values():
         if node.kind != water_graph.KIND_PIPE:
             continue
+        if node.element_id in graph.upstream_ids:
+            continue    # service piping behind the RPZ, outside the scope
 
         result = SegmentResult(node.element_id)
         result.system = node.system
@@ -158,6 +164,7 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
 
         segments.append(result)
 
+    _hold_existing_pipes(graph, segments, flags)
     _enforce_downsize_after_the_tee(graph, segments, flags)
 
     segments.sort(key=lambda s: s.demand_wsfu, reverse=True)
@@ -233,6 +240,48 @@ def _size_return_pipe(graph, node, result, recirc, flags):
         float(flow), float(selection["limit_gpm"]))
 
 
+def _hold_existing_pipes(graph, segments, flags):
+    """Leave existing phase pipes at their drawn size (Colin, 2026-10-26).
+
+    The size the load calls for is kept as the required size. Where it is
+    larger than the pipe on the drawing the pipe is flagged for upsizing; the
+    run report prints those in red. The pipe keeps its drawn diameter in
+    size_inches, so the downsize rule and the fitting pass see what is really
+    there, and write_sizes skips it.
+    """
+    for segment in segments:
+        node = graph.nodes.get(segment.element_id)
+        if node is None or not node.is_existing:
+            continue
+        segment.keep_existing = True
+        segment.required_nominal = segment.nominal_size
+        segment.required_size_in = segment.size_inches
+        drawn = node.diameter_inches or 0.0
+        segment.size_inches = drawn if drawn > 0.0 else None
+        segment.nominal_size = _nominal_label(drawn)
+        segment.rule = "EXISTING, left alone. {}".format(segment.rule)
+        required = segment.required_size_in
+        if required is not None and drawn > 0.0 and required > drawn + 0.001:
+            segment.upsize_needed = True
+            segment.flag = ("EXISTING pipe {} is {} and the new load calls "
+                            "for {}: UPSIZE".format(
+                                segment.element_id, segment.nominal_size,
+                                segment.required_nominal))
+            flags.append(segment.flag)
+
+
+def _nominal_label(inches):
+    """Nominal size label of the firm-table row nearest a drawn diameter."""
+    if not inches:
+        return None
+    best = None
+    for row in water_tables.firm_sizing_rows():
+        gap = abs(row["size_inches"] - inches)
+        if best is None or gap < best[0]:
+            best = (gap, row["nominal_size"])
+    return best[1] if best else None
+
+
 def _enforce_downsize_after_the_tee(graph, segments, flags):
     """A pipe is never smaller than anything downstream of it.
 
@@ -254,7 +303,8 @@ def _enforce_downsize_after_the_tee(graph, segments, flags):
     for segment in segments:
         # Return piping is sized on accumulated flow, which already only
         # grows toward the heater, and it is not downstream of the supply.
-        if segment.size_inches is None or segment.is_return:
+        if (segment.size_inches is None or segment.is_return or
+                segment.keep_existing):
             continue
         node = graph.nodes.get(segment.element_id)
         if node is None:
@@ -421,7 +471,7 @@ def write_sizes(doc, graph, sizing_result, transaction_factory):
     transaction.Start()
     try:
         for segment in sizing_result["segments"]:
-            if segment.size_inches is None:
+            if segment.size_inches is None or segment.keep_existing:
                 continue
             node = graph.nodes.get(segment.element_id)
             if node is None or node.element is None:
@@ -464,6 +514,7 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
 
     resized = 0
     skipped = 0
+    transitions = 0
     errors = []
 
     transaction = transaction_factory(doc, "RJA Tools - Size Water Fittings")
@@ -476,6 +527,15 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
             if node.element is None:
                 skipped += 1
                 continue
+            if "transition" in (node.family_name or "").lower():
+                # Revit's own reducer follows the pipes on either side.
+                transitions += 1
+                continue
+            if graph.last_phase_id is not None:
+                phase = revit_helpers.get_created_phase_id(node.element)
+                if phase is not None and phase != graph.last_phase_id:
+                    skipped += 1    # existing fitting, left alone
+                    continue
 
             neighbour_sizes = {}
             for connector in node.connectors:
@@ -502,7 +562,8 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
         transaction.RollBack()
         raise exc
 
-    return {"resized": resized, "skipped": skipped, "errors": errors}
+    return {"resized": resized, "skipped": skipped,
+            "transitions": transitions, "errors": errors}
 
 
 def write_fixture_connection_sizes(doc, graph, sizing_result, transaction_factory):

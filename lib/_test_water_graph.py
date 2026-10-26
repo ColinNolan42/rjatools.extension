@@ -88,6 +88,7 @@ def add_node(graph, nid, kind, parent=None, system=COLD, **kw):
     node.length_feet = kw.get("length_feet", 0.0)
     node.diameter_inches = 0.0
     node.system_type_id = None
+    node.is_existing = kw.get("is_existing", False)
     node.system_type_name = None
     node.is_water_fixture = (kind == water_graph.KIND_FIXTURE)
     node.fixture_name = kw.get("fixture_name", "")

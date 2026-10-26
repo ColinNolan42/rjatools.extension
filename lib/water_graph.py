@@ -83,6 +83,7 @@ class WaterNode(object):
         self.diameter_inches = 0.0
         self.system_type_id   = None   # PipingSystemType ELEMENT id
         self.system_type_name = None   # its name, for display only
+        self.is_existing      = False  # created before the project's last phase
 
         # Fixture load (only meaningful when kind == KIND_FIXTURE)
         self.is_water_fixture = False
@@ -141,6 +142,8 @@ class WaterGraph(object):
         self.origin_phase_id            = None    # created phase of the picked pipe
         self.existing_connections       = []      # (new element id, existing element id)
         self.existing_passthrough       = []      # existing devices inside the new run
+        self.last_phase_id              = None    # the project's last phase (new work)
+        self.upstream_ids               = set()   # service piping behind the RPZ inlet
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -192,6 +195,7 @@ def build_water_network(origin_element, doc, upstream=None):
         ValueError: a pipe was picked and its upstream end cannot be told.
     """
     graph = WaterGraph()
+    graph.last_phase_id = revit_helpers.get_last_phase_id(doc)
 
     origin_id = revit_helpers.eid_int(origin_element.Id)
     graph.origin_id = origin_id
@@ -277,12 +281,43 @@ def build_water_network(origin_element, doc, upstream=None):
         graph.log("HEATER {}: serves {} fixtures on its hot tree.".format(
             heater_id, len(served)))
 
+    # --- Service side of the RPZ ---
+    if origin.kind == KIND_ORIGIN and not graph.origin_is_new_pipe:
+        _mark_upstream_service(graph, cold)
+
     # --- Phase 3: demand ---
     _assign_demand(graph)
 
     graph.log("TRAVERSAL COMPLETE: {} elements, {} open ends, {} loop hits".format(
         len(graph.nodes), len(graph.open_ends), len(graph.loops)))
     return graph
+
+
+def _mark_upstream_service(graph, cold):
+    """Mark the piping behind the RPZ inlet so it is never sized.
+
+    The RPZ is the start of the scope; the service line upstream may run at a
+    smaller size on purpose (a higher pressure, with a PRV beyond it), so it is
+    none of this run's business (Colin, 2026-10-26). Both RPZ connectors are
+    cold water, so the walk crosses to the service side. A branch of the origin
+    with no fixture and no water heater anywhere below it is that side. Its
+    open end is not reported as an open end.
+    """
+    origin = graph.nodes.get(graph.origin_id)
+    if origin is None:
+        return
+    for child_id in origin.children_by_system.get(cold, []):
+        below = [child_id] + list(graph.descendants(child_id, cold))
+        if any(graph.nodes[nid].kind in (KIND_FIXTURE, KIND_HEATER)
+               for nid in below if nid in graph.nodes):
+            continue
+        graph.upstream_ids.update(below)
+        graph.log("UPSTREAM SERVICE: {} element(s) behind the RPZ inlet "
+                  "starting at {} are outside the scope and not sized.".format(
+                      len(below), child_id))
+    if graph.upstream_ids:
+        graph.open_ends = [(eid, system) for eid, system in graph.open_ends
+                           if eid not in graph.upstream_ids]
 
 
 # =============================================================================
@@ -448,9 +483,14 @@ def _make_node(graph, element, element_id, system):
         node.length_feet = revit_helpers.get_pipe_length_feet(element) or 0.0
         node.diameter_inches = revit_helpers.get_pipe_diameter_inches(element) or 0.0
         _read_pipe_system_type(graph, element, node)
-        graph.log("PIPE {}: {:.2f} ft, {:.3f} in, system '{}'".format(
+        if graph.last_phase_id is not None:
+            phase = revit_helpers.get_created_phase_id(element)
+            node.is_existing = (phase is not None and
+                                phase != graph.last_phase_id)
+        graph.log("PIPE {}: {:.2f} ft, {:.3f} in, system '{}'{}".format(
             element_id, node.length_feet, node.diameter_inches,
-            node.system_type_name))
+            node.system_type_name,
+            ", EXISTING phase" if node.is_existing else ""))
         return node
 
     is_fixture = revit_helpers.get_parameter_value(
@@ -462,7 +502,8 @@ def _make_node(graph, element, element_id, system):
         node.connector_count = len(connectors)
         node.is_water_fixture = True
         node.fixture_name = revit_helpers.get_parameter_value(
-            element, shared_params.PARAM_FIXTURE_NAME) or "UNNAMED"
+            element, shared_params.PARAM_FIXTURE_NAME) or \
+            node.type_name or "UNNAMED"
         node.cw_wsfu = _as_float(revit_helpers.get_parameter_value(
             element, shared_params.PARAM_CW_FIXTURE_UNITS))
         node.hw_wsfu = _as_float(revit_helpers.get_parameter_value(

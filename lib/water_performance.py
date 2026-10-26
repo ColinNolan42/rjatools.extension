@@ -115,8 +115,13 @@ def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
     result.system = system_key
     result.is_return = bool(segment.is_return)
     result.drawn_in = segment.existing_size_in
-    result.required_in = segment.size_inches
-    result.required_nominal = segment.nominal_size
+    # An existing pipe is held at its drawn size by Size Water; it is judged
+    # against the size the new load calls for.
+    held = bool(getattr(segment, "keep_existing", False))
+    result.required_in = (segment.required_size_in if held
+                          else segment.size_inches)
+    result.required_nominal = (segment.required_nominal if held
+                               else segment.nominal_size)
     result.length_feet = segment.length_feet
     result.gpm = segment.circ_gpm if segment.is_return else segment.demand_gpm
     if system_key is not None:
@@ -125,7 +130,7 @@ def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
     if segment.exceeds_table:
         result.reason = "load above the firm table, not judged"
         return result
-    if segment.size_inches is None:
+    if result.required_in is None:
         result.reason = segment.flag or "no table size for this pipe"
         return result
     if not segment.existing_size_in:
@@ -137,18 +142,18 @@ def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
         return result
 
     drawn = float(segment.existing_size_in)
-    required = float(segment.size_inches)
+    required = float(result.required_in)
     # Speed at the DRAWN size, which is what the pipe actually does.
     result.fps = velocity_fps(result.gpm, drawn)
 
     if drawn < required - SIZE_TOLERANCE_IN:
         result.label = RED
         result.reason = "drawn {} in, table requires {}".format(
-            _fmt(drawn), segment.nominal_size)
+            _fmt(drawn), result.required_nominal)
     elif drawn > required + SIZE_TOLERANCE_IN:
         result.label = PURPLE
         result.reason = "drawn {} in, table size is {}".format(
-            _fmt(drawn), segment.nominal_size)
+            _fmt(drawn), result.required_nominal)
     else:
         result.label = GREEN
         result.reason = "at table size"

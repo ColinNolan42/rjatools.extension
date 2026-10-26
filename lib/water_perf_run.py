@@ -12,6 +12,7 @@
 # IronPython 2.7 / pyRevit
 
 import datetime
+import re
 
 from Autodesk.Revit.DB import (
     Color, ElementId, OverrideGraphicSettings, Transaction, ViewDuplicateOption,
@@ -387,9 +388,42 @@ def _print_pressure(output, pressure, start_psi):
     notes = sorted(set(n for o in pressure["outlets"] for n in o.notes))
     if notes:
         output.print_md("Not counted or assumed:\n" +
-                        "\n".join("- " + n for n in notes[:40]))
-    output.print_md("\n".join(
-        "    " + line for line in water_pressure.basis_lines(start_psi)))
+                        "\n".join("- " + n for n in _group_notes(notes)))
+    output.print_md(
+        "    P_outlet = {:.1f} psi - 0.433 x H_static - friction - fittings "
+        "- devices >= Table 604.3 minimum\n"
+        "    friction: dP = f (L / D) (rho V^2 / 2), Darcy-Weisbach, "
+        "Swamee-Jain f, ASTM B88 Type L ID\n"
+        "    fittings: L_eq from Table E103.3(6) at the friction rate of the "
+        "pipe they sit on".format(float(start_psi)))
+
+
+_NOTE_ID = re.compile(r"^(.*?) (\d{5,}): (.*)$")
+
+
+def _group_notes(notes, show=4):
+    """'90 elbow 123: reason' x40 becomes one line: reason, 40 (ids)."""
+    groups = {}
+    order = []
+    plain = []
+    for note in notes:
+        match = _NOTE_ID.match(note)
+        if match is None:
+            plain.append(note)
+            continue
+        key = (match.group(1), match.group(3))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(match.group(2))
+    lines = []
+    for key in order:
+        ids = groups[key]
+        text = ", ".join(ids[:show])
+        if len(ids) > show:
+            text += ", +{} more".format(len(ids) - show)
+        lines.append("{} x {}: {} ({})".format(len(ids), key[0], key[1], text))
+    return lines + plain
 
 
 def _pressure_table(pressure, start_psi):
@@ -423,9 +457,14 @@ def _print_pumps(output, pumps, settings):
     notes = sorted(set(n for p in pumps for c in p["circuits"]
                        for n in c["notes"]))
     if notes:
-        output.print_md("Not counted:\n" + "\n".join("- " + n for n in notes))
-    output.print_md("\n".join("    " + line for line in water_pump.basis_lines(
-        settings["circuit_setter_psi"], settings["pump_safety_factor"])))
+        output.print_md("Not counted:\n" + "\n".join(
+            "- " + n for n in _group_notes(notes)))
+    output.print_md(
+        "    Head (ft) = 2.31 x (supply friction + return friction + "
+        "fittings + {:.2f} psi circuit setter + devices) x (1 + {:.2f})\n"
+        "    Flow (gpm) = sum of circuit setter flows at the heater".format(
+            float(settings["circuit_setter_psi"]),
+            float(settings["pump_safety_factor"])))
 
 
 def _pump_table(pumps, settings):
@@ -495,23 +534,22 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
     transaction.Start()
     try:
         fill_id = hvac_graph.solid_fill_pattern_id(doc)
-        table_view, table_h, table_w = water_drafting.build_performance_view(
-            doc, "Water Performance Table - {}".format(stamp), summary,
-            _TABLE_COLUMNS, rows, legend, fill_id, extra_tables or None)
-        wsfu_view = None
+        # One drafting view: tables, legend and (optionally) the WSFU take-off.
+        wsfu_arg = None
         if wsfu is not None:
             graph, sizing, header, recirc = wsfu
-            wsfu_view, _h, _w = water_drafting.build_wsfu_view(
-                doc, graph, header, sizing, recirc=recirc)
-            if wsfu_view is None:
-                output.print_md("The WSFU take-off could not be drawn: the "
-                                "project needs a Drafting view family type "
-                                "and a Text Note type.")
+            wsfu_arg = (graph, header, sizing, recirc)
+        table_only_h = []
+        table_view, table_h, table_w = water_drafting.build_performance_view(
+            doc, "Water Performance Table - {}".format(stamp), summary,
+            _TABLE_COLUMNS, rows, legend, fill_id, extra_tables or None,
+            wsfu_arg, table_only_h)
+        wsfu_view = table_view if wsfu is not None else None
         sheet = water_drafting.place_plan_and_table(
             doc, plan_view, table_view, table_h, table_w,
             "WP-{}-{}".format(source_number, stamp),
             "Water Performance - {} (Sheet)".format(source_number),
-            wsfu_view)
+            None, table_only_h[0] if table_only_h else None)
         if sheet is None:
             transaction.RollBack()
             output.print_md("No title block is loaded, so no sheet was made. "
@@ -557,9 +595,13 @@ def _print_report(output, results, sizing, tolerance):
     else:
         output.print_md("Every judged pipe is at table size.")
 
-    output.print_md("## Basis of design")
-    output.print_md("\n".join(
-        "    " + line for line in water_performance.basis_lines(tolerance)))
+    output.print_md(
+        "    Velocity (fps) = gpm / (2.4483 x ID^2), ID in inches, ASTM B88 "
+        "Type L, at the drawn size\n"
+        "    Limits: 8 fps cold, 5 fps hot and return. Yellow when V > "
+        "limit x (1 + {:.2f}).\n"
+        "    Pass: drawn size = firm table size for the pipe's demand "
+        "(Table E103.3(3) flow).".format(float(tolerance)))
 
 
 def _flagged_rows(results):

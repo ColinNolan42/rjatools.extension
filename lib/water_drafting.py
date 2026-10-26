@@ -69,11 +69,19 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
     if view is None:
         return None, 0.0, 0.0
     st = _Style(doc)
+    y, width = _draw_wsfu(st, view, 0.0, 0.0, graph, header, sizing_result,
+                          recirc)
+    return view, (0.0 - y), width
 
+
+def _draw_wsfu(st, view, ox, y, graph, header, sizing_result, recirc):
+    """Draw the WSFU take-off into `view` from (ox, y) downward.
+
+    Shared by the stand alone take-off view and Water Performance, which draws
+    it under its own tables in one drafting view. Returns (y after, width).
+    """
     columns = water_report.WSFU_COLUMNS
     width = sum([c[2] for c in columns], 0.0)
-    ox = 0.0
-    y = 0.0
 
     # --- Title band and job block ------------------------------------------
     y = _band(st, view, ox, y, width, "WATER FIXTURE UNIT (WFU) TAKE OFF",
@@ -153,7 +161,7 @@ def build_wsfu_view(doc, graph, header, sizing_result=None, view_name=None,
             _t(st, view, ox, y, line, "bold")
             y -= TEXT_H
 
-    return view, (0.0 - y), max(width, chart_w)
+    return y, max(width, chart_w)
 
 
 def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
@@ -201,7 +209,8 @@ def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
 
 
 def build_performance_view(doc, view_name, summary_lines, columns, rows,
-                           legend, fill_id, extra_tables=None):
+                           legend, fill_id, extra_tables=None, wsfu=None,
+                           table_height_out=None):
     """Drafting view for Water Performance: summary, flagged table, legend.
 
     Args:
@@ -268,6 +277,19 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
             y = _styled_table(st, view, ox, y, extra_columns, extra_rows)
         if notes:
             y = _note_panel(st, view, ox, y, table_w, notes)
+
+    if table_height_out is not None:
+        # Height of the tables alone, so the sheet can keep their top edge
+        # where it was and let the take-off grow downward.
+        table_height_out.append(0.0 - y)
+    if wsfu is not None:
+        # The WSFU take-off in the same view, under the tables, so the sheet
+        # carries one drafting view (Colin, 2026-10-26).
+        wsfu_graph, wsfu_header, wsfu_sizing, wsfu_recirc = wsfu
+        y -= GAP
+        y, wsfu_width = _draw_wsfu(st, view, ox, y, wsfu_graph, wsfu_header,
+                                   wsfu_sizing, wsfu_recirc)
+        width = max(width, wsfu_width)
     return view, (0.0 - y), width
 
 
@@ -295,7 +317,8 @@ def build_tables_view(doc, view_name, title, tables):
 
 
 def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
-                         sheet_number, sheet_name, wsfu_view=None):
+                         sheet_number, sheet_name, wsfu_view=None,
+                         table_top_h=None):
     """New sheet with the colored plan and the table beside it.
 
     Same placement as the Duct Performance sheets (centres hand placed on the
@@ -332,6 +355,10 @@ def place_plan_and_table(doc, plan_view, table_view, table_h, table_w,
         # width and height change run to run.
         left_edge_x = -1.014 - 1.360 / 2.0
         bottom_y = 1.546
+        if table_top_h is not None:
+            # One view holding the tables and more below them: keep the top
+            # edge where the tables alone would put it.
+            bottom_y = 1.546 + table_top_h - table_h
         table_vp = Viewport.Create(
             doc, sheet.Id, table_view.Id,
             XYZ(left_edge_x + table_w / 2.0, bottom_y + table_h / 2.0, 0))

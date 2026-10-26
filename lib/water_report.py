@@ -14,6 +14,8 @@
 #
 # IronPython 2.7
 
+import re
+
 import shared_params
 import water_tables
 import water_graph
@@ -43,6 +45,218 @@ def build_report(graph, sizing_result, header, recirc=None):
         lines.append("")
     lines.extend(exceptions_block(graph, sizing_result))
     return "\n".join(lines)
+
+
+def build_compact_report(graph, sizing_result, header, recirc=None):
+    """The window report: results, the equations with their numbers, and what
+    needs a look. No pipe by pipe listing, no basis paragraphs (the full pipe
+    table and the basis of design go on the drafting view and in
+    build_report). Colin, 2026-10-26.
+    """
+    lines = ["=" * 78,
+             "SIZE WATER   JOB {} {}   {}   BY {}".format(
+                 header.get("job_number", ""), header.get("job", ""),
+                 header.get("date", ""), header.get("by", "")),
+             "=" * 78,
+             "Basis: 2024 IPC Appendix E, Table E103.3(2) WSFU, "
+             "Table E103.3(3) demand, firm WSFU per size table (Copper L, "
+             "8 fps cold, 5 fps hot)."]
+    for line in origin_basis_lines(graph):
+        lines.append(line)
+    lines.append("")
+    lines.extend(wsfu_table(graph))
+    lines.append("")
+    lines.extend(size_summary(sizing_result))
+    lines.append("")
+    if recirc is not None and (recirc["legs"] or recirc["unrooted_pipe_ids"]):
+        lines.extend(recirc_compact(recirc))
+        lines.append("")
+    lines.extend(exceptions_compact(graph, sizing_result))
+    return "\n".join(lines)
+
+
+def size_summary(sizing_result):
+    """Pipe counts by nominal size and system, in place of the pipe table."""
+    order = [row["nominal_size"] for row in water_tables.firm_sizing_rows()]
+    counts = {}
+    total_ft = 0.0
+    held = 0
+    for s in sizing_result["segments"]:
+        if s.keep_existing:
+            held += 1
+            continue
+        if s.nominal_size is None:
+            continue
+        key = "HWR" if s.is_return else _system_label(s.system)
+        row = counts.setdefault(s.nominal_size, {"CW": 0, "HW": 0, "HWR": 0})
+        row[key] = row.get(key, 0) + 1
+        total_ft += float(s.length_feet or 0.0)
+    lines = ["PIPES SIZED (count by size)", "-" * 78,
+             "{:<8}{:>8}{:>8}{:>8}".format("SIZE", "CW", "HW", "HWR")]
+    totals = {"CW": 0, "HW": 0, "HWR": 0}
+    for nominal in order:
+        row = counts.get(nominal)
+        if row is None:
+            continue
+        lines.append("{:<8}{:>8}{:>8}{:>8}".format(
+            nominal, row["CW"], row["HW"], row["HWR"]))
+        for key in totals:
+            totals[key] += row[key]
+    lines.append("{:<8}{:>8}{:>8}{:>8}   {:.1f} ft".format(
+        "TOTAL", totals["CW"], totals["HW"], totals["HWR"], total_ft))
+    if held:
+        lines.append("{} existing phase pipe(s) left at their drawn size."
+                     .format(held))
+    return lines
+
+
+def recirc_compact(recirc):
+    """Circuit setter flows as the equation with its numbers."""
+    heat_loss = recirc["heat_loss_btu_per_100ft"]
+    drop = recirc["delta_t_f"]
+    legs = recirc["legs"]
+    lines = ["HOT WATER RECIRCULATION", "-" * 78,
+             "gpm = (L / 100 x {} BTU/h) / (500 x {} F), {:.1f} gpm minimum "
+             "per circuit setter".format(_num(heat_loss), _num(drop),
+                                         float(recirc["min_gpm"]))]
+    if legs:
+        leg = legs[0]
+        lines.append(
+            "Leg {}: ({:.1f} / 100 x {}) / (500 x {}) = {:.2f} gpm, set "
+            "{:.2f}".format(leg["number"], float(leg["effective_length_ft"]),
+                            _num(heat_loss), _num(drop),
+                            float(leg["calc_gpm"]), float(leg["gpm"])))
+    branches = [l for l in legs if l["method"] != "LOOP"]
+    shown = [l for l in legs if l["method"] == "LOOP"]
+    if len(branches) <= 6:
+        shown = legs
+        branches = []
+    lines.append("{:<5}{:<9}{:>10}{:>10}{:>9}".format(
+        "NO.", "METHOD", "L FT", "CALC", "SET GPM"))
+    for leg in shown:
+        lines.append("{:<5}{:<9}{:>10.1f}{:>10.2f}{:>9.2f}".format(
+            leg["number"], leg["method"],
+            float(leg["effective_length_ft"]), float(leg["calc_gpm"]),
+            float(leg["gpm"])))
+    if branches:
+        lengths = [float(l["effective_length_ft"]) for l in branches]
+        sets = sorted(set("{:.2f}".format(float(l["gpm"])) for l in branches))
+        lines.append("{} BRANCH legs, L {:.1f} to {:.1f} ft, set {} gpm".format(
+            len(branches), min(lengths), max(lengths), ", ".join(sets)))
+    lines.append("TOTAL CIRCULATION {:.2f} gpm, {} circuit setter(s), "
+                 "{:.1f} ft of return".format(
+                     float(recirc["total_gpm"]), len(legs),
+                     float(recirc.get("return_length_ft", 0.0))))
+    if recirc["unrooted_pipe_ids"]:
+        lines.append("{} return pipe(s) NOT SIZED, the end of their return "
+                     "line was not found: {}".format(
+                         len(recirc["unrooted_pipe_ids"]),
+                         _id_list(recirc["unrooted_pipe_ids"])))
+    return lines
+
+
+_FLAG_PIPE = re.compile(r"^Pipe (\d+): (.*)$")
+
+
+def group_flags(flags):
+    """One line per distinct message, with a count and the first ids."""
+    order = []
+    ids = {}
+    plain = []
+    for flag in flags:
+        match = _FLAG_PIPE.match(flag)
+        if match is None:
+            if flag not in plain:
+                plain.append(flag)
+            continue
+        message = match.group(2)
+        if message not in ids:
+            ids[message] = []
+            order.append(message)
+        ids[message].append(int(match.group(1)))
+    lines = []
+    for message in order:
+        lines.append("{} pipe(s): {} ({})".format(
+            len(ids[message]), message, _id_list(ids[message])))
+    lines.extend(plain)
+    return lines
+
+
+def _id_list(ids, show=5):
+    ids = list(ids)
+    text = ", ".join(str(i) for i in ids[:show])
+    if len(ids) > show:
+        text += ", +{} more".format(len(ids) - show)
+    return text
+
+
+def exceptions_compact(graph, sizing_result):
+    lines = ["FLAGS", "-" * 78]
+    if not graph.heater_ids:
+        lines.append("NO WATER HEATER found on the cold network. Hot water "
+                     "demand is NOT included in any cold pipe.")
+    else:
+        reported = set()
+        groups = getattr(graph, "heater_groups", {}) or {}
+        for hid in graph.heater_ids:
+            group = groups.get(hid, (hid,))
+            if len(group) > 1:
+                if group in reported:
+                    continue
+                reported.add(group)
+                fixtures = set()
+                for member in group:
+                    fixtures.update(graph.nodes[member].served_fixture_ids)
+                lines.append(
+                    "Heaters {} in parallel serve {} fixture(s), each carries "
+                    "1/{} of the hot load.".format(
+                        ", ".join(str(m) for m in group), len(fixtures),
+                        len(group)))
+            else:
+                lines.append("Heater {} serves {} fixture(s).".format(
+                    hid, len(graph.nodes[hid].served_fixture_ids)))
+
+    lines.extend(group_flags(sizing_result["flags"]))
+
+    if graph.open_ends:
+        lines.append("{} open connector(s), the network may be incomplete: "
+                     "{}".format(len(graph.open_ends),
+                                 _id_list([e for e, _s in graph.open_ends])))
+    if graph.existing_connections:
+        lines.append("{} connection(s) to EXISTING piping not followed: {}"
+                     .format(len(graph.existing_connections),
+                             _id_list([far for _n, far in
+                                       graph.existing_connections])))
+    passthrough = getattr(graph, "existing_passthrough", [])
+    if passthrough:
+        lines.append("{} EXISTING device(s) inside the new run, walked "
+                     "through: {}".format(len(passthrough),
+                                          _id_list(passthrough)))
+    if graph.upstream_ids:
+        lines.append("{} element(s) behind the RPZ inlet are outside the "
+                     "scope and were not sized.".format(
+                         len(graph.upstream_ids)))
+    if graph.loops:
+        lines.append("{} loop joint(s), expected on a recirculating system, "
+                     "otherwise a modelling error.".format(len(graph.loops)))
+    if graph.unreadable:
+        lines.append("{} element(s) had no readable connectors.".format(
+            len(graph.unreadable)))
+    zero = [f for f in graph.fixture_ids if graph.nodes[f].total_wsfu <= 0]
+    if zero:
+        lines.append("{} fixture(s) carry zero WSFU, check Type and "
+                     "public/private: {}".format(len(zero), _id_list(zero)))
+    if len(graph.system_types) > 1:
+        lines.append("System Types: " + ", ".join(
+            "{} ({})".format(graph.system_types[t], t)
+            for t in sorted(graph.system_types.keys())))
+    if sizing_result.get("flush_valve_system"):
+        lines.append("Flush valve system: cold water sized on gpm, flush "
+                     "valve column of Table E103.3(3).")
+    if len(lines) == 2:
+        lines.append("None.")
+    lines.append("=" * 78)
+    return lines
 
 
 # ---------------------------------------------------------------------------

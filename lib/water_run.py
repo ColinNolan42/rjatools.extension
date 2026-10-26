@@ -112,7 +112,7 @@ def run(doc, uidoc, output, forms):
         "job_number": settings["job_number"],
         "by": settings["by"],
     }
-    print(water_report.build_report(graph, sizing, header, recirc))
+    print(water_report.build_compact_report(graph, sizing, header, recirc))
 
     _warn_over_table(output, forms, sizing)
     _write_sizes(doc, output, forms, graph, sizing)
@@ -313,7 +313,27 @@ def _warn_over_table(output, forms, sizing):
     forms.alert(message, title="Size Water - Over the Table", warn_icon=True)
 
 
+def _print_existing_upsizes(output, sizing):
+    """Existing phase pipes are left alone; say in red which need upsizing."""
+    held = [s for s in sizing["segments"] if s.keep_existing]
+    if not held:
+        return
+    upsize = [s for s in held if s.upsize_needed]
+    output.print_md("{} EXISTING phase pipe(s) were left at their drawn "
+                    "size.".format(len(held)))
+    if not upsize:
+        output.print_md("None of them needs upsizing for the new load.")
+        return
+    rows = ["<li>Pipe {}: {} existing, new load calls for {}</li>".format(
+        s.element_id, s.nominal_size, s.required_nominal) for s in upsize]
+    output.print_html(
+        "<div style='color:#C00000;font-weight:bold'>EXISTING PIPING TO BE "
+        "UPSIZED FOR THE NEW LOAD ({} pipe(s)):<ul>{}</ul></div>".format(
+            len(upsize), "".join(rows)))
+
+
 def _write_sizes(doc, output, forms, graph, sizing):
+    _print_existing_upsizes(output, sizing)
     sized = sizing["totals"]["sized_count"]
     if sized == 0:
         output.print_md("Nothing to write: no pipe was sized.")
@@ -332,7 +352,7 @@ def _write_sizes(doc, output, forms, graph, sizing):
 
     output.print_md("Wrote **{}** pipe size(s). {} failed.".format(
         write["written"], write["failed"]))
-    for error in write["errors"][:20]:
+    for error in write["errors"][:5]:
         output.print_md("  " + error)
 
     # Fittings do not follow their pipes in Revit, so elbows and tees keep the
@@ -342,15 +362,20 @@ def _write_sizes(doc, output, forms, graph, sizing):
     try:
         fittings = water_sizing_engine.write_fitting_sizes(
             doc, graph, sizing, lambda d, name: Transaction(d, name))
-        output.print_md("Resized **{}** fitting(s). {} skipped.".format(
-            fittings["resized"], fittings["skipped"]))
-        for error in fittings["errors"][:10]:
+        output.print_md(
+            "Resized **{}** fitting(s). {} Revit transition(s) follow their "
+            "pipes. {} skipped.".format(
+                fittings["resized"], fittings.get("transitions", 0),
+                fittings["skipped"]))
+        for error in fittings["errors"][:3]:
             output.print_md("  " + error)
+        if len(fittings["errors"]) > 3:
+            output.print_md("  ... and {} more could not be resized.".format(
+                len(fittings["errors"]) - 3))
         if fittings["skipped"]:
             output.print_md(
-                "A skipped fitting either touches no sized pipe, or its "
-                "family exposes no size parameter the tool can set. Check "
-                "those by hand before issuing.")
+                "A skipped fitting touches no sized pipe, is existing phase, "
+                "or its family has no size parameter. Check by hand.")
     except Exception as exc:
         output.print_md(
             "Fitting resize failed, pipe sizes are unaffected: {}".format(
@@ -365,8 +390,11 @@ def _write_sizes(doc, output, forms, graph, sizing):
             "Fixture stubs: **{}** set to a larger pipe size, {} back to the "
             "Type size, {} skipped.".format(
                 stubs["set"], stubs["cleared"], stubs["skipped"]))
-        for error in stubs["errors"][:10]:
+        for error in stubs["errors"][:3]:
             output.print_md("  " + error)
+        if len(stubs["errors"]) > 3:
+            output.print_md("  ... and {} more.".format(
+                len(stubs["errors"]) - 3))
     except Exception as exc:
         output.print_md(
             "Fixture stub sizing failed, pipe sizes are unaffected: {}".format(
