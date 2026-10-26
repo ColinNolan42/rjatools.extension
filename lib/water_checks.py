@@ -184,8 +184,8 @@ def _check_fixtures(graph, findings):
                           for n in zero_load[:8])
         findings.append(Finding(
             SEVERITY_ERROR, "fixture_zero_wsfu",
-            "{} fixture(s) carry zero total WSFU, which is a data error, not "
-            "a zero demand. Check the Type and the public/private setting "
+            "{} fixture(s) carry zero total WSFU. That is a data error, not "
+            "a zero demand. Check the Type and the public or private setting "
             "on: {}{}".format(
                 len(zero_load), names,
                 "" if len(zero_load) <= 8 else ", ...")))
@@ -198,9 +198,9 @@ def _check_fixtures(graph, findings):
     if unknown:
         findings.append(Finding(
             SEVERITY_WARNING, "fixture_type_name_unreadable",
-            "{} fixture(s) returned no readable Type name, so they will group "
-            "together as 'UNKNOWN TYPE' in the take-off table. The per-segment "
-            "pipe sizes are unaffected, they read each fixture's own fixture "
+            "{} fixture(s) returned no readable Type name, so they group "
+            "together as 'UNKNOWN TYPE' in the take-off table. Pipe sizes are "
+            "unaffected because they read each fixture's own fixture "
             "units.".format(len(unknown))))
 
 
@@ -211,11 +211,10 @@ def _check_hot_water(graph, profile, findings):
     if hot_fixtures > 0 and heaters == 0:
         findings.append(Finding(
             SEVERITY_ERROR, "hot_demand_no_heater",
-            "{} fixture(s) draw hot water but NO water heater was found on "
-            "the network. A heater is identified by having both a cold water "
-            "inlet and a hot water outlet. Without one, the cold branch that "
-            "feeds it cannot be sized and no hot piping can be "
-            "sized.".format(hot_fixtures)))
+            "{} fixture(s) draw hot water but no water heater was found on "
+            "the network. A heater has both a cold water inlet and a hot "
+            "water outlet. Without one, neither the cold branch that feeds it "
+            "nor the hot piping can be sized.".format(hot_fixtures)))
         return
 
     if heaters == 0:
@@ -241,9 +240,9 @@ def _check_hot_water(graph, profile, findings):
                           for n in unserved)
         findings.append(Finding(
             SEVERITY_WARNING, "heater_serves_nothing",
-            "{} water heater(s) reach no fixtures on their hot outlet, so "
-            "the cold branch feeding them will size at zero. Check the hot "
-            "piping is connected: {}".format(len(unserved), names)))
+            "{} water heater(s) reach no fixtures through their hot outlet, "
+            "so the cold branch feeding them sizes at zero. Check that the "
+            "hot piping is connected: {}".format(len(unserved), names)))
 
 
 def _check_recirculation(graph, profile, returns, findings):
@@ -259,7 +258,7 @@ def _check_recirculation(graph, profile, returns, findings):
         findings.append(Finding(
             SEVERITY_INFO, "recirc_pump_found",
             "Recirculation available: {} pump candidate(s) found on the hot "
-            "water side: {}. Confirm these are circulation pumps, they are "
+            "water side: {}. Confirm they are circulation pumps. They are "
             "identified by category and connectors, not by "
             "name.".format(pumps, pump_names)))
 
@@ -268,7 +267,7 @@ def _check_recirculation(graph, profile, returns, findings):
             SEVERITY_WARNING, "hwr_wanted_no_pump",
             "{} fixture(s) have HWR_ACTIVE set, but no recirculation pump was "
             "found on the hot water network. Either the pump is missing from "
-            "the model, or it is not connected, or its connectors could not "
+            "the model, it is not connected, or its connectors could not "
             "be read.".format(hwr_fixtures)))
 
     if pumps and not hwr_fixtures:
@@ -302,15 +301,15 @@ def _check_recirculation(graph, profile, returns, findings):
         findings.append(Finding(
             SEVERITY_WARNING, "hwr_wanted_no_return_system",
             "{} fixture(s) have HWR_ACTIVE set, but no piping system type was "
-            "identified as the RETURN, so every hot pipe was sized as "
+            "identified as the return, so every hot pipe was sized as "
             "supply.{}".format(hwr_fixtures, extra)))
 
     if returns and not pumps:
         findings.append(Finding(
             SEVERITY_WARNING, "return_system_no_pump",
             "A return system was identified but no recirculation pump was "
-            "found on it. A recirculation loop needs a pump, "
-            "gravity and thermosiphon circulation are not permitted."))
+            "found on it. A recirculation loop needs a pump. Gravity and "
+            "thermosiphon circulation are not permitted."))
 
     if profile["has_recirc"]:
         findings.append(Finding(
@@ -325,21 +324,21 @@ def _check_connectivity(graph, findings):
         findings.append(Finding(
             SEVERITY_WARNING, "open_connectors",
             "{} open connector(s) on the network. Anything past an open "
-            "connector was never reached and is therefore not counted in any "
-            "pipe size.".format(len(graph.open_ends))))
+            "connector was not reached, so it is not counted in any pipe "
+            "size.".format(len(graph.open_ends))))
 
     if graph.unreadable:
         findings.append(Finding(
             SEVERITY_WARNING, "unreadable_connectors",
             "{} element(s) had no readable connectors, so the traversal could "
-            "not pass through them. A circulation pump is a known offender "
-            "here.".format(len(graph.unreadable))))
+            "not pass through them. A circulation pump is a common cause."
+            .format(len(graph.unreadable))))
 
     if graph.loops:
         findings.append(Finding(
             SEVERITY_INFO, "loops_present",
             "{} loop connection(s) found. A recirculation loop is expected to "
-            "show up here. Any other loop is a modelling error.".format(
+            "show up here. Any other loop is a modeling error.".format(
                 len(graph.loops))))
 
 

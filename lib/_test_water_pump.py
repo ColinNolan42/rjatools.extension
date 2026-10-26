@@ -85,5 +85,30 @@ class TestDutyPoint(unittest.TestCase):
         self.assertEqual(len(rows[0]), len(water_pump.TABLE_COLUMNS))
 
 
+class TestHeadChart(unittest.TestCase):
+
+    def test_chart_rows_add_up_to_the_total(self):
+        g, recirc = network()
+        point = water_pump.duty_points(g, recirc)[0]
+        rows, equation = water_pump.head_rows(point)
+        self.assertEqual(rows[0][0], "Supply pipe friction")
+        self.assertEqual(rows[-1][0], "TOTAL")
+        parts = sum(float(r[3]) for r in rows[:-1])
+        self.assertAlmostEqual(parts, float(rows[-1][3]), delta=0.02)
+        self.assertIn("{:.1f} ft".format(point["head_ft"]), equation)
+
+    def test_flow_line_uses_the_sigma(self):
+        g, recirc = network()
+        point = water_pump.duty_points(g, recirc)[0]
+        line = water_pump.flow_line(point)
+        self.assertIn(water_pump.SIGMA, line)
+        self.assertIn("{:.1f} gpm".format(point["gpm"]), line)
+
+    def test_point_names_the_heater(self):
+        g, recirc = network()
+        point = water_pump.duty_points(g, recirc)[0]
+        self.assertIn("heater_id", point)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -238,7 +238,7 @@ def exceptions_compact(graph, sizing_result):
                          len(graph.upstream_ids)))
     if graph.loops:
         lines.append("{} loop joint(s), expected on a recirculating system, "
-                     "otherwise a modelling error.".format(len(graph.loops)))
+                     "otherwise a modeling error.".format(len(graph.loops)))
     if graph.unreadable:
         lines.append("{} element(s) had no readable connectors.".format(
             len(graph.unreadable)))
@@ -450,9 +450,9 @@ def wsfu_load_lines(data):
         basis = ("WSFU to gpm: 2024 IPC Table E103.3(3), flush tank column "
                  "(no flush valve fixtures on the system).")
     return [
-        "Cold water sizing load (TOTAL wsfu): {}  ->  {} gpm".format(
+        "Cold water design load = {} total WSFU = {} gpm".format(
             _num(data["ext_total"]), _gpm(cold)),
-        "Hot water sizing load (HOT wsfu): {}  ->  {} gpm".format(
+        "Hot water design load = {} hot WSFU = {} gpm".format(
             _num(data["ext_hot"]), _gpm(hot)),
         basis,
         "Note: COLD + HOT does not equal TOTAL. Per note a to IPC Table "
@@ -731,7 +731,7 @@ def exceptions_block(graph, sizing_result):
 
     if graph.loops:
         lines.append("  {} loop connection(s) detected. A recirculation loop "
-                     "is expected here; any other loop is a modelling "
+                     "is expected here; any other loop is a modeling "
                      "error.".format(len(graph.loops)))
         any_flag = True
 

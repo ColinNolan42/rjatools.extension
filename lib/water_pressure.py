@@ -487,8 +487,8 @@ def _outlet(graph, fixture, system, start_psi, origin_z, gpm_by_pipe):
             kind = valve_kind(node)
             size = _first_size(node)
             if kind is None:
-                result.notes.append("{} '{}' not priced (no Device_Pressure_"
-                                    "Drop_PSI, not a known valve)".format(
+                result.notes.append("{} '{}': not priced, no Device_Pressure_"
+                                    "Drop_PSI and not a known valve".format(
                                         nid, node.family_name))
                 continue
         elif node.kind == water_graph.KIND_FIXTURE:
@@ -496,8 +496,8 @@ def _outlet(graph, fixture, system, start_psi, origin_z, gpm_by_pipe):
             # (Colin, 2026-10-12).
             kind, size = "tee_run", _first_size(node)
         elif node.kind == water_graph.KIND_HEATER:
-            result.notes.append("water heater {} has no Device_Pressure_"
-                                "Drop_PSI, counted as 0".format(nid))
+            result.notes.append("Water heater {}: no Device_Pressure_Drop_"
+                                "PSI entered, counted as 0 psi".format(nid))
             continue
         else:
             continue
@@ -588,33 +588,22 @@ def outlet_summary(analysis):
     passed = len([o for o in outlets if o.passes is True])
     failed = len([o for o in outlets if o.passes is False])
     unchecked = len(outlets) - passed - failed
-    line = "{} of {} fixture outlets meet the Table 604.3 minimum, {} do " \
-           "not.".format(passed, len(outlets), failed)
+    line = "{} of {} fixture outlets meet the Table 604.3 minimum.".format(
+        passed, len(outlets))
+    if failed:
+        line += " {} {} not.".format(failed, "does" if failed == 1 else "do")
     if unchecked:
         line += " {} not checked (no Table 604.3 row).".format(unchecked)
     return line
 
 
 def basis_lines(start_psi):
+    """The pressure basis as one equation and its terms."""
     return [
-        "Pressure basis: 2024 IPC Appendix E, Section E103.3 (segmented loss "
-        "method). Each outlet is checked against its minimum flow pressure "
-        "in Table 604.3.",
-        "Pressure at an outlet = the start pressure, less static head, pipe "
-        "friction, fittings and devices on the way to it.",
-        "Start pressure: {:.1f} psi at the picked point (after the RPZ, or "
-        "in the existing main at the tee).".format(float(start_psi)),
-        "Static head: {:.3f} psi per ft of floor level above the start "
-        "point's level. Section 604.8 limits static pressure to {:.0f} "
-        "psi.".format(PSI_PER_FT_HEAD, MAX_STATIC_PSI),
-        "Pipe friction: Darcy-Weisbach with the Swamee-Jain friction factor, "
-        "drawn copper, water at {:.0f} F (conservative for hot water), ASTM "
-        "B88 Type L inside diameters.".format(WATER_TEMP_F),
-        "Fittings and valves: equivalent lengths from Table E103.3(6), priced "
-        "at the friction rate of the pipe they sit on. Devices: "
-        "Device_Pressure_Drop_PSI where it is set.",
-        "Flow: the probable demand in each pipe, Table E103.3(3), at the "
-        "drawn size.",
+        "P(outlet) = P(start) - {:.3f} x H(static) - friction - fittings - "
+        "devices, against Table 604.3.".format(PSI_PER_FT_HEAD),
+        "P(start) = {:.1f} psi at the picked point. Friction by "
+        "Darcy-Weisbach. Fittings by Table E103.3(6).".format(float(start_psi)),
     ]
 
 

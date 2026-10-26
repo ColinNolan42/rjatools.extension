@@ -82,6 +82,35 @@ def _draw_wsfu(st, view, ox, y, graph, header, sizing_result, recirc):
     """
     columns = water_report.WSFU_COLUMNS
     width = sum([c[2] for c in columns], 0.0)
+    data = water_report.wsfu_data(graph)
+
+    # --- Firm pipe sizing chart --------------------------------------------
+    # The same rows the sizing looked each pipe up in. Above the take-off
+    # (Colin, 2026-10-26), with the design load under it.
+    chart = water_tables.sizing_chart()
+    chart_w = sum(CHART_WIDTHS, 0.0)
+    y = _band(st, view, ox, y, chart_w, "FIRM PIPE SIZING CHART", None,
+              SUB_BAND_H)
+    y = _styled_table(st, view, ox, y,
+                      list(zip(chart["headers"], CHART_WIDTHS)),
+                      chart["rows"])
+
+    # --- Design loads ------------------------------------------------------
+    y -= GAP
+    load_lines = list(water_report.wsfu_load_lines(data))
+    if sizing_result is not None:
+        totals = sizing_result["totals"]
+        load_lines.append("Pipes sized: {} of {}. Total length {:.1f} ft."
+                          .format(totals["sized_count"], totals["pipe_count"],
+                                  float(totals["total_length_ft"])))
+        if totals["unsized_count"]:
+            load_lines.append("{} pipe(s) not sized. The pyRevit window gives "
+                              "the reason for each.".format(
+                                  totals["unsized_count"]))
+    if load_lines:
+        y = _band(st, view, ox, y, width, "DESIGN LOAD", None, SUB_BAND_H)
+        y = _note_panel(st, view, ox, y, width, load_lines)
+    y -= GAP
 
     # --- Title band and job block ------------------------------------------
     y = _band(st, view, ox, y, width, "WATER FIXTURE UNIT (WFU) TAKE OFF",
@@ -97,7 +126,6 @@ def _draw_wsfu(st, view, ox, y, graph, header, sizing_result, recirc):
     # --- The take-off ------------------------------------------------------
     y = _band(st, view, ox, y, width, "WATER SUPPLY FIXTURE UNITS*",
               "BASIS 2024 IPC TABLE E103.3(2)", SUB_BAND_H)
-    data = water_report.wsfu_data(graph)
     rows = [[row.get(c[0], "") for c in columns] for row in data["rows"]]
     if rows:
         totals = [data["totals"].get(c[0], "") for c in columns]
@@ -116,33 +144,6 @@ def _draw_wsfu(st, view, ox, y, graph, header, sizing_result, recirc):
         for wrapped in _wrap(note, 125):
             _t(st, view, ox, y, wrapped)
             y -= TEXT_H
-
-    # --- Design loads ------------------------------------------------------
-    y -= GAP / 2.0
-    load_lines = list(water_report.wsfu_load_lines(data))
-    if sizing_result is not None:
-        totals = sizing_result["totals"]
-        load_lines.append("Pipes sized: {} of {}.  Total length {:.1f} ft.".format(
-            totals["sized_count"], totals["pipe_count"],
-            float(totals["total_length_ft"])))
-        if totals["unsized_count"]:
-            load_lines.append("{} pipe(s) NOT sized - see the pyRevit window "
-                              "for the reason on each.".format(
-                                  totals["unsized_count"]))
-    if load_lines:
-        y = _band(st, view, ox, y, width, "DESIGN LOAD", None, SUB_BAND_H)
-        y = _note_panel(st, view, ox, y, width, load_lines)
-
-    # --- Firm pipe sizing chart --------------------------------------------
-    # The same rows the sizing looked each pipe up in.
-    chart = water_tables.sizing_chart()
-    chart_w = sum(CHART_WIDTHS, 0.0)
-    y -= GAP
-    y = _band(st, view, ox, y, chart_w, "FIRM PIPE SIZING CHART", None,
-              SUB_BAND_H)
-    y = _styled_table(st, view, ox, y,
-                      list(zip(chart["headers"], CHART_WIDTHS)),
-                      chart["rows"])
 
     # --- Hot water recirculation sizing ------------------------------------
     if recirc is not None and recirc["legs"]:
@@ -211,7 +212,9 @@ def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
 def build_performance_view(doc, view_name, summary_lines, columns, rows,
                            legend, fill_id, extra_tables=None, wsfu=None,
                            table_height_out=None):
-    """Drafting view for Water Performance: summary, flagged table, legend.
+    """Drafting view for Water Performance, top to bottom: summary, flagged
+    pipes, the extra tables (pressure, pump), the firm sizing chart and design
+    load, the WSFU take-off, then the color legend.
 
     Args:
         doc: the Revit Document. Must already be inside a Transaction.
@@ -222,7 +225,10 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
         legend: [(Revit Color, text)], one swatch row each.
         fill_id: solid fill pattern id, so the swatches match the plan.
         extra_tables: optional [(title, columns, rows, note_lines)] drawn
-            after the legend, e.g. the pressure loss table.
+            under the flagged pipes, e.g. the pressure and pump tables.
+        wsfu: optional (graph, header, sizing, recirc) for the take-off.
+        table_height_out: optional list that receives the height of the
+            tables above the take-off.
 
     Returns:
         (ViewDrafting, content_height_ft, content_width_ft), or (None, 0, 0).
@@ -253,22 +259,6 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
     else:
         y = _note_panel(st, view, ox, y, width,
                         ["Every judged pipe is at table size."])
-    y -= GAP
-
-    # Legend: a swatch the plan colour, then its meaning, in an outlined box.
-    legend_w = min(width, 0.62)
-    y = _band(st, view, ox, y, legend_w, "COLOR LEGEND", None, SUB_BAND_H)
-    legend_top = y
-    swatch = 0.014
-    for color, meaning in legend:
-        if st.region_type_id is not None:
-            _legend_swatch(doc, view, st.region_type_id, ox + PAD * 2.0,
-                           y - swatch - (ROW_H - swatch) / 2.0, swatch,
-                           color, fill_id)
-        _t(st, view, ox + swatch + PAD * 3.0, y, meaning)
-        y -= ROW_H
-    _outline(st, view, ox, legend_top, ox + legend_w, y)
-
     for title, extra_columns, extra_rows, notes in (extra_tables or []):
         y -= GAP
         table_w = sum([c[1] for c in extra_columns], 0.0)
@@ -290,6 +280,22 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
         y, wsfu_width = _draw_wsfu(st, view, ox, y, wsfu_graph, wsfu_header,
                                    wsfu_sizing, wsfu_recirc)
         width = max(width, wsfu_width)
+
+    # Legend last: a swatch in the plan color, then its meaning, in an
+    # outlined box (Colin, 2026-10-26).
+    y -= GAP
+    legend_w = min(width, 0.62)
+    y = _band(st, view, ox, y, legend_w, "COLOR LEGEND", None, SUB_BAND_H)
+    legend_top = y
+    swatch = 0.014
+    for color, meaning in legend:
+        if st.region_type_id is not None:
+            _legend_swatch(doc, view, st.region_type_id, ox + PAD * 2.0,
+                           y - swatch - (ROW_H - swatch) / 2.0, swatch,
+                           color, fill_id)
+        _t(st, view, ox + swatch + PAD * 3.0, y, meaning)
+        y -= ROW_H
+    _outline(st, view, ox, legend_top, ox + legend_w, y)
     return view, (0.0 - y), width
 
 

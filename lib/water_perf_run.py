@@ -143,8 +143,8 @@ def run(doc, uidoc, output, forms):
     elif settings.get("pump_duty"):
         output.print_md("No hot water return was found, so there is no "
                         "recirculation pump duty point.")
-    extra = [t for t in (_pressure_table(pressure, settings["start_psi"]),
-                         _pump_table(pumps, settings)) if t]
+    extra = [t for t in [_pressure_table(pressure, settings["start_psi"])] +
+             _pump_tables(pumps, settings) if t]
     # The WSFU take-off goes on the colored plan sheet, under the flagged
     # table (Colin, 2026-10-21). Only without that sheet does it get its own.
     wsfu = None
@@ -389,13 +389,8 @@ def _print_pressure(output, pressure, start_psi):
     if notes:
         output.print_md("Not counted or assumed:\n" +
                         "\n".join("- " + n for n in _group_notes(notes)))
-    output.print_md(
-        "    P_outlet = {:.1f} psi - 0.433 x H_static - friction - fittings "
-        "- devices >= Table 604.3 minimum\n"
-        "    friction: dP = f (L / D) (rho V^2 / 2), Darcy-Weisbach, "
-        "Swamee-Jain f, ASTM B88 Type L ID\n"
-        "    fittings: L_eq from Table E103.3(6) at the friction rate of the "
-        "pipe they sit on".format(float(start_psi)))
+    output.print_md(chr(10).join(
+        "    " + line for line in water_pressure.basis_lines(start_psi)))
 
 
 _NOTE_ID = re.compile(r"^(.*?) (\d{5,}): (.*)$")
@@ -445,38 +440,42 @@ def _pressure_table(pressure, start_psi):
 
 def _print_pumps(output, pumps, settings):
     output.print_md("## Recirculation pump duty point")
-    for p in pumps:
-        output.print_md(
-            "Heater **{}**: **{:.1f} gpm at {:.1f} ft head** (index circuit "
-            "leg {}).".format(p["root_id"], p["gpm"], p["head_ft"],
-                              p["index_leg"]))
     output.print_table(
         table_data=water_pump.table_rows(pumps),
-        title="Pump duty point, index circuit breakdown",
+        title="Pump duty point",
         columns=[c[0].title() for c in water_pump.TABLE_COLUMNS])
+    for p in pumps:
+        output.print_md(water_pump.flow_line(p))
+        rows, equation = water_pump.head_rows(p)
+        if rows:
+            output.print_table(
+                table_data=rows,
+                title="System head, heater {}".format(
+                    p.get("heater_id", p["root_id"])),
+                columns=[c[0].title() for c in water_pump.HEAD_COLUMNS])
+            output.print_md(equation)
     notes = sorted(set(n for p in pumps for c in p["circuits"]
                        for n in c["notes"]))
     if notes:
-        output.print_md("Not counted:\n" + "\n".join(
+        output.print_md("Not counted:" + chr(10) + chr(10).join(
             "- " + n for n in _group_notes(notes)))
-    output.print_md(
-        "    Head (ft) = 2.31 x (supply friction + return friction + "
-        "fittings + {:.2f} psi circuit setter + devices) x (1 + {:.2f})\n"
-        "    Flow (gpm) = sum of circuit setter flows at the heater".format(
-            float(settings["circuit_setter_psi"]),
-            float(settings["pump_safety_factor"])))
 
 
-def _pump_table(pumps, settings):
-    """The pump section for the sheet, or None."""
+def _pump_tables(pumps, settings):
+    """The pump sections for the sheet: the duty point table with its flow
+    line, then the system head chart for each heater."""
     if not pumps:
-        return None
-    notes = ["HEATER {}: {:.1f} GPM AT {:.1f} FT HEAD".format(
-        p["root_id"], p["gpm"], p["head_ft"]) for p in pumps]
-    notes.extend(water_pump.basis_lines(settings["circuit_setter_psi"],
-                                        settings["pump_safety_factor"]))
-    return ("RECIRCULATION PUMP DUTY POINT", water_pump.TABLE_COLUMNS,
-            water_pump.table_rows(pumps), notes)
+        return []
+    notes = [water_pump.flow_line(p) for p in pumps]
+    tables = [("RECIRCULATION PUMP DUTY POINT", water_pump.TABLE_COLUMNS,
+               water_pump.table_rows(pumps), notes)]
+    for p in pumps:
+        rows, equation = water_pump.head_rows(p)
+        if rows:
+            tables.append(("SYSTEM HEAD, HEATER {}".format(
+                p.get("heater_id", p["root_id"])), water_pump.HEAD_COLUMNS,
+                rows, [equation]))
+    return tables
 
 
 def _make_tables_sheet(doc, output, tables, stamp):

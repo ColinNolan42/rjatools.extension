@@ -200,7 +200,7 @@ class TestPathsAndBudget(unittest.TestCase):
         self.assertTrue(cold.passes)
         self.assertEqual(len(result["outlets"]), 2)
         self.assertIs(result["critical"], result["outlets"][0])
-        self.assertTrue(any("water heater" in n
+        self.assertTrue(any("ater heater" in n
                             for n in [x for o in result["outlets"] for x in o.notes]))
 
     def test_low_start_fails(self):
