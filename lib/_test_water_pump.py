@@ -93,9 +93,11 @@ class TestHeadChart(unittest.TestCase):
         rows, equation = water_pump.head_rows(point)
         self.assertEqual(rows[0][0], "Supply pipe friction")
         self.assertEqual(rows[-1][0], "TOTAL")
-        parts = sum(float(r[3]) for r in rows[:-1])
-        self.assertAlmostEqual(parts, float(rows[-1][3]), delta=0.02)
+        parts = sum(float(r[4]) for r in rows[:-1])
+        self.assertAlmostEqual(parts, float(rows[-1][4]), delta=0.02)
         self.assertIn("{:.1f} ft".format(point["head_ft"]), equation)
+        self.assertIn("psi/100 ft", rows[0][3])
+        self.assertEqual(len(rows[0]), len(water_pump.HEAD_COLUMNS))
 
     def test_flow_line_uses_the_sigma(self):
         g, recirc = network()
