@@ -94,13 +94,12 @@ class TestHeadChart(unittest.TestCase):
         self.assertEqual(rows[0][0], "Supply pipe friction")
         self.assertEqual(rows[-1][0], "PUMP HEAD")
         self.assertEqual(rows[-2][0], "TOTAL")
-        parts = sum(float(r[4].split()[0]) for r in rows[:-2])
-        self.assertAlmostEqual(parts, float(rows[-2][4].split()[0]), delta=0.02)
-        self.assertEqual(rows[-1][4], "{:.1f} ft".format(point["head_ft"]))
+        parts = sum(float(r[3].split()[0]) for r in rows[:-2])
+        self.assertAlmostEqual(parts, float(rows[-2][3].split()[0]), delta=0.02)
+        self.assertEqual(rows[-1][3], "{:.1f} ft".format(point["head_ft"]))
         self.assertEqual(len(equations), 8)
         self.assertTrue(equations[0].startswith("1. V"))
         self.assertIn("{:.1f} ft".format(point["head_ft"]), equations[-1])
-        self.assertIn("psi/100 ft", rows[0][3])
         self.assertEqual(len(rows[0]), len(water_pump.HEAD_COLUMNS))
 
     def test_flow_line_uses_the_sigma(self):
