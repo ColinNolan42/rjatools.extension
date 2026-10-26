@@ -2356,6 +2356,32 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             qc, qb, ab, _ft = flows.get(tap_id, (dr.cfm, None, None, None))
             if qc and qb and ab:
                 fam = hvac_graph.fitting_family_name(elem)
+                # A main that ends in a tap is a turn into the branch, not a
+                # junction (Colin, 2026-10-26): all of its air turns (Qb/Qc at
+                # 1.0), so it is priced as a 90 degree elbow at the main's own
+                # Pv. Round main: die stamped r/D 1.5, the company standard.
+                # Rect main: smooth radius elbow, r/W 1.5, H/W as drawn.
+                # Unreadable size falls through to the tap table below.
+                if min(qb / qc, 1.0) >= 0.99 and not _continues(main):
+                    ec, elabel, enotes = None, None, []
+                    if _is_round_duct(dr):
+                        _d = _round_d_in(dr)
+                        if _d:
+                            ec, elabel, enotes = ashrae_fittings.round_elbow_c(
+                                _d, 1.5, 90.0)
+                    else:
+                        _wh = re.match(r'\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)',
+                                       getattr(dr, 'size', '') or '')
+                        if _wh and float(_wh.group(1)) > 0:
+                            ec, elabel, enotes = ashrae_fittings.rect_smooth_elbow_c(
+                                1.5, float(_wh.group(2)) / float(_wh.group(1)), 90.0)
+                    if ec is not None:
+                        vc = qc / dr.area_ft2
+                        res = (ec * hvac_graph.velocity_pressure_inwg(vc),
+                               '%s, end of main turn, C %.2f at main %.0f fpm'
+                               % (elabel, ec, vc), list(enotes))
+                        tapprice_cache[tap_id] = res
+                        return res
                 cb, label, notes = ashrae_fittings.tap_branch_c(
                     fitting_tables._is_supply(dr.sys_class),
                     'round' if hvac_graph.fitting_is_round(elem) else 'rect',
@@ -2809,6 +2835,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if term is not None:
                 # The diffuser the run ends at is itself a component drop.
                 keys_here = comp_keys + ('diffuser',)
+                # Every supply diffuser is assumed to have a balancing damper
+                # whether or not one is drawn (Colin, 2026-10-26), so a branch
+                # with no damper accessory (a w_Damper take-off, or none shown)
+                # still pays one. A drawn damper is never charged twice.
+                _assumed_damper = (
+                        fitting_tables._is_supply(term[1] or sys_class)
+                        and 'damper' not in comp_keys)
+                if _assumed_damper:
+                    keys_here = keys_here + ('damper',)
                 comp_here = 0.0
                 for _k in keys_here:
                     comp_here += _comp(_k)
@@ -2836,7 +2871,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'terminal_id':      nid,
                         'terminal_name':    _family or '-',
                         'unpriced':         unpriced,
-                        'items':            items + ((
+                        'items':            items + (((
+                            'Accessory (assumed)', 'Balancing damper at ' + (_family or '-'),
+                            None, fitting_tables.component_of('damper', comp_values),
+                            ('Balancing damper', 'known drop', None, None)),)
+                            if _assumed_damper else ()) + ((
                             'Terminal {}'.format(nid), _family or '-', None,
                             fitting_tables.component_of('diffuser', comp_values),
                             ('Diffuser / grille', 'known drop', None, None)),),

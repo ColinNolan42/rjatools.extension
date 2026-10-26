@@ -786,10 +786,10 @@ COMP17 = {'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.05}
 r17 = crit([1000], children17, ducts17, terms17, nodes17, safety_pct=10.0,
            comp_values=COMP17, vav_box_ids=set([1002]), vav_box_drop_inwc=0.40)
 sa17 = r17[1000]['Supply Air']
-check("case17 box drop is a component (0.40 box + 0.05 diffuser)",
-      abs(sa17['component_inwc'] - 0.45) < 1e-9, "got %r" % sa17['component_inwc'])
+check("case17 box drop is a component (0.40 box + 0.05 diffuser + 0.25 assumed damper)",
+      abs(sa17['component_inwc'] - 0.70) < 1e-9, "got %r" % sa17['component_inwc'])
 check("case17 component_keys name the box",
-      sorted(sa17['component_keys']) == ['diffuser', 'vav_box'],
+      sorted(sa17['component_keys']) == ['damper', 'diffuser', 'vav_box'],
       "got %r" % (sa17['component_keys'],))
 exp_elbow17 = fitting_tables.DEFAULT_C['round_elbow_90'] * pv(600.0)
 wrong_elbow17 = fitting_tables.DEFAULT_C['round_elbow_90'] * pv(1800.0)
@@ -799,7 +799,8 @@ check("case17 the elbow on the box discharge is priced at the OUTLET duct veloci
       "expected %.6f got %r (inlet velocity would give %.6f)"
       % (exp_elbow17, sa17['fitting_inwc'], wrong_elbow17))
 check("case17 the root AHU itself is not priced as a component",
-      'damper' not in sa17['component_keys'])
+      list(sa17['component_keys']).count('vav_box') == 1
+      and 'mid_equip' not in sa17['component_keys'])
 box17 = sa17.get('boxes', {}).get(1002)
 check("case17 MP loss to the box inlet is the MP duct only (0.20), x1.10 with SF",
       box17 is not None and abs(box17[0] - 0.20) < 1e-9
@@ -811,7 +812,7 @@ check("case17 index run items still add up to the subtotal",
 r17d = crit([1000], children17, ducts17, terms17, nodes17, comp_values=COMP17,
             vav_box_ids=set([1002]))
 check("case17 box drop defaults to the balancing damper value",
-      abs(r17d[1000]['Supply Air']['component_inwc'] - (0.25 + 0.05)) < 1e-9,
+      abs(r17d[1000]['Supply Air']['component_inwc'] - (0.25 + 0.05 + 0.25)) < 1e-9,
       "got %r" % r17d[1000]['Supply Air']['component_inwc'])
 
 # VAV OFF: the same equipment is priced as a balancing damper, and nothing is
@@ -819,8 +820,8 @@ check("case17 box drop defaults to the balancing damper value",
 r17off = crit([1000], children17, ducts17, terms17, nodes17, comp_values=COMP17)
 sa17off = r17off[1000]['Supply Air']
 check("case17 VAV off: mid tree equipment has its own key, at the damper value",
-      sorted(sa17off['component_keys']) == ['diffuser', 'mid_equip']
-      and abs(sa17off['component_inwc'] - 0.30) < 1e-9,
+      sorted(sa17off['component_keys']) == ['damper', 'diffuser', 'mid_equip']
+      and abs(sa17off['component_inwc'] - 0.55) < 1e-9,
       "keys %r comp %r" % (sa17off['component_keys'], sa17off['component_inwc']))
 check("case17 VAV off: no box list",
       sa17off.get('boxes') == {}, "got %r" % (sa17off.get('boxes'),))
@@ -883,7 +884,7 @@ r20 = crit([1000, 1002], children17, ducts17, terms17, nodes17, safety_pct=0.0,
 sa20 = r20[1000]['Supply Air']
 check("case20 the AHU's walk still charges the box (picked as a root too)",
       'vav_box' in sa20['component_keys']
-      and abs(sa20['component_inwc'] - 0.45) < 1e-9,
+      and abs(sa20['component_inwc'] - 0.70) < 1e-9,
       "keys %r comp %r" % (sa20['component_keys'], sa20['component_inwc']))
 check("case20 and records the MP loss to it",
       1002 in sa20.get('boxes', {}), "got %r" % (sa20.get('boxes'),))
@@ -1075,6 +1076,42 @@ check("case29 the negative return tap loss is floored at 0 and named in the repo
       abs(ra29.get('fitting_inwc', -1)) < 1e-12
       and any('floored at 0' in u for u in ra29.get('unpriced', ())),
       "fit %r notes %r" % (ra29.get('fitting_inwc'), ra29.get('unpriced')))
+
+# 30: a main that ends in a tap is a turn into the branch (Colin, 2026-10-26):
+#     priced as a 90 degree CR3-1 elbow (r/W 1.5, H/W as drawn) at the main's Pv,
+#     not the tap's Cc,b (which was 5.96 x Pv on a return end tap).
+ch30 = {599: [600], 600: [601], 601: [611], 611: [621]}
+n30 = {600: Elem(kind='duct', tap_pos={601: 2.0}),
+       601: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       611: Elem(kind='duct')}
+for _cls30 in ('Supply Air', 'Return Air'):
+    d30 = build([(600, 0.0, 10.0, 600.0, 1.0, _cls30),
+                 (611, 0.0, 5.0, 764.0, 0.785, _cls30)])
+    for _dr in d30.values():
+        _dr.size = '12x12"' if _dr.element_id == 600 else '12"dia'
+    t30 = {621: (600.0, _cls30, 'T-end')}
+    r30 = crit([599], ch30, d30, t30, n30).get(599, {}).get(_cls30, {})
+    ce30 = A.rect_smooth_elbow_c(1.5, 1.0, 90.0)[0]
+    check("case30 %s end of main tap is a CR3-1 elbow x main Pv, not Cc,b" % _cls30,
+          abs(r30.get('fitting_inwc', -1) - ce30 * pv(600.0)) < 1e-9
+          and abs(ce30 - 0.17) < 1e-9,
+          "got %r expected %.6f" % (r30.get('fitting_inwc'), ce30 * pv(600.0)))
+    check("case30 %s: a damper is assumed on supply only, never on return" % _cls30,
+          ('damper' in r30.get('component_keys', ())) == (_cls30 == 'Supply Air'),
+          "keys %r" % (r30.get('component_keys'),))
+# a drawn damper is not charged twice
+n30b = dict(n30)
+n30b[611] = Elem(kind='duct')
+n30b[612] = Elem(kind='accessory', family_name='Balancing Damper - Rectangular')
+ch30b = {599: [600], 600: [601], 601: [612], 612: [611], 611: [621]}
+d30b = build([(600, 0.0, 10.0, 600.0, 1.0, 'Supply Air'),
+              (611, 0.0, 5.0, 764.0, 0.785, 'Supply Air')])
+for _dr in d30b.values():
+    _dr.size = '12x12"' if _dr.element_id == 600 else '12"dia'
+r30b = crit([599], ch30b, d30b, {621: (600.0, 'Supply Air', 'T-end')}, n30b)[599]['Supply Air']
+check("case30 a drawn damper is charged once, not again as the assumed one",
+      list(r30b['component_keys']).count('damper') == 1,
+      "keys %r" % (r30b['component_keys'],))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
