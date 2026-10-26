@@ -211,7 +211,7 @@ def place_on_sheet(doc, view, content_h, content_w, sheet_number, sheet_name):
 
 def build_performance_view(doc, view_name, summary_lines, columns, rows,
                            legend, fill_id, extra_tables=None, wsfu=None,
-                           table_height_out=None):
+                           table_height_out=None, system_errors=None):
     """Drafting view for Water Performance, top to bottom: summary, flagged
     pipes, the extra tables (pressure, pump), the firm sizing chart and design
     load, the WSFU take-off, then the color legend.
@@ -227,6 +227,7 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
         extra_tables: optional [(title, columns, rows, note_lines)] drawn
             under the flagged pipes, e.g. the pressure and pump tables.
         wsfu: optional (graph, header, sizing, recirc) for the take-off.
+        system_errors: optional list of lines for the SYSTEM ERRORS panel.
         table_height_out: optional list that receives the height of the
             tables above the take-off.
 
@@ -250,6 +251,13 @@ def build_performance_view(doc, view_name, summary_lines, columns, rows,
     if len(summary_lines) > 1:
         y = _note_panel(st, view, ox, y, width, summary_lines[1:])
     y -= GAP
+
+    # The system errors, right under the result counts: places where the model
+    # is incomplete or wrong and can make the results wrong.
+    if system_errors:
+        y = _band(st, view, ox, y, width, "SYSTEM ERRORS", None, SUB_BAND_H)
+        y = _note_panel(st, view, ox, y, width, system_errors)
+        y -= GAP
 
     y = _band(st, view, ox, y, width, "PIPES NEEDING ATTENTION", None,
               SUB_BAND_H)

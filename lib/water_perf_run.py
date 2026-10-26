@@ -15,7 +15,8 @@ import datetime
 import re
 
 from Autodesk.Revit.DB import (
-    Color, ElementId, OverrideGraphicSettings, Transaction, ViewDuplicateOption,
+    Color, ElementId, FamilySymbol, FilteredElementCollector,
+    OverrideGraphicSettings, StorageType, Transaction, ViewDuplicateOption,
     ViewPlan)
 
 import shared_params
@@ -29,6 +30,9 @@ import water_run
 import water_drafting
 import water_pressure
 import water_pump
+import water_checks
+import water_flagging
+import water_system_errors
 import hvac_graph
 import ui_helpers
 
@@ -129,13 +133,22 @@ def run(doc, uidoc, output, forms):
             output.print_md(":warning: Pump duty point failed, not reported: "
                             "{}".format(str(exc)))
 
+    # The model checks and the numbered list of problem runs (one row per run,
+    # the first pipe of it), then the system errors that can make the
+    # results wrong (Colin, 2026-10-26).
+    checks = water_checks.check_system(graph, return_ids)
+    items = water_flagging.flag_items(graph, results) if results else []
+    system_errors = water_system_errors.collect(
+        graph, sizing, recirc, checks, items, pressure, pumps)
+
     stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
     new_view = None
     if results:
         fitting_labels = _fitting_labels(graph, results)
         new_view = _make_colored_view(doc, output, view, graph, results,
-                                      fitting_labels, stamp)
-        _print_report(output, results, sizing, settings["speed_tolerance"])
+                                      fitting_labels, stamp, items)
+        _print_report(output, results, sizing, settings["speed_tolerance"],
+                      items, system_errors)
     if pressure is not None:
         _print_pressure(output, pressure, settings["start_psi"])
     if pumps:
@@ -157,7 +170,8 @@ def run(doc, uidoc, output, forms):
         }, recirc)
     if new_view is not None:
         _make_sheet(doc, output, view, new_view, results, stamp,
-                    settings["speed_tolerance"], extra, wsfu)
+                    settings["speed_tolerance"], extra, wsfu, items,
+                    system_errors)
     else:
         if extra:
             _make_tables_sheet(doc, output, extra, stamp)
@@ -254,8 +268,32 @@ def _fitting_labels(graph, results):
     return labels
 
 
+def _keynote_symbol(doc):
+    """The RJA numbered circle family symbol, or None."""
+    for symbol in FilteredElementCollector(doc).OfClass(
+            FamilySymbol).ToElements():
+        try:
+            family = symbol.Family.Name
+            if "RJA - Keynote Symbol" in family and (
+                    "Circle" in family or "Circle" in symbol.Name):
+                return symbol
+        except Exception:
+            pass
+    return None
+
+
+def _on_view_level(view, element):
+    """True when the pipe sits on the level the plan view shows."""
+    try:
+        level = view.GenLevel
+        return (level is None or element.ReferenceLevel is None or
+                element.ReferenceLevel.Id == level.Id)
+    except Exception:
+        return True
+
+
 def _make_colored_view(doc, output, view, graph, results, fitting_labels,
-                       stamp):
+                       stamp, items=None):
     """Copy the active plan view and color the system in the copy.
 
     Returns the new view, or None when it could not be made.
@@ -297,6 +335,31 @@ def _make_colored_view(doc, output, view, graph, results, fitting_labels,
                 failed += 1
                 output.print_md("Could not color element {}: {}".format(
                     eid, str(exc)))
+        # Numbered circles on the first pipe of each problem run, so row 3 of
+        # the table is circle 3 in the plan.
+        symbol = _keynote_symbol(doc)
+        if symbol is not None and not symbol.IsActive:
+            symbol.Activate()
+            doc.Regenerate()
+        for item in items or []:
+            node = graph.nodes.get(item.result.element_id)
+            if node is None or node.element is None:
+                continue
+            if not _on_view_level(view, node.element):
+                continue
+            try:
+                point = node.element.Location.Curve.Evaluate(0.5, True)
+                if symbol is not None:
+                    instance = doc.Create.NewFamilyInstance(
+                        point, symbol, new_view)
+                    label = instance.LookupParameter("Label")
+                    if label is not None and not label.IsReadOnly:
+                        if label.StorageType == StorageType.String:
+                            label.Set(str(item.number))
+                        elif label.StorageType == StorageType.Integer:
+                            label.Set(item.number)
+            except Exception:
+                pass
         transaction.Commit()
     except Exception as exc:
         transaction.RollBack()
@@ -322,12 +385,6 @@ def _legend(tolerance):
         (water_performance.GREEN, "Green - at table size"),
         (water_performance.GRAY, "Gray - not judged (see Reason)"),
     ]
-
-# (header, width ft) for the sheet table, same cells as the pyRevit table.
-_TABLE_COLUMNS = [("STATUS", 0.075), ("PIPE", 0.075), ("SYSTEM", 0.065),
-                  ("DRAWN", 0.055), ("TABLE", 0.060), ("GPM", 0.050),
-                  ("FPS", 0.045), ("REASON", 0.560)]
-
 
 def _read_device_drops(graph):
     """Device_Pressure_Drop_PSI from every non-pipe element, instance first,
@@ -510,7 +567,8 @@ def _make_tables_sheet(doc, output, tables, stamp):
 
 
 def _make_sheet(doc, output, source_view, plan_view, results, stamp,
-                tolerance, extra_tables=None, wsfu=None):
+                tolerance, extra_tables=None, wsfu=None, items=None,
+                system_errors=None):
     """Put the colored plan, the flagged table and the legend on a new sheet.
 
     wsfu, when given, is (graph, sizing, header, recirc) for the WSFU take-off,
@@ -527,7 +585,7 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
             counts[water_performance.RED], counts[water_performance.PURPLE],
             counts[water_performance.GRAY]),
     ]
-    rows = [[str(c) for c in row] for row in _flagged_rows(results)]
+    rows = [water_flagging.row_cells(item) for item in items or []]
     legend = [(_COLORS[key], text) for key, text in _legend(tolerance)]
 
     source_sheet = revit_helpers.sheet_hosting_view(doc, source_view)
@@ -545,8 +603,9 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
         table_only_h = []
         table_view, table_h, table_w = water_drafting.build_performance_view(
             doc, "Water Performance Table - {}".format(stamp), summary,
-            _TABLE_COLUMNS, rows, legend, fill_id, extra_tables or None,
-            wsfu_arg, table_only_h)
+            water_flagging.COLUMNS, rows, legend, fill_id,
+            extra_tables or None, wsfu_arg, table_only_h,
+            water_system_errors.lines(system_errors or []))
         wsfu_view = table_view if wsfu is not None else None
         sheet = water_drafting.place_plan_and_table(
             doc, plan_view, table_view, table_h, table_w,
@@ -573,7 +632,8 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
         ", WSFU take-off included" if wsfu is not None and wsfu_view else ""))
 
 
-def _print_report(output, results, sizing, tolerance):
+def _print_report(output, results, sizing, tolerance, items=None,
+                  system_errors=None):
     counts = water_performance.summarize(results.values())
     output.print_md("## Result")
     output.print_md(
@@ -588,13 +648,18 @@ def _print_report(output, results, sizing, tolerance):
             counts[water_performance.PURPLE],
             counts[water_performance.GRAY]))
 
-    rows = _flagged_rows(results)
-    if rows:
+    entries = system_errors or []
+    output.print_md("## System errors")
+    output.print_md(water_system_errors.summary_line(entries))
+    if entries:
+        output.print_md(chr(10).join(
+            "- **{}**: {}".format(sev, text) for sev, text in entries))
+
+    if items:
         output.print_table(
-            table_data=rows,
+            table_data=[water_flagging.row_cells(i) for i in items],
             title="Pipes needing attention",
-            columns=["Status", "Pipe", "System", "Drawn (in)", "Table size",
-                     "gpm", "fps", "Reason"])
+            columns=water_flagging.CONSOLE_COLUMNS)
     else:
         output.print_md("Every judged pipe is at table size.")
 
@@ -605,34 +670,3 @@ def _print_report(output, results, sizing, tolerance):
         "limit x (1 + {:.2f}).\n"
         "    Pass: drawn size = firm table size for the pipe's demand "
         "(Table E103.3(3) flow).".format(float(tolerance)))
-
-
-def _flagged_rows(results):
-    """Every pipe that is not green, worst first. One source for the pyRevit
-    table and the sheet table."""
-    rows = []
-    order = (water_performance.RED, water_performance.YELLOW,
-             water_performance.PURPLE, water_performance.GRAY)
-    flagged = [r for r in results.values() if r.label in order]
-    # Graph ids are already plain integers (keyed by eid_int).
-    flagged.sort(key=lambda r: (-water_performance.PRIORITY[r.label],
-                                r.element_id))
-    for r in flagged:
-        rows.append([
-            r.label,
-            r.element_id,
-            "Return" if r.is_return else (
-                "Hot" if r.system == water_tables.SYSTEM_HOT else "Cold"),
-            _fmt_size(r.drawn_in),
-            r.required_nominal if r.required_nominal else "-",
-            "{:.1f}".format(r.gpm) if r.gpm is not None else "-",
-            "{:.1f}".format(r.fps) if r.fps is not None else "-",
-            r.reason,
-        ])
-    return rows
-
-
-def _fmt_size(value):
-    if value is None:
-        return "-"
-    return "{:.3f}".format(float(value)).rstrip("0").rstrip(".")

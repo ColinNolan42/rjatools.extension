@@ -28,10 +28,12 @@ SEVERITY_INFO = "INFO"
 
 
 class Finding(object):
-    def __init__(self, severity, code, message):
+    def __init__(self, severity, code, message, short=None):
         self.severity = severity
         self.code = code
         self.message = message
+        # One line for the System Errors list on the performance sheet.
+        self.short = short
 
     def __repr__(self):
         return "{}: {}".format(self.severity, self.message)
@@ -190,6 +192,7 @@ def _check_fixtures(graph, findings):
             "on: {}{}".format(
                 len(zero_load), names,
                 "" if len(zero_load) <= 8 else ", ...")))
+        findings[-1].short = "{} fixture(s) carry zero WSFU ({}). Their load is not counted.".format(len(zero_load), ", ".join(str(n.element_id) for n in zero_load[:5]))
 
     # A failed Type-name read is not cosmetic: the take-off groups rows by
     # Type, so every fixture collapses into a single "UNKNOWN TYPE" row.
@@ -216,6 +219,7 @@ def _check_hot_water(graph, profile, findings):
             "the network. A heater has both a cold water inlet and a hot "
             "water outlet. Without one, neither the cold branch that feeds it "
             "nor the hot piping can be sized.".format(hot_fixtures)))
+        findings[-1].short = "{} fixture(s) draw hot water but no water heater was found.".format(hot_fixtures)
         return
 
     if heaters == 0:
@@ -245,6 +249,7 @@ def _check_hot_water(graph, profile, findings):
             "so the cold branch feeding them and their hot outlet piping "
             "are not sized. Check that the "
             "hot piping is connected: {}".format(len(unserved), names)))
+        findings[-1].short = "Water heater {} serves no fixtures. Its cold feed and hot outlet piping are not sized.".format(", ".join(str(n.element_id) for n in unserved))
 
 
 def _check_recirculation(graph, profile, returns, findings):
@@ -271,6 +276,7 @@ def _check_recirculation(graph, profile, returns, findings):
             "found on the hot water network. Either the pump is missing from "
             "the model, it is not connected, or its connectors could not "
             "be read.".format(hwr_fixtures)))
+        findings[-1].short = "No recirculation pump was found, but {} fixture(s) call for recirculation.".format(hwr_fixtures)
 
     if pumps and not hwr_fixtures:
         findings.append(Finding(
@@ -278,6 +284,7 @@ def _check_recirculation(graph, profile, returns, findings):
             "A recirculation pump was found but no fixture has HWR_ACTIVE "
             "set, so nothing is asking to be on the loop. Check 'Add HWR' on "
             "the fixtures that need it."))
+        findings[-1].short = "A recirculation pump is modeled but no fixture is set to recirculate."
 
     if hwr_fixtures and not returns:
         # Name the candidates and their pipe counts. The return system is
@@ -305,6 +312,7 @@ def _check_recirculation(graph, profile, returns, findings):
             "{} fixture(s) have HWR_ACTIVE set, but no piping system type was "
             "identified as the return, so every hot pipe was sized as "
             "supply.{}".format(hwr_fixtures, extra)))
+        findings[-1].short = "{} fixture(s) call for recirculation but no return piping was identified.".format(hwr_fixtures)
 
     if returns and not pumps:
         findings.append(Finding(
@@ -312,6 +320,7 @@ def _check_recirculation(graph, profile, returns, findings):
             "A return system was identified but no recirculation pump was "
             "found on it. A recirculation loop needs a pump. Gravity and "
             "thermosiphon circulation are not permitted."))
+        findings[-1].short = "A hot water return was found with no recirculation pump on it."
 
     if profile["has_recirc"]:
         findings.append(Finding(
@@ -328,6 +337,7 @@ def _check_connectivity(graph, findings):
             "{} open connector(s) on the network. Anything past an open "
             "connector was not reached, so it is not counted in any pipe "
             "size.".format(len(graph.open_ends))))
+        findings[-1].short = "{} open connector(s) at {}. Piping beyond an open end is not counted.".format(len(graph.open_ends), ", ".join(str(e) for e, _s in graph.open_ends[:5]))
 
     if graph.unreadable:
         findings.append(Finding(
@@ -335,6 +345,7 @@ def _check_connectivity(graph, findings):
             "{} element(s) had no readable connectors, so the traversal could "
             "not pass through them. A circulation pump is a common cause."
             .format(len(graph.unreadable))))
+        findings[-1].short = "{} element(s) had no readable connectors, so the traversal stopped there.".format(len(graph.unreadable))
 
     if graph.loops:
         findings.append(Finding(
@@ -370,6 +381,7 @@ def _check_hot_cold_ties(graph, returns, findings):
         "recirculation pump between them: {}. Hot water may only enter the "
         "cold system downstream of a recirculation pump.".format(
             len(ties), ids)))
+    findings[-1].short = "Hot and cold water are tied together at pipe(s) {} with no recirculation pump between them.".format(", ".join(str(t[1]) for t in ties[:5]))
 
 
 def format_checks(result):
