@@ -449,14 +449,15 @@ def _print_pumps(output, pumps, settings):
         columns=[c[0].title() for c in water_pump.TABLE_COLUMNS])
     for p in pumps:
         output.print_md(water_pump.flow_line(p))
-        rows, equation = water_pump.head_rows(p)
+        rows, equations = water_pump.head_rows(p)
         if rows:
             output.print_table(
                 table_data=rows,
                 title="System head, heater {}".format(
                     p.get("heater_id", p["root_id"])),
                 columns=[c[0].title() for c in water_pump.HEAD_COLUMNS])
-            output.print_md(equation)
+            output.print_md(chr(10).join(
+                "    " + line for line in equations))
     notes = sorted(set(n for p in pumps for c in p["circuits"]
                        for n in c["notes"]))
     if notes:
@@ -473,11 +474,11 @@ def _pump_tables(pumps, settings):
     tables = [("RECIRCULATION PUMP DUTY POINT", water_pump.TABLE_COLUMNS,
                water_pump.table_rows(pumps), notes)]
     for p in pumps:
-        rows, equation = water_pump.head_rows(p)
+        rows, equations = water_pump.head_rows(p)
         if rows:
             tables.append(("SYSTEM HEAD, HEATER {}".format(
                 p.get("heater_id", p["root_id"])), water_pump.HEAD_COLUMNS,
-                rows, [equation]))
+                rows, equations))
     return tables
 
 

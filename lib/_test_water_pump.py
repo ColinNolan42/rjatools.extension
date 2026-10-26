@@ -90,12 +90,16 @@ class TestHeadChart(unittest.TestCase):
     def test_chart_rows_add_up_to_the_total(self):
         g, recirc = network()
         point = water_pump.duty_points(g, recirc)[0]
-        rows, equation = water_pump.head_rows(point)
+        rows, equations = water_pump.head_rows(point)
         self.assertEqual(rows[0][0], "Supply pipe friction")
-        self.assertEqual(rows[-1][0], "TOTAL")
-        parts = sum(float(r[4]) for r in rows[:-1])
-        self.assertAlmostEqual(parts, float(rows[-1][4]), delta=0.02)
-        self.assertIn("{:.1f} ft".format(point["head_ft"]), equation)
+        self.assertEqual(rows[-1][0], "PUMP HEAD")
+        self.assertEqual(rows[-2][0], "TOTAL")
+        parts = sum(float(r[4].split()[0]) for r in rows[:-2])
+        self.assertAlmostEqual(parts, float(rows[-2][4].split()[0]), delta=0.02)
+        self.assertEqual(rows[-1][4], "{:.1f} ft".format(point["head_ft"]))
+        self.assertEqual(len(equations), 8)
+        self.assertTrue(equations[0].startswith("1. V"))
+        self.assertIn("{:.1f} ft".format(point["head_ft"]), equations[-1])
         self.assertIn("psi/100 ft", rows[0][3])
         self.assertEqual(len(rows[0]), len(water_pump.HEAD_COLUMNS))
 

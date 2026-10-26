@@ -262,7 +262,7 @@ TABLE_COLUMNS = [("HEATER", 0.090), ("PUMP GPM", 0.075),
 # The system head chart: every item the pump has to overcome.
 HEAD_COLUMNS = [("SYSTEM HEAD ITEM", 0.190), ("QTY", 0.045),
                 ("EQ. LENGTH FT", 0.105), ("CALCULATION", 0.230),
-                ("PSI", 0.060)]
+                ("VALUE", 0.065)]
 
 SIGMA = u"\u03a3"
 
@@ -311,10 +311,10 @@ def head_rows(point):
     rows = [
         ["Supply pipe friction", "", "{:.1f}".format(circuit["supply_ft"]),
          run(circuit["supply_ft"], circuit["supply_psi"]),
-         "{:.2f}".format(circuit["supply_psi"])],
+         "{:.2f} psi".format(circuit["supply_psi"])],
         ["Return pipe friction", "", "{:.1f}".format(circuit["return_ft"]),
          run(circuit["return_ft"], circuit["return_psi"]),
-         "{:.2f}".format(circuit["return_psi"])],
+         "{:.2f} psi".format(circuit["return_psi"])],
     ]
     kinds = list(_FITTING_ORDER) + sorted(
         k for k in circuit["fittings"] if k not in _FITTING_ORDER)
@@ -327,21 +327,47 @@ def head_rows(point):
         rows.append([name, str(entry["qty"]),
                      "{:.1f}".format(entry["length_ft"]),
                      run(entry["length_ft"], entry["psi"]),
-                     "{:.2f}".format(entry["psi"])])
+                     "{:.2f} psi".format(entry["psi"])])
     rows.append(["Circuit setter", "1", "",
                  "1 x {:.2f} psi".format(circuit["setter_psi"]),
-                 "{:.2f}".format(circuit["setter_psi"])])
+                 "{:.2f} psi".format(circuit["setter_psi"])])
     if circuit["device_psi"]:
         rows.append(["Devices", str(circuit["device_qty"]), "",
                      "Device_Pressure_Drop_PSI",
-                     "{:.2f}".format(circuit["device_psi"])])
+                     "{:.2f} psi".format(circuit["device_psi"])])
     rows.append(["TOTAL", "", "", "sum of the psi above",
-                 "{:.2f}".format(circuit["total_psi"])])
-    equation = ("Head = {:.2f} ft/psi x {:.2f} psi x (1 + {:.2f}) = "
-                "{:.1f} ft".format(FT_PER_PSI, circuit["total_psi"],
-                                   point.get("safety_factor", 0.0),
-                                   point["head_ft"]))
-    return rows, equation
+                 "{:.2f} psi".format(circuit["total_psi"])])
+    factor = 1.0 + float(point.get("safety_factor", 0.0))
+    rows.append(["PUMP HEAD", "", "",
+                 "{:.2f} ft/psi x {:.2f} psi x {:.2f}".format(
+                     FT_PER_PSI, circuit["total_psi"], factor),
+                 "{:.1f} ft".format(point["head_ft"])])
+    return rows, head_equations(point)
+
+
+def head_equations(point):
+    """The equations behind the chart, in the order they are used."""
+    circuit = index_circuit(point)
+    total = circuit["total_psi"] if circuit else 0.0
+    factor = 1.0 + float(point.get("safety_factor", 0.0))
+    return [
+        "1. V (fps) = gpm / ({:.4f} x ID^2), ID in inches".format(
+            water_performance.GPM_PER_FPS_IN2),
+        "2. Re = V x D / nu, nu = {:.3e} ft2/s (water at {:.0f} F)".format(
+            water_pressure.KINEMATIC_VISCOSITY_FT2_S,
+            water_pressure.WATER_TEMP_F),
+        "3. f = 0.25 / [log10(e / (3.7 D) + 5.74 / Re^0.9)]^2, "
+        "e = {} ft".format(water_pressure.ROUGHNESS_FT),
+        "4. psi/100 ft = f / D x V^2 / (2 g) x 100 x {:.3f}".format(
+            water_pressure.PSI_PER_FT_HEAD),
+        "5. Pipe psi = length ft x psi/100 ft / 100",
+        "6. Fitting psi = equivalent length ft (Table E103.3(6)) x psi/100 ft "
+        "/ 100",
+        "7. Total psi = pipe friction + fittings + circuit setter + devices",
+        "8. Head ft = {:.2f} ft/psi x total psi x (1 + safety factor) = "
+        "{:.2f} x {:.2f} x {:.2f} = {:.1f} ft".format(
+            FT_PER_PSI, FT_PER_PSI, total, factor, point["head_ft"]),
+    ]
 
 
 def flow_line(point):
