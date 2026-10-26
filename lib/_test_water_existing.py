@@ -262,5 +262,71 @@ class TestParallelBackflow(unittest.TestCase):
         self.assertEqual(g.parallel_backflow, [])
 
 
+class TestHoseBibs(unittest.TestCase):
+
+    def test_table_604_3_gives_five_gpm(self):
+        import water_tables
+        self.assertEqual(water_tables.hose_bibb_gpm(), 5.0)
+
+    def test_name_recognition(self):
+        f = water_graph._name_is_hose_bib
+        self.assertTrue(f("OUTDOOR HOSE BIB", "65C-8"))
+        self.assertTrue(f("Wall Hydrant", "Sill Cock 1/2"))
+        self.assertTrue(f("RJA - Hose Bibb", ""))
+        self.assertFalse(f("RJA- Water Fixture Family", "Lavatory"))
+
+    def _graph(self):
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=10.0)
+        add_node(g, 3, water_graph.KIND_FIXTURE, parent=2, fixed_gpm=5.0)
+        add_node(g, 4, water_graph.KIND_FIXTURE, parent=2, fixed_gpm=5.0)
+        for nid in (3, 4):
+            g.nodes[nid].fixture_name = "Hose bibb"
+            g.nodes[nid].type_name = "65C-8"
+        for nid in (2,):
+            g.nodes[nid].diameter_inches = 1.0
+        return g
+
+    def test_pipe_to_hose_bibs_is_sized_on_the_fixed_gpm(self):
+        g = self._graph()
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[2].demand_fixed_gpm, 10.0)
+        result = water_sizing_engine.size_network(g)
+        seg = result["segments"][0]
+        self.assertAlmostEqual(seg.demand_gpm, 10.0)
+        self.assertEqual(seg.nominal_size, "3/4")
+        self.assertIn("gpm fixed", seg.rule)
+        judged = water_performance.classify(seg, "cold")
+        self.assertNotEqual(judged.reason, "no fixture demand downstream")
+
+    def test_hose_bibs_are_not_a_zero_wsfu_error_and_show_in_the_take_off(self):
+        import water_checks
+        import water_report
+        g = self._graph()
+        water_graph._assign_demand(g)
+        checks = water_checks.check_system(g)
+        self.assertFalse(any(f.code == "fixture_zero_wsfu"
+                             for f in checks["findings"]))
+        data = water_report.wsfu_data(g)
+        self.assertEqual(data["ext_fixed_gpm"], 10.0)
+        self.assertIn("Hose bibb", data["rows"][0]["fixture"])
+        self.assertEqual(data["rows"][0]["qty"], "2")
+        self.assertIn("plus 10 gpm fixed",
+                      "\n".join(water_report.wsfu_load_lines(data)))
+
+    def test_unrecognized_equipment_is_flagged(self):
+        import water_system_errors
+        g = self._graph()
+        add_node(g, 7, water_graph.KIND_EQUIPMENT, parent=2)
+        g.nodes[7].family_name = "Mystery Tank"
+        g.unrecognized_ids.append(7)
+        out = water_system_errors.collect(
+            g, {"segments": []}, None, {"findings": []})
+        self.assertTrue(any("not recognized" in t and "Mystery Tank" in t
+                            for _s, t in out))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -137,7 +137,8 @@ def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
         result.reason = "drawn size not read"
         return result
     if (not segment.is_return and
-            float(segment.demand_wsfu or 0.0) <= 0.0):
+            float(segment.demand_wsfu or 0.0) <= 0.0 and
+            float(getattr(segment, "fixed_gpm", 0.0) or 0.0) <= 0.0):
         result.reason = "no fixture demand downstream"
         return result
 

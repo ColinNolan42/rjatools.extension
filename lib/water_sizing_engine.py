@@ -48,6 +48,7 @@ class SegmentResult(object):
         self.required_nominal = None    # size the load calls for (existing pipe)
         self.required_size_in = None
         self.upsize_needed   = False    # existing pipe smaller than required
+        self.fixed_gpm       = 0.0      # fixed gpm load carried (hose bibbs)
 
 
 def size_network(graph, apply_minimums=True, return_system_type_ids=None,
@@ -103,9 +104,22 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
         demand = water_tables.demand_gpm(
             node.demand_wsfu,
             flush_valve_system and system_key == water_tables.SYSTEM_COLD)
+        fixed = float(getattr(node, "demand_fixed_gpm", 0.0) or 0.0)
+        if system_key != water_tables.SYSTEM_COLD:
+            fixed = 0.0
+        if fixed > 0.0:
+            # Fixed gpm loads (hose bibbs, Table 604.3) add to the WSFU flow,
+            # and the pipe is sized on gpm against the firm table restated in
+            # gpm.
+            wsfu_gpm = (demand["gpm"] if float(node.demand_wsfu or 0.0) > 0.0
+                        else 0.0)
+            demand = {"gpm": None if wsfu_gpm is None else wsfu_gpm + fixed,
+                      "curve": demand["curve"]}
+            result.fixed_gpm = fixed
         result.demand_gpm = demand["gpm"]
         result.demand_curve = demand["curve"]
-        by_gpm = demand["curve"] == water_tables.CURVE_FLUSHOMETER
+        by_gpm = (fixed > 0.0 or
+                  demand["curve"] == water_tables.CURVE_FLUSHOMETER)
 
         if by_gpm:
             selection = water_tables.select_size_by_gpm(demand["gpm"] or 0.0,
@@ -120,7 +134,7 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
             result.exceeds_table = True
             result.rule = "NOT SIZED"
             if by_gpm:
-                result.flag = ("flush valve demand exceeds the firm table "
+                result.flag = ("gpm demand exceeds the firm table "
                                "restated in gpm")
             else:
                 result.flag = ("demand {:.1f} wsfu exceeds the firm table "
@@ -146,7 +160,13 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
             segments.append(result)
             continue
 
-        if by_gpm:
+        if fixed > 0.0:
+            result.rule = "{} wsfu + {:.1f} gpm fixed = {:.1f} gpm, {} table " \
+                          "limit {:.1f} gpm".format(
+                              _fmt(node.demand_wsfu), fixed,
+                              float(demand["gpm"]), system_key,
+                              float(selection["limit_gpm"]))
+        elif by_gpm:
             result.rule = "{} wsfu, {:.1f} gpm flush valve, {} table limit " \
                           "{:.1f} gpm".format(
                               _fmt(node.demand_wsfu), float(demand["gpm"]),

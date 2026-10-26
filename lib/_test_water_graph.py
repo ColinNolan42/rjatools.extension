@@ -101,6 +101,8 @@ def add_node(graph, nid, kind, parent=None, system=COLD, **kw):
     node.is_flush_valve = kw.get("flush_valve", False)
     node.served_fixture_ids = kw.get("served", [])
     node.demand_wsfu = 0.0
+    node.demand_fixed_gpm = 0.0
+    node.fixed_gpm = kw.get("fixed_gpm", 0.0)
     node.assigned_size = None
     graph.add(node)
     # Mirror what _make_node does during a real traversal, so the report sees

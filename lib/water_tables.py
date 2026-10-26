@@ -302,6 +302,16 @@ def flush_valve_min_wsfu():
     return float(_load()[_CURVE_DATA_KEYS[CURVE_FLUSHOMETER]][0]["wsfu"])
 
 
+def hose_bibb_gpm():
+    """Flow of one hose bibb in gpm, from Table 604.3 ("Sill cock, hose
+    bibb"). Hose bibbs carry no WSFU in Table E103.3(2), so they are a fixed
+    gpm load (Colin, 2026-10-26)."""
+    for row in _load()["fixture_flow_604_3"]:
+        if "hose bibb" in str(row.get("fixture", "")).lower():
+            return float(row["flow_gpm"])
+    raise ValueError("Table 604.3 has no hose bibb row in the loaded tables.")
+
+
 def demand_gpm(wsfu, flush_valve_system=False):
     """Probable demand for a load, choosing the Table E103.3(3) column.
 

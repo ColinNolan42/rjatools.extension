@@ -363,7 +363,8 @@ def analyze(graph, sizing_result, start_psi=DEFAULT_START_PSI):
         if fixture is None:
             continue
         systems = []
-        if fixture.has_cw and float(fixture.cw_wsfu or 0.0) > 0.0:
+        if fixture.has_cw and (float(fixture.cw_wsfu or 0.0) > 0.0 or
+                               float(fixture.fixed_gpm or 0.0) > 0.0):
             systems.append(COLD)
         if fixture.has_hw and float(fixture.hw_wsfu or 0.0) > 0.0:
             systems.append(HOT)

@@ -39,6 +39,19 @@ def collect(graph, sizing, recirc, checks, items=None, pressure=None,
 
     found.extend(_circuit_setters(graph, recirc))
 
+    unknown = [n for n in (graph.nodes.get(i) for i in
+                           getattr(graph, "unrecognized_ids", []))
+               if n is not None]
+    if unknown:
+        names = ", ".join("{} ({})".format(n.element_id, n.family_name)
+                          for n in unknown[:5])
+        if len(unknown) > 5:
+            names += ", +{} more".format(len(unknown) - 5)
+        found.append((WARNING, "{} element(s) on the water piping are not "
+                      "recognized as a fixture, heater, pump or device, so "
+                      "their load is not counted: {}.".format(
+                          len(unknown), names)))
+
     over = [s.element_id for s in sizing["segments"] if s.exceeds_table]
     if over:
         found.append((ERROR, "{} pipe(s) carry more load than the firm table "

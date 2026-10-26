@@ -179,7 +179,8 @@ def _check_fixtures(graph, findings):
     zero_load = []
     for fid in graph.fixture_ids:
         node = graph.nodes.get(fid)
-        if node is not None and node.total_wsfu <= 0:
+        if (node is not None and node.total_wsfu <= 0 and
+                not float(node.fixed_gpm or 0.0)):
             zero_load.append(node)
 
     if zero_load:

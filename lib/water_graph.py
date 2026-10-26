@@ -29,6 +29,7 @@
 import shared_params
 import revit_helpers
 import tie_in
+import water_tables
 
 
 # Node kinds
@@ -97,6 +98,7 @@ class WaterNode(object):
         self.has_cw           = True
         self.has_hw           = True
         self.is_flush_valve   = False   # flushometer valve water closet or urinal
+        self.fixed_gpm        = 0.0     # fixed cold gpm load, a hose bibb (Table 604.3)
 
         # Heater bookkeeping (only meaningful when kind == KIND_HEATER)
         self.served_fixture_ids = []
@@ -108,6 +110,7 @@ class WaterNode(object):
 
         # Sizing results, filled by the sizing engine
         self.demand_wsfu   = 0.0
+        self.demand_fixed_gpm = 0.0   # fixed gpm loads downstream (cold pipes)
         self.assigned_size = None
 
 
@@ -146,6 +149,7 @@ class WaterGraph(object):
         self.upstream_ids               = set()   # service piping behind the RPZ inlet
         self.cross_ties                 = []      # (from id, pipe id, pipe system, walked system)
         self.parallel_backflow          = []      # other backflow preventers in parallel with the picked RPZ
+        self.unrecognized_ids           = []      # on the piping, not a fixture, heater, pump or device
 
     def add(self, node):
         self.nodes[node.element_id] = node
@@ -546,6 +550,22 @@ def _make_node(graph, element, element_id, system):
             node.total_wsfu, node.hwr_active))
         return node
 
+    if _name_is_hose_bib(_get_family_name(element), _get_type_name(element)):
+        # A hose bibb carries no WSFU in Table E103.3(2); it is a fixed
+        # 5 gpm load from Table 604.3 (Colin, 2026-10-26). Any other family
+        # that is not marked as a fixture is flagged, not guessed at.
+        node = WaterNode(element_id, element, KIND_FIXTURE)
+        node.connectors = connectors
+        node.connector_count = len(connectors)
+        node.is_water_fixture = True
+        node.fixture_name = "Hose bibb"
+        node.fixed_gpm = water_tables.hose_bibb_gpm()
+        node.has_hw = False
+        graph.fixture_ids.append(element_id)
+        graph.log("HOSE BIBB {}: fixed {} gpm".format(
+            element_id, node.fixed_gpm))
+        return node
+
     if _looks_like_heater(connectors):
         node = WaterNode(element_id, element, KIND_HEATER)
         node.connectors = connectors
@@ -569,9 +589,20 @@ def _make_node(graph, element, element_id, system):
     node = WaterNode(element_id, element, kind)
     node.connectors = connectors
     node.connector_count = len(connectors)
+    if kind in (KIND_EQUIPMENT, KIND_UNKNOWN):
+        graph.unrecognized_ids.append(element_id)
     graph.log("{} {}: '{}', {} connectors".format(
         kind.upper(), element_id, node.family_name, len(connectors)))
     return node
+
+
+def _name_is_hose_bib(*names):
+    """True when a family or Type name says hose bibb or sill cock."""
+    for name in names:
+        text = "".join(ch for ch in (name or "").lower() if ch.isalnum())
+        if "hosebib" in text or "sillcock" in text:
+            return True
+    return False
 
 
 def _read_pipe_system_type(graph, pipe, node):
@@ -1154,6 +1185,7 @@ def _assign_demand(graph):
 
         downstream = graph.descendants(node.element_id, node.system)
 
+        node.demand_fixed_gpm = 0.0
         if node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
             total = 0.0
             for nid in downstream:
@@ -1188,6 +1220,7 @@ def _assign_demand(graph):
         total = 0.0
         for fid in direct:
             total += graph.nodes[fid].total_wsfu
+            node.demand_fixed_gpm += float(graph.nodes[fid].fixed_gpm or 0.0)
         for fid, share in via_heater.items():
             if fid not in direct:
                 total += graph.nodes[fid].hw_wsfu * share
@@ -1219,11 +1252,14 @@ def _assign_parallel_backflow_demand(graph):
     if origin is None or origin.kind != KIND_ORIGIN:
         return
     full = 0.0
+    full_fixed = 0.0
     for child_id in origin.children_by_system.get(cold, []):
         child = graph.nodes.get(child_id)
         if child is not None and child.kind == KIND_PIPE:
             full = max(full, float(child.demand_wsfu or 0.0))
-    if full <= 0.0:
+            full_fixed = max(full_fixed,
+                             float(child.demand_fixed_gpm or 0.0))
+    if full <= 0.0 and full_fixed <= 0.0:
         return
     # Where a leg starts: the other backflow preventer itself when the walk
     # came up through its outlet, or the dead end of the leg when the walk
@@ -1255,7 +1291,8 @@ def _assign_parallel_backflow_demand(graph):
             if node is None or current in graph.upstream_ids:
                 break
             if node.kind == KIND_PIPE:
-                if float(node.demand_wsfu or 0.0) > 0.0:
+                if (float(node.demand_wsfu or 0.0) > 0.0 or
+                        float(node.demand_fixed_gpm or 0.0) > 0.0):
                     break
                 leg.append(current)
             current = node.parent_by_system.get(cold)
@@ -1263,6 +1300,7 @@ def _assign_parallel_backflow_demand(graph):
             continue
         for pid in leg:
             graph.nodes[pid].demand_wsfu = full
+            graph.nodes[pid].demand_fixed_gpm = full_fixed
         if preventer_id not in done:
             done.add(preventer_id)
             graph.parallel_backflow.append(preventer_id)
