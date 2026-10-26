@@ -242,7 +242,8 @@ def _check_hot_water(graph, profile, findings):
         findings.append(Finding(
             SEVERITY_WARNING, "heater_serves_nothing",
             "{} water heater(s) reach no fixtures through their hot outlet, "
-            "so the cold branch feeding them sizes at zero. Check that the "
+            "so the cold branch feeding them and their hot outlet piping "
+            "are not sized. Check that the "
             "hot piping is connected: {}".format(len(unserved), names)))
 
 

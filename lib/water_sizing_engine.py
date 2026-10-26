@@ -164,6 +164,7 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
 
         segments.append(result)
 
+    _hold_unloaded_heater_piping(graph, segments, flags)
     _hold_existing_pipes(graph, segments, flags)
     _enforce_downsize_after_the_tee(graph, segments, flags)
 
@@ -238,6 +239,57 @@ def _size_return_pipe(graph, node, result, recirc, flags):
     result.size_inches = selection["size_inches"]
     result.rule = "return, {:.2f} gpm circulation, table limit {:.1f} gpm".format(
         float(flow), float(selection["limit_gpm"]))
+
+
+def _hold_unloaded_heater_piping(graph, segments, flags):
+    """Leave unsized the piping that only serves a heater with no hot load.
+
+    A water heater that serves no fixtures gives its cold feed no demand, so
+    there is nothing to size it on (Colin, 2026-10-26). That is the cold
+    branch that feeds only that heater, and the heater's own hot outlet
+    piping. The shared main upstream carries other loads and is sized as
+    normal. These pipes keep their drawn size and are reported.
+    """
+    hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    cold = shared_params.SYSTEM_DOMESTIC_COLD_WATER
+    # Heaters in parallel serve their fixtures together, so a heater is
+    # unloaded only when nothing in its group draws hot water.
+    groups = water_graph.heater_groups(graph)
+    unloaded = []
+    for hid in graph.heater_ids:
+        if hid not in graph.nodes:
+            continue
+        served = set()
+        for member in groups.get(hid, (hid,)):
+            if member in graph.nodes:
+                served.update(graph.nodes[member].served_fixture_ids)
+        if not served:
+            unloaded.append(hid)
+    if not unloaded:
+        return
+    hot_side = {}
+    for hid in unloaded:
+        for nid in graph.descendants(hid, hot):
+            hot_side.setdefault(nid, hid)
+    for segment in segments:
+        node = graph.nodes.get(segment.element_id)
+        if node is None or segment.is_return:
+            continue
+        heater_id = hot_side.get(segment.element_id)
+        if heater_id is None and node.system == cold and                 float(segment.demand_wsfu or 0.0) <= 0.0:
+            below = set(graph.descendants(segment.element_id, cold))
+            for hid in unloaded:
+                if hid in below:
+                    heater_id = hid
+                    break
+        if heater_id is None:
+            continue
+        segment.nominal_size = None
+        segment.size_inches = None
+        segment.rule = "NOT SIZED"
+        segment.flag = ("water heater {} serves no hot fixtures, so this "
+                        "pipe cannot be sized".format(heater_id))
+        flags.append("Pipe {}: {}".format(segment.element_id, segment.flag))
 
 
 def _hold_existing_pipes(graph, segments, flags):

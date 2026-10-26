@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _test_water_graph import (          # noqa: E402
-    _install_revit_stubs, make_graph, add_node, COLD)
+    _install_revit_stubs, make_graph, add_node, link, COLD)
 
 import water_graph           # noqa: E402
 import water_sizing_engine   # noqa: E402
@@ -169,6 +169,45 @@ class TestHotColdTie(unittest.TestCase):
         result = water_checks.check_system(self._graph(77), [77])
         self.assertFalse(any(f.code == "hot_cold_tie"
                              for f in result["findings"]))
+class TestUnloadedHeater(unittest.TestCase):
+
+    def _graph(self, heater_serves):
+        g = make_graph()
+        g.origin_id = 1
+        hot = water_graph.shared_params.SYSTEM_DOMESTIC_HOT_WATER
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=5.0)
+        wc = add_node(g, 3, water_graph.KIND_FIXTURE, parent=2,
+                      cw=5.0, hw=0.0, total=5.0)
+        wc.type_name = "Water Closet, Flush Tank"
+        wc.is_public = True
+        add_node(g, 4, water_graph.KIND_PIPE, parent=1, length_feet=4.0)
+        add_node(g, 5, water_graph.KIND_HEATER, parent=4,
+                 served=list(heater_serves))
+        add_node(g, 6, water_graph.KIND_PIPE, system=hot, length_feet=1.0)
+        link(g, 5, 6, hot)
+        g.heater_ids.append(5)
+        for nid in (2, 4, 6):
+            g.nodes[nid].diameter_inches = 1.0
+        return g
+
+    def test_cold_feed_and_hot_stub_are_not_sized(self):
+        g = self._graph([])
+        water_graph._assign_demand(g)
+        result = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in result["segments"])
+        self.assertIsNone(by_id[4].nominal_size)
+        self.assertIsNone(by_id[6].nominal_size)
+        self.assertIn("serves no hot fixtures", by_id[4].flag)
+        self.assertIsNotNone(by_id[2].nominal_size)
+
+    def test_a_loaded_heater_is_sized_as_before(self):
+        g = self._graph([3])
+        water_graph._assign_demand(g)
+        result = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in result["segments"])
+        self.assertFalse(by_id[4].flag and "serves no hot" in by_id[4].flag)
+
 
 if __name__ == "__main__":
     unittest.main()
