@@ -1343,6 +1343,27 @@ def _preventer_above(graph, node_id, cold):
     return None
 
 
+def _first_pipe_below(graph, node_id, cold):
+    """The first pipe at or below node_id through single child fittings, or
+    None. Stops at service piping."""
+    seen = set()
+    current = node_id
+    while current is not None and current not in seen:
+        seen.add(current)
+        node = graph.nodes.get(current)
+        if node is None or current in graph.upstream_ids:
+            return None
+        if node.kind == KIND_PIPE:
+            return node
+        if node.kind != KIND_FITTING:
+            return None
+        kids = node.children_by_system.get(cold, [])
+        if len(kids) != 1:
+            return None
+        current = kids[0]
+    return None
+
+
 def _parallel_outlet_leg(graph, preventer_id, below, cold):
     """The outlet leg of a second preventer reached from its inlet side.
 
@@ -1376,8 +1397,10 @@ def _assign_parallel_backflow_demand(graph):
     full = 0.0
     full_fixed = 0.0
     for child_id in origin.children_by_system.get(cold, []):
-        child = graph.nodes.get(child_id)
-        if child is not None and child.kind == KIND_PIPE:
+        # The RPZ outlet often goes through a transition before the first
+        # pipe (bench 4C), so look through fittings for it.
+        child = _first_pipe_below(graph, child_id, cold)
+        if child is not None:
             full = max(full, float(child.demand_wsfu or 0.0))
             full_fixed = max(full_fixed,
                              float(child.demand_fixed_gpm or 0.0))

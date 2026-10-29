@@ -301,6 +301,60 @@ class TestParallelBackflow(unittest.TestCase):
         self.assertAlmostEqual(g.nodes[32].demand_wsfu, 0.0)
         self.assertEqual(g.parallel_backflow, [34])
 
+    def _live_4c(self):
+        """Bench 4C as walked live (2026-10-29): each RPZ outlet goes through
+        a transition before its first pipe, and the other RPZ's leg hangs off
+        the main tee and ends in a loop joint at that RPZ's transition.
+
+        Pick RPZ A (1): transition 2, leg 3, elbow 4, pipe 5, main tee 6 with
+        the main 7 (one WC) and RPZ B's leg 10, transition 11. Service: pipe
+        20, tee 21, stub 22, pipe 23, RPZ B 24."""
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_FITTING, parent=1)
+        add_node(g, 3, water_graph.KIND_PIPE, parent=2, length_feet=2.0)
+        add_node(g, 4, water_graph.KIND_FITTING, parent=3)
+        add_node(g, 5, water_graph.KIND_PIPE, parent=4, length_feet=2.0)
+        add_node(g, 6, water_graph.KIND_FITTING, parent=5)
+        add_node(g, 7, water_graph.KIND_PIPE, parent=6, length_feet=20.0)
+        wc = add_node(g, 9, water_graph.KIND_FIXTURE, parent=7,
+                      cw=5.0, hw=0.0, total=5.0)
+        wc.type_name = "Water Closet, Flush Tank"
+        wc.is_public = True
+        add_node(g, 10, water_graph.KIND_PIPE, parent=6, length_feet=2.0)
+        add_node(g, 11, water_graph.KIND_FITTING, parent=10)
+        add_node(g, 20, water_graph.KIND_PIPE, parent=1, length_feet=1.0)
+        add_node(g, 21, water_graph.KIND_FITTING, parent=20)
+        add_node(g, 22, water_graph.KIND_PIPE, parent=21, length_feet=1.0)
+        add_node(g, 23, water_graph.KIND_PIPE, parent=21, length_feet=1.0)
+        rpz_b = add_node(g, 24, water_graph.KIND_ACCESSORY, parent=23)
+        rpz_b.family_name = "RPZ 1-INCH"
+        g.loop_edges += [(24, 11, COLD), (11, 24, COLD)]
+        return g
+
+    def test_live_4c_leg_under_the_main_tee_takes_the_full_demand(self):
+        g = self._live_4c()
+        water_graph._mark_upstream_service(g, COLD)
+        self.assertEqual(g.upstream_ids, set([20, 21, 22, 23, 24]))
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[10].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[22].demand_wsfu, 0.0)
+        self.assertEqual(g.parallel_backflow, [24])
+
+    def test_live_4c_two_pipe_leg(self):
+        # The pick B mirror: the other leg is two pipes and an elbow.
+        g = self._live_4c()
+        add_node(g, 12, water_graph.KIND_FITTING, parent=11)
+        add_node(g, 13, water_graph.KIND_PIPE, parent=12, length_feet=2.0)
+        add_node(g, 14, water_graph.KIND_FITTING, parent=13)
+        g.loop_edges = [(24, 14, COLD), (14, 24, COLD)]
+        water_graph._mark_upstream_service(g, COLD)
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[10].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[13].demand_wsfu, 5.0)
+        self.assertEqual(g.parallel_backflow, [24])
+
     def test_no_second_rpz_changes_nothing(self):
         g = self._graph()
         g.nodes[8].family_name = "BALL VALVE"
