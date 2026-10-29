@@ -146,14 +146,10 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
             continue
 
         if selection["status"] == "no_demand":
-            # Match the gas engine: a zero-demand segment still gets the
-            # smallest size rather than being left at whatever was drawn.
-            # Drawn sizes are placeholders, so leaving one untouched would
-            # quietly keep a wrong number on the drawing.
-            smallest = water_tables.firm_sizing_rows()[0]
-            result.nominal_size = smallest["nominal_size"]
-            result.size_inches = smallest["size_inches"]
-            result.rule = "zero demand, minimum size assigned"
+            # Nothing to size on, so the pipe keeps its drawn size and is
+            # reported, the same as Water Performance leaves it gray (Colin,
+            # 2026-10-29: "if it's gray, just don't size it").
+            result.rule = "NOT SIZED"
             result.flag = ("no fixture demand downstream - pipe is past the "
                            "last fixture, or its fixtures carry no WSFU")
             flags.append("Pipe {}: {}".format(node.element_id, result.flag))

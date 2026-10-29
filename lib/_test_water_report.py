@@ -244,12 +244,11 @@ class TestDownsizeAfterTheTee(unittest.TestCase):
                     self.assertLessEqual(down.size_inches, seg.size_inches)
 
 
-class TestZeroDemandStillGetsASize(unittest.TestCase):
+class TestZeroDemandIsNotSized(unittest.TestCase):
 
-    def test_placeholder_pipe_is_overwritten_not_left_alone(self):
-        # Drawn sizes are placeholders, so a zero-demand segment gets the
-        # smallest size rather than keeping whatever was drawn, matching the
-        # gas engine's "zero demand - minimum size assigned".
+    def test_zero_demand_pipe_keeps_its_drawn_size(self):
+        # A pipe Water Performance shows gray for no demand is left alone by
+        # Size Water and reported (Colin, 2026-10-29).
         g = make_graph()
         g.origin_id = 1
         add_node(g, 1, water_graph.KIND_ORIGIN)
@@ -257,8 +256,10 @@ class TestZeroDemandStillGetsASize(unittest.TestCase):
         stub.diameter_inches = 2.0
         res = water_sizing_engine.size_network(g)
         seg = res["segments"][0]
-        self.assertEqual(seg.nominal_size, "1/2")
-        self.assertIn("zero demand", seg.rule)
+        self.assertIsNone(seg.nominal_size)
+        self.assertEqual(seg.rule, "NOT SIZED")
+        self.assertTrue(seg.flag.startswith("no fixture demand"))
+        self.assertEqual(res["totals"]["unsized_count"], 1)
 
 
 class TestOverTheTableIsFlagged(unittest.TestCase):
