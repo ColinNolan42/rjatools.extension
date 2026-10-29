@@ -367,11 +367,8 @@ def _write_sizes(doc, output, forms, graph, sizing):
             "pipes. {} skipped.".format(
                 fittings["resized"], fittings.get("transitions", 0),
                 fittings["skipped"]))
-        for error in fittings["errors"][:3]:
-            output.print_md("  " + error)
-        if len(fittings["errors"]) > 3:
-            output.print_md("  ... and {} more could not be resized.".format(
-                len(fittings["errors"]) - 3))
+        for error in fittings["errors"]:
+            output.print_md("**{}**".format(error))
         if fittings["skipped"]:
             output.print_md(
                 "A skipped fitting touches no sized pipe, is existing phase, "

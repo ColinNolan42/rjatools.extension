@@ -134,6 +134,50 @@ class TestTeeStartConnectorOrder(unittest.TestCase):
         self.assertFalse(water_graph._faces_upstream(g, {"connector_index": 0}))
 
 
+class TestTypeSizedValve(unittest.TestCase):
+
+    def test_valve_that_cannot_resize_is_a_hand_fix_warning(self):
+        # Bench 5C (2026-10-29): a ball valve sized by its Type stays 1 in on
+        # a 1-1/4 in line. Revit transitions it; the designer swaps the Type.
+        import revit_helpers
+
+        class Seg(object):
+            def __init__(self, eid, size):
+                self.element_id = eid
+                self.size_inches = size
+
+        class Tx(object):
+            def Start(self):
+                pass
+
+            def Commit(self):
+                pass
+
+            def RollBack(self):
+                pass
+
+        g = make_graph()
+        valve = add_node(g, 7, water_graph.KIND_ACCESSORY)
+        valve.element = object()
+        valve.family_name = "BALL VALVE"
+        valve.connectors = [
+            {"connected_element_id": 5, "diameter_in": 1.0},
+            {"connected_element_id": 6, "diameter_in": 1.0}]
+        saved = revit_helpers.set_fitting_size
+        revit_helpers.set_fitting_size = lambda *a: (False, "no parameter")
+        try:
+            out = water_sizing_engine.write_fitting_sizes(
+                None, g, {"segments": [Seg(5, 1.25), Seg(6, 1.25)]},
+                lambda d, name: Tx())
+        finally:
+            revit_helpers.set_fitting_size = saved
+        self.assertEqual(len(out["errors"]), 1)
+        text = out["errors"][0]
+        self.assertTrue(text.startswith("WARNING: 7 'BALL VALVE' is 1 in on "
+                                        "a 1-1/4 in line"))
+        self.assertIn("Change it to the 1-1/4 in Type by hand", text)
+
+
 class TestTransitionIsNotAnElbow(unittest.TestCase):
 
     def test_zero_length_transition_reads_as_a_coupling(self):

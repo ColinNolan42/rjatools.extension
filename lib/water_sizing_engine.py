@@ -631,9 +631,19 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
                 resized += 1
             else:
                 skipped += 1
+                # Usually a valve sized by its Type. Revit puts transitions on
+                # both sides, so the run stays connected; the designer swaps
+                # the Type by hand (Colin, 2026-10-29).
+                drawn = max([c.get("diameter_in") or 0.0
+                             for c in node.connectors] or [0.0])
                 errors.append(
-                    "Fitting {} ('{}'): could not resize to {} in.".format(
-                        node.element_id, node.family_name, largest))
+                    "WARNING: {} '{}' is {} in on a {} in line. Its size is "
+                    "set by its Type, so it was not resized and Revit put "
+                    "transitions on it. Change it to the {} in Type by "
+                    "hand.".format(
+                        node.element_id, node.family_name,
+                        _nominal_label(drawn) or "?",
+                        _nominal_label(largest), _nominal_label(largest)))
         transaction.Commit()
     except Exception as exc:
         transaction.RollBack()
