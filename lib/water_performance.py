@@ -14,9 +14,10 @@
 # Colors:
 #   GREEN   drawn size equals the firm table size, speed within the limit
 #   YELLOW  drawn size equals the firm table size, computed speed above limit
-#   RED     drawn size is smaller than the firm table size
+#   RED     drawn size is smaller than the firm table size, or the load is
+#           above the firm table (3 in max): the tool is not built for it
 #   PURPLE  drawn size is larger than the firm table size
-#   GRAY    could not be judged (over the table, no demand, no size, no ID)
+#   GRAY    could not be judged (no demand, no size, no ID)
 #
 # IronPython 2.7
 
@@ -130,7 +131,12 @@ def classify(segment, system_key=None, speed_tolerance=SPEED_TOLERANCE):
         result.limit_fps = water_tables.velocity_limit_fps(system_key)
 
     if segment.exceeds_table:
-        result.reason = "load above the firm table, not judged"
+        # RED, not gray: the load is beyond what the tool is built for, and
+        # the pipe shall be sized by hand (Colin, 2026-10-29, bench 7).
+        result.label = RED
+        result.over_table = True
+        result.reason = ("load above the firm table, the tool is not built "
+                         "for this load; size it by hand")
         return result
     if result.required_in is None:
         result.reason = segment.flag or "no table size for this pipe"

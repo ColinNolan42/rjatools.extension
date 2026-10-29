@@ -376,7 +376,8 @@ def _legend(tolerance):
     """Legend wording, worst first, matching the colors in the plan."""
     return [
         (water_performance.RED,
-         "Red - drawn smaller than the firm table size"),
+         "Red - drawn smaller than the firm table size, or load above "
+         "the table (size by hand)"),
         (water_performance.YELLOW,
          "Yellow - at table size, computed speed more than {:.0f} percent "
          "over the limit".format(float(tolerance) * 100.0)),
@@ -639,7 +640,7 @@ def _print_report(output, results, sizing, tolerance, items=None,
     output.print_md(
         "- GREEN (at table size): **{}**\n"
         "- YELLOW (at table size, computed speed over limit): **{}**\n"
-        "- RED (drawn smaller than table): **{}**\n"
+        "- RED (drawn smaller than table, or load above it): **{}**\n"
         "- PURPLE (drawn larger than table): **{}**\n"
         "- GRAY (not judged): **{}**".format(
             counts[water_performance.GREEN],

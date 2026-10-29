@@ -138,7 +138,10 @@ def flag_items(graph, results):
 def short_reason(result, dependents, steps=()):
     """The Reason cell, short, in the style of the Duct Performance table."""
     label = result.label
-    if label == water_performance.RED:
+    if label == water_performance.RED and getattr(result, "over_table",
+                                                  False):
+        text = "Load above the firm table, size by hand"
+    elif label == water_performance.RED:
         text = "Undersized"
     elif label == water_performance.PURPLE:
         text = "Oversized"

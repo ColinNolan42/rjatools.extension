@@ -142,9 +142,10 @@ class TestTypeSizedValve(unittest.TestCase):
         import revit_helpers
 
         class Seg(object):
-            def __init__(self, eid, size):
+            def __init__(self, eid, size, over=False):
                 self.element_id = eid
                 self.size_inches = size
+                self.exceeds_table = over
 
         class Tx(object):
             def Start(self):
@@ -176,6 +177,20 @@ class TestTypeSizedValve(unittest.TestCase):
         self.assertTrue(text.startswith("WARNING: 7 'BALL VALVE' is 1 in on "
                                         "a 1-1/4 in line"))
         self.assertIn("Change it to the 1-1/4 in Type by hand", text)
+
+        # Bench 7: a tee joining a pipe over the firm table is left alone,
+        # not resized on its other (smaller) pipes.
+        called = []
+        revit_helpers.set_fitting_size = lambda *a: called.append(a) or (True, "")
+        try:
+            out = water_sizing_engine.write_fitting_sizes(
+                None, g, {"segments": [Seg(5, None, over=True),
+                                       Seg(6, 2.5)]},
+                lambda d, name: Tx())
+        finally:
+            revit_helpers.set_fitting_size = saved
+        self.assertEqual(called, [])
+        self.assertIn("whose load is above the firm table", out["errors"][0])
 
 
 class TestTransitionIsNotAnElbow(unittest.TestCase):

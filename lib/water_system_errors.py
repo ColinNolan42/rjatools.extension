@@ -12,6 +12,7 @@
 
 import water_checks
 import water_graph
+import water_tables
 
 ERROR = water_checks.SEVERITY_ERROR
 WARNING = water_checks.SEVERITY_WARNING
@@ -54,8 +55,14 @@ def collect(graph, sizing, recirc, checks, items=None, pressure=None,
 
     over = [s.element_id for s in sizing["segments"] if s.exceeds_table]
     if over:
+        top = water_tables.firm_sizing_rows()[-1]
         found.append((ERROR, "{} pipe(s) carry more load than the firm table "
-                      "covers: {}.".format(len(over), _ids(over))))
+                      "covers ({} in maximum: {:.0f} cold WSFU, {:.0f} hot "
+                      "WSFU). The tool is not built for this load; size "
+                      "them by hand: {}.".format(
+                          len(over), top["nominal_size"],
+                          float(top["max_wsfu_8fps_cold"]),
+                          float(top["max_wsfu_5fps_hot"]), _ids(over))))
 
     upsize = [s.element_id for s in sizing["segments"]
               if getattr(s, "upsize_needed", False)]

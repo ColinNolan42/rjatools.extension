@@ -65,9 +65,16 @@ class T(unittest.TestCase):
             wp.classify(seg(2.5, 2.5, "2-1/2", gpm=75.0), "hot").label,
             wp.GREEN)
 
-    def test_exceeds_is_gray(self):
+    def test_exceeds_is_red_and_says_size_by_hand(self):
+        # Colin, 2026-10-29 (bench 7): a load above the firm table is RED,
+        # the tool is not built for it.
+        import water_flagging
         s = seg(3.0, None, None, exceeds_table=True)
-        self.assertEqual(wp.classify(s, "cold").label, wp.GRAY)
+        r = wp.classify(s, "cold")
+        self.assertEqual(r.label, wp.RED)
+        self.assertIn("not built for this load", r.reason)
+        self.assertEqual(water_flagging.short_reason(r, []),
+                         "Load above the firm table, size by hand")
 
     def test_zero_demand_gray(self):
         s = seg(1.0, 0.5, "1/2", wsfu=0.0)

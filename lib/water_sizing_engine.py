@@ -582,9 +582,12 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
     import revit_helpers
 
     size_by_pipe_id = {}
+    over_table = set()
     for segment in sizing_result["segments"]:
         if segment.size_inches is not None:
             size_by_pipe_id[segment.element_id] = segment.size_inches
+        if segment.exceeds_table:
+            over_table.add(segment.element_id)
 
     resized = 0
     skipped = 0
@@ -622,6 +625,20 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
 
             if not neighbour_sizes:
                 skipped += 1
+                continue
+
+            touches_over = [c.get("connected_element_id")
+                            for c in node.connectors
+                            if c.get("connected_element_id") in over_table]
+            if touches_over:
+                # Sized on its other pipes it would come out smaller than the
+                # over-table pipe it joins (bench 7, 2026-10-29).
+                skipped += 1
+                errors.append(
+                    "WARNING: {} '{}' joins pipe {} whose load is above the "
+                    "firm table, so it was not resized. Size it by "
+                    "hand.".format(node.element_id, node.family_name,
+                                   touches_over[0]))
                 continue
 
             largest = max(neighbour_sizes.values())
