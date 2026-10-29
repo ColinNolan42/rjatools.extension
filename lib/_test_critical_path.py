@@ -34,6 +34,7 @@ sys.path.insert(0, LIB_DIR)
 import fitting_tables  # noqa: E402  (real module, pure Python)
 import vav_checks      # noqa: E402  (real module, pure Python)
 import ashrae_fittings # noqa: E402  (real module, pure Python, reads the JSON tables)
+import fan_system_effect  # noqa: E402  (real module, pure Python)
 import math            # noqa: E402
 
 src = io.open(SCRIPT_PATH, encoding="utf-8").read()
@@ -143,7 +144,14 @@ def _duct_friction_loss_per_100ft(v_fpm, d_h_in, eps_ft=None):
     return 0.05
 
 
+def _equipment_connection_geometry(equip, other_id):
+    """A unit's connector toward other_id: Elem.conns {child id: geometry},
+    set on the equipment Elem by the fan system effect cases. None = unreadable."""
+    return (getattr(equip, 'conns', None) or {}).get(other_id)
+
+
 hvac_graph = types.ModuleType('hvac_graph')
+hvac_graph.equipment_connection_geometry = _equipment_connection_geometry
 hvac_graph.duct_friction_loss_per_100ft = _duct_friction_loss_per_100ft
 hvac_graph.takeoff_child_ids       = _takeoff_child_ids
 hvac_graph.duct_continues_past     = _duct_continues_past
@@ -162,6 +170,7 @@ hvac_graph.velocity_pressure_inwg  = _velocity_pressure_inwg
 
 ns = {'hvac_graph': hvac_graph, 'fitting_tables': fitting_tables,
       'vav_checks': vav_checks, 'ashrae_fittings': ashrae_fittings,
+      'fan_system_effect': fan_system_effect,
       're': re, 'math': math}
 exec(fn_src, ns)
 crit = ns['_critical_path_loss']
@@ -1112,6 +1121,398 @@ r30b = crit([599], ch30b, d30b, {621: (600.0, 'Supply Air', 'T-end')}, n30b)[599
 check("case30 a drawn damper is charged once, not again as the assumed one",
       list(r30b['component_keys']).count('damper') == 1,
       "keys %r" % (r30b['component_keys'],))
+
+
+# ── case 31 to 40: fan system effect (Colin, 2026-10-29) ─────────────────────
+#   2001 ASHRAE Fundamentals: Le Eq. 37 (p. 34.13), SR7-9 to SR7-12 DWDI
+#   outlet (p. 34.67 to 34.68), SR7-5 to SR7-8 SWSI, ED7-2 (p. 34.48) and
+#   ER7-1 (p. 34.60) inlet. Unit outlet 24 x 24 in. (4 ft2) at 4000 cfm
+#   (1000 fpm): Le = 609.6 mm / 350 = 1.742 m = 5.71 ft.
+import fan_system_effect as FSE  # noqa: E402
+FSE_ON = {'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5}
+SQ24 = {'round': False, 'area_ft2': 4.0, 'd_in': None, 'w_in': 24.0, 'h_in': 24.0}
+RD24 = {'round': True, 'area_ft2': math.pi, 'd_in': 24.0, 'w_in': None, 'h_in': None}
+LE24 = 609.6 / 350.0 / 0.3048
+
+
+def _unit(conns):
+    u = Elem(kind='equipment')
+    u.conns = conns
+    return u
+
+
+def _fse_run(nodes, children, ducts, terms, root, fan=FSE_ON, cls='Supply Air', **kw):
+    r = crit([root], children, ducts, terms, nodes, 10.0, fan_effect=fan, **kw)
+    return r.get(root, {}).get(cls, {})
+
+
+def _items_sum(leaf):
+    return sum(i[3] or 0.0 for i in leaf.get('items', ()))
+
+
+def _fse_items(leaf):
+    return [i for i in leaf.get('items', ())
+            if i[4] and i[4][0].startswith('Fan system effect')]
+
+
+# 31: nothing within Le of the outlet: no system effect, total unchanged.
+n31 = {900: _unit({901: SQ24})}
+c31 = {900: [901], 901: [910]}
+d31 = build([(901, 0.10, 20.0, 1000.0, 4.0, 'Supply Air')])
+t31 = {910: (4000.0, 'Supply Air', 'SD-31')}
+on31 = _fse_run(n31, c31, d31, t31, 900)
+off31 = _fse_run(n31, c31, d31, t31, 900, fan=None)
+check("case31 straight 20 ft from the outlet (Le 5.71 ft): fse 0, no take-off line, total as with it off",
+      on31.get('fse_inwc') == 0.0 and not _fse_items(on31)
+      and abs(on31['total_inwc'] - off31['total_inwc']) < 1e-12,
+      "on %r off %r" % (on31.get('total_inwc'), off31.get('total_inwc')))
+
+# 32: elbow right on the outlet (L 0): DWDI Ab/Ao 0.5, worst of A-D is
+#     SR7-11 C 3.80 (A 2.20, B 3.60, D 3.20): GRAY (Colin, 2026-10-29).
+n32 = {920: _unit({921: SQ24}),
+       921: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c32 = {920: [921], 921: [922], 922: [930]}
+d32 = build([(922, 0.0, 10.0, 1000.0, 4.0, 'Supply Air')])
+t32 = {930: (4000.0, 'Supply Air', 'SD-32')}
+sa32 = _fse_run(n32, c32, d32, t32, 920)
+exp32 = 3.80 * pv(1000.0)
+check("case32 elbow at L 0: FSE2 = 3.80 (SR7-11, worst of A-D) x Pv(1000)",
+      abs(sa32.get('fse_inwc', -1) - exp32) < 1e-9,
+      "got %r expected %.6f" % (sa32.get('fse_inwc'), exp32))
+check("case32 C 3.80 is GRAY: increase length of duct to 2.9 ft (C under 1.0)",
+      any(k == 'gray' and t.startswith('GRAY: System Effect Pressure Loss too high')
+          and 'increase length of duct to 2.9 ft' in t
+          for k, t in sa32.get('fse_notes', ())), "notes %r" % (sa32.get('fse_notes'),))
+check("case32 added before the safety factor: total = (subtotal incl. FSE) x 1.10",
+      abs(sa32['subtotal_inwc'] - (sa32['friction_inwc'] + sa32['fitting_inwc'] +
+                                   sa32['component_inwc'] + exp32)) < 1e-9
+      and abs(sa32['total_inwc'] - sa32['subtotal_inwc'] * 1.10) < 1e-9)
+_it32 = _fse_items(sa32)
+check("case32 one take-off line 'Fan system effect, supply outlet', SR7-11, C 3.80",
+      len(_it32) == 1 and _it32[0][4][0] == 'Fan system effect, supply outlet'
+      and _it32[0][4][1].startswith('SR7-11 pos C, L 0.0 / Le 5.7')
+      and abs(_it32[0][4][2] - 3.80) < 1e-9, "items %r" % (_it32,))
+check("case32 the index run items still add up to the subtotal",
+      abs(_items_sum(sa32) - sa32['subtotal_inwc']) < 1e-9)
+check("case32 HIGH_C is the named 1.0 threshold", FSE.HIGH_C == 1.0)
+check("case32 the GRAY elbow is still priced in the total and listed for the plan",
+      sa32['fse_inwc'] > 0.0 and sa32.get('fse_gray_ids') == {921},
+      "gray %r" % (sa32.get('fse_gray_ids'),))
+
+# 33: elbow past Le (8 ft > 5.71 ft): outside the outlet window, no system effect.
+n33 = {940: _unit({941: SQ24}),
+       942: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c33 = {940: [941], 941: [942], 942: [943], 943: [950]}
+d33 = build([(941, 0.0, 8.0, 1000.0, 4.0, 'Supply Air'),
+             (943, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
+sa33 = _fse_run(n33, c33, d33, {950: (4000.0, 'Supply Air', 'SD-33')}, 940)
+check("case33 elbow 8 ft out, past Le 5.71 ft: fse 0, not gray",
+      sa33.get('fse_inwc') == 0.0
+      and not any(k == 'gray' for k, _t in sa33.get('fse_notes', ())),
+      "fse %r notes %r" % (sa33.get('fse_inwc'), sa33.get('fse_notes')))
+# at L = Le / 4 (the 0.25 column): A 1.20, B 2.00, C 2.20, D 1.90 -> 2.20
+d33b = build([(941, 0.0, LE24 * 0.25, 1000.0, 4.0, 'Supply Air'),
+              (943, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
+sa33b = _fse_run(n33, c33, d33b, {950: (4000.0, 'Supply Air', 'SD-33')}, 940)
+check("case33 elbow at L/Le 0.25: C 2.20 (SR7-11) x Pv(1000)",
+      abs(sa33b.get('fse_inwc', -1) - 2.20 * pv(1000.0)) < 1e-9,
+      "got %r" % sa33b.get('fse_inwc'))
+
+# 34: a transition 2 ft out, inside Le: flagged, not priced; the elbow after
+#     it is not the first disruption.
+n34 = {960: _unit({961: SQ24}),
+       962: Elem(kind='transition', family_name='Rectangular Transition - Length',
+                 is_round=False),
+       964: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c34 = {960: [961], 961: [962], 962: [963], 963: [964], 964: [965], 965: [970]}
+d34 = build([(961, 0.0, 2.0, 1000.0, 4.0, 'Supply Air'),
+             (963, 0.0, 1.0, 1000.0, 4.0, 'Supply Air'),
+             (965, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
+sa34 = _fse_run(n34, c34, d34, {970: (4000.0, 'Supply Air', 'SD-34')}, 960)
+check("case34 transition inside Le: flagged, fse 0, the elbow after it ignored",
+      sa34.get('fse_inwc') == 0.0 and not _fse_items(sa34)
+      and any(k == 'warn' and 'transition 2.0 ft' in t and 'not priced' in t
+              for k, t in sa34.get('fse_notes', ())), "notes %r" % (sa34.get('fse_notes'),))
+# a tap 3 ft along the first duct is a disruption too
+n34b = {980: _unit({981: SQ24}), 981: Elem(kind='duct', tap_pos={982: 3.0}),
+        982: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+        983: Elem(kind='duct')}
+c34b = {980: [981], 981: [982, 983], 982: [990], 983: [991]}
+d34b = build([(981, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
+              (983, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
+t34b = {990: (1000.0, 'Supply Air', 'SD-a'), 991: (3000.0, 'Supply Air', 'SD-b')}
+sa34b = _fse_run(n34b, c34b, d34b, t34b, 980)
+check("case34 tap 3 ft along the outlet duct: flagged as a tap, not priced",
+      sa34b.get('fse_inwc') == 0.0
+      and any(k == 'warn' and t.startswith('WARNING: tap 3.0 ft')
+              for k, t in sa34b.get('fse_notes', ())),
+      "notes %r" % (sa34b.get('fse_notes'),))
+
+# 35: round return inlet elbow 1 ft from the unit, r/D 1.0: ED7-2 between
+#     L/D 0 (1.20) and 2.0 (0.67) at L/D 0.5 = 1.0675, GRAY; plus swirl warning.
+n35 = {1000: _unit({1001: RD24}),
+       1002: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                  geom={'round': True, 'd_in': 24.0, 'r_in': 24.0, 'w_in': None,
+                        'h_in': None, 'angle': 90.0})}
+c35 = {1000: [1001], 1001: [1002], 1002: [1003], 1003: [1010]}
+d35 = build([(1001, 0.0, 1.0, 1000.0, math.pi, 'Return Air'),
+             (1003, 0.0, 10.0, 1000.0, math.pi, 'Return Air')])
+ra35 = _fse_run(n35, c35, d35, {1010: (1000.0 * math.pi, 'Return Air', 'RG-35')}, 1000,
+                cls='Return Air')
+c35v = 1.20 + (0.67 - 1.20) * 0.25
+check("case35 return inlet elbow: ED7-2 r/D 1.0, L/D 0.5 -> C %.4f x Pv(1000)" % c35v,
+      abs(ra35.get('fse_inwc', -1) - c35v * pv(1000.0)) < 1e-9,
+      "got %r" % ra35.get('fse_inwc'))
+_n35 = ra35.get('fse_notes', ())
+check("case35 inlet swirl is warned, never priced",
+      any(k == 'warn' and 'FSE1,sw' in t and 'not priced' in t for k, t in _n35),
+      "notes %r" % (_n35,))
+check("case35 C 1.07 is GRAY: increase length of duct to 1.6 ft (C under 1.0 from L/D 0.755)",
+      any(k == 'gray' and 'increase length of duct to 1.6 ft' in t for k, t in _n35),
+      "notes %r" % (_n35,))
+check("case35 take-off line 'Fan system effect, return inlet' on ED7-2",
+      [i[4][0] for i in _fse_items(ra35)] == ['Fan system effect, return inlet']
+      and _fse_items(ra35)[0][4][1].startswith('ED7-2'))
+
+# 36: rect exhaust inlet elbow, ER7-1: H 24 in. (plane of the turn), r 36 in.
+#     (r/H 1.5), L 4 ft (L/H 2.0) -> 0.57, not gray; 24 x 12 is not square,
+#     so the ER7-1 square ASSUMPTION line is raised.
+RC2412 = {'round': False, 'area_ft2': 2.0, 'd_in': None, 'w_in': 24.0, 'h_in': 12.0}
+n36 = {1100: _unit({1101: RC2412}),
+       1102: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
+                  geom={'round': False, 'd_in': None, 'r_in': 36.0, 'w_in': 24.0,
+                        'h_in': 12.0, 'angle': 90.0})}
+c36 = {1100: [1101], 1101: [1102], 1102: [1103], 1103: [1110]}
+d36 = build([(1101, 0.0, 4.0, 1000.0, 2.0, 'Exhaust Air'),
+             (1103, 0.0, 10.0, 1000.0, 2.0, 'Exhaust Air')])
+ea36 = _fse_run(n36, c36, d36, {1110: (2000.0, 'Exhaust Air', 'EG-36')}, 1100,
+                cls='Exhaust Air')
+check("case36 exhaust inlet rect elbow: ER7-1 r/H 1.5, L/H 2.0 -> 0.57 x Pv(1000)",
+      abs(ea36.get('fse_inwc', -1) - 0.57 * pv(1000.0)) < 1e-9
+      and not any(k == 'gray' for k, _t in ea36.get('fse_notes', ())),
+      "got %r notes %r" % (ea36.get('fse_inwc'), ea36.get('fse_notes')))
+check("case36 non-square ER7-1 elbow: the square ASSUMPTION line, not a per-run note",
+      ea36.get('fse_assumptions') == [FSE.ER7_1_SQUARE_ASSUMPTION]
+      and not any('plane of the turn' in t for _k, t in ea36.get('fse_notes', ())),
+      "assume %r" % (ea36.get('fse_assumptions'),))
+
+# 37: inlet elbow geometry unreadable: H = the LARGER side of the unit inlet,
+#     radius unknown -> smallest row r/H 0.5; L 0 -> ER7-1 2.50.
+n37 = {1100: _unit({1102: RC2412}),
+       1102: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered',
+                  is_round=False, geom=None)}
+c37 = {1100: [1102], 1102: [1103], 1103: [1110]}
+d37 = build([(1103, 0.0, 10.0, 1000.0, 2.0, 'Return Air')])
+ra37 = _fse_run(n37, c37, d37, {1110: (2000.0, 'Return Air', 'RG-37')}, 1100,
+                cls='Return Air')
+check("case37 unreadable inlet elbow: larger inlet side, smallest r/H row -> 2.50 x Pv, said so",
+      abs(ra37.get('fse_inwc', -1) - 2.50 * pv(1000.0)) < 1e-9
+      and any('larger side' in t for _k, t in ra37.get('fse_notes', ()))
+      and any('conservative' in t for _k, t in ra37.get('fse_notes', ())),
+      "got %r notes %r" % (ra37.get('fse_inwc'), ra37.get('fse_notes')))
+
+# 38: duct-rooted pick: no fan connection, skipped with a note.
+sa38 = _fse_run(n32, c32, d32, t32, 920, duct_rooted_ids={920})
+check("case38 duct-rooted pick: fse 0 and the skip is noted",
+      sa38.get('fse_inwc') == 0.0
+      and any('rooted at a picked duct' in t for _k, t in sa38.get('fse_notes', ())),
+      "notes %r" % (sa38.get('fse_notes'),))
+
+# 39: SWSI switches the outlet tables (Ab/Ao 0.5, L 0: SR7-7 3.80); off = none.
+sa39 = _fse_run(n32, c32, d32, t32, 920,
+                fan={'on': True, 'fan_type': 'SWSI', 'blast_ratio': 0.5})
+check("case39 SWSI reads the SR7-5 to SR7-8 tables",
+      bool(_fse_items(sa39)) and _fse_items(sa39)[0][4][1].startswith('SR7-7'),
+      "items %r" % (_fse_items(sa39),))
+sa39b = _fse_run(n32, c32, d32, t32, 920,
+                 fan={'on': False, 'fan_type': 'DWDI', 'blast_ratio': 0.5})
+check("case39 unticked: no system effect at all",
+      sa39b.get('fse_inwc') == 0.0 and not sa39b.get('fse_notes'))
+
+# 40: unit connection unreadable: the first duct's area is used, and said.
+n40 = dict(n32)
+n40[920] = _unit({})
+sa40 = _fse_run(n40, c32, d32, t32, 920)
+check("case40 unreadable unit outlet: first duct area used (same 3.80 x Pv here), noted",
+      abs(sa40.get('fse_inwc', -1) - exp32) < 1e-9
+      and any('connection size unreadable' in t for _k, t in sa40.get('fse_notes', ())),
+      "got %r notes %r" % (sa40.get('fse_inwc'), sa40.get('fse_notes')))
+
+
+# ── case 41 to 45: Colin's rulings on the fan system effect (2026-10-29) ─────
+
+# 41: a fitting right on the unit connection was priced at 0 fpm (the walk
+#     started with no velocity). It now starts at the first duct's cfm over
+#     the unit connector area: 4000 cfm / 4 ft2 = 1000 fpm. Fan effect off.
+sa41 = _fse_run(n32, c32, d32, t32, 920, fan=None)
+_c41 = fitting_tables.elbow_c(False)
+check("case41 elbow on the unit connection is priced (worksheet C x Pv(1000)), not 0",
+      sa41['fitting_inwc'] > 0.0
+      and abs(sa41['fitting_inwc'] - _c41 * pv(1000.0)) < 1e-9,
+      "got %r expected %.6f" % (sa41['fitting_inwc'], _c41 * pv(1000.0)))
+# the start velocity uses the unit connector area, not the first duct's:
+# a 2 ft2 connector on the same 4000 cfm is 2000 fpm at the elbow
+n41b = dict(n32)
+n41b[920] = _unit({921: dict(SQ24, area_ft2=2.0)})
+sa41b = _fse_run(n41b, c32, d32, t32, 920, fan=None)
+check("case41 start velocity is the connector's (4000 cfm / 2 ft2 = 2000 fpm)",
+      abs(sa41b['fitting_inwc'] - _c41 * pv(2000.0)) < 1e-9,
+      "got %r" % sa41b['fitting_inwc'])
+# and it is priced with the first duct's class: a return elbow on the unit
+d41c = build([(922, 0.0, 10.0, 1000.0, 4.0, 'Return Air')])
+ra41 = _fse_run(n32, c32, d41c, {930: (4000.0, 'Return Air', 'RG-41')}, 920, fan=None,
+                cls='Return Air')
+check("case41 return elbow on the unit priced at Pv(1000) too",
+      abs(ra41.get('fitting_inwc', -1) - _c41 * pv(1000.0)) < 1e-9,
+      "got %r" % ra41.get('fitting_inwc'))
+
+# 42: inlet elbow priced by ED7-2 is NOT also priced as a fitting (ED7-2 / ER7-1
+#     include the elbow): one take-off line, and the run still adds up.
+check("case42 inlet elbow: no fitting loss on top of ED7-2 (fitting_inwc 0)",
+      abs(ra35.get('fitting_inwc', -1)) < 1e-12, "got %r" % ra35.get('fitting_inwc'))
+_rows42 = [i[4][0] for i in ra35.get('items', ()) if i[4]]
+check("case42 the take-off shows the elbow once, as the fan system effect line",
+      'Fan system effect, return inlet' in _rows42
+      and not any(r.startswith('Round elbow') for r in _rows42), "rows %r" % (_rows42,))
+check("case42 items add up to the subtotal",
+      abs(_items_sum(ra35) - ra35['subtotal_inwc']) < 1e-9)
+check("case42 the report says the elbow is not priced again",
+      any('not priced again' in t for _k, t in ra35.get('fse_notes', ())))
+check("case42 outlet SR7 stays system effect only: the outlet elbow is still a fitting",
+      sa32['fitting_inwc'] > 0.0)
+
+# 43: inlet window is the table floor distance, 5 D (10 ft on a 24 in. inlet).
+def _inlet_net(l_ft):
+    n = {1300: _unit({1301: RD24}),
+         1302: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                    geom={'round': True, 'd_in': 24.0, 'r_in': 24.0, 'w_in': None,
+                          'h_in': None, 'angle': 90.0})}
+    ch = {1300: [1301], 1301: [1302], 1302: [1303], 1303: [1310]}
+    d = build([(1301, 0.0, l_ft, 1000.0, math.pi, 'Return Air'),
+               (1303, 0.0, 10.0, 1000.0, math.pi, 'Return Air')])
+    return _fse_run(n, ch, d, {1310: (1000.0 * math.pi, 'Return Air', 'RG-43')}, 1300,
+                    cls='Return Air')
+ra43a = _inlet_net(9.0)          # L/D 4.5: 0.67 - (0.67 - 0.33) x 2.5 / 3
+c43 = 0.67 - (0.67 - 0.33) * 2.5 / 3.0
+check("case43 inlet elbow at 9 ft (inside 5 D = 10 ft): ED7-2 %.4f x Pv, elbow not repriced" % c43,
+      abs(ra43a.get('fse_inwc', -1) - c43 * pv(1000.0)) < 1e-9
+      and abs(ra43a.get('fitting_inwc', -1)) < 1e-12,
+      "fse %r fit %r" % (ra43a.get('fse_inwc'), ra43a.get('fitting_inwc')))
+ra43b = _inlet_net(11.0)         # past 5 D: an ordinary elbow
+check("case43 inlet elbow at 11 ft (past 5 D): no system effect, no swirl, priced as a fitting",
+      ra43b.get('fse_inwc') == 0.0 and ra43b.get('fitting_inwc', 0) > 0.0
+      and not any('FSE1,sw' in t for _k, t in ra43b.get('fse_notes', ())),
+      "fse %r fit %r notes %r" % (ra43b.get('fse_inwc'), ra43b.get('fitting_inwc'),
+                                  ra43b.get('fse_notes')))
+
+# 44: outlet window is Le, whatever its length: 60 x 60 in. (25 ft2) at
+#     3000 fpm (15.24 m/s, Eq. 36): Le = 15.24 x 1524 / 4500 m = 16.93 ft, so
+#     an elbow 16 ft out (past the old fixed 15 ft) is still priced.
+SQ60 = {'round': False, 'area_ft2': 25.0, 'd_in': None, 'w_in': 60.0, 'h_in': 60.0}
+le44 = 15.24 * 1524.0 / 4500.0 / 0.3048
+n44 = {1400: _unit({1401: SQ60}),
+       1402: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c44 = {1400: [1401], 1401: [1402], 1402: [1403], 1403: [1410]}
+d44 = build([(1401, 0.0, 16.0, 3000.0, 25.0, 'Supply Air'),
+             (1403, 0.0, 5.0, 3000.0, 25.0, 'Supply Air')])
+sa44 = _fse_run(n44, c44, d44, {1410: (75000.0, 'Supply Air', 'SD-44')}, 1400)
+_r44 = 16.0 / le44                # L/Le between the 0.50 and 1.00 columns
+c44v = 1.00 * (1.0 - (_r44 - 0.5) / 0.5)   # DWDI Ab/Ao 0.5: worst at 0.50 is C 1.00
+check("case44 outlet elbow 16 ft out, inside Le %.2f ft: priced (C %.3f x Pv(3000))" % (le44, c44v),
+      abs(sa44.get('fse_inwc', -1) - c44v * pv(3000.0)) < 1e-9,
+      "got %r" % sa44.get('fse_inwc'))
+# a transition past Le is not a disruption at all (8 ft out, Le 5.71 ft)
+n44b = dict(n34)
+d44b = build([(961, 0.0, 8.0, 1000.0, 4.0, 'Supply Air'),
+              (963, 0.0, 1.0, 1000.0, 4.0, 'Supply Air'),
+              (965, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
+sa44b = _fse_run(n44b, c34, d44b, {970: (4000.0, 'Supply Air', 'SD-34')}, 960)
+check("case44 transition past Le: not flagged",
+      not any('transition' in t for _k, t in sa44b.get('fse_notes', ())),
+      "notes %r" % (sa44b.get('fse_notes'),))
+
+# 45: the DWDI assumption is a report line (method_lines), not a per-run note.
+check("case45 no per-run SWSI note on the DWDI inlet run",
+      not any('SWSI' in t for _k, t in ra35.get('fse_notes', ())))
+
+
+# ── case 46 to 50: review round 2 (2026-10-29) ───────────────────────────────
+
+# 46: a tee right on the unit outlet, 4000 cfm unit, two 2000 cfm legs.
+#     The connection carries 4000 cfm (both legs), so 1000 fpm over the 4 ft2
+#     connector, not 500 fpm off one leg.
+n46 = {1500: _unit({1501: SQ24}),
+       1501: Elem(kind='unknown_fitting', family_name='Rectangular Tee', is_round=False),
+       1502: Elem(kind='duct'), 1503: Elem(kind='duct')}
+c46 = {1500: [1501], 1501: [1502, 1503], 1502: [1510], 1503: [1511]}
+d46 = build([(1502, 0.0, 10.0, 1000.0, 2.0, 'Supply Air'),
+             (1503, 0.0, 10.0, 1000.0, 2.0, 'Supply Air')])
+t46 = {1510: (2000.0, 'Supply Air', 'SD-a'), 1511: (2000.0, 'Supply Air', 'SD-b')}
+sa46 = _fse_run(n46, c46, d46, t46, 1500, fan=None)
+_tee46 = [i for i in sa46.get('items', ()) if i[0] == 'Fitting 1501']
+check("case46 tee on the unit priced at the connection's 1000 fpm (both legs), not 500",
+      len(_tee46) == 1 and abs(_tee46[0][2] - 1000.0) < 1e-9,
+      "items %r" % (_tee46,))
+# an elbow on the unit with the tee after it: FSE2 at Pv(1000), not Pv(500)
+n46b = {1500: _unit({1520: SQ24}),
+        1520: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False),
+        1501: Elem(kind='unknown_fitting', family_name='Rectangular Tee', is_round=False),
+        1502: Elem(kind='duct'), 1503: Elem(kind='duct')}
+c46b = {1500: [1520], 1520: [1501], 1501: [1502, 1503], 1502: [1510], 1503: [1511]}
+sa46b = _fse_run(n46b, c46b, d46, t46, 1500)
+check("case46 elbow on the unit before a tee: FSE2 = 3.80 x Pv(1000) on the full 4000 cfm",
+      abs(sa46b.get('fse_inwc', -1) - 3.80 * pv(1000.0)) < 1e-9,
+      "got %r expected %.6f" % (sa46b.get('fse_inwc'), 3.80 * pv(1000.0)))
+
+# 47: two supply outlets. The worst path leaves through the plain one (2.0 in.
+#     wc of friction), but the other outlet's elbow (C 3.80, GRAY) is still
+#     reported, once, named by its element.
+n47 = {1600: _unit({1601: SQ24, 1611: SQ24}),
+       1601: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c47 = {1600: [1601, 1611], 1601: [1602], 1602: [1620], 1611: [1621]}
+d47 = build([(1602, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
+             (1611, 2.0, 20.0, 1000.0, 4.0, 'Supply Air')])
+t47 = {1620: (4000.0, 'Supply Air', 'SD-elbow'), 1621: (4000.0, 'Supply Air', 'SD-long')}
+sa47 = _fse_run(n47, c47, d47, t47, 1600)
+check("case47 the worst path is the plain outlet: no FSE in its total",
+      sa47.get('terminal_name') == 'SD-long' and sa47.get('fse_inwc') == 0.0,
+      "terminal %r fse %r" % (sa47.get('terminal_name'), sa47.get('fse_inwc')))
+_g47 = [t for k, t in sa47.get('fse_notes', ()) if k == 'gray']
+check("case47 the other outlet's GRAY is still reported, once, named by element",
+      len(_g47) == 1 and 'supply outlet at element 1601' in _g47[0],
+      "notes %r" % (sa47.get('fse_notes'),))
+
+# 48: a unit connection that feeds equipment directly is noted, not skipped silently.
+n48 = {1700: _unit({}), 1701: Elem(kind='equipment')}
+c48 = {1700: [1701], 1701: [1702], 1702: [1710]}
+d48 = build([(1702, 0.0, 10.0, 800.0, 1.0, 'Supply Air')])
+sa48 = _fse_run(n48, c48, d48, {1710: (800.0, 'Supply Air', 'SD-48')}, 1700)
+check("case48 connection feeding equipment directly: noted as not checked",
+      any(k == 'note' and 'feeds equipment directly' in t and '1701' in t
+          for k, t in sa48.get('fse_notes', ())) and sa48.get('fse_inwc') == 0.0,
+      "notes %r" % (sa48.get('fse_notes'),))
+
+# 49: walk-level duct-rooted pick: the root IS a duct (no unit on the run).
+c49 = {1800: [1810]}
+d49 = build([(1800, 0.1, 10.0, 800.0, 1.0, 'Supply Air')])
+sa49 = _fse_run({}, c49, d49, {1810: (800.0, 'Supply Air', 'SD-49')}, 1800,
+                duct_rooted_ids={1800})
+check("case49 duct root: fse 0 and 'rooted at a picked duct' noted",
+      sa49.get('fse_inwc') == 0.0
+      and any('rooted at a picked duct' in t for _k, t in sa49.get('fse_notes', ())),
+      "notes %r" % (sa49.get('fse_notes'),))
+
+# 50: a VAV box picked as a root: no system effect on boxes (Colin), noted.
+n50 = {1900: _unit({1901: SQ24}),
+       1901: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c50 = {1900: [1901], 1901: [1902], 1902: [1910]}
+d50 = build([(1902, 0.0, 10.0, 1000.0, 4.0, 'Supply Air')])
+sa50 = _fse_run(n50, c50, d50, {1910: (4000.0, 'Supply Air', 'SD-50')}, 1900,
+                vav_box_ids={1900})
+check("case50 VAV box root: fse 0 even with an elbow on it, 'VAV box' noted",
+      sa50.get('fse_inwc') == 0.0
+      and any('VAV box' in t for _k, t in sa50.get('fse_notes', ())),
+      "notes %r" % (sa50.get('fse_notes'),))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

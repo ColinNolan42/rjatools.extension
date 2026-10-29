@@ -457,6 +457,16 @@ FITTING_ROWS = (
     ('Round straight tap on round main, return / exhaust', 'Round Takeoff w_Damper, tees',
      ('ED5-3_le250_Cb', 'ED5-3_le250_Cs', 'ED5-3_gt250_Cb', 'ED5-3_gt250_Cs'),
      'exhaust_tap_branch'),
+    # Fan system effect (Colin, 2026-10-29), read by fan_system_effect.py.
+    # No worksheet fallback: an unreadable connection is reported, not priced.
+    ('Fan outlet with elbow, DWDI (fan system effect)', 'Unit supply connection',
+     ('SR7-9', 'SR7-10', 'SR7-11', 'SR7-12'), None),
+    ('Fan outlet with elbow, SWSI (fan system effect)', 'Unit supply connection',
+     ('SR7-5', 'SR7-6', 'SR7-7', 'SR7-8'), None),
+    ('Fan inlet with round elbow (fan system effect)', 'Unit return / exhaust connection',
+     ('ED7-2',), None),
+    ('Fan inlet with rect elbow (fan system effect)', 'Unit return / exhaust connection',
+     ('ER7-1',), None),
 )
 # Not yet looked up from the 2001 tables, still the RJA worksheet value:
 # tees, crosses, wyes (incl. bullhead, SR5-14 / ER5-4 are transcribed) and

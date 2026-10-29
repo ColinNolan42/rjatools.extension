@@ -1800,6 +1800,50 @@ def equipment_entry_direction(equip, parent_id):
     return word
 
 
+def equipment_connection_geometry(equip, other_id):
+    """Size of the equipment connector joined to element other_id: a unit's
+    supply outlet or return inlet, for the fan system effect (Ao, and the
+    velocity pressure at the connection).
+
+    Returns {'round': bool, 'area_ft2', 'd_in', 'w_in', 'h_in'}, or None
+    (logged NOT FOUND) when the connector or its size cannot be read; the
+    caller then falls back to the first duct and says so. An oval connector
+    is read as Width x Height, as connector_areas_ft2 does.
+    """
+    if equip is None:
+        log.info('equipment_connection_geometry: no equipment, NOT FOUND')
+        return None
+    try:
+        eid = eid_int(equip.Id)
+    except Exception:
+        eid = None
+    conn = _connector_to(equip, other_id)
+    if conn is None:
+        log.info('equipment_connection_geometry: id=%s connector to %s NOT FOUND',
+                 eid, other_id)
+        return None
+    out = {'round': False, 'area_ft2': None, 'd_in': None, 'w_in': None, 'h_in': None}
+    try:
+        if conn.Shape == ConnectorProfileType.Round:
+            r = conn.Radius
+            out['round'] = True
+            out['d_in'] = r * 24.0
+            out['area_ft2'] = math.pi * r * r
+        else:
+            out['w_in'], out['h_in'] = conn.Width * 12.0, conn.Height * 12.0
+            out['area_ft2'] = conn.Width * conn.Height
+    except Exception as ex:
+        log.info('equipment_connection_geometry: id=%s connector to %s size '
+                 'unreadable: %s', eid, other_id, ex)
+        return None
+    if not out['area_ft2'] or out['area_ft2'] <= 0:
+        log.info('equipment_connection_geometry: id=%s connector to %s zero area, '
+                 'NOT FOUND', eid, other_id)
+        return None
+    log.info('equipment_connection_geometry: id=%s to %s %r', eid, other_id, out)
+    return out
+
+
 def is_fed_from_upstream_supply(equip):
     """True when this equipment takes Supply Air IN from a duct: a VAV or fan
     powered box, not the RTU or AHU that serves it.

@@ -30,6 +30,10 @@ EXPECTED_KEYS = {
     'ED5-3_le250_Cb': '3d', 'ED5-3_le250_Cs': '3d',
     'ED5-3_gt250_Cb': '3d', 'ED5-3_gt250_Cs': '3d',
     'ED5-2_Cb': '3d', 'ED5-2_Cs': '3d', 'SR2-1': 'const',
+    # Fan system effect (2026-10-29)
+    'SR7-5': '2d', 'SR7-6': '2d', 'SR7-7': '2d', 'SR7-8': '2d',
+    'SR7-9': '2d', 'SR7-10': '2d', 'SR7-11': '2d', 'SR7-12': '2d',
+    'ED7-2': '2d', 'ER7-1': '2d',
 }
 
 # Shapes as printed: 1d length, 2d rows x cols, 3d layers x rows x cols.
@@ -47,6 +51,9 @@ EXPECTED_SHAPES = {
     'ED5-3_le250_Cb': (9, 9, 9), 'ED5-3_le250_Cs': (9, 9, 9),
     'ED5-3_gt250_Cb': (9, 9, 9), 'ED5-3_gt250_Cs': (9, 9, 9),
     'ED5-2_Cb': (9, 9, 9), 'ED5-2_Cs': (9, 9, 9),
+    'SR7-5': (7, 6), 'SR7-6': (7, 6), 'SR7-7': (7, 6), 'SR7-8': (7, 6),
+    'SR7-9': (7, 6), 'SR7-10': (7, 6), 'SR7-11': (7, 6), 'SR7-12': (7, 6),
+    'ED7-2': (6, 4), 'ER7-1': (5, 4),
 }
 
 # Blank (null) cells as printed. Each row is described by the count of filled
@@ -137,6 +144,19 @@ SPOT = {
                        (1.0, 1.0, 0.9, 2.30)],
     'ED5-3_gt250_Cs': [(0.2, 0.2, 0.1, 20.43), (0.9, 0.3, 0.1, -21.27),
                        (1.0, 1.0, 0.1, 237.90), (1.0, 1.0, 0.9, 0.07)],
+    # Fan system effect, read off PDF pages 853 to 855 (p. 34.66 to 34.68),
+    # 835 (p. 34.48) and 847 (p. 34.60), 2026-10-29. Rows Ab/Ao, cols L/Le.
+    'SR7-5': [(0.4, 0.00, 3.20), (0.5, 0.25, 1.20), (1.0, 0.50, 0.18), (0.7, 1.00, 0.00)],
+    'SR7-6': [(0.4, 0.00, 3.80), (0.5, 0.50, 0.67), (1.0, 0.12, 0.53), (0.9, 10.00, 0.00)],
+    'SR7-7': [(0.4, 0.00, 5.50), (0.6, 0.12, 2.50), (1.0, 0.50, 0.26)],
+    'SR7-8': [(0.4, 0.00, 5.50), (0.8, 0.25, 0.80), (1.0, 0.00, 1.00)],
+    'SR7-9': [(0.4, 0.00, 3.20), (0.5, 0.00, 2.20), (0.9, 0.25, 0.33), (1.0, 1.00, 0.00)],
+    'SR7-10': [(0.4, 0.00, 4.80), (0.5, 0.00, 3.60), (0.8, 0.00, 1.25), (0.6, 0.50, 0.66),
+               (1.0, 0.12, 0.66)],
+    'SR7-11': [(0.4, 0.00, 5.50), (0.5, 0.00, 3.80), (0.9, 0.12, 0.80), (1.0, 0.50, 0.26)],
+    'SR7-12': [(0.4, 0.00, 4.70), (0.5, 0.25, 1.90), (0.9, 0.12, 0.68), (1.0, 0.00, 0.85)],
+    'ED7-2': [(0.50, 0.0, 1.80), (1.00, 2.0, 0.67), (1.50, 5.0, 0.33), (3.00, 10.0, 0.22)],
+    'ER7-1': [(0.50, 0.0, 2.50), (0.75, 2.0, 1.20), (1.50, 5.0, 0.30), (2.00, 10.0, 0.26)],
 }
 
 EXPECTED_COEF = {
@@ -256,6 +276,29 @@ class AshraeTablesTest(unittest.TestCase):
                           t['SD5-24_Cb1']['cols']['name']), ('As/Ac', 'Ab1/Ac', 'Qb1/Qc'))
         self.assertEqual(t['SD5-24_Cb1']['layers']['values'], [0.2, 0.35, 0.55, 0.8, 1.0])
         self.assertEqual(t['ED5-2_Cb']['rows']['values'], [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        for k in ('SR7-5', 'SR7-6', 'SR7-7', 'SR7-8', 'SR7-9', 'SR7-10', 'SR7-11', 'SR7-12'):
+            self.assertEqual((t[k]['rows']['name'], t[k]['cols']['name']), ('Ab/Ao', 'L/Le'), k)
+            self.assertEqual(t[k]['rows']['values'], [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], k)
+            self.assertEqual(t[k]['cols']['values'], [0.0, 0.12, 0.25, 0.5, 1.0, 10.0], k)
+        self.assertEqual((t['ED7-2']['rows']['name'], t['ED7-2']['cols']['name']), ('r/Do', 'L/Do'))
+        self.assertEqual((t['ER7-1']['rows']['name'], t['ER7-1']['cols']['name']), ('r/H', 'L/H'))
+        self.assertEqual(t['ED7-2']['cols']['values'], [0.0, 2.0, 5.0, 10.0])
+
+    def test_fan_tables_pages_and_zero_columns(self):
+        t = self.tables
+        pages = {'SR7-5': ('34.66', 853), 'SR7-6': ('34.67', 854), 'SR7-9': ('34.67', 854),
+                 'SR7-10': ('34.68', 855), 'SR7-12': ('34.68', 855),
+                 'ED7-2': ('34.48', 835), 'ER7-1': ('34.60', 847)}
+        for k, (page, pdf) in pages.items():
+            self.assertEqual((t[k]['page'], t[k]['pdf_page']), (page, pdf), k)
+        # Every SR7 outlet table reads 0 from L/Le 1.00 on, as printed.
+        for n in range(5, 13):
+            for row in t['SR7-%d' % n]['C']:
+                self.assertEqual(row[4:], [0.0, 0.0], n)
+        # The inlet tables floor: the 5.0 and 10.0 columns are equal, as printed.
+        for k in ('ED7-2', 'ER7-1'):
+            for row in t[k]['C']:
+                self.assertEqual(row[2], row[3], k)
 
     def test_all_numbers_finite(self):
         def walk(o):

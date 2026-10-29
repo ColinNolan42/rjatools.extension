@@ -60,6 +60,9 @@ CALLOUT_STYLES = {
     'error': ('#D22828', '#FDE3E3', '#7A1010'),
     'info':  (RJA_BLUE,  '#E3F0FB', '#00365E'),
     'ok':    ('#1E9E3A', '#E2F5E6', '#0F4D1D'),
+    # GRAY plan status (Duct Performance: could not be judged, or a fan
+    # system effect too high), the plan's own gray as the border.
+    'gray':  (STATUS_COLORS['GRAY'], '#EFEFEF', '#333333'),
 }
 
 
@@ -239,7 +242,8 @@ def table(headers, rows, align=None, total_row=None, status_col=None,
 
 def callout(text, kind='info'):
     """A highlighted box. kind: 'warn' (amber), 'error' (red), 'info' (blue),
-    'ok' (green). An unknown kind falls back to 'info'."""
+    'ok' (green), 'gray' (the GRAY plan status). An unknown kind falls back
+    to 'info'."""
     border, bg, color = CALLOUT_STYLES.get(kind, CALLOUT_STYLES['info'])
     return ('<div style="font-family:{};border-left:5px solid {};background:{};'
             'color:{};padding:5px 10px;margin:4px 0;font-size:12px;">{}</div>'

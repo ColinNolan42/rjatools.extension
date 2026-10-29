@@ -93,6 +93,7 @@ if _lib not in sys.path:
 import hvac_graph
 import fitting_tables
 import ashrae_fittings
+import fan_system_effect
 import diffuser_tables
 import revit_helpers
 import rja_drafting
@@ -287,6 +288,24 @@ _SETTINGS_XAML = '''
                                      ToolTip="Known filter drop in in. wc. Cannot be negative."/>
                             <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
                         </StackPanel>
+                        <CheckBox x:Name="cb_fse" Content="Include fan system effect" Margin="0,10,0,0"
+                                  ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. Transitions and taps there are flagged, not priced."/>
+                        <StackPanel x:Name="pnl_fse" Margin="20,4,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Fan type" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <RadioButton x:Name="rb_fan_dwdi" GroupName="fan_type" Content="DWDI" VerticalAlignment="Center" Margin="0,0,14,0"
+                                             ToolTip="Double width, double inlet centrifugal fan: outlet tables SR7-9 to SR7-12."/>
+                                <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center"
+                                             ToolTip="Single width, single inlet centrifugal fan: outlet tables SR7-5 to SR7-8."/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <TextBlock Text="Blast area ratio Ab/Ao" VerticalAlignment="Center"/>
+                                <TextBox x:Name="tb_blast" Width="56" Margin="8,0,6,0"
+                                         ToolTip="Fan blast area over outlet area, from the fan data when known. Range 0.4 to 1.0."/>
+                                <TextBlock Text="0.4 to 1.0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock x:Name="tb_fse_hint" Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
                             <Grid x:Name="grid_vav_static" Margin="0,4,0,0">
@@ -413,12 +432,15 @@ def _wpf_named(win, name):
 
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
-                     vav, vav_settings):
+                     vav, vav_settings, fan_effect=None):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
     With VAV ticked, the MP limits are also added to limits under
     vav_checks.MP_KEY, so every limit lookup finds them in one dict.
+
+    fan_effect: {'on', 'fan_type', 'blast_ratio'}; None (the legacy dialog,
+    which has no fields for it) takes fan_system_effect.default_settings().
     """
     limits = dict(limits)
     if vav:
@@ -436,6 +458,7 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'filter_inwc':   filter_inwc,
         'vav':           bool(vav),
         'vav_settings':  vav_settings,
+        'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
     }
 
 
@@ -472,6 +495,12 @@ def _show_velocity_settings_xaml(use_theme):
     tb_sf = N('tb_sf')
     cb_filter = N('cb_filter')
     tb_filter = N('tb_filter')
+    cb_fse = N('cb_fse')
+    pnl_fse = N('pnl_fse')
+    rb_fan_dwdi = N('rb_fan_dwdi')
+    rb_fan_swsi = N('rb_fan_swsi')
+    tb_blast = N('tb_blast')
+    tb_fse_hint = N('tb_fse_hint')
     exp_adv = N('exp_adv')
     exp_c = N('exp_c')
     exp_comp = N('exp_comp')
@@ -521,7 +550,19 @@ def _show_velocity_settings_xaml(use_theme):
     tb_tol.Text = str(_DV_DEFAULT_TOL_PCT)
     tb_sf.Text = str(_DV_DEFAULT_SAFETY_PCT)
     tb_filter.Text = '%g' % fitting_tables.DEFAULT_RETURN_FILTER_INWC
-    for b in (tb_tol, tb_sf, tb_filter):
+    _fse_def = fan_system_effect.default_settings()
+    tb_blast.Text = '%g' % _fse_def['blast_ratio']
+    cb_fse.IsChecked = bool(_fse_def['on'])
+    rb_fan_swsi.IsChecked = _fse_def['fan_type'] == 'SWSI'
+    rb_fan_dwdi.IsChecked = _fse_def['fan_type'] != 'SWSI'
+    tb_fse_hint.Text = (
+        'The first elbow within Le of each unit outlet, or 5 diameters of each inlet, '
+        'is priced from the 2001 ASHRAE Fundamentals (outlet SR7, worst of positions '
+        'A to D; inlet ED7-2 or ER7-1). C %.1f or more is gray, with the straight '
+        'length that brings it under. Inlet swirl is warned, '
+        'not priced. The inlet tables are printed for SWSI fans.'
+        % fan_system_effect.HIGH_C)
+    for b in (tb_tol, tb_sf, tb_filter, tb_blast):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
@@ -783,6 +824,17 @@ def _show_velocity_settings_xaml(use_theme):
                             'the safety factor. Excludes the coil and cabinet (already '
                             'in the published ESP), fire and backdraft dampers, and the '
                             'filter unless Include return filter is ticked.'),
+        ('Fan system effect', '2001 ASHRAE Fundamentals Eq. 38 (p. 34.14). The first '
+                              'disruption past each unit connection: within Le '
+                              '(Eq. 36 or 37) of an outlet, within the table floor '
+                              'distance (5 D or 5 H) of an inlet. Outlet elbow: SR7 '
+                              'tables for the fan type, worst of positions A to D, at '
+                              'Ab/Ao and L/Le, elbow priced separately. Inlet elbow: '
+                              'ED7-2 round, ER7-1 rect (SWSI tables, an assumption for '
+                              'DWDI), at r/D and L/D, elbow included. Added before the '
+                              'safety factor. Inlet swirl has no coefficient and is '
+                              'warned, not priced. Transitions and taps are flagged, '
+                              'not priced.'),
     ] + vav_checks.basis_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
@@ -802,6 +854,9 @@ def _show_velocity_settings_xaml(use_theme):
         pnl_static.IsEnabled = master
         pnl_static.Opacity = 1.0 if master else 0.55
         tb_filter.IsEnabled = bool(cb_filter.IsChecked)
+        fse_on = master and bool(cb_fse.IsChecked)
+        pnl_fse.IsEnabled = fse_on
+        pnl_fse.Opacity = 1.0 if fse_on else 0.55
         # VAV box and static fields appear only with VAV and external static
         # both ticked (Colin, 2026-10-22).
         both = master and bool(cb_vav.IsChecked)
@@ -810,6 +865,8 @@ def _show_velocity_settings_xaml(use_theme):
     cb_static.Unchecked += sync_enable
     cb_filter.Checked += sync_enable
     cb_filter.Unchecked += sync_enable
+    cb_fse.Checked += sync_enable
+    cb_fse.Unchecked += sync_enable
 
     # The VAV section stays greyed out until VAV System is ticked.
     def sync_vav(s=None, e=None):
@@ -894,6 +951,16 @@ def _show_velocity_settings_xaml(use_theme):
             if f is not None:
                 filter_inwc = f
 
+        fan_effect = fan_system_effect.default_settings()
+        fan_effect['on'] = bool(cb_fse.IsChecked)
+        fan_effect['fan_type'] = 'SWSI' if bool(rb_fan_swsi.IsChecked) else 'DWDI'
+        if ext_static and fan_effect['on']:
+            v, err = fan_system_effect.parse_blast_ratio(tb_blast.Text)
+            if err:
+                errors.append((tb_blast, 'Blast area ratio Ab/Ao ' + err + '.', ()))
+            else:
+                fan_effect['blast_ratio'] = v
+
         vav = bool(cb_vav.IsChecked)
         vav_settings = vav_checks.default_settings()
         if vav:
@@ -911,7 +978,8 @@ def _show_velocity_settings_xaml(use_theme):
         full_diag = bool(cb_full_diag.IsChecked)
         values = _settings_result(out, gpct, selected_cols, full_diag,
                                   ext_static, safety_pct, c_values, comp_values,
-                                  calc_basis, filter_inwc, vav, vav_settings)
+                                  calc_basis, filter_inwc, vav, vav_settings,
+                                  fan_effect)
         return errors, values
 
     def on_ok(s, e):
@@ -2096,7 +2164,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         all_terminals, all_nodes, safety_pct=0.0,
                         c_values=None, comp_values=None,
                         duct_rooted_ids=None, return_filter_inwc=0.0,
-                        vav_box_ids=None, vav_box_drop_inwc=None):
+                        vav_box_ids=None, vav_box_drop_inwc=None,
+                        fan_effect=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -2169,6 +2238,23 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     continues on its own side (supply stays supply).
     Each leaf also carries 'boxes': {box id: (MP loss to the box inlet,
     same with the safety factor)}, the worst path to each box of that root.
+
+    Fan system effect (Colin, 2026-10-29; lib/fan_system_effect.py):
+    fan_effect is the dialog's {'on', 'fan_type', 'blast_ratio'}, None or
+    off for none. For each unit root, each unit connection is walked to its
+    first disruption inside its window (outlet: Le; inlet: the table's floor
+    distance, 5 D or 5 H). An elbow is priced (supply outlet: SR7, worst of
+    positions A to D, elbow also priced as a fitting; return or exhaust
+    inlet: ED7-2 / ER7-1, which include the elbow, so the elbow is not
+    priced again) and added to the subtotal BEFORE the safety factor, like
+    any fitting; a transition, tap or other fitting inside the window is
+    flagged, not priced.
+
+    The walk leaves a unit at the unit connection's velocity (first duct cfm
+    over the connector area) and the first duct's class, so a fitting right
+    on the unit is priced; it started at 0 fpm before 2026-10-29. Each leaf carries 'fse_inwc' (0.0 when none) and
+    'fse_notes' [(kind, text)], kind 'note' or 'warn'. A duct-rooted pick has
+    no fan connection to measure from, so it is skipped with a note.
     """
     dr_by_int_id = {}
     for dr in all_duct_results.values():
@@ -2681,6 +2767,312 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         up_area = down_a
         return (fric, fit, n_fit, n_duct, dlen, unpriced)
 
+    # ── unit connections (Colin, 2026-10-29) ────────────────────────────────
+    # The connector on the unit joined to each of its first nodes: its size
+    # sets the velocity the walk starts with and the fan system effect's Ao.
+    unit_conn_cache = {}
+    def _unit_conn(root_id, first):
+        """hvac_graph.equipment_connection_geometry for the unit root_id
+        toward node first, or None (not equipment, or unreadable: logged)."""
+        key = (root_id, first)
+        if key not in unit_conn_cache:
+            root_elem = all_nodes.get(root_id)
+            geo = None
+            if root_elem is not None and hvac_graph.is_equipment(root_elem):
+                geo = hvac_graph.equipment_connection_geometry(root_elem, first)
+            unit_conn_cache[key] = geo
+        return unit_conn_cache[key]
+
+    def _connection_cfm(first):
+        """Air through the unit connection at node first: a duct's own cfm,
+        else the sum over the nearest ducts below it. nearest_ducts_down
+        reaches each duct once (it keeps a seen set and stops at the first
+        duct on every path), so a tee right on the unit counts both legs once
+        each (review, 2026-10-29). 0.0 when no duct below carries flow."""
+        dr = dr_by_int_id.get(first)
+        if dr is not None:
+            return float(dr.cfm or 0.0)
+        below = vav_checks.nearest_ducts_down(first, all_children, _kind)
+        return sum([float(dr_by_int_id[d].cfm or 0.0)
+                    for d in below if d in dr_by_int_id], 0.0)
+
+    def _unit_start(root_id, first):
+        """(fpm, area ft2, sys_class) the walk carries from the unit into node
+        first, or None.
+
+        A fitting right on the unit connection used to be priced at 0 fpm,
+        because the walk starts with no upstream velocity (Colin, 2026-10-29:
+        fix it). The flow is the whole connection's (_connection_cfm, both
+        legs of a tee on the unit), the area the unit connector's (the
+        section the air passes at the unit, and the end a transition there is
+        oriented against), else the first duct's own.
+        The class is the first duct's, so a fitting before any duct is priced
+        as supply or return correctly."""
+        root_elem = all_nodes.get(root_id)
+        if root_elem is None or not hvac_graph.is_equipment(root_elem):
+            return None
+        flow = _first_duct(first)
+        cfm = _connection_cfm(first)
+        if flow is None or cfm <= 0:
+            return None
+        conn = _unit_conn(root_id, first)
+        area = conn['area_ft2'] if conn is not None and conn.get('area_ft2') else flow.area_ft2
+        if not area:
+            return None
+        return cfm / area, area, flow.sys_class
+
+    # ── fan system effect (Colin, 2026-10-29) ───────────────────────────────
+    # The 2001 Fundamentals Eq. 38 (p. 34.14) adds FSE2 at the fan outlet and
+    # FSE1 at the inlet. Priced from the first disruption inside each unit
+    # connection's window; the math is fan_system_effect's.
+    fse_set = fan_effect if (fan_effect and fan_effect.get('on')) else None
+    _FSE_KIND_TEXT = {'takeoff': 'tap', 'split': 'branch', 'unknown': 'unrecognised fitting'}
+
+    def _fse_first_disruption(root_id, first, win):
+        """(role or None, L ft, node id, notes): the first disruption within
+        win feet of the unit connection at node first.
+
+        L is the straight duct from the unit connection to it: duct lengths
+        summed, unions and accessories passed at zero length. A tap on an
+        unbroken duct sits at its own distance along that duct
+        (hvac_graph.tap_positions_ft from the unit end). role is a
+        fitting_tables.classify_fitting role, 'takeoff' for a tap, 'split'
+        for a duct that divides; None when nothing is within the window or
+        the run ends inside it (a terminal or equipment)."""
+        notes = []
+        prev, nid, l_ft = root_id, first, 0.0
+        seen = set([root_id])
+        while nid is not None and nid not in seen and l_ft < win:
+            seen.add(nid)
+            dr = dr_by_int_id.get(nid)
+            elem = all_nodes.get(nid)
+            kids = [c for c in all_children.get(nid, []) if c not in seen]
+            if dr is not None:
+                taps = _taps(nid)
+                if taps:
+                    pos = {}
+                    if elem is not None:
+                        try:
+                            pos = hvac_graph.tap_positions_ft(elem, prev)
+                        except Exception:
+                            pos = {}
+                    if all(t in pos for t in taps):
+                        tid = min(taps, key=lambda t: pos[t])
+                        at = pos[tid]
+                    else:
+                        tid, at = taps[0], 0.0
+                        notes.append(('note', 'NOTE: tap position on duct %s unreadable, '
+                                      'taken at its unit end for the fan system effect'
+                                      % nid))
+                    fan_system_effect.log.info('fan system effect: tap %s on duct %s '
+                                               'at %.2f ft', tid, nid, l_ft + at)
+                    if l_ft + at < win:
+                        return 'takeoff', l_ft + at, tid, notes
+                    return None, l_ft + at, None, notes
+                l_ft += float(dr.length_ft or 0.0)
+                nxt = [c for c in kids if c not in taps]
+            elif elem is not None and hvac_graph.is_fitting(elem):
+                role = fitting_tables.classify_fitting(hvac_graph.fitting_family_name(elem))
+                if role not in fitting_tables.ZERO_LOSS_ROLES:
+                    fan_system_effect.log.info('fan system effect: %s %s at %.2f ft',
+                                               role, nid, l_ft)
+                    return role, l_ft, nid, notes
+                nxt = kids
+            elif elem is not None and hvac_graph.is_accessory(elem):
+                nxt = kids
+            else:
+                return None, l_ft, None, notes      # a terminal or equipment
+            if len(nxt) > 1:
+                return 'split', l_ft, nid, notes
+            if not nxt:
+                return None, l_ft, None, notes
+            prev, nid = nid, nxt[0]
+        fan_system_effect.log.info('fan system effect: nothing within %.1f ft of '
+                                   'connection %s (%.1f ft walked)', win, first, l_ft)
+        return None, l_ft, None, notes
+
+    def _fse_conn_size(conn, flow, notes, what):
+        """(is_round, D or H in.) of an inlet from the unit connector, its
+        LARGER side if rectangular (the higher C, and the longer window),
+        else the first duct; each fallback is named. (None, None) if nothing
+        is readable."""
+        if conn is not None:
+            if conn.get('round') and conn.get('d_in'):
+                return True, conn['d_in']
+            if conn.get('w_in') and conn.get('h_in'):
+                return False, max(conn['w_in'], conn['h_in'])
+        d = _round_d_in(flow)
+        if d:
+            notes.append(('note', 'NOTE: unit inlet unreadable; %s D taken from the '
+                          'first duct (%.0f in.)' % (what, d)))
+            return True, d
+        if flow.area_ft2:
+            side = math.sqrt(flow.area_ft2) * 12.0
+            notes.append(('note', 'NOTE: unit inlet unreadable; %s H taken as the side '
+                          'of a square of the first duct\'s area (%.0f in.)' % (what, side)))
+            return False, side
+        return None, None
+
+    def _fse_inlet_size(elem, conn, flow, notes):
+        """(is_round, D or H in., r in. or None) for the inlet elbow. H is
+        the side in the plane of the turn (hvac_graph.elbow_geometry swaps
+        Width and Height to put it there). Unreadable elbow: the inlet
+        connection's size (larger side, conservative), radius unknown."""
+        g = hvac_graph.elbow_geometry(elem) if elem is not None else None
+        if g is not None and g.get('round') and g.get('d_in'):
+            return True, g['d_in'], g.get('r_in')
+        if g is not None and not g.get('round') and g.get('w_in'):
+            # ER7-1 is printed for square elbows only (figure, p. 34.60): a
+            # non-square one is read on H and stated as an ASSUMPTION line
+            # in the report (Colin, 2026-10-29).
+            if g.get('h_in') and abs(g['w_in'] - g['h_in']) > 0.01:
+                notes.append(('assume', fan_system_effect.ER7_1_SQUARE_ASSUMPTION))
+            return False, g['w_in'], g.get('r_in')
+        is_round, size = _fse_conn_size(conn, flow, notes, 'elbow')
+        if size is not None:
+            notes.append(('note', 'NOTE: inlet elbow geometry unreadable; %s %.0f in. '
+                          'taken from the unit inlet (%s), radius unknown' % (
+                              'D' if is_round else 'H', size,
+                              'diameter' if is_round else 'larger side, conservative')))
+        return is_round, size, None
+
+    def _fse_connection(root_id, first, tag=False):
+        """The fan system effect at one unit connection, or None when it is
+        not a fan connection this prices (outside air, transfer).
+
+        tag: the unit has more than one connection of this class, so the
+        report names this one by its first element.
+        Returns {'loss', 'item' (index run item or None), 'where', 'notes',
+        'skip': node ids whose own fitting price the system effect replaces
+        (an inlet elbow: ED7-2 / ER7-1 include it), 'gray': elbow ids whose
+        C is HIGH_C or more, 'assumptions': report ASSUMPTION lines}."""
+        rec = {'loss': 0.0, 'item': None, 'where': 'unit connection', 'notes': [],
+               'skip': set(), 'gray': set(), 'assumptions': []}
+        if _kind(first) == 'equipment':
+            rec['notes'].append(('note', 'NOTE: unit connection to element %s not '
+                                 'checked for fan system effect: it feeds equipment '
+                                 'directly.' % first))
+            return rec
+        side = _side_below(first)
+        if side is None:
+            rec['notes'].append(('note', 'NOTE: unit connection to element %s not '
+                                 'checked for fan system effect: no duct found past '
+                                 'it.' % first))
+            return rec
+        # The role hook (Colin, 2026-10-29): a known connector direction would
+        # go in here for exhaust fans, where both sides are Exhaust Air. A
+        # unit's role is its classification today, so None is passed.
+        role_here = fan_system_effect.connection_role(side, None)
+        if role_here is None:
+            fan_system_effect.log.info('fan system effect: connection %s of %s is %r, '
+                                       'not checked', first, root_id, side)
+            return None
+        where_item = fan_system_effect.where_text(side, role_here)
+        where = where_item + (' at element %s' % first if tag else '')
+        rec['where'] = where
+        notes = rec['notes']
+        flow = _first_duct(first)
+        cfm = _connection_cfm(first)
+        if flow is None or cfm <= 0 or not flow.area_ft2:
+            notes.append(('note', 'NOTE: fan system effect at the %s not checked, no '
+                          'airflow on its first duct' % where))
+            return rec
+        conn = _unit_conn(root_id, first)
+        if conn is not None and conn.get('area_ft2'):
+            area = conn['area_ft2']
+        else:
+            area = flow.area_ft2
+            notes.append(('note', 'NOTE: unit %s connection size unreadable; the first '
+                          'duct (%s) is used for Ao and the velocity pressure'
+                          % (where, getattr(flow, 'size', '?'))))
+        v = cfm / area
+        if role_here == fan_system_effect.OUTLET:
+            win, _eq = fan_system_effect.effective_duct_length_ft(area, v)
+            win_name = 'Le'
+        else:
+            is_round_c, size_c = _fse_conn_size(conn, flow, notes, 'window')
+            if size_c is None:
+                notes.append(('warn', 'WARNING: %s size unreadable; fan system effect '
+                              'not checked' % where))
+                return rec
+            win = fan_system_effect.inlet_window_ft(is_round_c, size_c)
+            win_name = 'the inlet window, 5 %s' % ('D' if is_round_c else 'H')
+        role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win)
+        notes.extend(wnotes)
+        if role is None:
+            return rec
+        if role != 'elbow':
+            notes.append(('warn', fan_system_effect.disruption_text(
+                _FSE_KIND_TEXT.get(role, role), where, l_ft, win, win_name)))
+            return rec
+        if role_here == fan_system_effect.OUTLET:
+            r = fan_system_effect.outlet_effect(
+                fse_set.get('fan_type'), fse_set.get('blast_ratio'), area, cfm, l_ft)
+        else:
+            enotes = []
+            is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow, enotes)
+            if size is None:
+                notes.append(('warn', 'WARNING: elbow %.1f ft from the %s, but no size '
+                              'could be read; fan system effect not priced' % (l_ft, where)))
+                return rec
+            r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft)
+            if not r['within']:
+                # Past the table's floor distance for its own size: an
+                # ordinary elbow, priced by the walk like any other.
+                fan_system_effect.log.info('fan system effect: inlet elbow %s at %.2f ft '
+                                           'is past %.2f ft, priced as a fitting',
+                                           did, l_ft, r['floor_ft'])
+                return rec
+            for _k, _t in enotes:
+                if _k == 'assume':
+                    rec['assumptions'].append(_t)
+                else:
+                    notes.append((_k, _t))
+            notes.append(('warn', fan_system_effect.swirl_text(where, l_ft)))
+            notes.append(('note', 'NOTE: the %s C includes the elbow\'s own loss; elbow %s '
+                          'is not priced again as a fitting' % (r['table'], did)))
+            rec['skip'].add(did)
+        loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
+        notes.extend(('note', 'NOTE: ' + n) for n in r['notes'])
+        if r['high']:
+            # GRAY, not RED (Colin, 2026-10-29): still priced in the total,
+            # reported with the straight length that brings C under HIGH_C,
+            # and the elbow is drawn gray on the plan.
+            notes.append(('gray', fan_system_effect.high_text(r, where)))
+            rec['gray'].add(did)
+        name = 'Fan system effect, ' + where_item
+        basis = fan_system_effect.basis_text(r)
+        rec['loss'] = loss
+        rec['item'] = ('Fan system effect {}'.format(did), basis, r['v_fpm'], loss,
+                       (name, basis, r['c'], None))
+        return rec
+
+    def _fse_root(root_id):
+        """({unit connection node: record}, notes about the root itself)."""
+        recs, rnotes = {}, []
+        if fse_set is None:
+            return recs, rnotes
+        root_elem = all_nodes.get(root_id)
+        if duct_rooted_ids and root_id in duct_rooted_ids:
+            rnotes.append(('note', 'NOTE: fan system effect not priced: the run is '
+                           'rooted at a picked duct, with no fan connection to '
+                           'measure from.'))
+        elif root_id in box_ids:
+            rnotes.append(('note', 'NOTE: fan system effect not priced at a VAV box.'))
+        elif root_elem is None or not hvac_graph.is_equipment(root_elem):
+            fan_system_effect.log.info('fan system effect: root %s is not equipment, '
+                                       'NOT FOUND', root_id)
+        else:
+            firsts = all_children.get(root_id, [])
+            classes = [_side_below(f) if _kind(f) != 'equipment' else None
+                       for f in firsts]
+            for first, cls in zip(firsts, classes):
+                tag = cls is not None and classes.count(cls) > 1
+                rec = _fse_connection(root_id, first, tag)
+                if rec is not None:
+                    recs[first] = rec
+        return recs, rnotes
+
     best = {}              # root_id -> {sys_class: {...}}
     box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
     truncated_roots = set()  # PER ROOT: one unit truncating must not label the
@@ -2695,6 +3087,24 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     for root_id in all_root_ids:
         best_here = {}     # this equipment's own per-system-class winners
         boxes_here = {}    # box id -> worst MP loss reaching its inlet
+        # Fan system effect per unit connection, charged to the paths that
+        # leave the unit through that connection.
+        fse_recs, fse_root_notes = _fse_root(root_id)
+        fse_firsts = [c for c in all_children.get(root_id, []) if c in fse_recs]
+        fse_skip = set()
+        fse_gray = set()
+        fse_unit_notes = list(fse_root_notes)
+        fse_unit_assume = []
+        # Every connection's notes, not only the one the worst path leaves
+        # through (review, 2026-10-29): a second outlet's GRAY is still shown.
+        for _f in fse_firsts:
+            _r = fse_recs[_f]
+            fse_skip |= _r['skip']
+            fse_gray |= _r['gray']
+            fse_unit_notes.extend(_r['notes'])
+            for _a in _r['assumptions']:
+                if _a not in fse_unit_assume:
+                    fse_unit_assume.append(_a)
         # (node, friction, fitting loss, ducts, fittings, taps bypassed, feet,
         #  upstream FPM, upstream area ft2, sys_class, unpriced notes,
         #  nodes already on THIS path)
@@ -2762,6 +3172,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                          fitting_tables.flex_bend_c(c_values), None)),)
                 in_flex = is_flex_here
 
+            elif elem is not None and nid in fse_skip:
+                # An inlet elbow the fan system effect priced: ED7-2 / ER7-1
+                # include the elbow's own loss (Colin, 2026-10-29), so it is
+                # one line in the take-off, the fan system effect one.
+                pass
+
             elif elem is not None and hvac_graph.is_fitting(elem):
                 loss, counted, note, _down_a, detail = _price_fitting(
                     elem, sys_class, up_fpm, up_area,
@@ -2814,6 +3230,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     # What the MP supply costs to reach this box's inlet, before
                     # the box's own drop: the unit's max ESP less this is the
                     # pressure left at the box.
+                    # Fan system effect is deliberately not part of the box
+                    # check (Colin, 2026-10-29: no system effect on VAV boxes).
                     _reach = fric + fit + sum([_comp(_k) for _k in comp_keys], 0.0)
                     if _reach > boxes_here.get(nid, -1.0):
                         boxes_here[nid] = _reach
@@ -2853,15 +3271,32 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # Return Filter" option). Same on every return path, so it never
                 # changes which run is the worst, only the total.
                 filt    = return_filter_inwc if key == 'Return Air' else 0.0
+                # The unit connection this path leaves through, and its fan
+                # system effect (0 when none, or not checked).
+                fse_rec = None
+                for _first in fse_firsts:
+                    if _first in path and (fse_rec is None or
+                                           fse_recs[_first]['loss'] > fse_rec['loss']):
+                        fse_rec = fse_recs[_first]
+                fse_loss = fse_rec['loss'] if fse_rec is not None else 0.0
+                fse_items = ((fse_rec['item'],) if fse_rec is not None
+                             and fse_rec['item'] is not None else ())
                 current = best_here.get(key)
-                if current is None or (fric + fit + comp_here + filt) > (
+                if current is None or (fric + fit + comp_here + filt + fse_loss) > (
                         current['friction_inwc'] + current['fitting_inwc'] +
-                        current['component_inwc'] + current['filter_inwc']):
+                        current['component_inwc'] + current['filter_inwc'] +
+                        current['fse_inwc']):
                     best_here[key] = {
                         'friction_inwc':    fric,
                         'fitting_inwc':     fit,
                         'component_inwc':   comp_here,
                         'filter_inwc':      filt,
+                        'fse_inwc':         fse_loss,
+                        # The UNIT's fan system effect notes, the same on
+                        # every class of this root: print them once per unit.
+                        'fse_notes':        fse_unit_notes,
+                        'fse_gray_ids':     fse_gray,
+                        'fse_assumptions':  fse_unit_assume,
                         'unit_side_fittings': pre[2],
                         'component_keys':   keys_here,
                         'duct_count':       dcount,
@@ -2871,7 +3306,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'terminal_id':      nid,
                         'terminal_name':    _family or '-',
                         'unpriced':         unpriced,
-                        'items':            items + (((
+                        'items':            fse_items + items + (((
                             'Accessory (assumed)', 'Balancing damper at ' + (_family or '-'),
                             None, fitting_tables.component_of('damper', comp_values),
                             ('Balancing damper', 'known drop', None, None)),)
@@ -2943,6 +3378,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 dr.fpm, _sw,
                                 ('End of main tap adjustment', 'RJA worksheet', None, None)),)
                 c_fpm, c_area = up_fpm, up_area
+                c_class = sys_class
+                if nid == root_id and dr is None:
+                    # Leaving the unit: start at the unit connection's
+                    # velocity, not 0, so a fitting right on the unit is
+                    # priced (Colin, 2026-10-29).
+                    _st = _unit_start(root_id, child_id)
+                    if _st is not None:
+                        c_fpm, c_area, c_class = _st
                 if box_here:
                     # Past a box the air moves at the box OUTLET duct's
                     # velocity, not the inlet runout's, so a fitting right on
@@ -2952,7 +3395,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         c_fpm, c_area = _od.fpm, _od.area_ft2
                 stack.append((child_id, fric, extra_fit, comp_keys, dcount,
                               fcount, extra_t, dlen, c_fpm, c_area,
-                              sys_class, extra_unpriced,
+                              c_class, extra_unpriced,
                               path | frozenset([child_id]), in_flex,
                               extra_items))
 
@@ -2968,8 +3411,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         boxes = dict((bid, (v, v * sf))
                      for bid, v in box_reach.get(root_id, {}).items())
         for sys_class, b in per_class.items():
+            # Fan system effect is in the subtotal, so the safety factor
+            # applies to it like every other fitting (Colin, 2026-10-29).
             sub = (b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc'] +
-                   b['filter_inwc'])
+                   b['filter_inwc'] + b['fse_inwc'])
             b['subtotal_inwc'] = sub
             b['total_inwc']    = sub * sf
             b['truncated']     = root_id in truncated_roots
@@ -3559,7 +4004,8 @@ _LEGEND_ROWS = [
     ('RED',    'Main: exceeds the limit. Branch: diffuser or duct undersized. '
                'Either: fails the diffuser/duct height clearance (see Reason).'),
     ('GRAY',   'No airflow data: no CFM reaches this element (broken or '
-               'disconnected system).'),
+               'disconnected system). Or an elbow at a unit connection whose fan '
+               'system effect is too high (see External Static Pressure).'),
 ]
 
 # Columns read best left aligned; the rest are centred.
@@ -3649,7 +4095,8 @@ def _draw_external_static(st, view, y, total_w, esp_rec):
         y -= draft.GAP
     tail = duct_perf_console.sheet_lines(
         [('warn', w) for w in esp_rec.get('warnings') or []])
-    tail.extend(t for t in (esp_rec.get('method'), esp_rec.get('not_included')) if t)
+    tail.extend(t for t in [esp_rec.get('method')] + list(esp_rec.get('assumptions') or [])
+                + [esp_rec.get('not_included')] if t)
     if tail:
         y = draft._note_panel(st, view, 0.0, y, total_w, tail)
         y -= draft.GAP
@@ -3970,6 +4417,7 @@ def main():
     filter_inwc   = dialog_result['filter_inwc']
     vav_on        = dialog_result['vav']
     vav_set       = dialog_result['vav_settings']
+    fan_effect    = dialog_result.get('fan_effect') or fan_system_effect.default_settings()
 
     # Every run, even at the standard values, so nothing set by an earlier run
     # in the same session carries over.
@@ -4281,13 +4729,16 @@ def main():
     # text fallback can print just that section.
     esp_start = len(summary_lines)
     critical = None
+    fse_gray_ids = set()      # elbows drawn GRAY: fan system effect too high
+    fse_extra_assume = []     # ASSUMPTION lines from the priced fittings
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
             all_nodes, safety_pct, c_values, comp_values,
             duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc,
             vav_box_ids=vav_box_ids,
-            vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None)
+            vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None,
+            fan_effect=fan_effect)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
         esp_rec = {'units': [], 'combined': [], 'warnings': [],
@@ -4355,6 +4806,9 @@ def main():
                 if c.get('filter_inwc', 0.0) > 0.0:
                     esp_rows.append(('Return filter', c['filter_inwc'],
                                      'known drop, Include Return Filter'))
+                if c.get('fse_inwc', 0.0) > 0.0:
+                    esp_rows.append(('Fan system effect', c['fse_inwc'],
+                                     'unit connection, 2001 Fundamentals Eq. 38'))
                 for _item, _val, _det in esp_rows:
                     summary_lines.append(_esp_text_line(_item, _val, _det))
                 notes = []
@@ -4403,6 +4857,17 @@ def main():
                     'safety': safety_inwc, 'safety_detail': safety_det,
                     'total': c['total_inwc'], 'total_detail': total_det,
                     'notes': notes, 'warnings': cls_warnings})
+
+            # Fan system effect notes belong to the unit, not to a class:
+            # every class leaf carries the same list, so print it once.
+            _fse_leaf = per_class[sorted(per_class.keys())[0]]
+            unit_rec['fse'] = list(_fse_leaf.get('fse_notes', ()))
+            for _kind, _text in unit_rec['fse']:
+                summary_lines.append('    ' + _text)
+            fse_gray_ids.update(_fse_leaf.get('fse_gray_ids', ()))
+            for _a in _fse_leaf.get('fse_assumptions', ()):
+                if _a not in fse_extra_assume:
+                    fse_extra_assume.append(_a)
 
             # The fan sees supply and return in series, so the two index runs add.
             # Which sides went in is NAMED rather than assumed: a plenum-return
@@ -4510,6 +4975,10 @@ def main():
                    'unreadable (FALLBACK).'.format(
                        calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                        calc_basis['air_density']))
+        _fse_method, _fse_assume = fan_system_effect.method_lines(fan_effect)
+        _fse_assume = list(_fse_assume) + [a for a in fse_extra_assume
+                                           if a not in _fse_assume]
+        _method += ' ' + _fse_method
         if filter_inwc > 0.0:
             _not_inc = ('NOT INCLUDED: coil and cabinet, already in the published ESP. '
                         'Return filter IS included as a {:.3f} in. wc known drop. Fire and '
@@ -4519,8 +4988,11 @@ def main():
                         'ESP. Fire and backdraft dampers not priced.')
         summary_lines.append('')
         summary_lines.append('  ' + _method)
+        for _a in _fse_assume:
+            summary_lines.append('  ' + _a)
         summary_lines.append('  ' + _not_inc)
         esp_rec['method'] = _method
+        esp_rec['assumptions'] = list(_fse_assume)
         esp_rec['not_included'] = _not_inc
 
     vav_start = len(summary_lines)
@@ -4708,6 +5180,11 @@ def main():
                     break
                 frontier = nxt
             if worst is None:
+                worst = 'GRAY'
+            # An elbow at a unit connection whose fan system effect is too
+            # high is GRAY (Colin, 2026-10-29), unless a duct beside it
+            # fails outright (RED keeps priority, as everywhere else).
+            if nid in fse_gray_ids and worst != 'RED':
                 worst = 'GRAY'
             elem_labels[elem.Id] = worst
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1

@@ -17,11 +17,14 @@ Record shapes (all text already formatted unless noted):
                   may be present; the console no longer shows them)
 
   external static {'units': [unit], 'combined': [{'title', 'text'}],
-                  'warnings': [text], 'method': text, 'not_included': text}
+                  'warnings': [text], 'method': text, 'assumptions': [text]
+                  (optional), 'not_included': text}
                   unit = {'label', 'classes': [cls], 'untraced': [text],
                   'esp': text or None, 'one_sided': text or None,
                   'checks': [(ok bool, text)], 'warnings': [text],
-                  'esp_total': float or None, 'esp_sides': [class names]}
+                  'esp_total': float or None, 'esp_sides': [class names],
+                  'fse': [(kind, text)] fan system effect notes, kind 'note',
+                  'warn' or 'gray'}
                   cls = {'sys_class', 'airflow', 'rows': [(item, inwc float,
                   detail)], 'subtotal' float, 'safety' float, 'safety_detail',
                   'total' float, 'total_detail', 'notes': [text],
@@ -71,6 +74,7 @@ TAKEOFF_HEADERS = ['Item', 'Table / basis', 'Qty', 'C', 'in. wc']
 # Row order in the take-off: duct first, fittings, taps passed, components.
 _TAKEOFF_RANK = (
     ('Straight duct', 0), ('Flex duct', 1), ('Flex bend', 2),
+    ('Fan system effect', 3),
     ('Tap passed', 5), ('Unit side stretch', 7),
 )
 _KNOWN_DROP = 'known drop'
@@ -200,6 +204,10 @@ def esp_unit_notes(unit, sheet=False):
             out.append(('note', '{}: {}'.format(cls['sys_class'], n)))
         for w in cls.get('warnings') or []:
             out.append(('warn', w))
+    # The unit's fan system effect, once per unit (not per class): every
+    # connection's notes, kind 'note', 'warn' or 'gray' (Colin, 2026-10-29).
+    for kind, text in unit.get('fse') or []:
+        out.append((kind, text))
     for w in unit.get('untraced') or []:
         out.append(('warn', w))
     if unit.get('one_sided'):
@@ -212,7 +220,8 @@ def esp_unit_notes(unit, sheet=False):
 
 
 # Text that already names what it is keeps its own lead on the sheet.
-_OWN_LEADS = ('WARNING', 'UNPRICED', 'FALLBACK', 'NOTE', 'EXTERNAL STATIC', 'LOW')
+_OWN_LEADS = ('WARNING', 'UNPRICED', 'FALLBACK', 'NOTE', 'EXTERNAL STATIC', 'LOW',
+              'GRAY')
 
 
 def sheet_lines(notes):
@@ -257,6 +266,10 @@ def external_static(rec):
         out.append(cr.callout(w, 'warn'))
     if rec.get('method'):
         out.append(cr.note(rec['method']))
+    # Stated assumptions, e.g. the SWSI inlet tables used for a DWDI fan
+    # (Colin, 2026-10-29): one clear line each, not buried in the method.
+    for a in rec.get('assumptions') or []:
+        out.append(cr.callout(a, 'info'))
     if rec.get('not_included'):
         out.append(cr.note(rec['not_included']))
     return ''.join(out)

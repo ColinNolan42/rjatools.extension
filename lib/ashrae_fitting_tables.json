@@ -1726,6 +1726,323 @@
       "kind": "const",
       "C": 1.0,
       "notes": "Book note: \"Table is LAMINAR flow; Co = 1.0 is TURBULENT flow.\" The laminar H/W table is not used and not transcribed."
+    },
+    "SR7-5": {
+      "fitting": "SR7-5",
+      "title": "Fan Outlet, Centrifugal, SWSI, with Elbow (Position A)",
+      "page": "34.66",
+      "pdf_page": 853,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "SWSI",
+        "elbow_position": "A",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [3.2, 2.5, 1.8, 0.8, 0.0, 0.0],
+        [2.2, 1.8, 1.2, 0.53, 0.0, 0.0],
+        [1.6, 1.4, 0.8, 0.4, 0.0, 0.0],
+        [1.0, 0.8, 0.53, 0.26, 0.0, 0.0],
+        [0.8, 0.67, 0.47, 0.18, 0.0, 0.0],
+        [0.53, 0.47, 0.33, 0.18, 0.0, 0.0],
+        [0.53, 0.47, 0.33, 0.18, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-6": {
+      "fitting": "SR7-6",
+      "title": "Fan Outlet, Centrifugal, SWSI, with Elbow (Position B)",
+      "page": "34.67",
+      "pdf_page": 854,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "SWSI",
+        "elbow_position": "B",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [3.8, 3.2, 2.2, 1.0, 0.0, 0.0],
+        [2.9, 2.2, 1.6, 0.67, 0.0, 0.0],
+        [2.0, 1.6, 1.2, 0.53, 0.0, 0.0],
+        [1.4, 1.0, 0.67, 0.33, 0.0, 0.0],
+        [1.0, 0.8, 0.53, 0.26, 0.0, 0.0],
+        [0.8, 0.67, 0.47, 0.18, 0.0, 0.0],
+        [0.67, 0.53, 0.4, 0.18, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-7": {
+      "fitting": "SR7-7",
+      "title": "Fan Outlet, Centrifugal, SWSI, with Elbow (Position C)",
+      "page": "34.67",
+      "pdf_page": 854,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "SWSI",
+        "elbow_position": "C",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [5.5, 4.5, 3.2, 1.6, 0.0, 0.0],
+        [3.8, 3.2, 2.2, 1.0, 0.0, 0.0],
+        [2.9, 2.5, 1.6, 0.8, 0.0, 0.0],
+        [2.0, 1.6, 1.0, 0.53, 0.0, 0.0],
+        [1.4, 1.2, 0.8, 0.33, 0.0, 0.0],
+        [1.2, 0.8, 0.67, 0.26, 0.0, 0.0],
+        [1.0, 0.8, 0.53, 0.26, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-8": {
+      "fitting": "SR7-8",
+      "title": "Fan Outlet, Centrifugal, SWSI, with Elbow (Position D)",
+      "page": "34.67",
+      "pdf_page": 854,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "SWSI",
+        "elbow_position": "D",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [5.5, 4.5, 3.2, 1.6, 0.0, 0.0],
+        [3.8, 3.2, 2.2, 1.0, 0.0, 0.0],
+        [2.9, 2.5, 1.6, 0.8, 0.0, 0.0],
+        [2.0, 1.6, 1.0, 0.53, 0.0, 0.0],
+        [1.4, 1.2, 0.8, 0.33, 0.0, 0.0],
+        [1.2, 0.8, 0.67, 0.26, 0.0, 0.0],
+        [1.0, 0.8, 0.53, 0.26, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-9": {
+      "fitting": "SR7-9",
+      "title": "Fan Outlet, Centrifugal, DWDI, with Elbow (Position A)",
+      "page": "34.67",
+      "pdf_page": 854,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "DWDI",
+        "elbow_position": "A",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [3.2, 2.5, 1.8, 0.8, 0.0, 0.0],
+        [2.2, 1.8, 1.2, 0.53, 0.0, 0.0],
+        [1.6, 1.4, 0.8, 0.4, 0.0, 0.0],
+        [1.0, 0.8, 0.53, 0.26, 0.0, 0.0],
+        [0.8, 0.67, 0.47, 0.18, 0.0, 0.0],
+        [0.53, 0.47, 0.33, 0.18, 0.0, 0.0],
+        [0.53, 0.47, 0.33, 0.18, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-10": {
+      "fitting": "SR7-10",
+      "title": "Fan Outlet, Centrifugal, DWDI, with Elbow (Position B)",
+      "page": "34.68",
+      "pdf_page": 855,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "DWDI",
+        "elbow_position": "B",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [4.8, 4.0, 2.9, 1.3, 0.0, 0.0],
+        [3.6, 2.9, 2.0, 0.84, 0.0, 0.0],
+        [2.5, 2.0, 1.5, 0.66, 0.0, 0.0],
+        [1.8, 1.3, 0.84, 0.41, 0.0, 0.0],
+        [1.25, 1.0, 0.66, 0.33, 0.0, 0.0],
+        [1.0, 0.84, 0.59, 0.23, 0.0, 0.0],
+        [0.84, 0.66, 0.5, 0.23, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-11": {
+      "fitting": "SR7-11",
+      "title": "Fan Outlet, Centrifugal, DWDI, with Elbow (Position C)",
+      "page": "34.68",
+      "pdf_page": 855,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "DWDI",
+        "elbow_position": "C",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [5.5, 4.5, 3.2, 1.6, 0.0, 0.0],
+        [3.8, 3.2, 2.2, 1.0, 0.0, 0.0],
+        [2.9, 2.5, 1.6, 0.8, 0.0, 0.0],
+        [2.0, 1.6, 1.0, 0.53, 0.0, 0.0],
+        [1.4, 1.2, 0.8, 0.33, 0.0, 0.0],
+        [1.2, 0.8, 0.67, 0.26, 0.0, 0.0],
+        [1.0, 0.8, 0.53, 0.26, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "SR7-12": {
+      "fitting": "SR7-12",
+      "title": "Fan Outlet, Centrifugal, DWDI, with Elbow (Position D)",
+      "page": "34.68",
+      "pdf_page": 855,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "DWDI",
+        "elbow_position": "D",
+        "Le": "Eq. 36 (Vo > 13 m/s) or Eq. 37 (Vo <= 13 m/s), p. 34.12 to 34.13"
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "Ab/Ao",
+        "values": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+      },
+      "cols": {
+        "name": "L/Le",
+        "values": [0.0, 0.12, 0.25, 0.5, 1.0, 10.0]
+      },
+      "C": [
+        [4.7, 3.8, 2.7, 1.4, 0.0, 0.0],
+        [3.2, 2.7, 1.9, 0.85, 0.0, 0.0],
+        [2.5, 2.1, 1.4, 0.68, 0.0, 0.0],
+        [1.7, 1.4, 0.85, 0.45, 0.0, 0.0],
+        [1.2, 1.0, 0.68, 0.26, 0.0, 0.0],
+        [1.0, 0.68, 0.57, 0.22, 0.0, 0.0],
+        [0.85, 0.68, 0.45, 0.22, 0.0, 0.0]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the outlet, FSE2 (Eq. 38, p. 34.14). Co at the outlet section o velocity pressure. Zero from L/Le 1.00 on."
+    },
+    "ED7-2": {
+      "fitting": "ED7-2",
+      "title": "Fan Inlet, Centrifugal, SWSI, with 4 Gore Elbow",
+      "page": "34.48",
+      "pdf_page": 835,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "SWSI",
+        "gores": 4,
+        "angle_deg": 90
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "r/Do",
+        "values": [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
+      },
+      "cols": {
+        "name": "L/Do",
+        "values": [0.0, 2.0, 5.0, 10.0]
+      },
+      "C": [
+        [1.8, 1.0, 0.53, 0.53],
+        [1.4, 0.8, 0.4, 0.4],
+        [1.2, 0.67, 0.33, 0.33],
+        [1.1, 0.6, 0.33, 0.33],
+        [1.0, 0.53, 0.33, 0.33],
+        [0.67, 0.4, 0.22, 0.22]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the inlet, FSE1 (Eq. 38, p. 34.14). The duct upstream of the elbow is not included in the loss coefficient (figure). The L/Do 5.0 and 10.0 columns are equal: C does not fall below them."
+    },
+    "ER7-1": {
+      "fitting": "ER7-1",
+      "title": "Fan Inlet, Centrifugal, SWSI, 90 Degree Smooth Radius Elbow (Square)",
+      "page": "34.60",
+      "pdf_page": 847,
+      "coef": "Co",
+      "conditions": {
+        "fan_type": "SWSI",
+        "shape": "square, H x H",
+        "angle_deg": 90
+      },
+      "kind": "2d",
+      "rows": {
+        "name": "r/H",
+        "values": [0.5, 0.75, 1.0, 1.5, 2.0]
+      },
+      "cols": {
+        "name": "L/H",
+        "values": [0.0, 2.0, 5.0, 10.0]
+      },
+      "C": [
+        [2.5, 1.6, 0.8, 0.8],
+        [2.0, 1.2, 0.67, 0.67],
+        [1.2, 0.67, 0.33, 0.33],
+        [1.0, 0.57, 0.3, 0.3],
+        [0.8, 0.47, 0.26, 0.26]
+      ],
+      "transcribed": "2026-10-29",
+      "notes": "Fan system effect at the inlet, FSE1 (Eq. 38, p. 34.14). The duct upstream of the elbow is not included in the loss coefficient (figure). The L/H 5.0 and 10.0 columns are equal: C does not fall below them."
     }
   }
 }
