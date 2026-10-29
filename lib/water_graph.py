@@ -319,6 +319,15 @@ def _mark_upstream_service(graph, cold):
         if any(graph.nodes[nid].kind in (KIND_FIXTURE, KIND_HEATER)
                for nid in below if nid in graph.nodes):
             continue
+        # A second RPZ in parallel shares the service. Its outlet leg runs
+        # back into the main and carries flow, so it is not service piping
+        # (E18, bench 4).
+        below_set = set(below)
+        for nid in below:
+            node = graph.nodes.get(nid)
+            if node is not None and _is_backflow_preventer(node):
+                below_set -= _parallel_outlet_leg(graph, nid, set(below), cold)
+        below = [nid for nid in below if nid in below_set]
         graph.upstream_ids.update(below)
         graph.log("UPSTREAM SERVICE: {} element(s) behind the RPZ inlet "
                   "starting at {} are outside the scope and not sized.".format(
@@ -573,19 +582,22 @@ def _make_node(graph, element, element_id, system):
         return node
 
     if _name_is_hose_bib(_get_family_name(element), _get_type_name(element)):
-        # A hose bibb carries no WSFU in Table E103.3(2); it is a fixed
-        # 5 gpm load from Table 604.3 (Colin, 2026-10-26). Any other family
-        # that is not marked as a fixture is flagged, not guessed at.
+        # A hose bibb carries no WSFU in Table E103.3(2); the firm counts it
+        # as 5 cold WSFU (Colin, 2026-10-29). Any other family that is not
+        # marked as a fixture is flagged, not guessed at.
         node = WaterNode(element_id, element, KIND_FIXTURE)
         node.connectors = connectors
         node.connector_count = len(connectors)
         node.is_water_fixture = True
         node.fixture_name = "Hose bibb"
-        node.fixed_gpm = water_tables.hose_bibb_gpm()
+        node.type_name = "Hose bibb"
+        node.is_public = True
+        node.cw_wsfu = water_tables.HOSE_BIBB_WSFU
+        node.total_wsfu = water_tables.HOSE_BIBB_WSFU
         node.has_hw = False
         graph.fixture_ids.append(element_id)
-        graph.log("HOSE BIBB {}: fixed {} gpm".format(
-            element_id, node.fixed_gpm))
+        graph.log("HOSE BIBB {}: {} cold WSFU".format(
+            element_id, node.cw_wsfu))
         return node
 
     if _looks_like_heater(connectors):
@@ -1305,6 +1317,47 @@ def _is_backflow_preventer(node):
         "rpz" in name or "backflow" in name)
 
 
+def _preventer_above(graph, node_id, cold):
+    """The backflow preventer (not the picked one) a dead end leg hangs from.
+
+    Walks up the cold tree from node_id through zero demand pipes and
+    fittings. Returns the preventer's id, or None when the walk meets a pipe
+    that carries load, the start, or anything else first.
+    """
+    seen = set()
+    current = node_id
+    while current is not None and current not in seen:
+        seen.add(current)
+        node = graph.nodes.get(current)
+        if node is None or current == graph.origin_id:
+            return None
+        if current != node_id and _is_backflow_preventer(node):
+            return current
+        if node.kind == KIND_PIPE:
+            if (float(node.demand_wsfu or 0.0) > 0.0 or
+                    float(node.demand_fixed_gpm or 0.0) > 0.0):
+                return None
+        elif node.kind != KIND_FITTING:
+            return None
+        current = node.parent_by_system.get(cold)
+    return None
+
+
+def _parallel_outlet_leg(graph, preventer_id, below, cold):
+    """The outlet leg of a second preventer reached from its inlet side.
+
+    It runs from the preventer down to a loop joint with piping outside
+    `below` (the main). Returns the leg's ids, or an empty set.
+    """
+    leg = set(graph.descendants(preventer_id, cold))
+    for a, b, system in graph.loop_edges:
+        if system != cold:
+            continue
+        if (a in leg and b not in below) or (b in leg and a not in below):
+            return leg
+    return set()
+
+
 def _assign_parallel_backflow_demand(graph):
     """Size the leg behind a second backflow preventer for the full demand.
 
@@ -1347,6 +1400,16 @@ def _assign_parallel_backflow_demand(graph):
             if (other is not None and preventer != graph.origin_id and
                     end in graph.nodes and end not in graph.upstream_ids and
                     _is_backflow_preventer(other)):
+                starts.append((end, preventer))
+    # The walk reached the other preventer from its inlet (service) side, and
+    # its outlet leg ran on until it met the main at a loop joint. That leg
+    # hangs below the preventer, so walk up from the joint to it.
+    for a, b, system in graph.loop_edges:
+        if system != cold:
+            continue
+        for end in (a, b):
+            preventer = _preventer_above(graph, end, cold)
+            if preventer is not None:
                 starts.append((end, preventer))
 
     done = set()

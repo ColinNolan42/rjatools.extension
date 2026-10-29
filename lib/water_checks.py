@@ -235,10 +235,16 @@ def _check_hot_water(graph, profile, findings):
         "Hot water available: {} heater(s) serving {} hot fixture(s).".format(
             heaters, hot_fixtures)))
 
+    # Heaters in parallel serve their fixtures together; the walk reaches the
+    # fixtures through only one of them, so judge the group.
+    groups = water_graph.heater_groups(graph)
     unserved = []
     for hid in graph.heater_ids:
         node = graph.nodes.get(hid)
-        if node is not None and not node.served_fixture_ids:
+        if node is None:
+            continue
+        if not any(graph.nodes[m].served_fixture_ids
+                   for m in groups.get(hid, (hid,)) if m in graph.nodes):
             unserved.append(node)
 
     if unserved:

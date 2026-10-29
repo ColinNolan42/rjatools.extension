@@ -201,6 +201,22 @@ class TestUnloadedHeater(unittest.TestCase):
         self.assertIn("serves no hot fixtures", by_id[4].flag)
         self.assertIsNotNone(by_id[2].nominal_size)
 
+    def test_parallel_heater_is_not_reported_as_serving_nothing(self):
+        # 4C (2026-10-29): two heaters feed one hot header; the walk reaches
+        # the fixtures through heater 5 only.
+        import water_checks
+        hot = water_graph.shared_params.SYSTEM_DOMESTIC_HOT_WATER
+        g = self._graph([3])
+        add_node(g, 7, water_graph.KIND_PIPE, parent=1, length_feet=4.0)
+        add_node(g, 8, water_graph.KIND_HEATER, parent=7, served=[])
+        add_node(g, 10, water_graph.KIND_PIPE, system=hot, length_feet=1.0)
+        link(g, 8, 10, hot)
+        g.heater_ids.append(8)
+        g.hot_joints = {5: [6], 6: [5, 10], 10: [6, 8], 8: [10]}
+        result = water_checks.check_system(g)
+        self.assertFalse(any(f.code == "heater_serves_nothing"
+                             for f in result["findings"]))
+
     def test_a_loaded_heater_is_sized_as_before(self):
         g = self._graph([3])
         water_graph._assign_demand(g)
@@ -254,6 +270,37 @@ class TestParallelBackflow(unittest.TestCase):
         self.assertAlmostEqual(g.nodes[20].demand_wsfu, 0.0)
         self.assertEqual(g.parallel_backflow, [8])
 
+    def test_other_rpz_reached_from_its_inlet_is_not_service_piping(self):
+        # Bench 4 and 4C (2026-10-29): pick RPZ B (1). Its inlet pipe 30 runs
+        # to the service tee 31 (stub 32), then pipe 33 into RPZ A (34), whose
+        # outlet leg 35, 36 meets the main tee 3 at a loop joint.
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=3.0)
+        add_node(g, 3, water_graph.KIND_FITTING, parent=2)
+        add_node(g, 4, water_graph.KIND_PIPE, parent=3, length_feet=20.0)
+        wc = add_node(g, 9, water_graph.KIND_FIXTURE, parent=4,
+                      cw=5.0, hw=0.0, total=5.0)
+        wc.type_name = "Water Closet, Flush Tank"
+        wc.is_public = True
+        add_node(g, 30, water_graph.KIND_PIPE, parent=1, length_feet=1.0)
+        add_node(g, 31, water_graph.KIND_FITTING, parent=30)
+        add_node(g, 32, water_graph.KIND_PIPE, parent=31, length_feet=1.0)
+        add_node(g, 33, water_graph.KIND_PIPE, parent=31, length_feet=1.0)
+        rpz_a = add_node(g, 34, water_graph.KIND_ACCESSORY, parent=33)
+        rpz_a.family_name = "RPZ 1-INCH"
+        add_node(g, 35, water_graph.KIND_PIPE, parent=34, length_feet=2.0)
+        add_node(g, 36, water_graph.KIND_PIPE, parent=35, length_feet=2.0)
+        g.loop_edges.append((36, 3, COLD))
+        water_graph._mark_upstream_service(g, COLD)
+        self.assertEqual(g.upstream_ids, set([30, 31, 32, 33, 34]))
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[35].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[36].demand_wsfu, 5.0)
+        self.assertAlmostEqual(g.nodes[32].demand_wsfu, 0.0)
+        self.assertEqual(g.parallel_backflow, [34])
+
     def test_no_second_rpz_changes_nothing(self):
         g = self._graph()
         g.nodes[8].family_name = "BALL VALVE"
@@ -264,9 +311,24 @@ class TestParallelBackflow(unittest.TestCase):
 
 class TestHoseBibs(unittest.TestCase):
 
-    def test_table_604_3_gives_five_gpm(self):
+    def test_hose_bibb_is_five_cold_wsfu(self):
+        # Colin, 2026-10-29: 5 cold WSFU each, not a fixed 5 gpm.
         import water_tables
-        self.assertEqual(water_tables.hose_bibb_gpm(), 5.0)
+        self.assertEqual(water_tables.HOSE_BIBB_WSFU, 5.0)
+
+    def test_two_hose_bibs_size_on_wsfu(self):
+        import water_tables
+        g = make_graph()
+        g.origin_id = 1
+        add_node(g, 1, water_graph.KIND_ORIGIN)
+        add_node(g, 2, water_graph.KIND_PIPE, parent=1, length_feet=10.0)
+        for nid in (3, 4):
+            add_node(g, nid, water_graph.KIND_FIXTURE, parent=2,
+                     cw=water_tables.HOSE_BIBB_WSFU, hw=0.0,
+                     total=water_tables.HOSE_BIBB_WSFU)
+        water_graph._assign_demand(g)
+        self.assertAlmostEqual(g.nodes[2].demand_wsfu, 10.0)
+        self.assertAlmostEqual(g.nodes[2].demand_fixed_gpm, 0.0)
 
     def test_name_recognition(self):
         f = water_graph._name_is_hose_bib

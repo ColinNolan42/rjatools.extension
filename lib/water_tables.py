@@ -302,14 +302,11 @@ def flush_valve_min_wsfu():
     return float(_load()[_CURVE_DATA_KEYS[CURVE_FLUSHOMETER]][0]["wsfu"])
 
 
-def hose_bibb_gpm():
-    """Flow of one hose bibb in gpm, from Table 604.3 ("Sill cock, hose
-    bibb"). Hose bibbs carry no WSFU in Table E103.3(2), so they are a fixed
-    gpm load (Colin, 2026-10-26)."""
-    for row in _load()["fixture_flow_604_3"]:
-        if "hose bibb" in str(row.get("fixture", "")).lower():
-            return float(row["flow_gpm"])
-    raise ValueError("Table 604.3 has no hose bibb row in the loaded tables.")
+# Hose bibbs carry no WSFU in Table E103.3(2). The firm counts each as 5
+# cold WSFU, summed with the other fixtures (Colin, 2026-10-29). This replaced
+# a fixed 5 gpm per hose bibb from Table 604.3, which stacked every hose bibb
+# at full flow on top of the building's peak demand.
+HOSE_BIBB_WSFU = 5.0
 
 
 def demand_gpm(wsfu, flush_valve_system=False):
