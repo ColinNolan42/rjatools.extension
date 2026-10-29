@@ -107,6 +107,33 @@ class TestExistingPipesLeftAlone(unittest.TestCase):
         self.assertEqual(judged.label, water_performance.RED)
 
 
+class TestTeeStartConnectorOrder(unittest.TestCase):
+
+    def test_upstream_is_matched_by_connector_id_not_position(self):
+        # Bench 5 and 5C (2026-10-29): the tee was read once to find its new
+        # branch and again by the walk, and the second read came back in a
+        # different order. Connector Id 3 is the branch both times.
+        import tie_in
+        first = [{"connector_index": 0, "connector_id": 1, "kind": "existing"},
+                 {"connector_index": 1, "connector_id": 2, "kind": "existing"},
+                 {"connector_index": 2, "connector_id": 3, "kind": "new"}]
+        picked = tie_in.pick_tee_branch(first)
+        g = make_graph()
+        g.origin_upstream_connectors = set(picked["upstream_connectors"])
+        g.origin_upstream_connector_ids = set(picked["upstream_connector_ids"])
+        second = [{"connector_index": 0, "connector_id": 3},
+                  {"connector_index": 1, "connector_id": 2},
+                  {"connector_index": 2, "connector_id": 1}]
+        faces = [water_graph._faces_upstream(g, c) for c in second]
+        self.assertEqual(faces, [False, True, True])
+
+    def test_index_is_the_fallback_without_ids(self):
+        g = make_graph()
+        g.origin_upstream_connectors = set([1])
+        self.assertTrue(water_graph._faces_upstream(g, {"connector_index": 1}))
+        self.assertFalse(water_graph._faces_upstream(g, {"connector_index": 0}))
+
+
 class TestTransitionIsNotAnElbow(unittest.TestCase):
 
     def test_zero_length_transition_reads_as_a_coupling(self):

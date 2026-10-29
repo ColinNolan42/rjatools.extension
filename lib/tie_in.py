@@ -48,6 +48,7 @@ def pick_upstream_end(ends):
             reason = "it is open, the existing piping is not modeled"
         return {"status": "ok",
                 "connector_index": upstream[0]["connector_index"],
+                "connector_id": upstream[0].get("connector_id"),
                 "reason": reason}
     if not upstream:
         return {"status": "no_upstream",
@@ -100,6 +101,7 @@ def resolve_new_pipe_upstream(pipe, doc, system=None):
                 elif _is_cap(neighbour):
                     kind = END_CAP
         ends.append({"connector_index": c.get("connector_index"),
+                     "connector_id": c.get("connector_id"),
                      "kind": kind,
                      "neighbour_id": neighbour_id,
                      "origin_xyz": c.get("origin_xyz")})
@@ -140,6 +142,8 @@ def pick_tee_branch(ends):
                 "branch_connector": new[0]["connector_index"],
                 "upstream_connectors": [e["connector_index"] for e in ends
                                         if e is not new[0]],
+                "upstream_connector_ids": [e.get("connector_id") for e in ends
+                                           if e is not new[0]],
                 "reason": "the tee's branch is the only connection to new "
                           "construction, the rest of the tee is on the "
                           "existing main"}
@@ -182,6 +186,7 @@ def resolve_tee_branch(tee, doc, system=None):
                 else:
                     kind = END_EXISTING
         ends.append({"connector_index": c.get("connector_index"),
+                     "connector_id": c.get("connector_id"),
                      "kind": kind, "neighbour_id": neighbour_id})
     result = pick_tee_branch(ends)
     result["ends"] = ends

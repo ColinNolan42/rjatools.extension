@@ -141,6 +141,7 @@ class WaterGraph(object):
         self.origin_is_new_pipe         = False   # any existing building tie-in
         self.origin_is_tee              = False   # ... picked as the tee
         self.origin_upstream_connectors = set()   # connector_index values
+        self.origin_upstream_connector_ids = set()  # Revit connector Ids
         self.origin_upstream_reason     = ""
         self.origin_phase_id            = None    # created phase of the picked pipe
         self.existing_connections       = []      # (new element id, existing element id)
@@ -229,6 +230,9 @@ def build_water_network(origin_element, doc, upstream=None):
             origin_element)
         graph.origin_upstream_reason = upstream.get("reason", "")
         graph.origin_upstream_connectors = set([upstream["connector_index"]])
+        if upstream.get("connector_id") is not None:
+            graph.origin_upstream_connector_ids = set(
+                [upstream["connector_id"]])
         graph.log("ORIGIN: new construction pipe {}. Upstream end: {}".format(
             origin_id, graph.origin_upstream_reason or "NOT RESOLVED"))
     else:
@@ -253,6 +257,9 @@ def build_water_network(origin_element, doc, upstream=None):
             graph.origin_upstream_reason = upstream.get("reason", "")
             graph.origin_upstream_connectors = set(
                 upstream["upstream_connectors"])
+            graph.origin_upstream_connector_ids = set(
+                i for i in upstream.get("upstream_connector_ids", [])
+                if i is not None)
             graph.log("ORIGIN: tee {} on the existing main. {}".format(
                 origin_id, graph.origin_upstream_reason))
 
@@ -341,6 +348,19 @@ def _mark_upstream_service(graph, cold):
 # TRAVERSAL
 # =============================================================================
 
+def _faces_upstream(graph, c):
+    """True for a connector of the picked pipe or tee that faces existing.
+
+    Matched by Revit connector Id. The position in the connector set is only
+    the fallback: two reads of the same element can come back in different
+    orders, which sent the walk into the existing main and away from the new
+    branch (bench 5 and 5C, 2026-10-29).
+    """
+    if graph.origin_upstream_connector_ids and             c.get("connector_id") is not None:
+        return c.get("connector_id") in graph.origin_upstream_connector_ids
+    return c.get("connector_index") in graph.origin_upstream_connectors
+
+
 def _walk(graph, doc, start_id, system, visited):
     """Breadth-first walk from start_id following only `system` connectors."""
     queue = [start_id]
@@ -384,9 +404,7 @@ def _walk(graph, doc, start_id, system, visited):
             # The end of the picked new pipe that faces the existing piping.
             # Not an open end, and never walked: the existing main is assumed
             # adequate and is none of this run's business.
-            if (current_id == graph.origin_id and
-                    c.get("connector_index") in
-                    graph.origin_upstream_connectors):
+            if current_id == graph.origin_id and _faces_upstream(graph, c):
                 continue
 
             if not c.get("is_connected"):

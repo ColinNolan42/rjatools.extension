@@ -611,8 +611,16 @@ def get_connectors(element):
             # above are unchanged so pipe_graph.py behaves exactly as before.
             "connected_system_element_id": None,   # MEPSystem ref, never traversed
             "system_type": None,                   # e.g. "DomesticColdWater"
-            "diameter_in": None                    # connector size, inches
+            "diameter_in": None,                   # connector size, inches
+            # Revit's own connector Id, fixed per element. The position in
+            # the set is not: two reads can enumerate it in different orders.
+            "connector_id": None
         }
+
+        try:
+            entry["connector_id"] = int(connector.Id)
+        except Exception:
+            pass
 
         # --- Flow direction ---
         try:
