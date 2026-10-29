@@ -387,9 +387,15 @@ def _enforce_downsize_after_the_tee(graph, segments, flags):
             downstream = by_id.get(nid)
             if downstream is not None and downstream.is_return:
                 continue
-            if downstream is not None and downstream.size_inches:
-                if downstream.size_inches > largest:
-                    largest = downstream.size_inches
+            if downstream is None:
+                continue
+            # An existing pipe keeps its drawn size, which can be far larger
+            # than the load needs (bench 5, a 2 in existing sink branch). The
+            # new pipe upstream follows the size the load calls for there.
+            size = (downstream.required_size_in if downstream.keep_existing
+                    else downstream.size_inches)
+            if size and size > largest:
+                largest = size
 
         if largest > segment.size_inches:
             was = segment.nominal_size

@@ -91,6 +91,17 @@ class TestExistingPipesLeftAlone(unittest.TestCase):
         self.assertTrue(seg.keep_existing)
         self.assertFalse(seg.upsize_needed)
 
+    def test_oversized_existing_branch_does_not_raise_the_new_main(self):
+        # Bench 5 (2026-10-29): a 2 in existing branch to one fixture raised
+        # the new main above it to 2 in.
+        g = build(existing_drawn=2.0)
+        water_graph._mark_upstream_service(g, COLD)
+        water_graph._assign_demand(g)
+        result = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in result["segments"])
+        self.assertEqual(by_id[4].nominal_size, "2")
+        self.assertEqual(by_id[3].nominal_size, "3/4")
+
     def test_performance_judges_existing_against_the_required_size(self):
         judged = water_performance.classify(self.by_id[4], "cold")
         self.assertEqual(judged.label, water_performance.RED)
