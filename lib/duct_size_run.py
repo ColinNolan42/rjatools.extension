@@ -96,10 +96,9 @@ def run(doc, uidoc, output, forms):
             if warning.startswith("Equipment id"):
                 output.print_md(":warning: " + warning)
 
-    single_lines, single_ids = _single_terminal_runs(net)
-    for line in single_lines:
+    for line in _single_terminal_runs(net):
         output.print_md(line)
-    plans = _plan(doc, net, settings["limits"], mp_ids, runout_ids, single_ids)
+    plans = _plan(doc, net, settings["limits"], mp_ids, runout_ids)
     _print_plan(output, plans)
     runouts = sorted(p.element_id for p in plans
                      if p.skip_reason == duct_sizing.SKIP_INLET_RUNOUT)
@@ -213,13 +212,11 @@ def _pick(uidoc, doc, output, forms):
 # Plan
 # ---------------------------------------------------------------------------
 
-def _plan(doc, net, limits, mp_ids=None, runout_ids=None, single_ids=None):
+def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
     """mp_ids: ducts between the unit and the VAV box inlets (VAV ticked).
     They are always mains, sized to the MP limits at the boxes' diffuser
     total. runout_ids: the MP ducts with exactly one box downstream (inlet
-    runouts), sized to the box by the engineer and never resized.
-    single_ids: nodes on a unit connection that serves one terminal, always
-    sized as mains (Colin, 2026-11-02)."""
+    runouts), sized to the box by the engineer and never resized."""
     root_id = eid_int(net.root.Id)
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
@@ -227,7 +224,6 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None, single_ids=None):
     parents = _parents(net)
     mp_ids = mp_ids or set()
     runout_ids = runout_ids or set()
-    single_ids = single_ids or set()
     floor_cache = {}
 
     plans = []
@@ -239,12 +235,10 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None, single_ids=None):
         # A branch is left alone only when it feeds an RJA auto-sizing
         # diffuser; a branch to any other diffuser is sized like a main
         # (Colin, 2026-10-22).
-        # A unit connection serving one terminal is always a main (Colin,
-        # 2026-11-02, hvac_graph.single_terminal_runs).
         term = None
         if len(below) == 1 and not is_mp:
             term = net.nodes.get(next(iter(below)))
-        is_branch = (term is not None and nid not in single_ids and
+        is_branch = (term is not None and
                      hvac_graph.is_auto_sizing_diffuser(term))
         # Any one terminal duct that IS sized never goes under that
         # diffuser's own connection (Colin, 2026-11-02).
@@ -379,24 +373,20 @@ _conn_size_in = hvac_graph.connector_size_in
 
 
 def _single_terminal_runs(net):
-    """(note lines, node ids) for the root unit connections that serve a
-    single terminal (hvac_graph.single_terminal_runs). Those runs are always
-    sized as mains, never left as an auto-sizing branch, with one short note
-    each (Colin, 2026-11-02, the same as Duct Performance)."""
+    """Note lines naming each single diffuser main: a root unit connection
+    that serves one terminal (hvac_graph.single_terminal_runs). The run stays
+    a branch, so an RJA auto-sizing branch is left as drawn (Colin,
+    2026-11-02, the same as Duct Performance)."""
     root_id = eid_int(net.root.Id)
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
     equip_ids = set(nid for nid, e in net.nodes.items()
                     if e is not None and hvac_graph.is_equipment(e))
     runs = hvac_graph.single_terminal_runs(root_id, net.children, downstream, equip_ids)
-    lines = []
-    ids = set()
-    for first in sorted(runs):
-        lines.append(hvac_graph.single_terminal_text(root_id, first))
-        ids |= runs[first]
-    hvac_graph.log.info('Size Duct: %d single terminal unit run(s) on root %s, '
-                        'sized as mains', len(lines), root_id)
-    return lines, ids
+    lines = [hvac_graph.single_terminal_text(root_id, first) for first in sorted(runs)]
+    hvac_graph.log.info('Size Duct: %d single diffuser main(s) on root %s, '
+                        'left as branches', len(lines), root_id)
+    return lines
 
 
 def _parents(net):

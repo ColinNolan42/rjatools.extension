@@ -4913,10 +4913,10 @@ def main():
     # reach, so taking one root's answer and discarding the other's could turn
     # a real main into an apparent branch.
     #
-    # A unit connection serving only one terminal would make its whole run one
-    # branch: nearly always a disconnected run or a rare point of use unit.
-    # Such a run is always judged as a MAIN (velocity and friction), with one
-    # short note per run (Colin, 2026-11-02: always on and quiet,
+    # A unit connection serving only one terminal is a single diffuser main:
+    # its whole run stays one branch, judged on the diffuser tables, and one
+    # short note names it so the designer knows (Colin, 2026-11-02: very
+    # rare, core and shell or a four way drop box diffuser;
     # hvac_graph.single_terminal_runs).
     term_ids = set(all_terminals.keys())
     equip_ids = set(nid for nid, e in all_nodes.items()
@@ -4934,11 +4934,9 @@ def main():
         for first, run in hvac_graph.single_terminal_runs(
                 rid, all_children, partial, equip_ids).items():
             single_runs[(rid, first)] = run
-    single_main_ids = set()
-    for (rid, first), run in sorted(single_runs.items()):
+    for (rid, first), _run in sorted(single_runs.items()):
         output.print_md(hvac_graph.single_terminal_text(rid, first))
-        single_main_ids |= run
-    hvac_graph.log.info('Branch rule: %d single terminal unit run(s), judged as mains',
+    hvac_graph.log.info('Branch rule: %d single diffuser main(s), judged as branches',
                         len(single_runs))
 
     branch_ctx    = {}   # ElementId -> (category, terminal_elem, terminal_cfm) or None
@@ -4957,12 +4955,11 @@ def main():
             continue
         tset = downstream_terms.get(eid_int(eid), set())
         term_elem = None
-        if len(tset) == 1 and eid_int(eid) not in single_main_ids:
+        if len(tset) == 1:
             term_elem = all_nodes.get(list(tset)[0])
         if term_elem is None:
-            # 0 terminals downstream (a dead-end run), 2+ (a real main), a
-            # single terminal unit run, or a terminal
-            # that somehow isn't in the merged node map: all keep the
+            # 0 terminals downstream (a dead-end run), 2+ (a real main), or a
+            # terminal that somehow isn't in the merged node map: all keep the
             # velocity/friction treatment.
             branch_ctx[eid] = None
             duct_roles[eid] = _duct_role_label(False, None)

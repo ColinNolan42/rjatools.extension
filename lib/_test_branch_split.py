@@ -3,10 +3,10 @@
 
 RJA rule (Colin, 2026-11-02): a duct with one terminal downstream is a
 BRANCH. A root unit connection that serves only one terminal makes its whole
-run one branch, which is nearly always a model set up problem or a rare
-point of use unit, so the tools always judge (Duct Performance) or size
-(Size Duct) that run as a main and print one short NOTE (Colin, 2026-11-02,
-always on, no dialog option). VAV boxes serving one diffuser are
+run one branch, a single diffuser main. It stays a branch; the tools only
+name it in one short NOTE, since it is very rare (core and shell, a four way
+drop box diffuser) and otherwise a sign of a disconnected run (Colin,
+2026-11-02). VAV boxes serving one diffuser are
 normal and are not reported. The pure block of hvac_graph.py is run on its
 own, since hvac_graph itself imports the Revit API.
 
@@ -93,10 +93,11 @@ class TestSingleTerminalRuns(unittest.TestCase):
 
 
 class NoteText(unittest.TestCase):
-    def test_note_says_judged_as_a_main(self):
+    def test_note_names_a_single_diffuser_main_judged_as_a_branch(self):
         t = TEXT(101, 202)
         self.assertTrue(t.startswith("NOTE: unit 101 connection at element 202"))
-        self.assertIn("judged as a main", t)
+        self.assertIn("single diffuser main", t)
+        self.assertIn("judged as a branch", t)
         self.assertNotIn("WARNING", t)
 
 

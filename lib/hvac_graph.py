@@ -1750,13 +1750,13 @@ def single_terminal_runs(root_id, children, downstream, equipment_ids=()):
     """{first node id: set of node ids on that run} for each connection of
     the root UNIT that serves exactly one terminal.
 
-    A duct with one terminal downstream is a BRANCH, so without this check
-    such a run, trunk included, would be one branch and never get the
-    velocity and friction check. That is nearly always a model set up problem
-    (a run disconnected from the rest of the system) or a rare point of use
-    unit, so the callers ALWAYS judge (Duct Performance) or size (Size Duct)
-    these runs as mains and print one short note per run (Colin, 2026-11-02:
-    always on and quiet, no dialog option).
+    A duct with one terminal downstream is a BRANCH, and such a run, trunk
+    included, stays one branch: judged on the diffuser tables, and left as
+    drawn by Size Duct when the diffuser is an RJA auto-sizing one. The
+    callers only NAME it a single diffuser main in one short note, so the
+    designer knows (Colin, 2026-11-02): it is very rare, seen in core and
+    shell work or a grocery store four way drop box diffuser, and otherwise
+    points at a run disconnected from the rest of the system.
 
     Only the root unit's own connections count. A VAV box serving one
     diffuser is normal and keeps the branch rule; a root that is a picked
@@ -1786,9 +1786,10 @@ def single_terminal_runs(root_id, children, downstream, equipment_ids=()):
 def single_terminal_text(unit_id, first_id):
     """The NOTE line for one single terminal unit run, shared by Duct
     Performance and Size Duct so the wording matches."""
-    return ('NOTE: unit %s connection at element %s serves only one terminal; '
-            'its run is judged as a main (check the model if this is not a '
-            'point of use unit).' % (unit_id, first_id))
+    return ('NOTE: unit %s connection at element %s is a single diffuser main '
+            '(one terminal); its run is judged as a branch. Rare (core and '
+            'shell, a four way drop box diffuser); otherwise check the model '
+            'for a disconnected run.' % (unit_id, first_id))
 
 
 # ── solid fill pattern ───────────────────────────────────────────────────────
