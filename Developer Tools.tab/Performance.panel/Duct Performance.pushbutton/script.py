@@ -2828,7 +2828,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     fse_set = fan_effect if (fan_effect and fan_effect.get('on')) else None
     _FSE_KIND_TEXT = {'takeoff': 'tap', 'split': 'branch', 'unknown': 'unrecognised fitting'}
 
-    def _fse_first_disruption(root_id, first, win):
+    def _fse_first_disruption(root_id, first, win, where='unit connection'):
         """(role or None, L ft, node id, notes): the first disruption within
         win feet of the unit connection at node first.
 
@@ -2838,8 +2838,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         (hvac_graph.tap_positions_ft from the unit end). role is a
         fitting_tables.classify_fitting role, 'takeoff' for a tap, 'split'
         for a duct that divides; None when nothing is within the window or
-        the run ends inside it (a terminal or equipment)."""
+        the run ends inside it (a terminal or equipment). A transition at the
+        unit (fan_system_effect.is_adapter) is passed, its length counted."""
         notes = []
+        adapters = 0
         prev, nid, l_ft = root_id, first, 0.0
         seen = set([root_id])
         while nid is not None and nid not in seen and l_ft < win:
@@ -2873,7 +2875,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 nxt = [c for c in kids if c not in taps]
             elif elem is not None and hvac_graph.is_fitting(elem):
                 role = fitting_tables.classify_fitting(hvac_graph.fitting_family_name(elem))
-                if role not in fitting_tables.ZERO_LOSS_ROLES:
+                if fan_system_effect.is_adapter(role, l_ft, adapters):
+                    adapters += 1
+                    notes.append(('note', fan_system_effect.adapter_text(nid, l_ft, where)))
+                    fan_system_effect.log.info('fan system effect: transition %s at '
+                                               '%.2f ft passed as the adapter', nid, l_ft)
+                elif role not in fitting_tables.ZERO_LOSS_ROLES:
                     fan_system_effect.log.info('fan system effect: %s %s at %.2f ft',
                                                role, nid, l_ft)
                     return role, l_ft, nid, notes
@@ -2997,7 +3004,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 return rec
             win = fan_system_effect.inlet_window_ft(is_round_c, size_c)
             win_name = 'the inlet window, 5 %s' % ('D' if is_round_c else 'H')
-        role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win)
+        role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where)
         notes.extend(wnotes)
         if role is None:
             return rec
@@ -3063,7 +3070,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             fan_system_effect.log.info('fan system effect: root %s is not equipment, '
                                        'NOT FOUND', root_id)
         else:
-            firsts = all_children.get(root_id, [])
+            # A unit connector also references its logical Duct System
+            # element; that is no connection to price (OLMC, 2026-10-30).
+            firsts = []
+            for f in all_children.get(root_id, []):
+                if _kind(f) is None:
+                    fan_system_effect.log.info('fan system effect: node %s under %s '
+                                               'is not ductwork, skipped', f, root_id)
+                else:
+                    firsts.append(f)
             classes = [_side_below(f) if _kind(f) != 'equipment' else None
                        for f in firsts]
             for first, cls in zip(firsts, classes):

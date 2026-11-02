@@ -67,6 +67,11 @@ log = logging.getLogger(__name__)
 
 HIGH_C = 1.0                 # a fan system effect C at or above this is GRAY
 LENGTH_STEP_FT = 0.1         # the "increase length of duct to" figure, rounded up
+# A transition starting within this distance of the unit is its connection
+# adapter (curb or flange to duct size), part of the connection: the walk
+# passes it and judges the next disruption, measured from the unit (Colin,
+# 2026-10-30, after OLMC hid an elbow behind a 0.4 ft adapter).
+ADAPTER_TRANSITION_FT = 1.0
 ER7_1_SQUARE_ASSUMPTION = ('ASSUMPTION: ER7-1 is printed for square elbows; the '
                            'rectangular elbow is read with H = the side in the plane '
                            'of the turn.')
@@ -397,6 +402,19 @@ def disruption_text(kind, where, l_ft, limit_ft, limit_name):
                 kind, float(l_ft), where, limit_name, float(limit_ft)))
 
 
+def is_adapter(role, l_ft, adapters_passed):
+    """True when a fitting of role at l_ft from the unit is the connection
+    adapter: a transition within ADAPTER_TRANSITION_FT, and only the first."""
+    return (role == 'transition' and adapters_passed == 0
+            and float(l_ft) <= ADAPTER_TRANSITION_FT)
+
+
+def adapter_text(fid, l_ft, where):
+    return ('NOTE: transition %s %.1f ft from the %s taken as the unit connection '
+            'adapter; fan system effect judged at the next disruption.'
+            % (fid, float(l_ft), where))
+
+
 def method_lines(settings):
     """(METHOD sentence, [ASSUMPTION lines]) for the external static report,
     console and drafting view alike. Off: a not-included sentence, no
@@ -413,10 +431,13 @@ def method_lines(settings):
               '(round) or ER7-1 (rect), whose C includes the elbow, so it is not '
               'priced again. Added before the safety factor. C %.1f or more is GRAY, '
               'with the straight length that brings it under. '
+              'A transition within %.1f ft of the unit is taken as its connection '
+              'adapter, priced as a fitting only, and the next disruption is judged. '
               'Inlet swirl not priced (no 2001 coefficient); transitions and taps '
               'flagged, not priced.' % (
                   fan, tables[0][1], tables[-1][1],
-                  float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_C))
+                  float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_C,
+                  ADAPTER_TRANSITION_FT))
     assumptions = []
     if fan != 'SWSI':
         assumptions.append(

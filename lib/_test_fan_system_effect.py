@@ -207,9 +207,19 @@ class SettingsTest(unittest.TestCase):
         self.assertIn('SR7-5 to SR7-8', m2)
         self.assertIn('0.70', m2)
         self.assertEqual(a2, [])
+        self.assertIn('connection adapter', m)
         m3, a3 = F.method_lines({'on': False})
         self.assertIn('not included', m3)
         self.assertEqual(a3, [])
+
+    def test_connection_adapter(self):
+        # OLMC: a 0.4 ft transition at the unit is the adapter, passed once
+        self.assertTrue(F.is_adapter('transition', 0.4, 0))
+        self.assertTrue(F.is_adapter('transition', 1.0, 0))
+        self.assertFalse(F.is_adapter('transition', 1.1, 0))
+        self.assertFalse(F.is_adapter('transition', 0.4, 1))
+        self.assertFalse(F.is_adapter('elbow', 0.4, 0))
+        self.assertIn('adapter', F.adapter_text(5, 0.4, 'supply outlet'))
 
     def test_blast_ratio_validation(self):
         self.assertEqual(F.parse_blast_ratio('0.5'), (0.5, None))
