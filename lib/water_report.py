@@ -2,7 +2,11 @@
 # water_report.py
 # Formats the Size Water output for the pyRevit window.
 #
-# Three blocks, in this order:
+# The window report (build_compact_report) and the pieces the WSFU take-off
+# drafting view and Diagnose share. The long report with a segment table
+# was removed (Colin, 2026-11-02); the pipe table lives on the drafting view.
+#
+# Formerly three blocks:
 #   1. Basis of design (from water_tables, so it cannot drift from the tables
 #      actually used)
 #   2. The WSFU take-off table, laid out like the firm's
@@ -21,36 +25,10 @@ import water_tables
 import water_graph
 
 
-def build_report(graph, sizing_result, header, recirc=None):
-    """Return the whole report as a single string.
-
-    Args:
-        graph: the traversed WaterGraph.
-        sizing_result: what water_sizing_engine.size_network returned.
-        header: dict with "date", "job", "job_number", "by".
-        recirc: what water_recirc.analyze returned, or None when the system
-            has no hot water return.
-    """
-    lines = []
-    lines.extend(basis_block(header))
-    for line in origin_basis_lines(graph):
-        lines.append("  " + line)
-    lines.append("")
-    lines.extend(wsfu_table(graph))
-    lines.append("")
-    lines.extend(segment_table(graph, sizing_result))
-    lines.append("")
-    if recirc is not None and (recirc["legs"] or recirc["unrooted_pipe_ids"]):
-        lines.extend(recirc_table(recirc))
-        lines.append("")
-    lines.extend(exceptions_block(graph, sizing_result))
-    return "\n".join(lines)
-
-
 def build_compact_report(graph, sizing_result, header, recirc=None):
     """The window report: results, the equations with their numbers, and what
     needs a look. No pipe by pipe listing (the full pipe table goes on the
-    drafting view and in build_report). Colin, 2026-10-26.
+    drafting view). Colin, 2026-10-26.
 
     The full basis of design block heads it, from
     water_tables.basis_of_design_lines(), because every Domestic Water output
@@ -277,33 +255,6 @@ def exceptions_compact(graph, sizing_result):
 # 1. Basis of design
 # ---------------------------------------------------------------------------
 
-def basis_block(header):
-    lines = ["=" * 78,
-             "SIZE WATER - DOMESTIC WATER PIPE SIZING",
-             "=" * 78,
-             "DATE:     {}".format(header.get("date", "")),
-             "JOB:      {}".format(header.get("job", "")),
-             "JOB NO.:  {}".format(header.get("job_number", "")),
-             "BY:       {}".format(header.get("by", "")),
-             "",
-             "BASIS OF DESIGN"]
-    for line in water_tables.basis_of_design_lines():
-        lines.append("  " + line)
-    lines.append("")
-    lines.extend(sizing_chart_lines())
-    return lines
-
-
-def sizing_chart_lines():
-    """The firm WSFU-to-pipe-size chart as fixed-width console lines."""
-    chart = water_tables.sizing_chart()
-    fmt = "  {:<11}{:<20}{:<19}{:<14}"
-    lines = ["FIRM PIPE SIZING CHART", fmt.format(*chart["headers"])]
-    for row in chart["rows"]:
-        lines.append(fmt.format(*row))
-    return lines
-
-
 def origin_basis_lines(graph):
     """Basis lines that depend on where the run started.
 
@@ -510,53 +461,6 @@ def wsfu_table(graph):
 # 3. Segment sizing table
 # ---------------------------------------------------------------------------
 
-def segment_table(graph, sizing_result):
-    lines = ["PIPE SIZING BY SEGMENT",
-             "-" * 78,
-             "{:<10}{:<7}{:>8}{:>8}{:>8}{:>9}{:>9}  {}".format(
-                 "PIPE ID", "SYS", "WSFU", "GPM", "LEN FT",
-                 "EXISTING", "NEW", "RULE"),
-             "-" * 78]
-
-    segments = sizing_result["segments"]
-    if not segments:
-        lines.append("  (no pipes were traversed)")
-        lines.append("-" * 78)
-        return lines
-
-    for s in segments:
-        if s.is_return:
-            # Return piping carries circulation flow, not fixture units.
-            lines.append("{:<10}{:<7}{:>8}{:>8}{:>8}{:>9}{:>9}  {}".format(
-                s.element_id,
-                "HWR",
-                "-",
-                "-" if s.circ_gpm is None else "{:.2f}".format(
-                    float(s.circ_gpm)),
-                "{:.1f}".format(float(s.length_feet)),
-                _size(s.existing_size_in),
-                s.nominal_size if s.nominal_size else "-",
-                s.rule))
-            continue
-        lines.append("{:<10}{:<7}{:>8}{:>8}{:>8}{:>9}{:>9}  {}".format(
-            s.element_id,
-            _system_label(s.system),
-            _num(s.demand_wsfu),
-            _gpm({"gpm": s.demand_gpm}),
-            "{:.1f}".format(float(s.length_feet)),
-            _size(s.existing_size_in),
-            s.nominal_size if s.nominal_size else "-",
-            s.rule))
-
-    totals = sizing_result["totals"]
-    lines.append("-" * 78)
-    lines.append("{} pipes, {} sized, {} not sized, {:.1f} ft total".format(
-        totals["pipe_count"], totals["sized_count"],
-        totals["unsized_count"], float(totals["total_length_ft"])))
-    lines.append("-" * 78)
-    return lines
-
-
 # ---------------------------------------------------------------------------
 # 4. Hot water recirculation: the circuit setter settings
 # ---------------------------------------------------------------------------
@@ -679,131 +583,6 @@ def recirc_table(recirc):
 # ---------------------------------------------------------------------------
 # 5. Everything the run could not do
 # ---------------------------------------------------------------------------
-
-def exceptions_block(graph, sizing_result):
-    lines = ["FLAGS, SKIPPED AND NOT EVALUATED", "-" * 78]
-    any_flag = False
-
-    if not graph.heater_ids:
-        lines.append("  NO WATER HEATER found on the cold network. Hot water "
-                     "demand is therefore NOT included in any cold pipe.")
-        any_flag = True
-    else:
-        reported = set()
-        groups = getattr(graph, "heater_groups", {}) or {}
-        for hid in graph.heater_ids:
-            group = groups.get(hid, (hid,))
-            if len(group) > 1:
-                if group in reported:
-                    continue
-                reported.add(group)
-                fixtures = set()
-                for member in group:
-                    fixtures.update(graph.nodes[member].served_fixture_ids)
-                lines.append(
-                    "  Water heaters {} are in parallel: they serve {} "
-                    "fixture(s) together and split the hot load equally, so "
-                    "each cold feed and hot outlet carries 1/{} of it, "
-                    "combined at the tee where the outlets join.".format(
-                        ", ".join(str(m) for m in group), len(fixtures),
-                        len(group)))
-                continue
-            node = graph.nodes[hid]
-            lines.append("  Water heater {} serves {} fixture(s).".format(
-                hid, len(node.served_fixture_ids)))
-
-    for flag in sizing_result["flags"]:
-        lines.append("  " + flag)
-        any_flag = True
-
-    if graph.open_ends:
-        lines.append("  {} open connector(s) - the network may be "
-                     "incomplete:".format(len(graph.open_ends)))
-        for element_id, system in graph.open_ends[:15]:
-            lines.append("      element {} ({})".format(
-                element_id, _system_label(system)))
-        if len(graph.open_ends) > 15:
-            lines.append("      ... and {} more".format(
-                len(graph.open_ends) - 15))
-        any_flag = True
-
-    if graph.existing_connections:
-        lines.append("  {} connection(s) to EXISTING phase piping were not "
-                     "followed. The existing piping is assumed adequate and "
-                     "is not sized: {}".format(
-                         len(graph.existing_connections),
-                         ", ".join(str(far) for _near, far in
-                                   graph.existing_connections[:10])))
-
-    passthrough = getattr(graph, "existing_passthrough", [])
-    if passthrough:
-        lines.append("  {} EXISTING phase valve(s) or fitting(s) sit inside "
-                     "the new construction run, with new work on every other "
-                     "side, so the run was walked through them. Check their "
-                     "phase: {}".format(
-                         len(passthrough),
-                         ", ".join(str(e) for e in passthrough[:10])))
-
-    if graph.loops:
-        lines.append("  {} loop connection(s) detected. A recirculation loop "
-                     "is expected here; any other loop is a modeling "
-                     "error.".format(len(graph.loops)))
-        any_flag = True
-
-    if graph.unreadable:
-        lines.append("  {} element(s) had no readable connectors.".format(
-            len(graph.unreadable)))
-        any_flag = True
-
-    fixtures_without_load = [
-        fid for fid in graph.fixture_ids
-        if graph.nodes[fid].total_wsfu <= 0]
-    if fixtures_without_load:
-        lines.append("  {} fixture(s) carry zero WSFU - check the Type and "
-                     "the public/private setting: {}".format(
-                         len(fixtures_without_load),
-                         ", ".join(str(f) for f in fixtures_without_load[:10])))
-        any_flag = True
-
-    if len(graph.system_types) > 1:
-        lines.append("  Piping system types found on the network:")
-        for type_id in sorted(graph.system_types.keys()):
-            lines.append("      {} (id {})".format(
-                graph.system_types[type_id], type_id))
-        lines.append("      Hot supply and hot water recirculation share one "
-                     "system CLASSIFICATION, so the RETURN is identified by "
-                     "System Type instead. A system identified as the return "
-                     "is sized on circulation flow, not fixture units.")
-
-    segments = sizing_result["segments"]
-    cw_count = len([s for s in segments
-                    if s.system == shared_params.SYSTEM_DOMESTIC_COLD_WATER
-                    and s.nominal_size is not None])
-    hw_count = len([s for s in segments
-                    if s.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER
-                    and not s.is_return and s.nominal_size is not None])
-    hwr_count = len([s for s in segments
-                     if s.is_return and s.nominal_size is not None])
-    hwr_unsized = len([s for s in segments
-                       if s.is_return and s.nominal_size is None])
-    lines.append("  SIZED BY THIS RUN: {} cold water pipe(s), {} hot water "
-                 "pipe(s) and {} hot water return pipe(s).".format(
-                     cw_count, hw_count, hwr_count))
-    if hwr_unsized:
-        lines.append("  NOT SIZED: {} hot water return pipe(s), see the "
-                     "flags above.".format(hwr_unsized))
-    if sizing_result.get("flush_valve_system"):
-        lines.append("  DEMAND: the system serves a flush valve fixture, so "
-                     "cold water uses the flush valve column of Table "
-                     "E103.3(3) and is sized on gpm.")
-    lines.append("  VELOCITY AND PRESSURE LOSS: checked by Water "
-                 "Performance.")
-
-    if not any_flag:
-        lines.insert(2, "  No blocking issues found.")
-    lines.append("=" * 78)
-    return lines
-
 
 # ---------------------------------------------------------------------------
 # Formatting helpers

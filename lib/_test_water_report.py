@@ -160,13 +160,9 @@ class TestDemoSizing(unittest.TestCase):
                 self.assertIn(key, row)
 
     def test_report_is_ascii_and_has_all_blocks(self):
-        text = water_report.build_report(self.graph, self.result, HEADER)
+        text = water_report.build_compact_report(self.graph, self.result, HEADER)
         text.encode("ascii")
-        for needle in ("BASIS OF DESIGN",
-                       "WATER SUPPLY FIXTURE UNIT TAKE-OFF",
-                       "PIPE SIZING BY SEGMENT",
-                       "FLAGS, SKIPPED AND NOT EVALUATED",
-                       "2024 International Plumbing Code"):
+        for needle in ("SIZE WATER", "FLAGS", "2024 International Plumbing Code"):
             self.assertIn(needle, text)
 
 
@@ -417,7 +413,7 @@ def _print_report():
     graph = build_demo_system()
     water_graph._assign_demand(graph)
     result = water_sizing_engine.size_network(graph)
-    print(water_report.build_report(graph, result, HEADER))
+    print(water_report.build_compact_report(graph, result, HEADER))
 
 
 if __name__ == "__main__":

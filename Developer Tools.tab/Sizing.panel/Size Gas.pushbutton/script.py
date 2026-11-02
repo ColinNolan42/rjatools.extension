@@ -590,7 +590,7 @@ def main():
         if no_load:
             output.print_md(
                 "**{}/{} fixture(s) have 0 MBH load** - "
-                "connected pipes will be sized at minimum (1/2\"):".format(
+                "connected pipes will be sized at minimum (3/4\"):".format(
                     len(no_load), len(fixture_nodes)))
             for n in no_load:
                 output.print_md("  - {} (ID {})".format(

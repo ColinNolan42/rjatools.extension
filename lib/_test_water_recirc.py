@@ -428,20 +428,19 @@ class TestReturnSizing(unittest.TestCase):
     def test_report_lists_the_circuit_setters(self):
         header = {"date": "2026-10-12", "job": "Demo", "job_number": "26.000",
                   "by": "CN"}
-        text = water_report.build_report(self.g, self.result, header,
-                                         self.recirc)
+        # The circuit setter table is water_report.recirc_table, which
+        # Diagnose prints (the long Size Water report was removed 2026-11-02).
+        text = "\n".join(water_report.recirc_table(self.recirc))
         text.encode("ascii")
         for needle in ("HOT WATER RECIRCULATION - CIRCUIT SETTER FLOWS",
                        "LOOP", "BRANCH", "160.0", "0.80", "0.50",
-                       "TOTAL CIRCULATION FLOW, 2 circuit setter(s): 1.30 gpm",
-                       "HWR",
-                       "4 hot water return pipe(s)"):
+                       "TOTAL CIRCULATION FLOW, 2 circuit setter(s): 1.30 gpm"):
             self.assertIn(needle, text)
         self.assertNotIn("still to do", text)
 
     def test_report_without_a_return_has_no_recirculation_block(self):
         header = {"date": "2026-10-12", "job": "", "job_number": "", "by": ""}
-        text = water_report.build_report(self.g, self.result, header)
+        text = water_report.build_compact_report(self.g, self.result, header)
         self.assertNotIn("CIRCUIT SETTER FLOWS", text)
 
 

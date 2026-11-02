@@ -62,8 +62,6 @@ PARAM_HW_OUT_SIZE_OVERRIDE = "HW Out Size Override"  # Instance Length.
 
 # Equipment / device parameters approved 2026-09-23 but NOT yet on any family.
 # Read defensively; absent means "not applicable", never an error.
-PARAM_LOAD_MODE          = "Load_Mode"           # "WSFU" or "GPM".
-PARAM_FIXED_GPM          = "Fixed_GPM"           # Number. Used when Load_Mode = GPM.
 PARAM_FLUSH_TYPE          = "Flush_Type"          # Type text: Tank, Valve, Flushometer Tank, None.
 PARAM_DEVICE_PRESSURE_DROP = "Device_Pressure_Drop_PSI"  # Number. Pressure-loss stage only.
 

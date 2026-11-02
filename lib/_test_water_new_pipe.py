@@ -134,7 +134,7 @@ class TestPipeOriginIsSized(unittest.TestCase):
     def test_report_states_the_existing_main_was_not_checked(self):
         header = {"date": "2026-10-13", "job": "TI", "job_number": "26.000",
                   "by": "CN"}
-        text = water_report.build_report(self.g, self.result, header)
+        text = water_report.build_compact_report(self.g, self.result, header)
         text.encode("ascii")
         self.assertIn("sizing starts at the new construction connection "
                       "(pipe 1)", text)
@@ -302,9 +302,8 @@ class TestWalkStopsAtExistingPhase(unittest.TestCase):
         g.existing_connections = [(3, 77)]
         water_graph._assign_demand(g)
         result = water_sizing_engine.size_network(g)
-        text = "\n".join(water_report.exceptions_block(g, result))
-        self.assertIn("1 connection(s) to EXISTING phase piping were not "
-                      "followed", text)
+        text = "\n".join(water_report.exceptions_compact(g, result))
+        self.assertIn("1 connection(s) to EXISTING piping not followed", text)
         self.assertIn("77", text)
 
 
