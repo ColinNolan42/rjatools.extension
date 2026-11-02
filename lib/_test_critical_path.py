@@ -1376,8 +1376,9 @@ check("case42 the take-off shows the elbow once, as the fan system effect line",
       and not any(r.startswith('Round elbow') for r in _rows42), "rows %r" % (_rows42,))
 check("case42 items add up to the subtotal",
       abs(_items_sum(ra35) - ra35['subtotal_inwc']) < 1e-9)
-check("case42 the report says the elbow is not priced again",
-      any('not priced again' in t for _k, t in ra35.get('fse_notes', ())))
+check("case42 the report says the elbow is part of the fan system effect",
+      any('elbow 1002' in t and 'part of the fan system effect' in t
+          and 'include the elbow' in t for _k, t in ra35.get('fse_notes', ())))
 check("case42 outlet SR7 stays system effect only: the outlet elbow is still a fitting",
       sa32['fitting_inwc'] > 0.0)
 

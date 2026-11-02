@@ -3069,8 +3069,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     rec['assumptions'].append(_t)
                 else:
                     notes.append((_k, _t))
-            notes.append(('note', 'NOTE: the %s C includes the elbow\'s own loss; elbow %s '
-                          'is not priced again as a fitting' % (r['table'], did)))
+            notes.append(('note', 'NOTE: elbow %s, %.1f ft from the %s, is part of the fan '
+                          'system effect: the %s C tables include the elbow\'s own loss, '
+                          'so it is priced in the fan system effect line, not as a '
+                          'separate elbow' % (did, l_ft, where, r['table'])))
             rec['skip'].add(did)
         loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
