@@ -56,10 +56,12 @@ RJA DECISIONS (Colin, 2026-10-29):
     2026-11-02), not the conservative unreadable radius row.
   - A duct pick with no unit takes the picked duct's unit side end as the
     unit outlet or inlet (Colin, 2026-11-02).
-  - C at or above HIGH_C is GRAY (Colin, 2026-10-29, was RED): "System
-    Effect Pressure Loss too high, increase length of duct to X ft", X the
-    straight length from the unit connection at which C first drops BELOW
-    HIGH_C. It is still priced in the total.
+  - A loss (C x Pv) at or above HIGH_LOSS_INWC is GRAY: "System Effect
+    Pressure Loss too high, increase length of duct to X ft", X the straight
+    length from the unit connection at which the loss first drops BELOW it.
+    It is still priced in the total. Colin, 2026-11-02: judged on the loss,
+    not on C (was C 1.0 from 2026-10-29); 0.058 in. wc is reasonable, 0.5 is
+    not, which takes a very short straight into a small, fast elbow.
   - ER7-1 is printed for SQUARE elbows (figure, p. 34.60). A non-square
     rectangular inlet elbow is read with H = the side in the plane of the
     turn, stated as an ASSUMPTION (ER7_1_SQUARE_ASSUMPTION).
@@ -74,7 +76,7 @@ import ashrae_fittings
 
 log = logging.getLogger(__name__)
 
-HIGH_C = 1.0                 # a fan system effect C at or above this is GRAY
+HIGH_LOSS_INWC = 0.5         # a fan system effect loss at or above this is GRAY
 LENGTH_STEP_FT = 0.1         # the "increase length of duct to" figure, rounded up
 MITERED_R_OVER_H = 1.0       # ER7-1 row a rect mitered inlet elbow is read on
 ER7_1_SQUARE_ASSUMPTION = ('ASSUMPTION: ER7-1 is printed for square elbows; the '
@@ -153,51 +155,63 @@ def parse_blast_ratio(text):
     return v, None
 
 
-def is_high(c):
-    """True when a fan system effect C reaches HIGH_C (reported GRAY)."""
-    return c is not None and float(c) >= HIGH_C - 1e-9
+def std_pv_inwc(v_fpm):
+    """Velocity pressure of standard air, in. wc. The default when the caller
+    passes no pv_of (Duct Performance passes hvac_graph's, which follows the
+    dialog's air density)."""
+    return (float(v_fpm) / 4005.0) ** 2
+
+
+def is_high(loss_inwc):
+    """True when a fan system effect loss reaches HIGH_LOSS_INWC (GRAY)."""
+    return loss_inwc is not None and float(loss_inwc) >= HIGH_LOSS_INWC - 1e-9
+
+
+def c_limit(pv_inwc):
+    """The C at which the loss reaches HIGH_LOSS_INWC at this Pv."""
+    return HIGH_LOSS_INWC / pv_inwc if pv_inwc > 0 else float('inf')
 
 
 def _ceil_step(ft):
     """ft rounded UP to LENGTH_STEP_FT, so the figure given is past the edge.
-    Any length above zero is at least one step: a C of exactly HIGH_C at
-    L 0 needs some straight duct, never '0.0 ft'."""
+    Any length above zero is at least one step: a loss of exactly
+    HIGH_LOSS_INWC at L 0 needs some straight duct, never '0.0 ft'."""
     n = math.ceil(float(ft) / LENGTH_STEP_FT - 1e-9)
     if float(ft) > 0.0:
         n = max(n, 1)
     return round(n * LENGTH_STEP_FT, 6)
 
 
-def _first_below(c_of, x_max, iters=60):
-    """Smallest x in [0, x_max] where c_of(x) < HIGH_C, or None when even
+def _first_below(c_of, x_max, c_lim, iters=60):
+    """Smallest x in [0, x_max] where c_of(x) < c_lim, or None when even
     x_max does not get under it. c_of is a table read, which falls (does not
     rise) with straight length, so bisection finds the edge."""
-    if c_of(0.0) < HIGH_C:
+    if c_of(0.0) < c_lim:
         return 0.0
-    if c_of(x_max) >= HIGH_C:
+    if c_of(x_max) >= c_lim:
         return None
     lo, hi = 0.0, float(x_max)
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
-        if c_of(mid) < HIGH_C:
+        if c_of(mid) < c_lim:
             hi = mid
         else:
             lo = mid
     return hi
 
 
-def outlet_fix_ft(fan_type, blast_ratio, le_ft):
+def outlet_fix_ft(fan_type, blast_ratio, le_ft, c_lim):
     """Straight length from the outlet at which the worst of positions A to
-    D first drops below HIGH_C, rounded up; 0.0 when it never reaches it."""
-    x = _first_below(lambda r: outlet_c(fan_type, blast_ratio, r)[0], 1.0)
+    D first drops below c_lim, rounded up; None when it never does."""
+    x = _first_below(lambda r: outlet_c(fan_type, blast_ratio, r)[0], 1.0, c_lim)
     return _ceil_step(x * float(le_ft)) if x is not None else None
 
 
-def inlet_fix_ft(is_round, r_over, size_in):
+def inlet_fix_ft(is_round, r_over, size_in, c_lim):
     """Straight length from the inlet at which ED7-2 / ER7-1 first drops below
-    HIGH_C, rounded up; None if the table's floor is itself that high."""
+    c_lim, rounded up; None if the table's floor is itself that high."""
     key = INLET_ROUND if is_round else INLET_RECT
-    x = _first_below(lambda y: inlet_c(is_round, r_over, y)[0], _cols(key)[-1])
+    x = _first_below(lambda y: inlet_c(is_round, r_over, y)[0], _cols(key)[-1], c_lim)
     return _ceil_step(x * float(size_in) / 12.0) if x is not None else None
 
 
@@ -305,22 +319,25 @@ def inlet_c(is_round, r_over, l_over):
 
 # ── one connection ───────────────────────────────────────────────────────────
 
-def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft):
+def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft, pv_of=None):
     """The fan outlet record for an elbow l_ft from the outlet of area_ft2.
 
-    Returns {'side': 'outlet', 'c', 'table', 'position', 'v_fpm', 'le_ft',
-    'eq', 'l_ft', 'ratio' (L/Le), 'blast_ratio', 'high', 'fix_ft', 'notes'}.
-    Pv is the caller's (hvac_graph's standard air), so the loss is c x
-    Pv(v_fpm). fix_ft: the straight length from the outlet at which C first
-    drops below HIGH_C (outlet_fix_ft)."""
+    Returns {'side': 'outlet', 'c', 'table', 'position', 'v_fpm', 'pv',
+    'loss', 'le_ft', 'eq', 'l_ft', 'ratio' (L/Le), 'blast_ratio', 'high',
+    'fix_ft', 'notes'}. pv_of(v_fpm) gives the velocity pressure (standard
+    air when None); loss = c x pv. fix_ft: the straight length from the
+    outlet at which the loss first drops below HIGH_LOSS_INWC."""
     v = float(cfm) / float(area_ft2)
+    pv = (pv_of or std_pv_inwc)(v)
     le, eq = effective_duct_length_ft(area_ft2, v)
     ratio = float(l_ft) / le if le > 0 else 0.0
     c, pos, key, notes = outlet_c(fan_type, blast_ratio, ratio)
+    high = is_high(c * pv)
     rec = {'side': 'outlet', 'c': c, 'table': key, 'position': pos,
-           'v_fpm': v, 'le_ft': le, 'eq': eq, 'l_ft': float(l_ft),
-           'ratio': ratio, 'blast_ratio': float(blast_ratio), 'high': is_high(c),
-           'fix_ft': outlet_fix_ft(fan_type, blast_ratio, le) if is_high(c) else None,
+           'v_fpm': v, 'pv': pv, 'loss': c * pv, 'le_ft': le, 'eq': eq,
+           'l_ft': float(l_ft), 'ratio': ratio, 'blast_ratio': float(blast_ratio),
+           'high': high,
+           'fix_ft': outlet_fix_ft(fan_type, blast_ratio, le, c_limit(pv)) if high else None,
            'notes': notes}
     log.info('fan_system_effect outlet: %s pos %s Ab/Ao %.2f L %.2f ft Le %.2f ft '
              '(%s) C %.2f at %.0f fpm', key, pos, float(blast_ratio), float(l_ft),
@@ -328,7 +345,7 @@ def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft):
     return rec
 
 
-def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft):
+def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None):
     """The fan inlet record for an elbow l_ft from the inlet.
 
     size_in: the elbow's D (round) or H (rect, the side in the plane of the
@@ -340,7 +357,8 @@ def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft):
     C reaches the table's floor, floor_c that floor (never 0 on these
     tables). within False: the elbow is at or past floor_ft, outside the
     inlet window, and is an ordinary fitting; the caller does not price it
-    here. fix_ft: where C first drops below HIGH_C (inlet_fix_ft)."""
+    here. fix_ft: where the loss first drops below HIGH_LOSS_INWC. pv_of, pv
+    and loss as outlet_effect."""
     size_in = float(size_in)
     r_over = (float(r_in) / size_in) if r_in else None
     l_over = float(l_ft) * 12.0 / size_in
@@ -348,11 +366,13 @@ def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft):
     fr = floor_ratio(key, r_used)
     floor_c, _n = ashrae_fittings.lookup(key, r_used, fr)
     v = float(cfm) / float(area_ft2)
+    pv = (pv_of or std_pv_inwc)(v)
+    high = is_high(c * pv)
     floor_ft = fr * size_in / 12.0
     rec = {'side': 'inlet', 'c': c, 'table': key, 'r_ratio': r_used,
-           'size_in': size_in, 'v_fpm': v, 'l_ft': float(l_ft), 'ratio': l_over,
-           'high': is_high(c),
-           'fix_ft': inlet_fix_ft(is_round, r_used, size_in) if is_high(c) else None,
+           'size_in': size_in, 'v_fpm': v, 'pv': pv, 'loss': c * pv,
+           'l_ft': float(l_ft), 'ratio': l_over, 'high': high,
+           'fix_ft': inlet_fix_ft(is_round, r_used, size_in, c_limit(pv)) if high else None,
            'floor_ft': floor_ft, 'floor_ratio': fr, 'floor_c': floor_c,
            'within': float(l_ft) < floor_ft - 1e-9, 'notes': notes}
     log.info('fan_system_effect inlet: %s r/%s %.2f L %.2f ft (%.2f x %.1f in.) '
@@ -381,7 +401,8 @@ def high_text(rec, where, eid):
     the elbow's element id, named with its distance from the unit (Colin,
     2026-11-02: every note names its element and where it sits)."""
     if rec.get('fix_ft') is None:
-        fix = 'no straight length in the table brings C under %.1f' % HIGH_C
+        fix = ('no straight length in the table brings it under %.1f in. wc'
+               % HIGH_LOSS_INWC)
     else:
         fix = 'increase length of duct to %.1f ft' % rec['fix_ft']
     if rec['side'] == 'outlet':
@@ -390,8 +411,9 @@ def high_text(rec, where, eid):
         basis = '%s r/%s %.2f' % (rec['table'], 'D' if rec['table'] == INLET_ROUND
                                   else 'H', rec['r_ratio'])
     return ('GRAY: System Effect Pressure Loss too high at elbow %s, %.1f ft from '
-            'the %s, %s (C %.2f, %s; C %.1f or more).' % (
-                eid, rec['l_ft'], where, fix, rec['c'], basis, HIGH_C))
+            'the %s, %.3f in. wc, %s (C %.2f at %.0f fpm, %s; %.1f in. wc or more).' % (
+                eid, rec['l_ft'], where, rec['loss'], fix, rec['c'], rec['v_fpm'],
+                basis, HIGH_LOSS_INWC))
 
 
 def disruption_text(kind, eid, where, l_ft, limit_ft, limit_name):
@@ -417,15 +439,15 @@ def method_lines(settings):
               'Ab/Ao %.2f; the elbow is also priced as a fitting. Inlet: within the '
               'table floor distance (5 D or 5 H), an elbow is priced from ED7-2 '
               '(round) or ER7-1 (rect), whose C includes the elbow, so it is not '
-              'priced again. Added before the safety factor. C %.1f or more is GRAY, '
-              'with the straight length that brings it under. '
+              'priced again. Added before the safety factor. A loss of %.1f in. wc '
+              'or more is GRAY, with the straight length that brings it under. '
               'L runs from the unit through straight duct and any transitions, '
               'their length counted, to the first elbow; transitions are priced '
               'as fittings. Taps and splits inside the window are flagged, not '
               'priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
               'row. On a duct pick, L starts at the unit end of the picked duct.' % (
                   fan, tables[0][1], tables[-1][1],
-                  float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_C,
+                  float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
                   MITERED_R_OVER_H))
     assumptions = []
     if fan != 'SWSI':

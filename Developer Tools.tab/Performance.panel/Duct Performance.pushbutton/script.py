@@ -559,9 +559,9 @@ def _show_velocity_settings_xaml(use_theme):
     tb_fse_hint.Text = (
         'The first elbow within Le of each unit outlet, or 5 diameters of each inlet, '
         'is priced from the 2001 ASHRAE Fundamentals (outlet SR7, worst of positions '
-        'A to D; inlet ED7-2 or ER7-1). C %.1f or more is gray, with the straight '
-        'length that brings it under. The inlet tables are printed for SWSI fans.'
-        % fan_system_effect.HIGH_C)
+        'A to D; inlet ED7-2 or ER7-1). A loss of %.1f in. wc or more is gray, with '
+        'the straight length that brings it under. The inlet tables are printed for '
+        'SWSI fans.' % fan_system_effect.HIGH_LOSS_INWC)
     for b in (tb_tol, tb_sf, tb_filter, tb_blast):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
@@ -3136,7 +3136,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         Returns {'loss', 'item' (index run item or None), 'where', 'notes',
         'skip': node ids whose own fitting price the system effect replaces
         (an inlet elbow: ED7-2 / ER7-1 include it), 'gray': elbow ids whose
-        C is HIGH_C or more, 'assumptions': report ASSUMPTION lines}."""
+        loss is HIGH_LOSS_INWC or more, 'assumptions': report ASSUMPTION lines}."""
         rec = {'loss': 0.0, 'item': None, 'where': 'unit connection', 'notes': [],
                'skip': set(), 'gray': set(), 'assumptions': []}
         if _kind(first) == 'equipment':
@@ -3202,7 +3202,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return rec
         if role_here == fan_system_effect.OUTLET:
             r = fan_system_effect.outlet_effect(
-                fse_set.get('fan_type'), fse_set.get('blast_ratio'), area, cfm, l_ft)
+                fse_set.get('fan_type'), fse_set.get('blast_ratio'), area, cfm, l_ft,
+                pv_of=hvac_graph.velocity_pressure_inwg)
         else:
             enotes = []
             is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow, enotes,
@@ -3212,7 +3213,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                               'could be read; fan system effect not priced'
                               % (did, l_ft, where)))
                 return rec
-            r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft)
+            r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft,
+                                               pv_of=hvac_graph.velocity_pressure_inwg)
             if not r['within']:
                 # Past the table's floor distance for its own size: an
                 # ordinary elbow, priced by the walk like any other.
@@ -3235,8 +3237,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                      for n in r['notes'])
         if r['high']:
             # GRAY, not RED (Colin, 2026-10-29): still priced in the total,
-            # reported with the straight length that brings C under HIGH_C,
-            # and the elbow is drawn gray on the plan.
+            # reported with the straight length that brings the loss under
+            # HIGH_LOSS_INWC (0.5 in. wc, Colin 2026-11-02, was C 1.0), and
+            # the elbow is drawn gray on the plan.
             notes.append(('gray', fan_system_effect.high_text(r, where, did)))
             rec['gray'].add(did)
         name = 'Fan system effect, ' + where_item
@@ -4006,6 +4009,15 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
         return label, cap, reason, None
 
     kind, terminal_elem, terminal_cfm = branch_ctx
+
+    if dr.cfm <= 0:
+        # A branch to a diffuser with Flow 0 cannot be judged: GRAY like a
+        # main with no airflow, never a table pass (Colin, 2026-11-02, TB-M01
+        # D-5 drew green). Only the clearance rule still overrides it.
+        label, reason = 'GRAY', 'No airflow data'
+        if _fails_height_clearance(dr, downstream_height_in):
+            label, reason = 'RED', 'Diffuser/Duct Clearance'
+        return label, 0.0, reason, None
 
     if (terminal_elem is not None and kind not in ('ceiling', 'sidewall')
             and not hvac_graph.is_auto_sizing_diffuser(terminal_elem)):

@@ -1182,10 +1182,9 @@ exp32 = 3.80 * pv(1000.0)
 check("case32 elbow at L 0: FSE2 = 3.80 (SR7-11, worst of A-D) x Pv(1000)",
       abs(sa32.get('fse_inwc', -1) - exp32) < 1e-9,
       "got %r expected %.6f" % (sa32.get('fse_inwc'), exp32))
-check("case32 C 3.80 is GRAY: increase length of duct to 2.9 ft (C under 1.0)",
-      any(k == 'gray' and t.startswith('GRAY: System Effect Pressure Loss too high')
-          and 'increase length of duct to 2.9 ft' in t
-          for k, t in sa32.get('fse_notes', ())), "notes %r" % (sa32.get('fse_notes'),))
+check("case32 C 3.80 at 1000 fpm is 0.237 in. wc, under 0.5: NOT gray (Colin, 2026-11-02)",
+      not any(k == 'gray' for k, t in sa32.get('fse_notes', ())),
+      "notes %r" % (sa32.get('fse_notes'),))
 check("case32 added before the safety factor: total = (subtotal incl. FSE) x 1.10",
       abs(sa32['subtotal_inwc'] - (sa32['friction_inwc'] + sa32['fitting_inwc'] +
                                    sa32['component_inwc'] + exp32)) < 1e-9
@@ -1197,10 +1196,30 @@ check("case32 one take-off line 'Fan system effect, supply outlet', SR7-11, C 3.
       and abs(_it32[0][4][2] - 3.80) < 1e-9, "items %r" % (_it32,))
 check("case32 the index run items still add up to the subtotal",
       abs(_items_sum(sa32) - sa32['subtotal_inwc']) < 1e-9)
-check("case32 HIGH_C is the named 1.0 threshold", FSE.HIGH_C == 1.0)
-check("case32 the GRAY elbow is still priced in the total and listed for the plan",
-      sa32['fse_inwc'] > 0.0 and sa32.get('fse_gray_ids') == {921},
+check("case32 HIGH_LOSS_INWC is the named 0.5 in. wc threshold",
+      FSE.HIGH_LOSS_INWC == 0.5 and not hasattr(FSE, 'HIGH_C'))
+check("case32 priced in the total, not listed gray for the plan",
+      sa32['fse_inwc'] > 0.0 and not sa32.get('fse_gray_ids'),
       "gray %r" % (sa32.get('fse_gray_ids'),))
+
+# 32b: the same elbow at 2000 fpm: 3.80 x Pv(2000) = 0.948 in. wc, GRAY, with
+#      the straight length at which the loss drops under 0.5 in. wc.
+d32b = build([(922, 0.0, 10.0, 2000.0, 4.0, 'Supply Air')])
+sa32b = _fse_run(n32, c32, d32b, {930: (8000.0, 'Supply Air', 'SD-32')}, 920)
+_r32b = FSE.outlet_effect('DWDI', 0.5, 4.0, 8000.0, 0.0, pv_of=pv)
+check("case32b 0.948 in. wc is GRAY with its fix length, and listed for the plan",
+      _r32b['high'] and _r32b['fix_ft'] is not None
+      and any(k == 'gray' and t.startswith('GRAY: System Effect Pressure Loss too high')
+              and '%.3f in. wc' % _r32b['loss'] in t
+              and 'increase length of duct to %.1f ft' % _r32b['fix_ft'] in t
+              for k, t in sa32b.get('fse_notes', ()))
+      and sa32b.get('fse_gray_ids') == {921},
+      "notes %r gray %r" % (sa32b.get('fse_notes'), sa32b.get('fse_gray_ids')))
+_fx = _r32b['fix_ft']
+check("case32b at the fix length the loss is under 0.5, one step short it is not",
+      FSE.outlet_effect('DWDI', 0.5, 4.0, 8000.0, _fx, pv_of=pv)['loss'] < 0.5
+      and FSE.outlet_effect('DWDI', 0.5, 4.0, 8000.0, _fx - 0.1, pv_of=pv)['loss'] >= 0.5,
+      "fix %r" % _fx)
 
 # 33: elbow past Le (8 ft > 5.71 ft): outside the outlet window, no system effect.
 n33 = {940: _unit({941: SQ24}),
@@ -1291,7 +1310,8 @@ check("case34 tap 3 ft along the outlet duct: flagged as a tap, not priced",
       "notes %r" % (sa34b.get('fse_notes'),))
 
 # 35: round return inlet elbow 1 ft from the unit, r/D 1.0: ED7-2 between
-#     L/D 0 (1.20) and 2.0 (0.67) at L/D 0.5 = 1.0675, GRAY; inlet swirl is not reported.
+#     L/D 0 (1.20) and 2.0 (0.67) at L/D 0.5 = 1.0675, 0.067 in. wc, not GRAY;
+#     inlet swirl is not reported.
 n35 = {1000: _unit({1001: RD24}),
        1002: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
                   geom={'round': True, 'd_in': 24.0, 'r_in': 24.0, 'w_in': None,
@@ -1309,8 +1329,8 @@ _n35 = ra35.get('fse_notes', ())
 check("case35 inlet swirl is not reported",
       not any('swirl' in t.lower() for k, t in _n35),
       "notes %r" % (_n35,))
-check("case35 C 1.07 is GRAY: increase length of duct to 1.6 ft (C under 1.0 from L/D 0.755)",
-      any(k == 'gray' and 'increase length of duct to 1.6 ft' in t for k, t in _n35),
+check("case35 C 1.07 at 1000 fpm is 0.067 in. wc, under 0.5: not GRAY (Colin, 2026-11-02)",
+      not any(k == 'gray' for k, t in _n35),
       "notes %r" % (_n35,))
 check("case35 take-off line 'Fan system effect, return inlet' on ED7-2",
       [i[4][0] for i in _fse_items(ra35)] == ['Fan system effect, return inlet']
@@ -1383,9 +1403,24 @@ check("case38 the unit side elbow is priced in the unit side stretch, not the sy
       sa38.get('unit_side_fittings') == 1
       and abs(_items_sum(sa38) - sa38['subtotal_inwc']) < 1e-9,
       "unit side %r" % (sa38.get('unit_side_fittings'),))
-check("case38 a GRAY elbow on a duct pick reaches the gray id set",
-      _r38['high'] and sa38.get('fse_gray_ids') == {2003},
+check("case38 the elbow at 1000 fpm is under 0.5 in. wc: no gray id",
+      not _r38['high'] and not sa38.get('fse_gray_ids'),
       "gray %r high %r" % (sa38.get('fse_gray_ids'), _r38['high']))
+# 38c: the same duct pick at 3000 fpm: the elbow's loss is over 0.5 in. wc and
+#      a GRAY elbow on a duct pick reaches the gray id set.
+d38c = build([(2000, 0.0, 2.0, 3000.0, 4.0, 'Supply Air'),
+              (2002, 0.0, 0.5, 0.0, 4.0, 'Supply Air'),
+              (2004, 0.0, 10.0, 3000.0, 4.0, 'Supply Air')])
+for _dr in d38c.values():
+    _dr.size = '24x24"'
+    _dr.d_h_in = 24.0
+sa38c = _fse_run(n38, c38, d38c, {2010: (12000.0, 'Supply Air', 'SD-38')}, 2000,
+                 duct_rooted_ids={2000})
+_r38c = FSE.outlet_effect('DWDI', 0.5, 4.0, 12000.0, 2.0, pv_of=pv)
+check("case38c a GRAY elbow on a duct pick reaches the gray id set",
+      _r38c['high'] and sa38c.get('fse_gray_ids') == {2003},
+      "gray %r high %r loss %r" % (sa38c.get('fse_gray_ids'), _r38c['high'],
+                                   _r38c['loss']))
 
 # 38b: duct pick on a return with a mitered inlet elbow 1 ft along: ER7-1 on
 #      the r/H 1.0 row (Colin, 2026-11-02), and the elbow is not priced again.
@@ -1588,14 +1623,14 @@ check("case46 elbow on the unit before a tee: FSE2 = 3.80 x Pv(1000) on the full
       "got %r expected %.6f" % (sa46b.get('fse_inwc'), 3.80 * pv(1000.0)))
 
 # 47: two supply outlets. The worst path leaves through the plain one (2.0 in.
-#     wc of friction), but the other outlet's elbow (C 3.80, GRAY) is still
+#     wc of friction), but the other outlet's elbow (C 3.80 at 2000 fpm, GRAY) is still
 #     reported, once, named by its element.
 n47 = {1600: _unit({1601: SQ24, 1611: SQ24}),
        1601: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
 c47 = {1600: [1601, 1611], 1601: [1602], 1602: [1620], 1611: [1621]}
-d47 = build([(1602, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
+d47 = build([(1602, 0.0, 10.0, 2000.0, 4.0, 'Supply Air'),
              (1611, 2.0, 20.0, 1000.0, 4.0, 'Supply Air')])
-t47 = {1620: (4000.0, 'Supply Air', 'SD-elbow'), 1621: (4000.0, 'Supply Air', 'SD-long')}
+t47 = {1620: (8000.0, 'Supply Air', 'SD-elbow'), 1621: (4000.0, 'Supply Air', 'SD-long')}
 sa47 = _fse_run(n47, c47, d47, t47, 1600)
 check("case47 the worst path is the plain outlet: no FSE in its total",
       sa47.get('terminal_name') == 'SD-long' and sa47.get('fse_inwc') == 0.0,

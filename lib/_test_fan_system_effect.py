@@ -80,25 +80,38 @@ class OutletTest(unittest.TestCase):
         self.assertEqual(key, 'SR7-11')
         self.assertTrue(any('unknown' in n for n in notes))
 
-    def test_outlet_effect_high_and_fix_length(self):
+    def test_outlet_effect_reasonable_loss_not_high(self):
+        # Colin, 2026-11-02: judged on the loss, not C. C 3.80 at 1000 fpm is
+        # 3.80 x 0.0623 = 0.237 in. wc, under 0.5: priced, not GRAY.
         r = F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 0.0)
         self.assertAlmostEqual(r['v_fpm'], 1000.0)
         self.assertAlmostEqual(r['c'], 3.80)
+        self.assertAlmostEqual(r['loss'], 3.80 * (1000.0 / 4005.0) ** 2)
+        self.assertFalse(r['high'])
+        self.assertIsNone(r['fix_ft'])
+        self.assertEqual(F.basis_text(r), 'SR7-11 pos C, L 0.0 / Le 5.7 ft')
+
+    def test_outlet_effect_high_and_fix_length(self):
+        # 2000 fpm: 3.80 x 0.2494 = 0.948 in. wc, GRAY. The fix is where the
+        # worst of A to D drops under 0.5 / 0.2494 = 2.00.
+        r = F.outlet_effect('DWDI', 0.5, 4.0, 8000.0, 0.0)
         self.assertTrue(r['high'])
-        # Worst of A to D drops below 1.0 just past L/Le 0.50 (position C
-        # reads 1.00 there; B and D cross at 0.47 and 0.46): 0.5 x 5.714 =
-        # 2.857 ft, rounded up to 2.9 ft.
-        self.assertAlmostEqual(r['fix_ft'], 2.9)
+        fx = r['fix_ft']
+        self.assertIsNotNone(fx)
+        self.assertLess(F.outlet_effect('DWDI', 0.5, 4.0, 8000.0, fx)['loss'], 0.5)
+        self.assertGreaterEqual(F.outlet_effect('DWDI', 0.5, 4.0, 8000.0, fx - 0.1)['loss'], 0.5)
         txt = F.high_text(r, 'supply outlet', 921)
         self.assertTrue(txt.startswith('GRAY: System Effect Pressure Loss too high'))
         # names the elbow and its distance from the unit (Colin, 2026-11-02)
-        self.assertIn('at elbow 921, 0.0 ft from the supply outlet', txt)
-        self.assertIn('increase length of duct to 2.9 ft', txt)
+        self.assertIn('at elbow 921, 0.0 ft from the supply outlet, 0.948 in. wc', txt)
+        self.assertIn('increase length of duct to %.1f ft' % fx, txt)
         self.assertIn('SR7-11', txt)
-        # at 2.9 ft C is under 1.0, at 2.8 ft it is not
-        self.assertLess(F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 2.9)['c'], 1.0)
-        self.assertGreaterEqual(F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 2.8)['c'], 1.0)
-        self.assertEqual(F.basis_text(r), 'SR7-11 pos C, L 0.0 / Le 5.7 ft')
+        self.assertIn('0.5 in. wc or more', txt)
+
+    def test_pv_of_is_used(self):
+        r = F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 0.0, pv_of=lambda v: 0.2)
+        self.assertAlmostEqual(r['loss'], 0.76)
+        self.assertTrue(r['high'])
 
     def test_outlet_effect_past_le_is_zero(self):
         r = F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 6.0)
@@ -146,21 +159,27 @@ class InletTest(unittest.TestCase):
         self.assertEqual(F.floor_ratio('ER7-1', 2.0), 5.0)
         self.assertEqual(F.zero_ratio('SR7-10'), 1.0)
 
-    def test_inlet_effect_high_fix_and_floor_length(self):
-        # 24 in. round, r/D 1.0, elbow on the inlet: C 1.20, floor 0.33 at 5 D = 10 ft
+    def test_inlet_effect_floor_length_and_reasonable_loss(self):
+        # 24 in. round, r/D 1.0, elbow on the inlet: C 1.20, floor 0.33 at 5 D
+        # = 10 ft. At 1000 fpm 1.20 x 0.0623 = 0.075 in. wc: not GRAY.
         r = F.inlet_effect(True, 24.0, 24.0, 3.1416, 3141.6, 0.0)
         self.assertAlmostEqual(r['c'], 1.20)
-        self.assertTrue(r['high'])
+        self.assertFalse(r['high'])
         self.assertAlmostEqual(r['floor_ft'], 10.0)
         self.assertAlmostEqual(r['floor_c'], 0.33)
         self.assertAlmostEqual(r['v_fpm'], 1000.0)
-        # C under 1.0 from L/D 2 x 0.20 / 0.53 = 0.755: 1.51 ft, up to 1.6 ft
-        self.assertAlmostEqual(r['fix_ft'], 1.6)
+        self.assertEqual(F.basis_text(r), 'ED7-2 r/D 1.00, L 0.0 ft, D 24 in')
+
+    def test_inlet_effect_high_and_fix_length(self):
+        # 3000 fpm: Pv 0.561, 1.20 x 0.561 = 0.673 in. wc, GRAY. Under 0.5
+        # once C < 0.891: L/D 2 x 0.309 / 0.53 = 1.166, 2.33 ft, up to 2.4 ft.
+        r = F.inlet_effect(True, 24.0, 24.0, 3.1416, 9424.8, 0.0)
+        self.assertTrue(r['high'])
+        self.assertAlmostEqual(r['fix_ft'], 2.4)
         txt = F.high_text(r, 'return inlet', 1002)
         self.assertIn('elbow 1002, 0.0 ft from the return inlet', txt)
-        self.assertIn('increase length of duct to 1.6 ft', txt)
+        self.assertIn('increase length of duct to 2.4 ft', txt)
         self.assertIn('ED7-2', txt)
-        self.assertEqual(F.basis_text(r), 'ED7-2 r/D 1.00, L 0.0 ft, D 24 in')
 
     def test_inlet_effect_at_two_diameters(self):
         r = F.inlet_effect(False, 24.0, 36.0, 4.0, 4000.0, 4.0)   # r/H 1.5, L/H 2.0
@@ -172,7 +191,8 @@ class SettingsTest(unittest.TestCase):
     def test_defaults(self):
         d = F.default_settings()
         self.assertEqual(d, {'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5})
-        self.assertEqual(F.HIGH_C, 1.0)
+        self.assertEqual(F.HIGH_LOSS_INWC, 0.5)
+        self.assertFalse(hasattr(F, 'HIGH_C'))
         self.assertFalse(hasattr(F, 'RED_C'))
         self.assertFalse(hasattr(F, 'WINDOW_FT'))    # fixed window dropped
 
@@ -237,15 +257,19 @@ class SettingsTest(unittest.TestCase):
             self.assertTrue(err, bad)
 
     def test_high_threshold(self):
-        self.assertTrue(F.is_high(1.0))
-        self.assertFalse(F.is_high(0.99))
+        self.assertTrue(F.is_high(0.5))
+        self.assertFalse(F.is_high(0.49))
         self.assertFalse(F.is_high(None))
+        self.assertAlmostEqual(F.c_limit(0.25), 2.0)
 
     def test_fix_length_none_when_floor_is_high(self):
         # nothing in ED7-2 / ER7-1 floors at 1.0 or more, so a fix always exists
-        self.assertIsNotNone(F.inlet_fix_ft(False, 0.5, 24.0))       # ER7-1 worst row
-        self.assertAlmostEqual(F.inlet_fix_ft(True, 1.5, 24.0), 0.8)   # 1.10 -> 0.60: L/D 0.4 x 2 ft
-        self.assertAlmostEqual(F.outlet_fix_ft('DWDI', 1.0, 5.0), 0.1)   # C 1.00 at L 0, under just past it
+        # (at a C limit of 1.0)
+        self.assertIsNotNone(F.inlet_fix_ft(False, 0.5, 24.0, 1.0))       # ER7-1 worst row
+        self.assertAlmostEqual(F.inlet_fix_ft(True, 1.5, 24.0, 1.0), 0.8)   # 1.10 -> 0.60: L/D 0.4 x 2 ft
+        self.assertAlmostEqual(F.outlet_fix_ft('DWDI', 1.0, 5.0, 1.0), 0.1)   # C 1.00 at L 0
+        # ED7-2 floors at 0.33 at r/D 1.0: a limit under it has no fix
+        self.assertIsNone(F.inlet_fix_ft(True, 1.0, 24.0, 0.3))
         self.assertTrue(F.ER7_1_SQUARE_ASSUMPTION.startswith('ASSUMPTION: ER7-1'))
 
     def test_text_builders(self):
@@ -262,7 +286,7 @@ class ReportTest(unittest.TestCase):
     def test_gray_once_per_unit_console_and_sheet(self):
         import console_report as cr
         import duct_perf_console as dpc
-        gray = F.high_text(F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 0.0), 'supply outlet',
+        gray = F.high_text(F.outlet_effect('DWDI', 0.5, 4.0, 8000.0, 0.0), 'supply outlet',
                            921)
         unit = {'label': 'RTU-1', 'classes': [
             {'sys_class': 'Supply Air', 'rows': [], 'subtotal': 0.1, 'safety': 0.01,
