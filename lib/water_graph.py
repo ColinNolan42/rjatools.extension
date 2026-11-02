@@ -98,7 +98,6 @@ class WaterNode(object):
         self.has_cw           = True
         self.has_hw           = True
         self.is_flush_valve   = False   # flushometer valve water closet or urinal
-        self.fixed_gpm        = 0.0     # fixed cold gpm load, a hose bibb (Table 604.3)
 
         # Heater bookkeeping (only meaningful when kind == KIND_HEATER)
         self.served_fixture_ids = []
@@ -110,7 +109,6 @@ class WaterNode(object):
 
         # Sizing results, filled by the sizing engine
         self.demand_wsfu   = 0.0
-        self.demand_fixed_gpm = 0.0   # fixed gpm loads downstream (cold pipes)
         self.assigned_size = None
 
 
@@ -134,6 +132,10 @@ class WaterGraph(object):
         self.return_unrooted = []  # return pipe ids whose end could not be found
         self.hot_joints      = {}  # every hot water joint, kept from before the split
         self.heater_groups   = {}  # heater id -> tuple of heaters in parallel
+        # Heaters in parallel whose hot supply piping still holds a loop, so
+        # the equal split cannot be worked out: (group, [hot pipe ids]). Those
+        # pipes are left unsized and raise an ERROR (Colin, 2026-11-02).
+        self.parallel_hot_unsplit = []
 
         # Existing building: the run starts at the first NEW cold water pipe
         # instead of an RPZ (Colin, 2026-10-13). The connectors listed here
@@ -361,6 +363,13 @@ def _faces_upstream(graph, c):
     return c.get("connector_index") in graph.origin_upstream_connectors
 
 
+# Connector classifications (PipeSystemType, as revit_helpers.get_connectors
+# reads it) the water walk may follow. Anything else on an element the walk
+# reaches is another system and is never entered.
+_WATER_CLASSIFICATIONS = (shared_params.SYSTEM_DOMESTIC_COLD_WATER,
+                          shared_params.SYSTEM_DOMESTIC_HOT_WATER)
+
+
 def _walk(graph, doc, start_id, system, visited):
     """Breadth-first walk from start_id following only `system` connectors."""
     queue = [start_id]
@@ -393,6 +402,15 @@ def _walk(graph, doc, start_id, system, visited):
                           "type, skipped.".format(current_id, c.get("connector_index")))
                 continue
             if c_system != system:
+                if c_system not in _WATER_CLASSIFICATIONS:
+                    # The walk stays in domestic water piping (Colin,
+                    # 2026-11-02). A heater, boiler or other equipment can
+                    # carry a gas, hydronic or sanitary connector; it is never
+                    # followed, and the skip is logged.
+                    graph.log("NOT WATER: element {} connector {} is '{}', "
+                              "not domestic water. Not followed.".format(
+                                  current_id, c.get("connector_index"),
+                                  c_system))
                 continue
 
             # A fixture connector the Type does not actually use (its stub is
@@ -676,15 +694,22 @@ def _read_pipe_system_type(graph, pipe, node):
     system_type = None
     try:
         system_type = pipe.Document.GetElement(pipe.MEPSystem.GetTypeId())
-    except Exception:
+    except Exception as e:
         system_type = None
+        graph.log("Pipe {}: System Type element NOT FOUND ({}).".format(
+            node.element_id, str(e)))
 
     if system_type is not None:
         try:
             node.system_type_id = revit_helpers.eid_int(system_type.Id)
-        except Exception:
+        except Exception as e:
             node.system_type_id = None
+            graph.log("Pipe {}: System Type id could not be read ({}).".format(
+                node.element_id, str(e)))
         node.system_type_name = revit_helpers.get_element_type_name(system_type)
+    elif node.system_type_id is None:
+        graph.log("Pipe {}: System Type element NOT FOUND.".format(
+            node.element_id))
 
     if not node.system_type_name:
         # The pipe's own parameter gives the same name without touching the
@@ -695,8 +720,12 @@ def _read_pipe_system_type(graph, pipe, node):
                 BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
             if param is not None:
                 node.system_type_name = param.AsValueString()
-        except Exception:
-            pass
+        except Exception as e:
+            graph.log("Pipe {}: System Type parameter could not be read "
+                      "({}).".format(node.element_id, str(e)))
+        if not node.system_type_name:
+            graph.log("Pipe {}: System Type name NOT FOUND.".format(
+                node.element_id))
 
     if node.system_type_id is not None:
         graph.system_types[node.system_type_id] = (
@@ -1284,7 +1313,6 @@ def _assign_demand(graph):
 
         downstream = graph.descendants(node.element_id, node.system)
 
-        node.demand_fixed_gpm = 0.0
         if node.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER:
             total = 0.0
             for nid in downstream:
@@ -1319,7 +1347,6 @@ def _assign_demand(graph):
         total = 0.0
         for fid in direct:
             total += graph.nodes[fid].total_wsfu
-            node.demand_fixed_gpm += float(graph.nodes[fid].fixed_gpm or 0.0)
         for fid, share in via_heater.items():
             if fid not in direct:
                 total += graph.nodes[fid].hw_wsfu * share
@@ -1352,8 +1379,7 @@ def _preventer_above(graph, node_id, cold):
         if current != node_id and _is_backflow_preventer(node):
             return current
         if node.kind == KIND_PIPE:
-            if (float(node.demand_wsfu or 0.0) > 0.0 or
-                    float(node.demand_fixed_gpm or 0.0) > 0.0):
+            if float(node.demand_wsfu or 0.0) > 0.0:
                 return None
         elif node.kind != KIND_FITTING:
             return None
@@ -1413,16 +1439,13 @@ def _assign_parallel_backflow_demand(graph):
     if origin is None or origin.kind != KIND_ORIGIN:
         return
     full = 0.0
-    full_fixed = 0.0
     for child_id in origin.children_by_system.get(cold, []):
         # The RPZ outlet often goes through a transition before the first
         # pipe (bench 4C), so look through fittings for it.
         child = _first_pipe_below(graph, child_id, cold)
         if child is not None:
             full = max(full, float(child.demand_wsfu or 0.0))
-            full_fixed = max(full_fixed,
-                             float(child.demand_fixed_gpm or 0.0))
-    if full <= 0.0 and full_fixed <= 0.0:
+    if full <= 0.0:
         return
     # Where a leg starts: the other backflow preventer itself when the walk
     # came up through its outlet, or the dead end of the leg when the walk
@@ -1464,8 +1487,7 @@ def _assign_parallel_backflow_demand(graph):
             if node is None or current in graph.upstream_ids:
                 break
             if node.kind == KIND_PIPE:
-                if (float(node.demand_wsfu or 0.0) > 0.0 or
-                        float(node.demand_fixed_gpm or 0.0) > 0.0):
+                if float(node.demand_wsfu or 0.0) > 0.0:
                     break
                 leg.append(current)
             current = node.parent_by_system.get(cold)
@@ -1473,7 +1495,6 @@ def _assign_parallel_backflow_demand(graph):
             continue
         for pid in leg:
             graph.nodes[pid].demand_wsfu = full
-            graph.nodes[pid].demand_fixed_gpm = full_fixed
         if preventer_id not in done:
             done.add(preventer_id)
             graph.parallel_backflow.append(preventer_id)
@@ -1496,24 +1517,53 @@ def _assign_parallel_hot_demand(graph, groups):
     piping past the tee where every outlet has joined carries all of it, and
     a pipe with only some of the heaters on one side gets parallel_leg set to
     the group.
+
+    The cut only works on a tree. When no return was split out (a return in
+    the hot supply System Type, or one named on pipe count alone), the joint
+    that closed the recirculation loop is still in the hot joints, and a cut
+    across the loop leaves everything on one side, so the main and an outlet
+    read 0 WSFU. Then the walked tree is used, with only the loop joints that
+    join two heaters' trees kept. A group whose piping is still not a tree
+    is not split: its hot pipes are listed on graph.parallel_hot_unsplit,
+    left unsized and reported as an ERROR (Colin, 2026-11-02).
     """
     hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    graph.parallel_hot_unsplit = []
     adjacency = None
     done = set()
     for group in set(groups.values()):
         if len(group) < 2:
             continue
         if adjacency is None:
-            adjacency = _hot_supply_adjacency(graph)
+            if graph.return_system_type_ids:
+                adjacency = _hot_supply_adjacency(graph)
+            else:
+                adjacency = _hot_tree_adjacency(graph)
         component = _side(adjacency, group[0], None)
         members = set(group)
-        load = sum(graph.nodes[nid].hw_wsfu for nid in component
-                   if graph.nodes[nid].kind == KIND_FIXTURE)
+        pipes = sorted(nid for nid in component
+                       if graph.nodes[nid].kind == KIND_PIPE and
+                       graph.nodes[nid].system == hot and
+                       not is_return_pipe(graph, graph.nodes[nid]))
+        joints = sum(len(adjacency.get(nid, [])) for nid in component) // 2
+        if joints != len(component) - 1:
+            graph.parallel_hot_unsplit.append((group, pipes))
+            for nid in pipes:
+                done.add(nid)
+                graph.nodes[nid].parallel_leg = False
+            graph.log("HEATERS IN PARALLEL {}: ERROR, the hot supply piping "
+                      "still closes a loop ({} joints across {} elements), so "
+                      "the hot load cannot be split between the heaters. {} "
+                      "hot pipe(s) left unsized.".format(
+                          ", ".join(str(h) for h in group), joints,
+                          len(component), len(pipes)))
+            continue
+        load = float(sum([graph.nodes[nid].hw_wsfu for nid in component
+                          if graph.nodes[nid].kind == KIND_FIXTURE], 0.0))
         share = load / float(len(group))
-        for nid in sorted(component):
+        for nid in pipes:
             node = graph.nodes[nid]
-            if (nid in done or node.kind != KIND_PIPE or node.system != hot or
-                    is_return_pipe(graph, node)):
+            if nid in done:
                 continue
             done.add(nid)
             # A pipe has two ends, so two sides that agree. Every side is
@@ -1523,14 +1573,55 @@ def _assign_parallel_hot_demand(graph, groups):
             for neighbour in adjacency.get(nid, []):
                 side = _side(adjacency, neighbour, nid)
                 heaters = len(members & side)
-                taken = sum(graph.nodes[s].hw_wsfu for s in side
-                            if graph.nodes[s].kind == KIND_FIXTURE)
+                taken = sum([graph.nodes[s].hw_wsfu for s in side
+                             if graph.nodes[s].kind == KIND_FIXTURE], 0.0)
                 demand = max(demand, abs(heaters * share - taken))
                 leg = leg or 0 < heaters < len(group)
             node.demand_wsfu = demand
             node.parallel_leg = group if leg else False
         graph.log("HEATERS IN PARALLEL {}: {:.1f} hot WSFU, {:.2f} out of "
-                  "each.".format(", ".join(str(h) for h in group), load, share))
+                  "each.".format(", ".join(str(h) for h in group),
+                                 float(load), float(share)))
+
+
+def _hot_tree_adjacency(graph):
+    """The walked hot tree, both ways, plus the loop joints that join trees.
+
+    Used when no return was split out. Every tree link is kept. A loop joint
+    is kept only when it joins two pieces not yet joined, which is a second
+    heater's outlet meeting the first heater's tree. A joint that closes a
+    loop (the recirculation return coming back) is left out and logged.
+    """
+    hot = shared_params.SYSTEM_DOMESTIC_HOT_WATER
+    adjacency = {}
+    root = {}
+
+    def _find(nid):
+        while root.get(nid, nid) != nid:
+            nid = root[nid]
+        return nid
+
+    def _join(a, b):
+        for one, other in ((a, b), (b, a)):
+            neighbours = adjacency.setdefault(one, [])
+            if other not in neighbours:
+                neighbours.append(other)
+        root[_find(a)] = _find(b)
+
+    for node_id in sorted(graph.nodes.keys()):
+        for child_id in graph.nodes[node_id].children_by_system.get(hot, []):
+            if child_id in graph.nodes:
+                _join(node_id, child_id)
+    for a, b, system in graph.loop_edges:
+        if system != hot or a not in graph.nodes or b not in graph.nodes:
+            continue
+        if _find(a) == _find(b):
+            graph.log("HEATERS IN PARALLEL: loop joint {} - {} left out of "
+                      "the hot load split, it closes a loop and no return "
+                      "was split out.".format(a, b))
+            continue
+        _join(a, b)
+    return adjacency
 
 
 def _hot_supply_adjacency(graph):

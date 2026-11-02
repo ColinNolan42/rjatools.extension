@@ -141,9 +141,9 @@ class TestDemoSizing(unittest.TestCase):
         lines = water_report.wsfu_table(self.graph)
         text = "\n".join(lines)
         # extended TOTAL = 2x5.0 + 1x2.0 = 12.0, the same load the main carries
-        self.assertIn("Cold water sizing load (TOTAL wsfu): 12", text)
+        self.assertIn("Cold water design load = 12 total WSFU", text)
         # extended HOT = 1 x 1.5
-        self.assertIn("Hot water sizing load (HOT wsfu): 1.50", text)
+        self.assertIn("Hot water design load = 1.50 hot WSFU", text)
 
     def test_wsfu_data_feeds_both_renderers(self):
         # The drafting view and the console both render from wsfu_data(), so
@@ -400,7 +400,7 @@ class TestDraftingLayout(unittest.TestCase):
         # The drafting table's width must come from the same column list the
         # console table uses, or the two can disagree.
         expected = sum(c[2] for c in water_report.WSFU_COLUMNS)
-        self.assertAlmostEqual(expected, 0.705)
+        self.assertAlmostEqual(expected, 0.79)
         self.assertEqual(len(water_report.WSFU_COLUMNS), 8)
 
     def test_default_view_name_uses_job_number(self):

@@ -49,20 +49,23 @@ def build_report(graph, sizing_result, header, recirc=None):
 
 def build_compact_report(graph, sizing_result, header, recirc=None):
     """The window report: results, the equations with their numbers, and what
-    needs a look. No pipe by pipe listing, no basis paragraphs (the full pipe
-    table and the basis of design go on the drafting view and in
-    build_report). Colin, 2026-10-26.
+    needs a look. No pipe by pipe listing (the full pipe table goes on the
+    drafting view and in build_report). Colin, 2026-10-26.
+
+    The full basis of design block heads it, from
+    water_tables.basis_of_design_lines(), because every Domestic Water output
+    shall print it (Colin, 2026-11-02).
     """
     lines = ["=" * 78,
              "SIZE WATER   JOB {} {}   {}   BY {}".format(
                  header.get("job_number", ""), header.get("job", ""),
                  header.get("date", ""), header.get("by", "")),
              "=" * 78,
-             "Basis: 2024 IPC Appendix E, Table E103.3(2) WSFU, "
-             "Table E103.3(3) demand, firm WSFU per size table (Copper L, "
-             "8 fps cold, 5 fps hot)."]
+             "BASIS OF DESIGN"]
+    for line in water_tables.basis_of_design_lines():
+        lines.append("  " + line)
     for line in origin_basis_lines(graph):
-        lines.append(line)
+        lines.append("  " + line)
     lines.append("")
     lines.extend(wsfu_table(graph))
     lines.append("")
@@ -253,8 +256,7 @@ def exceptions_compact(graph, sizing_result):
         lines.append("{} element(s) had no readable connectors.".format(
             len(graph.unreadable)))
     zero = [f for f in graph.fixture_ids
-            if graph.nodes[f].total_wsfu <= 0 and
-            not float(graph.nodes[f].fixed_gpm or 0.0)]
+            if graph.nodes[f].total_wsfu <= 0]
     if zero:
         lines.append("{} fixture(s) carry zero WSFU, check Type and "
                      "public/private: {}".format(len(zero), _id_list(zero)))
@@ -368,16 +370,9 @@ def wsfu_data(graph):
     # happened live on 2026-09-24, where 12 water closets and 6 lavatories
     # printed as 18 x 5.0 = 90 cold and 0 hot instead of 69 cold and 9 hot.
     groups = {}
-    fixed_loads = {}      # fixture name -> [count, gpm each]
     for fid in graph.fixture_ids:
         node = graph.nodes.get(fid)
         if node is None:
-            continue
-        if float(node.fixed_gpm or 0.0) > 0.0:
-            entry = fixed_loads.setdefault(
-                node.fixture_name or node.type_name,
-                [0, float(node.fixed_gpm)])
-            entry[0] += 1
             continue
         occupancy = "PUBLIC" if node.is_public else "PRIVATE"
         key = (node.type_name, occupancy)
@@ -424,22 +419,9 @@ def wsfu_data(graph):
             "total_ext": _num(g["total"]),
         })
 
-    ext_fixed_gpm = 0.0
-    for name in sorted(fixed_loads.keys()):
-        count, each = fixed_loads[name]
-        ext_fixed_gpm += count * each
-        rows.append({
-            "fixture": "{}, {} gpm each (Table 604.3)".format(
-                name, _num(each)),
-            "qty": str(count),
-            "cold_ea": "-", "hot_ea": "-", "total_ea": "-",
-            "cold_ext": "-", "hot_ext": "-", "total_ext": "-",
-        })
-
     totals = {
         "fixture": "TOTALS",
-        "qty": str(sum(g["count"] for g in groups.values()) +
-                   sum(v[0] for v in fixed_loads.values())),
+        "qty": str(sum(g["count"] for g in groups.values())),
         "cold_ea": "", "hot_ea": "", "total_ea": "",
         "cold_ext": _num(ext_cold),
         "hot_ext": _num(ext_hot),
@@ -448,8 +430,6 @@ def wsfu_data(graph):
 
     return {"rows": rows, "totals": totals, "ext_cold": ext_cold,
             "ext_hot": ext_hot, "ext_total": ext_total,
-            "ext_fixed_gpm": ext_fixed_gpm,
-            "fixed_loads": fixed_loads,
             "flush_valve_system": water_graph.has_flush_valves(graph)}
 
 
@@ -483,18 +463,8 @@ def wsfu_load_lines(data):
     else:
         basis = ("WSFU to gpm: 2024 IPC Table E103.3(3), flush tank column "
                  "(no flush valve fixtures on the system).")
-    fixed = float(data.get("ext_fixed_gpm", 0.0) or 0.0)
-    if fixed > 0.0 and cold.get("gpm") is not None:
-        cold_line = ("Cold water design load = {} total WSFU = {} gpm, plus "
-                     "{} gpm fixed = {:.1f} gpm".format(
-                         _num(data["ext_total"]), _gpm(cold), _num(fixed),
-                         float(cold["gpm"]) + fixed))
-    elif fixed > 0.0:
-        cold_line = ("Cold water design load = {} total WSFU, plus {} gpm "
-                     "fixed".format(_num(data["ext_total"]), _num(fixed)))
-    else:
-        cold_line = "Cold water design load = {} total WSFU = {} gpm".format(
-            _num(data["ext_total"]), _gpm(cold))
+    cold_line = "Cold water design load = {} total WSFU = {} gpm".format(
+        _num(data["ext_total"]), _gpm(cold))
     return [
         cold_line,
         "Hot water design load = {} hot WSFU = {} gpm".format(

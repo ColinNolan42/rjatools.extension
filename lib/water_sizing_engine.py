@@ -48,7 +48,6 @@ class SegmentResult(object):
         self.required_nominal = None    # size the load calls for (existing pipe)
         self.required_size_in = None
         self.upsize_needed   = False    # existing pipe smaller than required
-        self.fixed_gpm       = 0.0      # fixed gpm load carried (hose bibbs)
 
 
 def size_network(graph, apply_minimums=True, return_system_type_ids=None,
@@ -104,22 +103,11 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
         demand = water_tables.demand_gpm(
             node.demand_wsfu,
             flush_valve_system and system_key == water_tables.SYSTEM_COLD)
-        fixed = float(getattr(node, "demand_fixed_gpm", 0.0) or 0.0)
-        if system_key != water_tables.SYSTEM_COLD:
-            fixed = 0.0
-        if fixed > 0.0:
-            # Fixed gpm loads (hose bibbs, Table 604.3) add to the WSFU flow,
-            # and the pipe is sized on gpm against the firm table restated in
-            # gpm.
-            wsfu_gpm = (demand["gpm"] if float(node.demand_wsfu or 0.0) > 0.0
-                        else 0.0)
-            demand = {"gpm": None if wsfu_gpm is None else wsfu_gpm + fixed,
-                      "curve": demand["curve"]}
-            result.fixed_gpm = fixed
+        # Every load is WSFU: hose bibbs are 5 cold WSFU (Colin, 2026-10-29)
+        # and there is no fixed gpm load (Colin, 2026-11-02).
         result.demand_gpm = demand["gpm"]
         result.demand_curve = demand["curve"]
-        by_gpm = (fixed > 0.0 or
-                  demand["curve"] == water_tables.CURVE_FLUSHOMETER)
+        by_gpm = demand["curve"] == water_tables.CURVE_FLUSHOMETER
 
         if by_gpm:
             selection = water_tables.select_size_by_gpm(demand["gpm"] or 0.0,
@@ -156,13 +144,7 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
             segments.append(result)
             continue
 
-        if fixed > 0.0:
-            result.rule = "{} wsfu + {:.1f} gpm fixed = {:.1f} gpm, {} table " \
-                          "limit {:.1f} gpm".format(
-                              _fmt(node.demand_wsfu), fixed,
-                              float(demand["gpm"]), system_key,
-                              float(selection["limit_gpm"]))
-        elif by_gpm:
+        if by_gpm:
             result.rule = "{} wsfu, {:.1f} gpm flush valve, {} table limit " \
                           "{:.1f} gpm".format(
                               _fmt(node.demand_wsfu), float(demand["gpm"]),
@@ -181,6 +163,7 @@ def size_network(graph, apply_minimums=True, return_system_type_ids=None,
         segments.append(result)
 
     _hold_unloaded_heater_piping(graph, segments, flags)
+    _hold_unsplit_parallel_hot(graph, segments, flags)
     _hold_existing_pipes(graph, segments, flags)
     _enforce_downsize_after_the_tee(graph, segments, flags)
 
@@ -305,6 +288,33 @@ def _hold_unloaded_heater_piping(graph, segments, flags):
         segment.rule = "NOT SIZED"
         segment.flag = ("water heater {} serves no hot fixtures, so this "
                         "pipe cannot be sized".format(heater_id))
+        flags.append("Pipe {}: {}".format(segment.element_id, segment.flag))
+
+
+def _hold_unsplit_parallel_hot(graph, segments, flags):
+    """Leave unsized the hot pipes of heaters in parallel that hold a loop.
+
+    water_graph could not split the hot load between the heaters, so the
+    demand on these pipes is not known and sizing them on it would write a
+    wrong size (Colin, 2026-11-02). They keep their drawn size and are
+    reported; water_checks raises the ERROR.
+    """
+    held = {}
+    for group, pipes in getattr(graph, "parallel_hot_unsplit", []):
+        for pid in pipes:
+            held[pid] = group
+    if not held:
+        return
+    for segment in segments:
+        group = held.get(segment.element_id)
+        if group is None or segment.is_return:
+            continue
+        segment.nominal_size = None
+        segment.size_inches = None
+        segment.rule = "NOT SIZED"
+        segment.flag = ("water heaters {} in parallel, their hot supply "
+                        "piping closes a loop so the hot load could not be "
+                        "split".format(", ".join(str(h) for h in group)))
         flags.append("Pipe {}: {}".format(segment.element_id, segment.flag))
 
 
@@ -471,13 +481,20 @@ def _fixture_supply_size_in(fixture, system):
         else:
             name = None
         if name is not None:
+            import revit_helpers
             try:
-                import revit_helpers
                 feet = revit_helpers.get_type_parameter_value(element, name)
                 if feet:
                     return feet * shared_params.INCHES_PER_FOOT
-            except Exception:
-                pass
+                revit_helpers._log_entry(
+                    "WARNING", "_fixture_supply_size_in", fixture.element_id,
+                    "Type parameter '{}' NOT FOUND or zero, the connector "
+                    "diameter is used instead.".format(name))
+            except Exception as e:
+                revit_helpers._log_entry(
+                    "ERROR", "_fixture_supply_size_in", fixture.element_id,
+                    "Could not read Type parameter '{}': {}".format(
+                        name, str(e)))
     for connector in fixture.connectors:
         if connector.get("system_type") != system:
             continue
@@ -604,8 +621,14 @@ def write_fitting_sizes(doc, graph, sizing_result, transaction_factory):
             if node.element is None:
                 skipped += 1
                 continue
-            if "rpz" in (node.family_name or "").lower():
-                skipped += 1    # a backflow preventer keeps its own size
+            if water_graph._is_backflow_preventer(node):
+                # A backflow preventer (RPZ or backflow by name, the picked
+                # one or one in parallel) keeps its own size (Colin,
+                # 2026-11-02).
+                skipped += 1
+                graph.log("FITTING WRITE: {} '{}' is a backflow preventer, "
+                          "left at its own size.".format(node.element_id,
+                                                         node.family_name))
                 continue
             if "transition" in (node.family_name or "").lower():
                 # Revit's own reducer follows the pipes on either side.

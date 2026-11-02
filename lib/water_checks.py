@@ -179,8 +179,7 @@ def _check_fixtures(graph, findings):
     zero_load = []
     for fid in graph.fixture_ids:
         node = graph.nodes.get(fid)
-        if (node is not None and node.total_wsfu <= 0 and
-                not float(node.fixed_gpm or 0.0)):
+        if node is not None and node.total_wsfu <= 0:
             zero_load.append(node)
 
     if zero_load:
@@ -257,6 +256,20 @@ def _check_hot_water(graph, profile, findings):
             "are not sized. Check that the "
             "hot piping is connected: {}".format(len(unserved), names)))
         findings[-1].short = "Water heater {} serves no fixtures. Its cold feed and hot outlet piping are not sized.".format(", ".join(str(n.element_id) for n in unserved))
+
+    # Heaters in parallel split the hot load by cutting the hot supply
+    # piping, which only works on a tree (Colin, 2026-11-02).
+    for group, pipes in getattr(graph, "parallel_hot_unsplit", []):
+        heaters_text = ", ".join(str(h) for h in group)
+        findings.append(Finding(
+            SEVERITY_ERROR, "parallel_heaters_loop",
+            "Water heaters {} are in parallel, and their hot supply piping "
+            "still closes a loop after the return piping was taken out, so "
+            "the hot load cannot be split between them. {} hot pipe(s) are "
+            "left unsized. Draw the return in its own System Type, or check "
+            "for a hot main piped in a loop.".format(heaters_text,
+                                                     len(pipes))))
+        findings[-1].short = "Heaters {} in parallel: hot supply closes a loop, {} hot pipe(s) not sized.".format(heaters_text, len(pipes))
 
 
 def _check_recirculation(graph, profile, returns, findings):

@@ -268,18 +268,73 @@ def _fitting_labels(graph, results):
     return labels
 
 
-def _keynote_symbol(doc):
-    """The RJA numbered circle family symbol, or None."""
+def _symbol_names(symbol):
+    """(family name, type name) of a FamilySymbol, either one "" when unread.
+
+    Never .Name first: under IronPython it raises on Revit elements (memory
+    reference_ironpython_revit_name). BuiltInParameter first, then
+    ElementType.FamilyName and the static Element.Name accessor.
+    """
+    from Autodesk.Revit.DB import BuiltInParameter, Element
+    family = ""
+    type_name = ""
+    try:
+        param = symbol.get_Parameter(BuiltInParameter.SYMBOL_FAMILY_NAME_PARAM)
+        if param is not None:
+            family = param.AsString() or ""
+    except Exception:
+        family = ""
+    if not family:
+        try:
+            family = symbol.FamilyName or ""
+        except Exception:
+            family = ""
+    try:
+        param = symbol.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)
+        if param is not None:
+            type_name = param.AsString() or ""
+    except Exception:
+        type_name = ""
+    if not type_name:
+        try:
+            type_name = Element.Name.GetValue(symbol) or ""
+        except Exception:
+            type_name = ""
+    return family, type_name
+
+
+def _keynote_symbol(doc, output=None):
+    """The RJA numbered circle family symbol, or None.
+
+    Every symbol whose names could not be read is counted, and the result is
+    printed (Colin, 2026-11-02: no silent failures).
+    """
+    unread = []
+    found = None
     for symbol in FilteredElementCollector(doc).OfClass(
             FamilySymbol).ToElements():
-        try:
-            family = symbol.Family.Name
-            if "RJA - Keynote Symbol" in family and (
-                    "Circle" in family or "Circle" in symbol.Name):
-                return symbol
-        except Exception:
-            pass
-    return None
+        family, type_name = _symbol_names(symbol)
+        if not family:
+            unread.append(revit_helpers.eid_int(symbol.Id))
+            continue
+        if "RJA - Keynote Symbol" in family and (
+                "Circle" in family or "Circle" in type_name):
+            found = symbol
+            break
+    if output is not None:
+        if unread:
+            output.print_md("Keynote symbol search: family name NOT FOUND on "
+                            "{} symbol(s), first ids {}.".format(
+                                len(unread),
+                                ", ".join(str(i) for i in unread[:5])))
+        if found is None:
+            output.print_md("Keynote symbol 'RJA - Keynote Symbol' (Circle) "
+                            "NOT FOUND in the project, so the flagged pipes "
+                            "are not numbered on the plan.")
+        else:
+            output.print_md("Keynote symbol found: element {}.".format(
+                revit_helpers.eid_int(found.Id)))
+    return found
 
 
 def _on_view_level(view, element):
@@ -337,7 +392,7 @@ def _make_colored_view(doc, output, view, graph, results, fitting_labels,
                     eid, str(exc)))
         # Numbered circles on the first pipe of each problem run, so row 3 of
         # the table is circle 3 in the plan.
-        symbol = _keynote_symbol(doc)
+        symbol = _keynote_symbol(doc, output)
         if symbol is not None and not symbol.IsActive:
             symbol.Activate()
             doc.Regenerate()
@@ -358,8 +413,15 @@ def _make_colored_view(doc, output, view, graph, results, fitting_labels,
                             label.Set(str(item.number))
                         elif label.StorageType == StorageType.Integer:
                             label.Set(item.number)
-            except Exception:
-                pass
+                    else:
+                        output.print_md(
+                            "Keynote {} at pipe {}: 'Label' parameter NOT "
+                            "FOUND or read only, the circle is blank.".format(
+                                item.number, item.result.element_id))
+            except Exception as exc:
+                output.print_md("Keynote {} could not be placed at pipe {}: "
+                                "{}".format(item.number,
+                                            item.result.element_id, str(exc)))
         transaction.Commit()
     except Exception as exc:
         transaction.RollBack()

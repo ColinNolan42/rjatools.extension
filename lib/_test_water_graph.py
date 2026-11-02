@@ -38,7 +38,11 @@ def _install_revit_stubs():
                  # used by water_drafting
                  "XYZ", "Line", "TextNote", "TextNoteOptions", "TextNoteType",
                  "ViewDrafting", "ViewFamily", "ViewFamilyType", "ViewSheet",
-                 "Viewport"):
+                 "Viewport",
+                 # used by rja_drafting (water_drafting's shared table look)
+                 "CurveLoop", "FilledRegion", "FilledRegionType",
+                 "OverrideGraphicSettings", "Color", "FillPatternElement",
+                 "HorizontalTextAlignment"):
         setattr(db, name, _Enum(name))
 
     autodesk.Revit = revit
@@ -101,8 +105,6 @@ def add_node(graph, nid, kind, parent=None, system=COLD, **kw):
     node.is_flush_valve = kw.get("flush_valve", False)
     node.served_fixture_ids = kw.get("served", [])
     node.demand_wsfu = 0.0
-    node.demand_fixed_gpm = 0.0
-    node.fixed_gpm = kw.get("fixed_gpm", 0.0)
     node.assigned_size = None
     graph.add(node)
     # Mirror what _make_node does during a real traversal, so the report sees
@@ -301,6 +303,117 @@ class TestHeatersInParallel(unittest.TestCase):
         self.assertAlmostEqual(g.nodes[32].demand_wsfu, 2.0)
         self.assertAlmostEqual(g.nodes[12].demand_wsfu, 4.0)
         self.assertAlmostEqual(g.nodes[11].demand_wsfu, 6.0)
+
+
+class TestParallelHeatersWithUnsplitReturn(unittest.TestCase):
+    """The TestHeatersInParallel layout plus a 40 ft return from the end tee
+    back to heater A, drawn in the hot supply System Type, so no return is
+    split out. The joint that closed the loop used to stay in the hot
+    adjacency, a cut across the loop left everything on one side, and the
+    main read 0 WSFU (review finding, Colin, 2026-11-02).
+
+        hot main(11) -> end tee(12) -> return(13, 40 ft) -> heater A(6)
+    """
+
+    def build(self, walk_meets_at_tee=False):
+        g = TestHeatersInParallel().build()
+        add_node(g, 12, water_graph.KIND_FITTING, parent=11, system=HOT)
+        if walk_meets_at_tee:
+            # The walk went round from heater A both ways and met at the tee.
+            add_node(g, 13, water_graph.KIND_PIPE, parent=6, system=HOT,
+                     length_feet=40.0)
+            g.loop_edges.append((13, 12, HOT))
+        else:
+            add_node(g, 13, water_graph.KIND_PIPE, parent=12, system=HOT,
+                     length_feet=40.0)
+            g.loop_edges.append((13, 6, HOT))
+        return g
+
+    def test_main_carries_the_whole_hot_load(self):
+        for meets in (False, True):
+            g = self.build(meets)
+            water_graph._assign_demand(g)
+            self.assertAlmostEqual(g.nodes[11].demand_wsfu, 6.0)
+            self.assertAlmostEqual(g.nodes[8].demand_wsfu, 3.0)
+            self.assertAlmostEqual(g.nodes[9].demand_wsfu, 3.0)
+            self.assertAlmostEqual(g.nodes[13].demand_wsfu, 0.0)
+            self.assertEqual(g.parallel_hot_unsplit, [])
+
+    def test_loop_left_after_split_is_an_error_and_not_sized(self):
+        # A return was split out, but not this one, so the hot supply still
+        # holds a loop: no split, an ERROR, and no size from a 0 load.
+        import water_checks
+        import water_sizing_engine
+        g = self.build()
+        g.return_system_type_ids = set([999])
+        water_graph._assign_demand(g)
+        self.assertEqual(len(g.parallel_hot_unsplit), 1)
+        group, pipes = g.parallel_hot_unsplit[0]
+        self.assertEqual(group, (6, 7))
+        self.assertEqual(pipes, [8, 9, 11, 13])
+        for fid in (20, 21, 22, 23):
+            g.nodes[fid].type_name = "Lavatory"
+        codes = [f.code for f in water_checks.check_system(g)["errors"]]
+        self.assertIn("parallel_heaters_loop", codes)
+        res = water_sizing_engine.size_network(g)
+        by_id = dict((s.element_id, s) for s in res["segments"])
+        for pid in pipes:
+            self.assertIsNone(by_id[pid].nominal_size)
+            self.assertEqual(by_id[pid].rule, "NOT SIZED")
+
+
+class TestWalkStaysInWater(unittest.TestCase):
+    """A water heater with CW, HW and a gas connector: the walk shall never
+    enter the gas pipe (Colin, 2026-11-02). Revit reports gas piping as
+    OtherPipe; hydronic and sanitary are covered the same way."""
+
+    def _connector(self, index, neighbour, system):
+        return {"connector_index": index, "direction": "Bidirectional",
+                "is_connected": True, "connected_element_id": neighbour,
+                "connected_element_type": None, "origin_xyz": None,
+                "connected_system_element_id": None, "system_type": system,
+                "diameter_in": 0.75}
+
+    def _walk(self, system, other):
+        g = make_graph()
+        g.origin_id = 1
+        heater = add_node(g, 1, water_graph.KIND_HEATER)
+        heater.connectors = [self._connector(0, 50, COLD),
+                             self._connector(1, 60, HOT),
+                             self._connector(2, 70, other)]
+        keep = (water_graph._get_element, water_graph._make_node)
+        made = []
+
+        def fake_make(graph, element, element_id, sys_):
+            made.append(element_id)
+            return add_node(graph, element_id, water_graph.KIND_PIPE,
+                            system=sys_)
+
+        water_graph._get_element = lambda doc, eid: object()
+        water_graph._make_node = fake_make
+        try:
+            water_graph._walk(g, None, 1, system, set([1]))
+        finally:
+            water_graph._get_element, water_graph._make_node = keep
+        return g, made
+
+    def test_gas_pipe_never_enters_the_graph(self):
+        for system, own in ((COLD, 50), (HOT, 60)):
+            g, made = self._walk(system, "OtherPipe")
+            self.assertEqual(made, [own])
+            self.assertNotIn(70, g.nodes)
+            self.assertTrue(any(l.startswith("NOT WATER: element 1 connector 2")
+                                for l in g.log_lines))
+
+    def test_hydronic_and_sanitary_are_not_followed(self):
+        for other in ("SupplyHydronic", "Sanitary"):
+            g, made = self._walk(COLD, other)
+            self.assertNotIn(70, g.nodes)
+            self.assertEqual(made, [50])
+
+    def test_the_other_water_system_is_not_logged_as_not_water(self):
+        g, _made = self._walk(COLD, "OtherPipe")
+        self.assertFalse(any("connector 1 is" in l for l in g.log_lines))
 
 
 class TestMixedFixtures(unittest.TestCase):

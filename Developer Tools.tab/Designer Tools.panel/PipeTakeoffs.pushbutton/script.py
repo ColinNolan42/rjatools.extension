@@ -1580,6 +1580,15 @@ def build_hwr_series(props, fixture, upstream_pt):
                 logger.info(
                     "HWR series: set '{}' to {:.3f} in to match the main."
                     .format(name, dia_ft * 12.0))
+            else:
+                # Reported, not silent (Colin, 2026-11-02): the connector
+                # stays at the Type size, so the run shows a size change.
+                logger.warning(
+                    "HWR series: fixture {}: could not set '{}' to {:.3f} in "
+                    "(parameter NOT FOUND, read only or rejected). The "
+                    "connector stays at its Type size.".format(
+                        revit_helpers.eid_int(fixture.Id),
+                        name or "HW Size Override", float(dia_ft) * 12.0))
         stub_start = XYZ(
             origin.X + facing.X * STUB_LENGTH,
             origin.Y + facing.Y * STUB_LENGTH,

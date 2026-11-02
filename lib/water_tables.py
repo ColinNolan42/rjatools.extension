@@ -548,10 +548,21 @@ def _demand_sentence(demand_table_id):
             "first row of that column, uses the flush tank column.")
 
 
+# Printed label for a dialog row label, where the sentence reads better with
+# a different lead in. Every other row prints as "<label> <value>".
+_BASIS_LINE_LABELS = {
+    "Code:": "Basis of design:",
+    "Recirculation:": "Hot water return (sized on circulation flow):",
+}
+
+
 def basis_of_design_lines(extra=None):
     """Build the basis-of-design text block every Domestic Water tool
     output shall print, generated from the loaded tables so it cannot
     drift from the data actually in use.
+
+    Built on basis_of_design_rows(), one line per row, so the printed block
+    and the dialog can never say different things (Colin, 2026-11-02).
 
     Args:
         extra: Optional list of additional ASCII strings to append
@@ -560,66 +571,9 @@ def basis_of_design_lines(extra=None):
     Returns:
         List of plain ASCII strings, no trailing newlines.
     """
-    data = _load()
-    source = data["_source"]
-    firm_rows = data["firm_sizing_table"]
-
-    code_edition = source.get("code", "2024 International Plumbing Code")
-
-    wsfu_table_id = str(source.get("wsfu_table", "")).split(",")[0].strip()
-    if not wsfu_table_id:
-        wsfu_table_id = "Table E103.3(2)"
-
-    demand_table_id = str(source.get("demand_table", "")).split(",")[0].strip()
-    if not demand_table_id:
-        demand_table_id = "Table E103.3(3)"
-
-    firm_source_parts = [
-        p.strip() for p in str(source.get("firm_sizing_table", "")).split(",")
-    ]
-    pipe_material = firm_source_parts[-1] if firm_source_parts[-1] else "Copper Type L"
-
-    cold_fps = None
-    hot_fps = None
-    for key in firm_rows[0].keys():
-        if key.endswith("_cold"):
-            cold_fps = _fps_from_limit_field(key)
-        elif key.endswith("_hot"):
-            hot_fps = _fps_from_limit_field(key)
-
-    size_min = firm_rows[0]["nominal_size"]
-    size_max = firm_rows[-1]["nominal_size"]
-
     lines = []
-    lines.append("Basis of design: " + str(code_edition) + ".")
-    lines.append("Fixture loads: " + wsfu_table_id +
-                 ", water supply fixture units (WSFU).")
-    lines.append("Demand: " + _demand_sentence(demand_table_id))
-    lines.append(
-        "Pipe sizing: the firm WSFU per size table (" + pipe_material +
-        "), " + str(size_min) + "\" through " + str(size_max) + "\", at a "
-        "maximum velocity of " + _fmt_fps(cold_fps) + " fps for cold water "
-        "and " + _fmt_fps(hot_fps) + " fps for hot water. On a flush valve "
-        "system, cold water piping is sized on gpm against the same table "
-        "restated in gpm.")
-    lines.append(
-        "Cold water piping is sized on total fixture units and hot water "
-        "piping on hot fixture units. A cold water branch that serves only a "
-        "water heater is sized on the hot fixture units that heater serves. "
-        "Water heaters in parallel on a common hot header split the hot load "
-        "equally, so the cold feed to each and its hot outlet carry its "
-        "share, combined at the tee where the outlets join.")
-    lines.append(
-        "Hot water return: sized on circulation flow. " + _RETURN_BASIS +
-        " The return is sized against the hot water table restated in gpm "
-        "per " + demand_table_id + " (" + _fmt_fps(hot_fps) + " fps), " +
-        str(size_min) + "\" minimum.")
-    lines.append(
-        "Velocity: computed from ASTM B88 Type L inside diameters and "
-        "checked in Water Performance.")
-    lines.append(
-        "Pressure loss: 2024 IPC Section E103.3 segmented loss method, "
-        "checked against Table 604.3 in Water Performance.")
+    for label, value in basis_of_design_rows():
+        lines.append(_BASIS_LINE_LABELS.get(label, label) + " " + value)
 
     if extra:
         for line in extra:
