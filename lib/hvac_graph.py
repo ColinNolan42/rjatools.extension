@@ -1690,38 +1690,53 @@ def compute_downstream_terminal_ids(root_id, nodes, children, terminal_ids):
 
 
 # ── branch rule (pure, CPython tested in _test_branch_split.py) ──────────────
-def split_above_ids(root_id, children, downstream, equipment_ids=()):
-    """Node ids that have a SPLIT above them on the walk from root_id.
+def single_terminal_runs(root_id, children, downstream, equipment_ids=()):
+    """{first node id: set of node ids on that run} for each connection of
+    the root UNIT that serves exactly one terminal.
 
-    A split is ductwork (a duct, fitting or accessory, never equipment) with
-    two or more terminals downstream. A duct with one terminal downstream is
-    a BRANCH only when it is in this set (Colin, 2026-11-02): a unit feeding
-    a single terminal never splits, so its whole run, trunk included, stays
-    a MAIN and keeps the velocity and friction check. Before this rule that
-    run was one branch and was never checked.
+    A duct with one terminal downstream is a BRANCH, so such a run, trunk
+    included, is one branch and never gets the velocity and friction check.
+    That is nearly always a model set up problem (a run disconnected from
+    the rest of the system) or a rare point of use unit, so the callers
+    WARN on every run found here, and Duct Performance judges these runs as
+    mains when its "Check single terminal unit runs as mains" option is
+    ticked (Colin, 2026-11-02: an option, not a hard rule, for a rare case).
 
-    Equipment never counts as the split: the root unit's count mixes its
-    supply and return sides, and a VAV box's outlet split happens in the
-    ductwork after it. A root that is a picked duct does count.
+    Only the root unit's own connections count. A VAV box serving one
+    diffuser is normal and keeps the branch rule; a root that is a picked
+    duct has no unit connection and returns {}. The run stops at equipment.
 
     downstream: compute_downstream_terminal_ids() for the same root.
-    equipment_ids: node ids that are equipment.
+    equipment_ids: node ids that are equipment (the root unit among them).
     """
-    out = set()
-    seen = set()
-    stack = [(root_id, False)]
-    while stack:
-        nid, above = stack.pop()
-        if nid in seen:
+    out = {}
+    if root_id not in equipment_ids:
+        return out
+    for first in children.get(root_id, []):
+        if first in equipment_ids or len(downstream.get(first, ())) != 1:
             continue
-        seen.add(nid)
-        if above:
-            out.add(nid)
-        splits = (nid not in equipment_ids
-                  and len(downstream.get(nid, ())) >= 2)
-        for cid in children.get(nid, []):
-            stack.append((cid, above or splits))
+        run = set()
+        stack = [first]
+        while stack:
+            nid = stack.pop()
+            if nid in run:
+                continue
+            run.add(nid)
+            stack.extend(c for c in children.get(nid, []) if c not in equipment_ids)
+        out[first] = run
     return out
+
+
+def single_terminal_text(unit_id, first_id, checked_as_main=False):
+    """The WARNING line for one single terminal unit run, shared by Duct
+    Performance and Size Duct so the wording matches."""
+    how = ('judged as a main on velocity and friction (option ticked)'
+           if checked_as_main else
+           'judged as one branch, so its trunk gets no velocity or friction check')
+    return ('WARNING: unit %s connection at element %s serves only one terminal. '
+            'Check the model for a disconnected run; if the unit really serves one '
+            'terminal (a rare point of use unit), the run is %s.'
+            % (unit_id, first_id, how))
 
 
 # ── solid fill pattern ───────────────────────────────────────────────────────

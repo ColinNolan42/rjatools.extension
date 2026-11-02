@@ -96,6 +96,8 @@ def run(doc, uidoc, output, forms):
             if warning.startswith("Equipment id"):
                 output.print_md(":warning: " + warning)
 
+    for line in _single_terminal_warnings(net):
+        output.print_md(":warning: " + line)
     plans = _plan(doc, net, settings["limits"], mp_ids, runout_ids)
     _print_plan(output, plans)
     runouts = sorted(p.element_id for p in plans
@@ -219,12 +221,6 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
     no_flow = set(net.zero_terminals) | set(net.missing_flow)
-    # A one terminal duct is a branch only below a split (Colin, 2026-11-02),
-    # the same rule as Duct Performance: a unit feeding one terminal is sized
-    # as a main along its whole run.
-    equip_ids = set(nid for nid, e in net.nodes.items()
-                    if e is not None and hvac_graph.is_equipment(e))
-    split_above = hvac_graph.split_above_ids(root_id, net.children, downstream, equip_ids)
     parents = _parents(net)
     mp_ids = mp_ids or set()
     runout_ids = runout_ids or set()
@@ -238,7 +234,7 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
         # A branch is left alone only when it feeds an RJA auto-sizing
         # diffuser; a branch to any other diffuser is sized like a main
         # (Colin, 2026-10-22).
-        is_branch = len(below) == 1 and not is_mp and nid in split_above
+        is_branch = len(below) == 1 and not is_mp
         if is_branch:
             term = net.nodes.get(next(iter(below)))
             is_branch = term is not None and hvac_graph.is_auto_sizing_diffuser(term)
@@ -338,6 +334,25 @@ def _taps_on(net, duct, up_pt, direction):
 
 # Largest dimension of a connector, inches (lives in hvac_graph).
 _conn_size_in = hvac_graph.connector_size_in
+
+
+def _single_terminal_warnings(net):
+    """One line per root unit connection that serves a single terminal
+    (hvac_graph.single_terminal_runs, Colin 2026-11-02). Its whole run is a
+    branch, so a branch to an RJA auto-sizing diffuser is left as drawn: the
+    engineer checks it, or fixes the model if the run is disconnected."""
+    root_id = eid_int(net.root.Id)
+    downstream = hvac_graph.compute_downstream_terminal_ids(
+        root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
+    equip_ids = set(nid for nid, e in net.nodes.items()
+                    if e is not None and hvac_graph.is_equipment(e))
+    runs = hvac_graph.single_terminal_runs(root_id, net.children, downstream, equip_ids)
+    lines = []
+    for first in sorted(runs):
+        lines.append(hvac_graph.single_terminal_text(root_id, first))
+    hvac_graph.log.info('Size Duct: %d single terminal unit run(s) on root %s',
+                        len(lines), root_id)
+    return lines
 
 
 def _parents(net):

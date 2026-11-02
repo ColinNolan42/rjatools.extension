@@ -218,6 +218,10 @@ _SETTINGS_XAML = '''
                           ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
                            Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
+                <CheckBox x:Name="cb_single" Content="Check single terminal unit runs as mains"
+                          ToolTip="A unit connection serving only one terminal makes its whole run one branch, with no velocity or friction check. It is warned on either way. Ticked, that run is judged as a main."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
+                           Text="Rare: usually a disconnected run in the model, or a point of use unit."/>
                 <CheckBox x:Name="cb_vav" Content="VAV System"
                           ToolTip="Supply mains between the unit and the VAV box inlets are checked as medium pressure (MP). Single duct and fan powered boxes alike."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -433,7 +437,7 @@ def _wpf_named(win, name):
 
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
-                     vav, vav_settings, fan_effect=None):
+                     vav, vav_settings, fan_effect=None, single_main=False):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
@@ -442,6 +446,9 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
 
     fan_effect: {'on', 'fan_type', 'blast_ratio'}; None (the legacy dialog,
     which has no fields for it) takes fan_system_effect.default_settings().
+
+    single_main: judge a unit connection that serves only one terminal as a
+    main (Colin, 2026-11-02, default off; the legacy dialog has no box).
     """
     limits = dict(limits)
     if vav:
@@ -460,6 +467,7 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'vav':           bool(vav),
         'vav_settings':  vav_settings,
         'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
+        'single_main':   bool(single_main),
     }
 
 
@@ -483,6 +491,7 @@ def _show_velocity_settings_xaml(use_theme):
     N = lambda name: _wpf_named(win, name)
     img_logo = N('img_logo')
     cb_full_diag = N('cb_full_diag')
+    cb_single = N('cb_single')
     cb_vav = N('cb_vav')
     exp_vav = N('exp_vav')
     grid_vav = N('grid_vav')
@@ -566,6 +575,7 @@ def _show_velocity_settings_xaml(use_theme):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
+    cb_single.IsChecked = False
     cb_vav.IsChecked = False
     cb_static.IsChecked = False
     cb_filter.IsChecked = True       # default on (Colin, 2026-11-02)
@@ -978,7 +988,7 @@ def _show_velocity_settings_xaml(use_theme):
         values = _settings_result(out, gpct, selected_cols, full_diag,
                                   ext_static, safety_pct, c_values, comp_values,
                                   calc_basis, filter_inwc, vav, vav_settings,
-                                  fan_effect)
+                                  fan_effect, bool(cb_single.IsChecked))
         return errors, values
 
     def on_ok(s, e):
@@ -4666,6 +4676,7 @@ def main():
     tol_pct       = dialog_result['tol_pct']
     selected_cols = dialog_result['selected_cols']
     full_diag     = dialog_result['full_diag']
+    single_main   = dialog_result.get('single_main', False)
     ext_static    = dialog_result['ext_static']
     safety_pct    = dialog_result['safety_pct']
     c_values      = dialog_result['c_values']
@@ -4858,8 +4869,8 @@ def main():
     # 4a. Branch vs main, against the merged graph.
     #
     # A duct is a BRANCH when exactly one terminal is reachable downstream of
-    # it and the run has split above it, however many segments and fittings
-    # that tap-off is made of; a MAIN otherwise. Branches are sized against the diffuser tables,
+    # it, however many segments and fittings that tap-off is made of; a MAIN
+    # when two or more are. Branches are sized against the diffuser tables,
     # mains keep the velocity/friction check.
     #
     # Computed per root and unioned rather than merged by overwrite: a duct
@@ -4867,15 +4878,15 @@ def main():
     # reach, so taking one root's answer and discarding the other's could turn
     # a real main into an apparent branch.
     #
-    # A one terminal duct is a branch only below a split (Colin, 2026-11-02,
-    # hvac_graph.split_above_ids): equipment feeding a single terminal never
-    # splits, so its whole run stays a main with the velocity/friction check.
-    # Until 2026-11-02 that run was one branch and was never checked.
+    # A unit connection serving only one terminal makes its whole run one
+    # branch: nearly always a disconnected run or a rare point of use unit.
+    # Warned on every time; judged as a main only with the dialog option
+    # (Colin, 2026-11-02, hvac_graph.single_terminal_runs).
     term_ids = set(all_terminals.keys())
     equip_ids = set(nid for nid, e in all_nodes.items()
                     if e is not None and hvac_graph.is_equipment(e))
     downstream_terms = {}
-    split_above = set()
+    single_runs = {}      # (unit id, first node id) -> node ids on that run
     for rid in all_root_ids:
         partial = hvac_graph.compute_downstream_terminal_ids(
             rid, all_nodes, all_children, term_ids)
@@ -4884,8 +4895,17 @@ def main():
                 downstream_terms[nid] = downstream_terms[nid] | tset
             else:
                 downstream_terms[nid] = tset
-        split_above |= hvac_graph.split_above_ids(rid, all_children, partial, equip_ids)
-    hvac_graph.log.info('Branch rule: %d nodes below a split', len(split_above))
+        for first, run in hvac_graph.single_terminal_runs(
+                rid, all_children, partial, equip_ids).items():
+            single_runs[(rid, first)] = run
+    single_main_ids = set()
+    for (rid, first), run in sorted(single_runs.items()):
+        output.print_md(':warning: ' + hvac_graph.single_terminal_text(
+            rid, first, checked_as_main=single_main))
+        if single_main:
+            single_main_ids |= run
+    hvac_graph.log.info('Branch rule: %d single terminal unit run(s), option %s',
+                        len(single_runs), single_main)
 
     branch_ctx    = {}   # ElementId -> (category, terminal_elem, terminal_cfm) or None
     duct_roles    = {}   # ElementId -> Duct Role display string
@@ -4903,13 +4923,13 @@ def main():
             continue
         tset = downstream_terms.get(eid_int(eid), set())
         term_elem = None
-        if len(tset) == 1 and eid_int(eid) in split_above:
+        if len(tset) == 1 and eid_int(eid) not in single_main_ids:
             term_elem = all_nodes.get(list(tset)[0])
         if term_elem is None:
-            # 0 terminals downstream (a dead-end run), 2+ (a real main), one
-            # terminal with no split above (a unit feeding one terminal), or
-            # a terminal that somehow isn't in the merged node map: all keep
-            # the velocity/friction treatment.
+            # 0 terminals downstream (a dead-end run), 2+ (a real main), a
+            # single terminal unit run with the option ticked, or a terminal
+            # that somehow isn't in the merged node map: all keep the
+            # velocity/friction treatment.
             branch_ctx[eid] = None
             duct_roles[eid] = _duct_role_label(False, None)
             continue
@@ -5769,7 +5789,7 @@ def main():
     legend_rec = {
         'roles_note': ('Mains and branches were checked by different methods.',
                        'A duct is a branch when exactly one terminal is reachable '
-                       'downstream of it after the run splits, otherwise a main.'),
+                       'downstream of it, a main when two or more are.'),
         'limits_caption': ('Main ducts, design limits used (green at or under max, '
                            'yellow within {}% above max, red over max + {}%, purple '
                            'when a smaller standard size still fits)'.format(
