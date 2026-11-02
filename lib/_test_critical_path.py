@@ -15,6 +15,7 @@ lookups.
 Read-only against the source: this file never writes to the extension.
 """
 import io
+import logging
 import os
 import re
 import sys
@@ -151,6 +152,7 @@ def _equipment_connection_geometry(equip, other_id):
 
 
 hvac_graph = types.ModuleType('hvac_graph')
+hvac_graph.log = logging.getLogger('hvac_graph_fake')
 hvac_graph.equipment_connection_geometry = _equipment_connection_geometry
 hvac_graph.duct_friction_loss_per_100ft = _duct_friction_loss_per_100ft
 hvac_graph.takeoff_child_ids       = _takeoff_child_ids
@@ -1514,6 +1516,55 @@ check("case50 VAV box root: fse 0 even with an elbow on it, 'VAV box' noted",
       sa50.get('fse_inwc') == 0.0
       and any('VAV box' in t for _k, t in sa50.get('fse_notes', ())),
       "notes %r" % (sa50.get('fse_notes'),))
+
+# 51: friction along an unbroken main with taps (Colin, 2026-11-02). The main
+#     keeps one size but its flow drops at each tap, so its friction is the
+#     sum of its pieces at their own flow, and a run leaving through a tap is
+#     charged only up to that tap. Case 26's main (10 ft, 1.0 ft2, 1000 cfm,
+#     taps at 2 ft taking 300 cfm and 5 ft taking 400 cfm), plus the main
+#     carrying on past the taps with 300 cfm. Friction faked as V / 10000 in.
+#     wc per 100 ft so each piece's flow shows in the number.
+_flat_fric = hvac_graph.duct_friction_loss_per_100ft
+hvac_graph.duct_friction_loss_per_100ft = lambda v, d_h=None, eps=None: v / 10000.0
+ch51 = {299: [300], 300: [301, 302, 313], 301: [311], 302: [312], 311: [321],
+        312: [322], 313: [323]}
+n51 = dict(n26)
+n51[313] = Elem(kind='duct')
+t51 = dict(t26)
+t51[323] = (300.0, 'Supply Air', 'SD-3')
+def _d51(f311, f312, f313):
+    return build([(300, 0.0, 10.0, 1000.0, 1.0, 'Supply Air'),
+                  (311, f311, 5.0, 600.0, 0.5, 'Supply Air'),
+                  (312, f312, 5.0, 800.0, 0.5, 'Supply Air'),
+                  (313, f313, 5.0, 300.0, 1.0, 'Supply Air')])
+far51 = _sa(crit([299], ch51, _d51(0.0, 0.5, 0.0), t51, n51), 299)
+near51 = _sa(crit([299], ch51, _d51(0.5, 0.0, 0.0), t51, n51), 299)
+end51 = _sa(crit([299], ch51, _d51(0.0, 0.0, 1.0), t51, n51), 299)
+hvac_graph.duct_friction_loss_per_100ft = _flat_fric
+exp_far = 2.0 / 100 * 0.1 + 3.0 / 100 * 0.07           # 0 to 2 ft at 1000, 2 to 5 at 700
+exp_near = 2.0 / 100 * 0.1                              # 0 to 2 ft at 1000 only
+exp_end = exp_far + 5.0 / 100 * 0.03                    # and 5 to 10 ft at 300
+check("case51 run out the far tap: main charged 0-2 ft at 1000 fpm + 2-5 ft at 700 fpm",
+      far51.get('terminal_id') == 322
+      and abs(far51.get('friction_inwc', -1) - (0.5 + exp_far)) < 1e-9,
+      "term %r fric %r expected %r" % (far51.get('terminal_id'), far51.get('friction_inwc'),
+                                       0.5 + exp_far))
+check("case51 run out the near tap: main charged only 0-2 ft at 1000 fpm",
+      near51.get('terminal_id') == 321
+      and abs(near51.get('friction_inwc', -1) - (0.5 + exp_near)) < 1e-9,
+      "term %r fric %r" % (near51.get('terminal_id'), near51.get('friction_inwc')))
+check("case51 run carrying on along the main: all three pieces, 1000 / 700 / 300 fpm",
+      end51.get('terminal_id') == 323
+      and abs(end51.get('friction_inwc', -1) - (1.0 + exp_end)) < 1e-9,
+      "term %r fric %r expected %r" % (end51.get('terminal_id'), end51.get('friction_inwc'),
+                                       1.0 + exp_end))
+_it51 = [i for i in far51.get('items', ()) if i[0] == 'Duct 300']
+check("case51 the take-off line for the main shows 5.0 of 10.0 ft and the stepped loss",
+      len(_it51) == 1 and '5.0 of 10.0 ft' in _it51[0][1]
+      and abs(_it51[0][3] - exp_far) < 1e-9 and abs(_it51[0][4][3] - 5.0) < 1e-9,
+      "items %r" % (_it51,))
+check("case51 the index run items still add up to the subtotal",
+      abs(sum(i[3] or 0.0 for i in far51.get('items', ())) - far51['subtotal_inwc']) < 1e-9)
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

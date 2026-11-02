@@ -26,8 +26,8 @@ overrides either verdict - it is an installability problem, not a sizing one.
 VAV System (dialog checkbox, plan approved 2026-10-22, lib/vav_checks.py):
 supply equipment entered mid tree through its inlet is a VAV box. The supply
 between the unit and the box inlets is medium pressure (MP): always a main,
-judged against the MP limits, never purple. After the box, as above. Flex
-upstream of a box and a diffuser on an MP main are red. External static
+judged against the MP limits, purple when a smaller size meets them (Colin,
+2026-11-02). After the box, as above. A diffuser on an MP main is red. External static
 prices each box and reports the pressure left at it.
 
 Which columns appear in the output tables is chosen in the settings dialog;
@@ -2552,6 +2552,46 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 notes.append(fb)
         return loss, len(passed), parts, notes
 
+    def _seg_friction(duct_id, child_id):
+        """(friction in. wc, feet charged) on an unbroken main with taps, or
+        None to keep the duct's own whole length figure.
+
+        The main keeps one size but its flow drops at every tap, so the
+        friction is the sum of its pieces, each at its own flow (Colin,
+        2026-11-02): unit end to tap 1 at the duct cfm, tap 1 to tap 2 at
+        that less tap 1's branch, and so on. A run leaving through a tap is
+        charged only up to that tap. Needs the tap order (positions read);
+        without it the whole duct is charged at its unit end cfm, as before."""
+        dr = dr_by_int_id[duct_id]
+        taps = _taps(duct_id)
+        if not taps or not dr.area_ft2:
+            return None
+        flows, ordered = _tap_flows(duct_id)
+        if not ordered:
+            return None
+        length = float(dr.length_ft or 0.0)
+        stop = (min(float(flows[child_id][3]), length) if child_id in taps
+                else length)
+        d_h = getattr(dr, 'd_h_in', None)
+        eps = getattr(dr, 'roughness_ft', None)
+        q, x0, total = dr.cfm, 0.0, 0.0
+        for t in sorted(taps, key=lambda t: flows[t][3]):
+            x1 = min(max(float(flows[t][3]), x0), stop)
+            if x1 > x0 and q > 0:
+                total += (x1 - x0) / 100.0 * hvac_graph.duct_friction_loss_per_100ft(
+                    q / dr.area_ft2, d_h, eps)
+            x0 = x1
+            if x0 >= stop:
+                break
+            q = max(flows[t][0] - (flows[t][1] or 0.0), 0.0)
+        if stop > x0 and q > 0:
+            total += (stop - x0) / 100.0 * hvac_graph.duct_friction_loss_per_100ft(
+                q / dr.area_ft2, d_h, eps)
+        hvac_graph.log.info('_seg_friction: duct %s exit %s, %.2f of %.2f ft, %.5f in. wc '
+                            '(whole duct at unit end cfm %.5f)', duct_id, child_id, stop,
+                            length, total, dr.friction_loss_inwc)
+        return total, stop
+
     def _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area, loc_id=None):
         """(loss in. wc, label, notes, downstream area) from the 2001 tables,
         or None to fall back to the worksheet."""
@@ -3390,7 +3430,27 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 extra_t   = tcount
                 extra_items = items
                 extra_unpriced = unpriced
+                c_fric, c_dlen = fric, dlen
                 if dr is not None:
+                    # Friction along a main with taps: each piece at its own
+                    # flow, only as far as this run goes (_seg_friction).
+                    seg = _seg_friction(nid, child_id)
+                    if seg is not None:
+                        _sf, _ft = seg
+                        c_fric = fric - dr.friction_loss_inwc + _sf
+                        c_dlen = dlen - float(dr.length_ft) + _ft
+                        _name = 'Duct {}'.format(nid)
+                        for _i in range(len(extra_items) - 1, -1, -1):
+                            if extra_items[_i][0] == _name:
+                                _old = extra_items[_i]
+                                extra_items = extra_items[:_i] + ((
+                                    _name,
+                                    '{}, {:.1f} of {:.1f} ft, flow stepped at taps'.format(
+                                        getattr(dr, 'size', '?'), _ft, float(dr.length_ft)),
+                                    _old[2], _sf,
+                                    (_old[4][0], _old[4][1], _old[4][2], _ft)),) + \
+                                    extra_items[_i + 1:]
+                                break
                     # Every tap on this main that the run passes before it
                     # leaves restricts it: Cs from the tap's 2001 table at its
                     # own flow split (worksheet C where flows are unreadable).
@@ -3445,8 +3505,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     _od = _first_duct(child_id)
                     if _od is not None:
                         c_fpm, c_area = _od.fpm, _od.area_ft2
-                stack.append((child_id, fric, extra_fit, comp_keys, dcount,
-                              fcount, extra_t, dlen, c_fpm, c_area,
+                stack.append((child_id, c_fric, extra_fit, comp_keys, dcount,
+                              fcount, extra_t, c_dlen, c_fpm, c_area,
                               c_class, extra_unpriced,
                               path | frozenset([child_id]), in_flex,
                               extra_items))
@@ -3619,9 +3679,9 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     Returns (label, max_cap_cfm, reason) — reason is 'Velocity', 'Friction',
     'Oversized', 'Diffuser/Duct Clearance', or '' (GREEN/GRAY, nothing to flag).
 
-    A VAV medium pressure duct (dr.is_mp) is judged against the MP limits and
-    is never PURPLE: MP supply is sized for the boxes' minimum inlet pressure,
-    so a low velocity there is not an oversize to report.
+    A VAV medium pressure duct (dr.is_mp) is judged against the MP limits,
+    PURPLE included: the shrink candidate is tested on the MP limits too
+    (Colin, 2026-11-02; it was never PURPLE before).
     """
     max_fpm, max_friction = _limits_of(dr, custom_limits)
     tol_fac = tol_pct / 100.0
@@ -3659,7 +3719,7 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     # GREEN ducts get downgraded to PURPLE if a smaller standard size — both
     # width and height at least one nominal size down — would still satisfy
     # both max FPM and max friction. i.e. it's oversized.
-    if combined == 'GREEN' and not getattr(dr, 'is_mp', False):
+    if combined == 'GREEN':
         _, sugg_area = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
         if sugg_area is not None:
             combined = 'PURPLE'
@@ -3761,9 +3821,13 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
 
     kind, terminal_elem, terminal_cfm = branch_ctx
 
-    if terminal_elem is not None and not hvac_graph.is_auto_sizing_diffuser(terminal_elem):
-        # Not an RJA auto-sizing diffuser: nothing sized the branch to it, so
-        # the branch gets the main duct check (Colin, 2026-10-22).
+    if (terminal_elem is not None and kind not in ('ceiling', 'sidewall')
+            and not hvac_graph.is_auto_sizing_diffuser(terminal_elem)):
+        # Not an RJA auto-sizing diffuser and no neck or face table to judge
+        # it by (a slot from another family, whose length and slot count are
+        # not read): the branch gets the main duct check. Ceiling and sidewall
+        # diffusers from any family are judged on the RJA diffuser tables
+        # (Colin, 2026-11-02; until then every non-RJA one got the main check).
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
         return label, cap, reason, None
 
@@ -4654,8 +4718,8 @@ def main():
     # 4a. Branch vs main, against the merged graph.
     #
     # A duct is a BRANCH when exactly one terminal is reachable downstream of
-    # it, however many segments and fittings that tap-off is made of; a MAIN
-    # when two or more are. Branches are sized against the diffuser tables,
+    # it and the run has split above it, however many segments and fittings
+    # that tap-off is made of; a MAIN otherwise. Branches are sized against the diffuser tables,
     # mains keep the velocity/friction check.
     #
     # Computed per root and unioned rather than merged by overwrite: a duct
@@ -4663,14 +4727,15 @@ def main():
     # reach, so taking one root's answer and discarding the other's could turn
     # a real main into an apparent branch.
     #
-    # KNOWN LIMITATION, left as-is deliberately (Colin, 2026-09-23): a piece of
-    # equipment feeding only ONE terminal — no AHU/DOAS trunk splitting to
-    # multiple VAV/VRF/FCU taps — has its entire run, trunk included,
-    # classified as a single branch and gets no velocity/friction check at
-    # all. The normal case (an AHU/DOAS main with multiple taps downstream)
-    # is unaffected. Not special-cased for now — under development.
+    # A one terminal duct is a branch only below a split (Colin, 2026-11-02,
+    # hvac_graph.split_above_ids): equipment feeding a single terminal never
+    # splits, so its whole run stays a main with the velocity/friction check.
+    # Until 2026-11-02 that run was one branch and was never checked.
     term_ids = set(all_terminals.keys())
+    equip_ids = set(nid for nid, e in all_nodes.items()
+                    if e is not None and hvac_graph.is_equipment(e))
     downstream_terms = {}
+    split_above = set()
     for rid in all_root_ids:
         partial = hvac_graph.compute_downstream_terminal_ids(
             rid, all_nodes, all_children, term_ids)
@@ -4679,6 +4744,8 @@ def main():
                 downstream_terms[nid] = downstream_terms[nid] | tset
             else:
                 downstream_terms[nid] = tset
+        split_above |= hvac_graph.split_above_ids(rid, all_children, partial, equip_ids)
+    hvac_graph.log.info('Branch rule: %d nodes below a split', len(split_above))
 
     branch_ctx    = {}   # ElementId -> (category, terminal_elem, terminal_cfm) or None
     duct_roles    = {}   # ElementId -> Duct Role display string
@@ -4696,12 +4763,13 @@ def main():
             continue
         tset = downstream_terms.get(eid_int(eid), set())
         term_elem = None
-        if len(tset) == 1:
+        if len(tset) == 1 and eid_int(eid) in split_above:
             term_elem = all_nodes.get(list(tset)[0])
         if term_elem is None:
-            # 0 terminals downstream (a dead-end run), 2+ (a real main), or a
-            # terminal that somehow isn't in the merged node map — all keep
-            # the pre-existing velocity/friction treatment.
+            # 0 terminals downstream (a dead-end run), 2+ (a real main), one
+            # terminal with no split above (a unit feeding one terminal), or
+            # a terminal that somehow isn't in the merged node map: all keep
+            # the velocity/friction treatment.
             branch_ctx[eid] = None
             duct_roles[eid] = _duct_role_label(False, None)
             continue
@@ -5548,7 +5616,7 @@ def main():
     legend_rec = {
         'roles_note': ('Mains and branches were checked by different methods.',
                        'A duct is a branch when exactly one terminal is reachable '
-                       'downstream of it, a main when two or more are.'),
+                       'downstream of it after the run splits, otherwise a main.'),
         'limits_caption': ('Main ducts, design limits used (green at or under max, '
                            'yellow within {}% above max, red over max + {}%, purple '
                            'when a smaller standard size still fits)'.format(

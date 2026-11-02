@@ -1254,6 +1254,7 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
     diffuser_ok = None
     branch_ok   = None
     unverified  = []
+    over_max    = False   # Flow above the largest size in the table
 
     if res.category == 'ceiling':
         neck_dia          = geom[1]
@@ -1271,6 +1272,7 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
         # duct at once, so showing only one of them would understate it.
         min_dia = diffuser_tables.min_diameter_for_cfm(table, res.cfm)
         if min_dia is None:
+            over_max = True
             res.required_size = '>{}'.format(diffuser_tables.round_size_label(
                 diffuser_tables.largest_diameter(table)))
         else:
@@ -1308,6 +1310,7 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
         # three aspect ratios and are not comparable dimension-by-dimension.
         min_row = diffuser_tables.min_row_for_cfm(table, res.cfm)
         if min_row is None:
+            over_max = True
             res.required_size = '>{}'.format(diffuser_tables.row_size_label(
                 diffuser_tables.largest_sidewall_row(table)))
         elif face_row is not None and (face_row[0] * face_row[1]) > (min_row[0] * min_row[1]):
@@ -1336,12 +1339,18 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
 
     # Compose the verdict. A real failure always beats an unverifiable half:
     # not being able to check the diffuser does not excuse an undersized duct.
-    if diffuser_ok is False and branch_ok is False:
+    # Over the largest published size no neck or face carries the Flow: the
+    # diffuser has to be split (Colin, 2026-11-02). Otherwise an undersized
+    # diffuser names the size it needs, the same as the Required Size column.
+    if over_max:
         res.status = 'RED'
-        res.reason = 'Diffuser + branch undersized'
+        res.reason = 'Max CFM reached, split diffuser'
+    elif diffuser_ok is False and branch_ok is False:
+        res.status = 'RED'
+        res.reason = 'Diffuser + branch undersized, use {}'.format(res.required_size)
     elif diffuser_ok is False:
         res.status = 'RED'
-        res.reason = 'Diffuser undersized for CFM'
+        res.reason = 'Diffuser undersized for CFM, use {}'.format(res.required_size)
     elif branch_ok is False:
         res.status = 'RED'
         res.reason = 'Branch smaller than diffuser'
@@ -1678,6 +1687,41 @@ def compute_downstream_terminal_ids(root_id, nodes, children, terminal_ids):
             for cid in children.get(nid, []):
                 stack.append((cid, False))
     return result
+
+
+# ── branch rule (pure, CPython tested in _test_branch_split.py) ──────────────
+def split_above_ids(root_id, children, downstream, equipment_ids=()):
+    """Node ids that have a SPLIT above them on the walk from root_id.
+
+    A split is ductwork (a duct, fitting or accessory, never equipment) with
+    two or more terminals downstream. A duct with one terminal downstream is
+    a BRANCH only when it is in this set (Colin, 2026-11-02): a unit feeding
+    a single terminal never splits, so its whole run, trunk included, stays
+    a MAIN and keeps the velocity and friction check. Before this rule that
+    run was one branch and was never checked.
+
+    Equipment never counts as the split: the root unit's count mixes its
+    supply and return sides, and a VAV box's outlet split happens in the
+    ductwork after it. A root that is a picked duct does count.
+
+    downstream: compute_downstream_terminal_ids() for the same root.
+    equipment_ids: node ids that are equipment.
+    """
+    out = set()
+    seen = set()
+    stack = [(root_id, False)]
+    while stack:
+        nid, above = stack.pop()
+        if nid in seen:
+            continue
+        seen.add(nid)
+        if above:
+            out.add(nid)
+        splits = (nid not in equipment_ids
+                  and len(downstream.get(nid, ())) >= 2)
+        for cid in children.get(nid, []):
+            stack.append((cid, above or splits))
+    return out
 
 
 # ── solid fill pattern ───────────────────────────────────────────────────────

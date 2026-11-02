@@ -219,6 +219,12 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
     no_flow = set(net.zero_terminals) | set(net.missing_flow)
+    # A one terminal duct is a branch only below a split (Colin, 2026-11-02),
+    # the same rule as Duct Performance: a unit feeding one terminal is sized
+    # as a main along its whole run.
+    equip_ids = set(nid for nid, e in net.nodes.items()
+                    if e is not None and hvac_graph.is_equipment(e))
+    split_above = hvac_graph.split_above_ids(root_id, net.children, downstream, equip_ids)
     parents = _parents(net)
     mp_ids = mp_ids or set()
     runout_ids = runout_ids or set()
@@ -232,7 +238,7 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
         # A branch is left alone only when it feeds an RJA auto-sizing
         # diffuser; a branch to any other diffuser is sized like a main
         # (Colin, 2026-10-22).
-        is_branch = len(below) == 1 and not is_mp
+        is_branch = len(below) == 1 and not is_mp and nid in split_above
         if is_branch:
             term = net.nodes.get(next(iter(below)))
             is_branch = term is not None and hvac_graph.is_auto_sizing_diffuser(term)
