@@ -146,14 +146,17 @@ def format_diagnostic_output(graph, origin_element):
     # -------------------------------------------------------------------------
     # SYSTEM SUMMARY
     # -------------------------------------------------------------------------
-    total_load = sum(n.gas_load_mbh for n in graph.nodes.values() if n.is_gas_fixture)
+    # Float start: sum([]) is int 0, and '{:.1f}'.format(0) raises in
+    # IronPython 2.7.
+    total_load = sum((n.gas_load_mbh for n in graph.nodes.values()
+                      if n.is_gas_fixture), 0.0)
     longest_ft = graph.longest_run["total_length_feet"] if graph.longest_run else 0.0
 
     section("SYSTEM SUMMARY")
     lines.append("  Fixtures:       {}".format(len(fixtures)))
-    lines.append("  Total load:     {:.1f} MBH".format(total_load))
+    lines.append("  Total load:     {:.1f} MBH".format(float(total_load)))
     lines.append("  Pipe segments:  {}".format(len(graph.edges)))
-    lines.append("  Longest run:    {:.1f}'".format(longest_ft))
+    lines.append("  Longest run:    {:.1f}'".format(float(longest_ft)))
     lines.append("  Spec gravity:   {}".format(shared_params.SPECIFIC_GRAVITY))
 
     # -------------------------------------------------------------------------
@@ -194,7 +197,8 @@ def generate_one_line_data(graph):
     Returns:
         dict with keys: segments, fixtures, notes_block
     """
-    total_load = sum(n.gas_load_mbh for n in graph.nodes.values() if n.is_gas_fixture)
+    total_load = sum((n.gas_load_mbh for n in graph.nodes.values()
+                      if n.is_gas_fixture), 0.0)
     longest_ft = graph.longest_run["total_length_feet"] if graph.longest_run else 0.0
 
     segments = []
@@ -315,10 +319,12 @@ def _format_pipe_size(diameter_inches):
 
 
 def _safe_family_name(element):
+    """Family name through revit_helpers.get_element_family_name, else the
+    element class name, else 'Unknown'."""
+    name = revit_helpers.get_element_family_name(element)
+    if name:
+        return name
     try:
-        return element.Symbol.Family.Name
+        return element.GetType().Name
     except Exception:
-        try:
-            return element.GetType().Name
-        except Exception:
-            return "Unknown"
+        return "Unknown"

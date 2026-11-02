@@ -742,15 +742,37 @@ def _apply_diameter_approach(approach_name, pipe, nominal_feet):
             return False, approach_name
 
         if param is None:
+            _log_entry("INFO", "_apply_diameter_approach", _safe_eid(pipe),
+                       "{}: parameter NOT FOUND.".format(approach_name))
             return False, approach_name
         if param.IsReadOnly:
+            _log_entry("INFO", "_apply_diameter_approach", _safe_eid(pipe),
+                       "{}: parameter is read only.".format(approach_name))
             return False, approach_name
 
-        param.Set(nominal_feet)
-        return True, approach_name
+        # Parameter.Set returns False when Revit rejects the value, without
+        # raising (Colin, 2026-11-02: a rejected write is a failure, not a
+        # success).
+        ok = bool(param.Set(nominal_feet))
+        _log_entry("INFO" if ok else "WARNING", "_apply_diameter_approach",
+                   _safe_eid(pipe),
+                   "{}: Set({:.5f} ft) {}.".format(
+                       approach_name, float(nominal_feet),
+                       "accepted" if ok else "REJECTED"))
+        return ok, approach_name
 
-    except Exception:
+    except Exception as e:
+        _log_entry("WARNING", "_apply_diameter_approach", _safe_eid(pipe),
+                   "{}: Set raised: {}".format(approach_name, str(e)))
         return False, approach_name
+
+
+def _safe_eid(element):
+    """eid_int(element.Id), or None when the element has no readable id."""
+    try:
+        return eid_int(element.Id)
+    except Exception:
+        return None
 
 
 def set_pipe_diameter(pipe, nominal_inches):
@@ -845,14 +867,18 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
     try:
         param = element.LookupParameter("Nominal Radius")
         if param is not None and not param.IsReadOnly:
-            param.Set((nominal_inches / 2.0) / INCHES_PER_FOOT)
+            if param.Set((nominal_inches / 2.0) / INCHES_PER_FOOT):
+                _log_entry("INFO", fn, eid,
+                           "Resized via Nominal Radius to {} in.".format(
+                               nominal_inches))
+                return True, "Nominal Radius"
+            _log_entry("WARNING", fn, eid,
+                       "Nominal Radius Set({} in.) REJECTED, trying the "
+                       "connectors.".format(nominal_inches))
+        else:
             _log_entry("INFO", fn, eid,
-                       "Resized via Nominal Radius to {} in.".format(
-                           nominal_inches))
-            return True, "Nominal Radius"
-        _log_entry("INFO", fn, eid,
-                   "No writable 'Nominal Radius' parameter, trying the "
-                   "connectors.")
+                       "No writable 'Nominal Radius' parameter, trying the "
+                       "connectors.")
     except Exception as exc:
         _log_entry("WARNING", fn, eid,
                    "Nominal Radius resize failed: {}".format(str(exc)))
@@ -883,7 +909,10 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
                             continue
                         connector.Radius = (inches / 2.0) / INCHES_PER_FOOT
                         set_any = True
-                    except Exception:
+                    except Exception as exc:
+                        _log_entry("WARNING", fn, eid,
+                                   "Connector radius write failed: {}".format(
+                                       str(exc)))
                         continue
         except Exception as exc:
             _log_entry("WARNING", fn, eid,
@@ -968,6 +997,29 @@ def get_created_phase_id(element):
         return None
     _log_entry("INFO", fn, eid, "Created phase id {}.".format(phase_id))
     return phase_id
+
+
+def is_new_construction(element, doc):
+    """True when the element was created in the project's LAST phase.
+
+    The one test for "new construction" (Colin, 2026-11-02). It fails
+    CLOSED: when either phase cannot be read the element is treated as
+    existing, logged, and is never resized.
+    """
+    fn = "is_new_construction"
+    eid = _safe_eid(element)
+    created = get_created_phase_id(element)
+    last = get_last_phase_id(doc)
+    if created is None or last is None:
+        _log_entry("WARNING", fn, eid,
+                   "Phase not readable (created {}, last {}). Treated as "
+                   "EXISTING, not resized.".format(created, last))
+        return False
+    is_new = (created == last)
+    _log_entry("INFO", fn, eid,
+               "Created phase {}, last phase {}: {}.".format(
+                   created, last, "new construction" if is_new else "existing"))
+    return is_new
 
 
 def get_element_location(element):

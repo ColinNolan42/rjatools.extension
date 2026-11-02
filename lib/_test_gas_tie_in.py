@@ -10,8 +10,13 @@ run.
 Run:  python _test_gas_tie_in.py
 """
 
+import os
 import sys
 import unittest
+
+# python -I leaves the script folder off sys.path; the sibling test module
+# and lib/ are imported from here.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _test_prv_zones import _node, _edge, _finish, _Stub   # installs the stubs
 

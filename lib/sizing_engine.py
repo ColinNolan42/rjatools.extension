@@ -61,6 +61,38 @@ NOMINAL_TO_INCHES = {
 }
 
 
+def nominal_for_diameter(table_id, diameter_in, tolerance_in=0.1):
+    """The table's own nominal size name for a drawn pipe diameter, or None.
+
+    The inverse map is built from gas_tables.list_pipe_sizes(table_id) only,
+    so a copper pipe reads as '1 K&L' on a copper table and a CSST pipe as
+    an EHD name on a CSST table, never as the steel name that shares its
+    diameter (Colin, 2026-11-02). Where two names in the same table share a
+    diameter (EHD-18 and EHD-19 are both 1/2 in.), the first, the smaller
+    and lower capacity one, is kept, which is the conservative read.
+
+    Args:
+        table_id:     IFGC table the pipe is checked on.
+        diameter_in:  drawn diameter, inches.
+        tolerance_in: largest difference accepted, inches.
+
+    Returns:
+        str nominal size name from that table, or None when no size in the
+        table is within tolerance_in.
+    """
+    inverse = {}
+    for nominal in gas_tables.list_pipe_sizes(table_id):
+        inches = NOMINAL_TO_INCHES.get(nominal)
+        if inches is not None and inches not in inverse:
+            inverse[inches] = nominal
+    if not inverse or diameter_in is None:
+        return None
+    closest = min(inverse.keys(), key=lambda k: abs(k - diameter_in))
+    if abs(closest - diameter_in) < tolerance_in:
+        return inverse[closest]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Heat Content of Gas -> CFH conversion (RJA standard)
 # ---------------------------------------------------------------------------
@@ -435,15 +467,35 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         # CFH = BTUH / Heat Content of Gas (see mbh_to_cfh() docstring).
         demand_cfh_effective = mbh_to_cfh(demand_mbh, heat_content_btu_per_cf)
 
-        # Zero demand: assign minimum available pipe size
+        # Zero demand: the smallest size at or above the firm minimum that
+        # has a published capacity at this run. Copper tables leave the small
+        # sizes blank at long rows, so the first size can have no value
+        # (Colin, 2026-11-02).
         if demand_mbh <= 0:
-            selected = e_sizes[0]
-            selected, upsized = _apply_minimum(selected, e_sizes)
-            capacity_at_size = gas_tables.get_capacity(
-                e_table_id, e_run_ft, selected)
+            selected = None
+            capacity_at_size = None
+            upsized = False
+            at_min = [s for s in e_sizes
+                      if NOMINAL_TO_INCHES.get(s, 0.0) >= MIN_PIPE_INCHES]
+            for s in (at_min or e_sizes):
+                try:
+                    capacity_at_size = gas_tables.get_capacity(
+                        e_table_id, e_run_ft, s)
+                except ValueError:
+                    continue
+                selected = s
+                upsized = (s != e_sizes[0])
+                break
+            if selected is None:
+                sizing_errors.append(
+                    "Pipe {}: zero demand, and no size in Table {} has a "
+                    "published capacity at {:.0f} ft.".format(
+                        edge.element_id, e_table_id, float(e_row_ft)))
+                continue
             note = "zero demand - minimum size assigned"
             if upsized:
-                note += " (upsized to 3/4\" firm minimum)"
+                note += " (smallest published size at or above the 3/4\" " \
+                        "firm minimum)"
             segment_detail.append({
                 "pipe_id":             edge.element_id,
                 "demand_mbh":          0.0,
@@ -475,8 +527,8 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
             sizing_errors.append(
                 "Pipe {}: demand {:.1f} MBH ({:.1f} CFH) exceeds max table "
                 "capacity at {:.0f} ft in Table {}.".format(
-                    edge.element_id, demand_mbh, demand_cfh_effective,
-                    e_row_ft, e_table_id))
+                    edge.element_id, float(demand_mbh),
+                    float(demand_cfh_effective), float(e_row_ft), e_table_id))
             continue
 
         selected, upsized = _apply_minimum(selected, e_sizes)
@@ -543,9 +595,10 @@ def basis_of_design_rows():
         ("Method", "Longest Run Method, IFGC Appendix A (A103.1). One "
                    "developed length, from the meter to the farthest outlet, "
                    "sizes every pipe in the system."),
-        ("Developed length", "Pipe length plus 5 ft per elbow along the "
+        ("Developed length", "Pipe length plus {:g} ft per elbow along the "
                              "longest run. Where the length falls between "
-                             "table rows the next longer row is used."),
+                             "table rows the next longer row is used.".format(
+                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT))),
         ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
                    "the total load of every appliance downstream of it."),
         ("Specific gravity", "{:g}, matching the IFGC tables.".format(
@@ -730,10 +783,10 @@ def format_sizing_output(sizing_result, graph):
                     z["label"], z["table_id"], z["run_ft"], z["row_ft"],
                     z["farthest_name"] or "-"))
     lines.append("Heat Content:  {:.0f} BTU/CF".format(
-        sizing_result.get("heat_content_btu_per_cf",
-                           shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)))
+        float(sizing_result.get("heat_content_btu_per_cf",
+                                shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))))
     lines.append("Total load:    {:.1f} MBH  |  {} fixtures".format(
-        total_mbh, len(fixture_nodes)))
+        float(total_mbh), len(fixture_nodes)))
     lines.append("")
 
     sizes = sizing_result["sizes"]

@@ -24,6 +24,12 @@ PRV_FAMILY_KEYWORDS = ("prv", "regulator", "regulating")
 # equipment's own regulator: it is ignored for sizing.
 PRV_MIDSTREAM_MIN_DOWNSTREAM_FT = 10.0
 
+# Equivalent length added to the developed length for each elbow on a path,
+# feet (IFGC Appendix A). Read by pipe_graph and the sizing basis text.
+# One-Line keeps its own copy until the One-Line fixes are taken up
+# (Colin, 2026-11-02); the two shall stay equal.
+ELBOW_EQUIV_LENGTH_FT = 5.0
+
 # =============================================================================
 # DOMESTIC WATER FIXTURE SHARED PARAMETERS
 # Group "Water Fixture Data" in MEP_SharedParams.txt. Names are UPPERCASE to

@@ -258,6 +258,17 @@ _NOT_GAS_CLASSIFICATIONS = (
     "FireProtectPreaction", "FireProtectOther", "Storm")
 
 
+def _not_gas_classification(connector):
+    """The connector's system classification when it is one that is never
+    gas, else None. A connector with no readable classification is not
+    rejected: gas itself reads OtherPipe, and some families report nothing.
+    """
+    system_type = connector.get("system_type")
+    if system_type in _NOT_GAS_CLASSIFICATIONS:
+        return system_type
+    return None
+
+
 def check_gas_pipe(pipe):
     """Is a picked pipe on a gas system? (Colin, 2026-10-13: reject a pipe
     that is not a gas piping system.)
@@ -432,6 +443,16 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
     # Find the two connectors on the pipe
     connectors = revit_helpers.get_connectors(pipe)
 
+    # A pipe on a system that is not gas is never part of the run: no edge,
+    # so it is never sized, and nothing past it is walked (Colin, 2026-11-02).
+    for c in connectors:
+        not_gas = _not_gas_classification(c)
+        if not_gas:
+            graph.log(
+                "SKIP: pipe {} is {}, not gas. Not sized, not "
+                "followed.".format(pipe_id, not_gas))
+            return
+
     # Identify which connector leads back to parent and which goes forward
     far_connected_id = None
     for c in connectors:
@@ -536,10 +557,34 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
             "DIRECT CONNECTION: node {} -> node {} (no pipe between them)".format(
                 parent_node_id, eid))
 
+    # --- A gas appliance is a terminal (Colin, 2026-11-02) ---
+    # A water heater also carries CW and HW, a boiler hydronic supply and
+    # return, an RTU condensate. Walking those connectors took the run into
+    # piping that is not gas, and Size Gas then resized it. The appliance is
+    # recorded with its load and the walk ends here.
+    if is_gas_fixture:
+        for c in connectors:
+            next_id = c["connected_element_id"]
+            if (c["is_connected"] and next_id is not None
+                    and next_id not in visited):
+                graph.log(
+                    "TERMINAL: appliance {} connector {} ({}) to element {} "
+                    "not followed.".format(
+                        eid, c.get("connector_index"),
+                        c.get("system_type") or "unknown system", next_id))
+        return
+
     # --- Queue all connected elements we haven't visited ---
     for c in connectors:
         if c["is_connected"] and c["connected_element_id"] is not None:
             next_id = c["connected_element_id"]
+            not_gas = _not_gas_classification(c)
+            if not_gas and next_id not in visited:
+                graph.log(
+                    "SKIP: element {} connector {} is {}, not gas. Element "
+                    "{} not followed.".format(
+                        eid, c.get("connector_index"), not_gas, next_id))
+                continue
             if next_id not in visited:
                 next_element = _get_element(doc, next_id)
                 if next_element is not None:
@@ -639,7 +684,7 @@ def _longest_run_from(graph, start_id, stop_at_prv):
                       every PRV, which is the whole-system length
                       _find_longest_run() reports.
     """
-    ELBOW_EQUIV_FT = 5.0
+    ELBOW_EQUIV_FT = shared_params.ELBOW_EQUIV_LENGTH_FT
 
     longest = {
         "total_length_feet":        0.0,
@@ -854,11 +899,15 @@ def _is_family_instance(element):
 
 
 def _get_family_name(element):
-    """Return the family name string or 'Unknown'."""
+    """Return the family name string, the element class name, or 'Unknown'.
+
+    The family name comes from revit_helpers.get_element_family_name, the one
+    reader that avoids the IronPython .Name hazard.
+    """
+    name = revit_helpers.get_element_family_name(element)
+    if name:
+        return name
     try:
-        return element.Symbol.Family.Name
+        return element.GetType().Name
     except Exception:
-        try:
-            return element.GetType().Name
-        except Exception:
-            return "Unknown"
+        return "Unknown"

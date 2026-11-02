@@ -209,11 +209,13 @@ def diagnose_gas(element):
         return
 
     fixtures = [n for n in graph.nodes.values() if n.is_gas_fixture]
-    total_load = sum(n.gas_load_mbh for n in fixtures)
-    pipes = [n for n in graph.nodes.values() if n.node_type == 'pipe']
+    # Float starts: '{:.1f}' on int 0 raises in IronPython 2.7. Pipes are the
+    # graph's edges, not nodes (no node is ever typed 'pipe').
+    total_load = sum((n.gas_load_mbh for n in fixtures), 0.0)
+    pipes = list(graph.edges.values())
     fittings = [n for n in graph.nodes.values() if n.node_type == 'fitting']
     tees = [n for n in graph.nodes.values() if n.node_type == 'tee']
-    total_length = sum(getattr(n, 'length_feet', 0.0) for n in pipes)
+    total_length = sum((float(e.length_feet or 0.0) for e in pipes), 0.0)
 
     accessories = []
     for n in list(fittings) + list(tees):
@@ -339,11 +341,13 @@ def diagnose_water(element):
 
     cw_pipes = [n for n in pipes if n.system == shared_params.SYSTEM_DOMESTIC_COLD_WATER]
     hw_pipes = [n for n in pipes if n.system == shared_params.SYSTEM_DOMESTIC_HOT_WATER]
-    total_length = sum(n.length_feet for n in pipes)
+    # Seeded with 0.0 so an empty list still gives a float: IronPython
+    # raises on '{:.1f}'.format(0) (int).
+    total_length = float(sum([n.length_feet or 0.0 for n in pipes], 0.0))
 
-    total_cw_wsfu = sum(n.cw_wsfu for n in fixtures)
-    total_hw_wsfu = sum(n.hw_wsfu for n in fixtures)
-    total_wsfu    = sum(n.total_wsfu for n in fixtures)
+    total_cw_wsfu = float(sum([n.cw_wsfu or 0.0 for n in fixtures], 0.0))
+    total_hw_wsfu = float(sum([n.hw_wsfu or 0.0 for n in fixtures], 0.0))
+    total_wsfu    = float(sum([n.total_wsfu or 0.0 for n in fixtures], 0.0))
     hwr_fixtures  = [n for n in fixtures if n.hwr_active]
 
     output.print_md('\n## Summary')
@@ -372,7 +376,8 @@ def diagnose_water(element):
         output.print_md('| --- | --- | --- | --- | --- | --- | --- |')
         for n in fixtures:
             output.print_md('| {} | {} | {:.2f} | {:.2f} | {:.2f} | {} | {} |'.format(
-                n.fixture_name, n.type_name, n.cw_wsfu, n.hw_wsfu, n.total_wsfu,
+                n.fixture_name, n.type_name, float(n.cw_wsfu or 0.0),
+                float(n.hw_wsfu or 0.0), float(n.total_wsfu or 0.0),
                 'Yes' if n.hwr_active else 'No', n.element_id))
 
     if heaters:

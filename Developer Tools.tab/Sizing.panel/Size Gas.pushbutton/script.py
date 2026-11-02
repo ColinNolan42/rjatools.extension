@@ -72,144 +72,153 @@ def _set_pipe_diameter(pipe, nominal_inches):
 
 
 # ---------------------------------------------------------------------------
-# Fitting resize - set each connector radius to match its connected pipe
+# Fitting resize - one size per fitting through revit_helpers.set_fitting_size
 # ---------------------------------------------------------------------------
 
-def _resize_fittings(graph, result_sizes, doc):
-    """Resize parametric fittings by setting the 'Nominal Radius' instance
-    parameter. Nominal Radius = nominal pipe diameter / 2 (in feet).
+def _resize_fittings(graph, new_sizes, doc):
+    """Resize the new construction fittings to the pipes sized this run.
 
-    For each fitting the target size is the highest-load connected pipe,
-    which corresponds to the main run size at that fitting location.
+    For each fitting the target size is the highest-load connected pipe in
+    new_sizes, which corresponds to the main run size at that fitting
+    location. new_sizes holds new construction pipes only, so an existing
+    pipe never sets a fitting's size. An existing phase fitting is never
+    resized: existing stays the size it is, and the existing pipe audit
+    reports a shortfall (Colin, 2026-11-02).
+
+    The write goes through revit_helpers.set_fitting_size with no
+    per-connector map, so only the 'Nominal Radius' parameter is used.
+    Connector.Radius writes are not attempted: they disconnect fittings
+    (verified 2026-10-12).
+
+    Args:
+        graph:     NetworkGraph that was sized.
+        new_sizes: {pipe element id: nominal size} for new construction pipes.
+        doc:       active Document, for the phase check.
 
     Returns:
-        (resized_count, skipped_count, fail_list)
+        dict with resized (int), no_sized_pipe (int, no new pipe sized this
+        run touches it), existing (int, existing phase, left alone),
+        no_element (int), appliance (int, equipment with no size
+        parameter) and failures (list of str, real write failures).
     """
-    resized  = 0
-    skipped  = 0
-    failures = []
+    counts = {"resized": 0, "no_sized_pipe": 0, "existing": 0,
+              "no_element": 0, "appliance": 0, "failures": []}
 
     for node in graph.nodes.values():
         if node.node_type not in ("tee", "fitting", "elbow", "fixture"):
             continue
         if node.element is None:
-            skipped += 1
+            counts["no_element"] += 1
             continue
 
-        # Find the highest-load connected pipe to determine target size
+        if not revit_helpers.is_new_construction(node.element, doc):
+            counts["existing"] += 1
+            revit_helpers._log_entry(
+                "INFO", "_resize_fittings", node.element_id,
+                "Existing phase (or phase unreadable): not resized.")
+            continue
+
+        # Find the highest-load connected new pipe to determine target size
         target_size = None
         max_load    = -1
         for edge in graph.edges.values():
             if (edge.from_node_id == node.element_id or
                     edge.to_node_id == node.element_id):
-                if (edge.element_id in result_sizes and
+                if (edge.element_id in new_sizes and
                         edge.cumulative_load_mbh > max_load):
                     max_load    = edge.cumulative_load_mbh
-                    target_size = result_sizes[edge.element_id]
+                    target_size = new_sizes[edge.element_id]
 
         if target_size is None:
-            skipped += 1
+            counts["no_sized_pipe"] += 1
+            revit_helpers._log_entry(
+                "INFO", "_resize_fittings", node.element_id,
+                "No new construction pipe sized this run touches it: not "
+                "resized.")
+            continue
+
+        # An appliance is resized only when it is a cap style family with a
+        # 'Nominal Radius' (the cap first, then the stub pipe, STEP 9). Real
+        # equipment has no such parameter and is left alone, not a failure.
+        if node.is_gas_fixture and _lookup_param(
+                node.element, "Nominal Radius") is None:
+            counts["appliance"] += 1
+            revit_helpers._log_entry(
+                "INFO", "_resize_fittings", node.element_id,
+                "Appliance with no 'Nominal Radius': not resized.")
             continue
 
         nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(target_size)
         if nominal_inches is None:
-            skipped += 1
+            counts["failures"].append(
+                "Fitting {} ({}): unrecognised nominal size '{}'.".format(
+                    node.element_id, node.family_name, target_size))
             continue
 
-        # Nominal Radius = nominal diameter / 2, converted to feet
-        target_radius_feet = (nominal_inches / 2.0) / 12.0
-
-        ok = False
-
-        # Approach 1: LookupParameter("Nominal Radius") - instance param on
-        # Generic Standard elbows and tees
-        try:
-            param = node.element.LookupParameter("Nominal Radius")
-            if param is not None and not param.IsReadOnly:
-                param.Set(target_radius_feet)
-                ok = True
-        except Exception:
-            pass
-
-        # Approach 2: connector.Radius fallback
-        if not ok:
-            try:
-                cm = node.element.ConnectorManager
-                if cm is not None:
-                    for connector in cm.Connectors:
-                        try:
-                            connector.Radius = target_radius_feet
-                            ok = True
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
+        ok, approach = revit_helpers.set_fitting_size(
+            node.element, nominal_inches)
         if ok:
-            resized += 1
+            counts["resized"] += 1
         else:
-            failures.append(
-                "Fitting {} ({}): could not set size to {}".format(
-                    node.element_id, node.family_name, target_size))
-            skipped += 1
+            counts["failures"].append(
+                "Fitting {} ({}): could not set size to {}\" ({}).".format(
+                    node.element_id, node.family_name, target_size, approach))
 
-    return resized, skipped, failures
+    return counts
 
 
-# ---------------------------------------------------------------------------
-# Phase and diameter helpers
-# ---------------------------------------------------------------------------
-
-def _get_pipe_phase_name(pipe, doc):
-    """Return the Phase Created name for a pipe, or None if unreadable."""
+def _lookup_param(element, name):
+    """element.LookupParameter(name), or None when it raises (logged)."""
     try:
-        p = pipe.get_Parameter(BuiltInParameter.PHASE_CREATED)
-        if p is None:
-            return None
-        phase_elem = doc.GetElement(p.AsElementId())
-        if phase_elem is None:
-            return None
-        return phase_elem.Name
-    except Exception:
+        return element.LookupParameter(name)
+    except Exception as e:
+        revit_helpers._log_entry(
+            "WARNING", "_lookup_param", revit_helpers.eid_int(element.Id),
+            "LookupParameter('{}') raised: {}".format(name, str(e)))
         return None
 
 
-def _get_pipe_nominal_size(pipe):
-    """Return the nominal size string for a pipe's current Revit diameter, or None.
+# ---------------------------------------------------------------------------
+# Diameter helpers
+# ---------------------------------------------------------------------------
 
-    Steel nominal designations (1/2, 3/4 ... 12) take priority over EHD/K&L
-    when multiple nominal sizes map to the same decimal inch value.
+def _get_pipe_nominal_size(pipe, table_id):
+    """The nominal size name, from table_id's own size list, for a pipe's
+    drawn diameter, or None. A None is logged with the pipe id.
+
+    The table's own list is used so a copper or CSST pipe reads as its own
+    size name, never as the steel name sharing its diameter
+    (sizing_engine.nominal_for_diameter).
     """
-    try:
-        param = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)
-        if param is None:
-            param = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_NOMINAL_DIAMETER)
-        if param is None:
-            return None
-        dia_in = param.AsDouble() * 12.0  # Revit feet -> inches
-        _STEEL = frozenset([
-            "1/2","3/4","1","1-1/4","1-1/2","2","2-1/2",
-            "3","4","5","6","8","10","12"])
-        inv = {}
-        for nom, inches in sizing_engine.NOMINAL_TO_INCHES.items():
-            if nom not in _STEEL:
-                inv[inches] = nom
-        for nom, inches in sizing_engine.NOMINAL_TO_INCHES.items():
-            if nom in _STEEL:
-                inv[inches] = nom
-        if not inv:
-            return None
-        closest = min(inv.keys(), key=lambda k: abs(k - dia_in))
-        return inv[closest] if abs(closest - dia_in) < 0.1 else None
-    except Exception:
+    pipe_id = revit_helpers.eid_int(pipe.Id)
+    dia_in = revit_helpers.get_pipe_diameter_inches(pipe)
+    if dia_in is None:
+        revit_helpers._log_entry(
+            "WARNING", "_get_pipe_nominal_size", pipe_id,
+            "Diameter NOT READABLE, existing pipe not checked.")
         return None
+    nominal = sizing_engine.nominal_for_diameter(table_id, dia_in)
+    if nominal is None:
+        revit_helpers._log_entry(
+            "WARNING", "_get_pipe_nominal_size", pipe_id,
+            "Diameter {:.3f} in. matches no size in Table {}.".format(
+                float(dia_in), table_id))
+    else:
+        revit_helpers._log_entry(
+            "INFO", "_get_pipe_nominal_size", pipe_id,
+            "Diameter {:.3f} in. reads as {} in Table {}.".format(
+                float(dia_in), nominal, table_id))
+    return nominal
 
 
-def _audit_existing_pipe(pipe_id, edge, recommended_nom, result, overloaded_list):
+def _audit_existing_pipe(pipe_id, edge, recommended_nom, result,
+                         overloaded_list, unchecked_list):
     """Check whether an existing pipe's current size handles the new load.
 
-    If current capacity < demand, appends a dict to overloaded_list so a
-    warning is shown after the sizing transaction.
+    If current capacity < demand, or the table publishes no capacity for
+    its size at this run, appends a dict to overloaded_list. A pipe whose
+    size cannot be matched to the table goes to unchecked_list. Both are
+    shown after the sizing transaction.
 
     Args:
         pipe_id:         int  pipe element ID
@@ -217,34 +226,40 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result, overloaded_list
         recommended_nom: str  the IFGC-computed size (already in result["sizes"])
         result:          dict returned by sizing_engine.size_system()
         overloaded_list: list  mutated in-place
+        unchecked_list:  list  mutated in-place
     """
     demand = edge.cumulative_load_mbh
     if demand <= 0:
         return  # no load -> no concern
 
-    current_nom = _get_pipe_nominal_size(edge.pipe)
+    # The table and run this pipe was sized on (differs after a PRV).
+    ctx = result.get("edge_context", {}).get(pipe_id, {})
+    table_id = ctx.get("table_id", result["table_id"])
+    run_ft = ctx.get("longest_run_ft", result["longest_run_ft"])
+
+    current_nom = _get_pipe_nominal_size(edge.pipe, table_id)
     if current_nom is None:
-        return  # can't read current size -> skip check
+        unchecked_list.append({"pipe_id": pipe_id, "table_id": table_id})
+        return
 
     demand_cfh = sizing_engine.mbh_to_cfh(
         demand, result.get("heat_content_btu_per_cf",
                             shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
-    # The table and run this pipe was sized on (differs after a PRV).
-    ctx = result.get("edge_context", {}).get(pipe_id, {})
     try:
-        current_cap = gas_tables.get_capacity(
-            ctx.get("table_id", result["table_id"]),
-            ctx.get("longest_run_ft", result["longest_run_ft"]),
-            current_nom)
-    except ValueError:
-        # Nominal not in this table (e.g. copper table selected for steel pipe)
-        current_cap = 0.0
+        current_cap = float(gas_tables.get_capacity(
+            table_id, run_ft, current_nom))
+    except ValueError as e:
+        # The table publishes no capacity for this size at this run.
+        revit_helpers._log_entry(
+            "WARNING", "_audit_existing_pipe", pipe_id,
+            "No published capacity: {}".format(str(e)))
+        current_cap = None
 
-    if current_cap < demand_cfh:
+    if current_cap is None or current_cap < demand_cfh:
         overloaded_list.append({
             "pipe_id":        pipe_id,
             "current_nom":    current_nom,
-            "demand_mbh":     demand,
+            "demand_mbh":     float(demand),
             "current_cap":    current_cap,
             "recommended_nom": recommended_nom,
         })
@@ -626,6 +641,8 @@ def main():
     skipped_stubs       = []
     existing_skip_count = 0
     existing_overloaded = []  # pipes that are Existing but undersized for new load
+    existing_unchecked  = []  # existing pipes whose size is not in the table
+    new_sizes           = {}  # new construction pipes only, for the fittings
 
     t = Transaction(doc, "RJA Tools - Size Gas Pipes")
     t.Start()
@@ -640,9 +657,12 @@ def main():
                 fail_count += 1
                 continue
 
-            # Determine phase before anything else
-            phase_name = _get_pipe_phase_name(edge.pipe, doc)
-            is_new     = (phase_name is None or phase_name == "New Construction")
+            # Determine phase before anything else. One test for new
+            # construction, failing closed: an unreadable phase is existing
+            # and is never resized (Colin, 2026-11-02).
+            is_new = revit_helpers.is_new_construction(edge.pipe, doc)
+            if is_new:
+                new_sizes[pipe_id] = nominal_size
 
             to_node = graph.nodes.get(edge.to_node_id)
             is_stub = (to_node is not None and to_node.is_gas_fixture)
@@ -661,14 +681,16 @@ def main():
                     # Existing stub: skip entirely, run capacity audit only
                     existing_skip_count += 1
                     _audit_existing_pipe(
-                        pipe_id, edge, nominal_size, result, existing_overloaded)
+                        pipe_id, edge, nominal_size, result,
+                        existing_overloaded, existing_unchecked)
                 continue
 
             if not is_new:
                 # Existing distribution pipe: skip resize, audit capacity
                 existing_skip_count += 1
                 _audit_existing_pipe(
-                    pipe_id, edge, nominal_size, result, existing_overloaded)
+                    pipe_id, edge, nominal_size, result,
+                    existing_overloaded, existing_unchecked)
                 continue
 
             nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
@@ -705,64 +727,56 @@ def main():
         return
 
     # ------------------------------------------------------------------
-    # Existing pipe audit results
+    # Existing pipe audit results. Printing is guarded so a formatting
+    # error can never stop Transactions 2 and 3 (Colin, 2026-11-02).
     # ------------------------------------------------------------------
-    if existing_skip_count > 0:
-        output.print_md("---")
-        if existing_overloaded:
-            output.print_md(
-                "## :warning: Existing Pipes: Load Exceeds Current Size")
-            output.print_md(
-                "{} existing pipe(s) were skipped. "
-                "{} of them carry more load than their current size can handle "
-                "at the system's longest run length. "
-                "These pipes were **not** resized. Coordinate with the project "
-                "team before upsizing existing piping.".format(
-                    existing_skip_count, len(existing_overloaded)))
-            output.print_md("")
-            output.print_md(
-                "| Pipe ID | Current Size | New Load | Current Capacity"
-                " (CFH) | Recommended |")
-            output.print_md("| --- | --- | --- | --- | --- |")
-            for e in existing_overloaded:
-                output.print_md(
-                    "| {} | {}\" | {:.1f} MBH | {:.1f} | {}\" |".format(
-                        e["pipe_id"],
-                        e["current_nom"],
-                        e["demand_mbh"],
-                        e["current_cap"],
-                        e["recommended_nom"]))
-        else:
-            output.print_md(
-                ":white_check_mark: {} existing pipe(s) skipped — "
-                "all adequately sized for the new load.".format(
-                    existing_skip_count))
+    try:
+        _print_existing_audit(existing_skip_count, existing_overloaded,
+                              existing_unchecked)
+    except Exception as e:
+        output.print_md(
+            ":warning: Existing pipe audit could not be printed: {}".format(
+                str(e)))
 
     # ------------------------------------------------------------------
-    # STEP 8 - Resize fittings (separate transaction)
+    # STEP 8 - Resize fittings (separate transaction). New construction
+    # fittings only, sized from new construction pipes only.
     # ------------------------------------------------------------------
     output.print_md("**Resizing fittings (Nominal Radius parameter)...**")
-    fit_resized  = 0
-    fit_skipped  = 0
-    fit_failures = []
+    fit = {"resized": 0, "no_sized_pipe": 0, "existing": 0,
+           "no_element": 0, "appliance": 0, "failures": []}
+    fit_committed = False
 
     t2 = Transaction(doc, "RJA Tools - Resize Pipe Fittings")
     t2.Start()
     try:
-        fit_resized, fit_skipped, fit_failures = _resize_fittings(
-            graph, result["sizes"], doc)
+        fit = _resize_fittings(graph, new_sizes, doc)
         doc.Regenerate()
         t2.Commit()
-        output.print_md(
-            ":white_check_mark: Fittings: {} resized, {} skipped.".format(
-                fit_resized, fit_skipped))
-        if fit_failures:
-            for f in fit_failures:
-                output.print_md(":warning: {}".format(f))
+        fit_committed = True
     except Exception as e:
         t2.RollBack()
         output.print_md(
             ":warning: Fitting resize transaction failed: {}".format(str(e)))
+        fit = {"resized": 0, "no_sized_pipe": 0, "existing": 0,
+               "no_element": 0, "appliance": 0,
+               "failures": ["Fitting transaction rolled back: {}".format(
+                   str(e))]}
+
+    if fit_committed:
+        try:
+            output.print_md(
+                ":white_check_mark: Fittings: {} resized, {} existing left "
+                "alone, {} with no new pipe sized this run, {} appliance(s) "
+                "with no size parameter, {} failed.".format(
+                    fit["resized"], fit["existing"], fit["no_sized_pipe"],
+                    fit["appliance"], len(fit["failures"])))
+            for f in fit["failures"]:
+                output.print_md(":warning: {}".format(f))
+        except Exception as e:
+            output.print_md(
+                ":warning: Fitting results could not be printed: {}".format(
+                    str(e)))
 
     # ------------------------------------------------------------------
     # STEP 9 - Resize fixture stub pipes (after cap Nominal Radius is set)
@@ -776,16 +790,24 @@ def main():
         output.print_md("**Sizing fixture stub pipes (cap already resized)...**")
         t3 = Transaction(doc, "RJA Tools - Size Fixture Stub Pipes")
         t3.Start()
+        stub_committed = False
         try:
             for s in skipped_stubs:
                 edge = graph.edges.get(s["pipe_id"])
                 if edge is None or edge.pipe is None:
                     stub_fail += 1
+                    revit_helpers._log_entry(
+                        "ERROR", "size_gas_stubs", s["pipe_id"],
+                        "Stub pipe NOT FOUND in graph.")
                     continue
                 nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(
                     s["recommended_size"])
                 if nominal_inches is None:
                     stub_fail += 1
+                    revit_helpers._log_entry(
+                        "ERROR", "size_gas_stubs", s["pipe_id"],
+                        "Unrecognised nominal size '{}'.".format(
+                            s["recommended_size"]))
                     continue
                 ok, _approach = _set_pipe_diameter(edge.pipe, nominal_inches)
                 if ok:
@@ -794,27 +816,100 @@ def main():
                     stub_fail += 1
             doc.Regenerate()
             t3.Commit()
+            stub_committed = True
+        except Exception as e:
+            t3.RollBack()
+            stub_success = 0
+            output.print_md(
+                ":warning: Stub pipe transaction failed: {}".format(str(e)))
+        if stub_committed:
             output.print_md(
                 ":white_check_mark: Stub pipes: {} sized.".format(stub_success))
             if stub_fail:
                 output.print_md(
                     ":warning: {} stub pipe(s) failed.".format(stub_fail))
-        except Exception as e:
-            t3.RollBack()
-            output.print_md(
-                ":warning: Stub pipe transaction failed: {}".format(str(e)))
 
+    try:
+        _print_summary(result, existing_check, success_count, stub_success,
+                       stub_fail, existing_skip_count, existing_overloaded,
+                       existing_unchecked, fit, fail_count, fail_list)
+    except Exception as e:
+        output.print_md(
+            ":warning: Summary could not be printed: {}. The sizes above "
+            "were written.".format(str(e)))
+
+
+def _print_existing_audit(existing_skip_count, existing_overloaded,
+                          existing_unchecked):
+    """The existing pipe audit table for the output window."""
+    if existing_skip_count <= 0:
+        return
+    output.print_md("---")
+    if existing_overloaded:
+        output.print_md(
+            "## :warning: Existing Pipes: Load Exceeds Current Size")
+        output.print_md(
+            "{} existing pipe(s) were skipped. "
+            "{} of them carry more load than their current size can handle "
+            "at the system's longest run length, or the table publishes no "
+            "capacity for their size at that length. "
+            "These pipes were **not** resized. Coordinate with the project "
+            "team before upsizing existing piping.".format(
+                existing_skip_count, len(existing_overloaded)))
+        output.print_md("")
+        output.print_md(
+            "| Pipe ID | Current Size | New Load | Current Capacity"
+            " (CFH) | Recommended |")
+        output.print_md("| --- | --- | --- | --- | --- |")
+        for e in existing_overloaded:
+            cap = e["current_cap"]
+            cap_text = ("none published" if cap is None
+                        else "{:.1f}".format(float(cap)))
+            output.print_md(
+                "| {} | {}\" | {:.1f} MBH | {} | {}\" |".format(
+                    e["pipe_id"],
+                    e["current_nom"],
+                    float(e["demand_mbh"]),
+                    cap_text,
+                    e["recommended_nom"]))
+    else:
+        output.print_md(
+            ":white_check_mark: {} existing pipe(s) skipped, "
+            "all adequately sized for the new load.".format(
+                existing_skip_count))
+    if existing_unchecked:
+        output.print_md(
+            ":warning: {} existing pipe(s) could not be checked: the drawn "
+            "diameter matches no size in the table ({}).".format(
+                len(existing_unchecked),
+                ", ".join("{} [Table {}]".format(u["pipe_id"], u["table_id"])
+                          for u in existing_unchecked[:10])))
+
+
+def _print_summary(result, existing_check, success_count, stub_success,
+                   stub_fail, existing_skip_count, existing_overloaded,
+                   existing_unchecked, fit, fail_count, fail_list):
+    """The run summary table for the output window."""
     output.print_md("---")
     output.print_md("## Summary")
     output.print_md("| Item | Value |")
     output.print_md("| --- | --- |")
     output.print_md("| Distribution pipes sized | {} |".format(success_count))
     output.print_md("| Fixture stub pipes sized | {} |".format(stub_success))
+    if stub_fail:
+        output.print_md("| Fixture stub pipe failures | {} |".format(stub_fail))
     output.print_md("| Existing pipes skipped | {} |".format(existing_skip_count))
     output.print_md("| Existing pipes undersized | {} |".format(
         len(existing_overloaded)))
-    output.print_md("| Fittings + caps resized | {} |".format(fit_resized))
-    output.print_md("| Fitting failures | {} |".format(fit_skipped))
+    if existing_unchecked:
+        output.print_md("| Existing pipes not checked | {} |".format(
+            len(existing_unchecked)))
+    output.print_md("| Fittings + caps resized | {} |".format(fit["resized"]))
+    output.print_md("| Existing fittings left alone | {} |".format(
+        fit["existing"]))
+    output.print_md("| Fittings with no new pipe sized | {} |".format(
+        fit["no_sized_pipe"]))
+    output.print_md("| Fitting failures | {} |".format(len(fit["failures"])))
     output.print_md("| Pipe failures | {} |".format(fail_count))
     output.print_md("| API approach used | {} |".format(
         _confirmed_approach[0] or "None - all failed"))
@@ -828,15 +923,15 @@ def main():
                 float(existing_check["existing_load_mbh"]),
                 "adequate" if existing_check["adequate"] else "NOT ADEQUATE"))
     output.print_md("| Heat Content of Gas | {:.0f} BTU/CF |".format(
-        result["heat_content_btu_per_cf"]))
+        float(result["heat_content_btu_per_cf"])))
     if result.get("downstream_table_id"):
         # One row per system: the meter side, then each PRV.
         for z in result["zones"]:
             output.print_md("| {} | Table {}, run {:.1f} ft (row {} ft) |".format(
-                z["label"], z["table_id"], z["run_ft"], z["row_ft"]))
+                z["label"], z["table_id"], float(z["run_ft"]), z["row_ft"]))
     else:
         output.print_md("| Longest run | {:.1f} ft |".format(
-            result["longest_run_ft"]))
+            float(result["longest_run_ft"])))
         output.print_md("| Table row used | {} ft |".format(
             result["table_length_used_ft"]))
 
@@ -851,7 +946,7 @@ def main():
         output.print_md(
             ":white_check_mark: **{} distribution pipes + {} stub pipes + "
             "{} fittings/caps sized.**".format(
-                success_count, stub_success, fit_resized))
+                success_count, stub_success, fit["resized"]))
     else:
         output.print_md("---")
         output.print_md(

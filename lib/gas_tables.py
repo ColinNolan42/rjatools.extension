@@ -89,7 +89,8 @@ SUPPORTED_MATERIALS = (
 # ---------------------------------------------------------------------------
 # Table options - used by Size Gas dialog to populate the sizing table list.
 # Each entry maps a human-readable label to a specific IFGC table.
-# "inlet_pressure_psi" is None for <2 psi tables (pressure is below threshold).
+# "inlet_pressure_psi" is 0.7 for the under 2 psi and in. w.c. tables, a
+# placeholder below HIGH_PRESSURE_THRESHOLD_PSI, never None.
 # ---------------------------------------------------------------------------
 
 TABLE_OPTIONS = [
