@@ -1249,7 +1249,7 @@ check("case34 tap 3 ft along the outlet duct: flagged as a tap, not priced",
       "notes %r" % (sa34b.get('fse_notes'),))
 
 # 35: round return inlet elbow 1 ft from the unit, r/D 1.0: ED7-2 between
-#     L/D 0 (1.20) and 2.0 (0.67) at L/D 0.5 = 1.0675, GRAY; plus swirl warning.
+#     L/D 0 (1.20) and 2.0 (0.67) at L/D 0.5 = 1.0675, GRAY; inlet swirl is not reported.
 n35 = {1000: _unit({1001: RD24}),
        1002: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
                   geom={'round': True, 'd_in': 24.0, 'r_in': 24.0, 'w_in': None,
@@ -1264,8 +1264,8 @@ check("case35 return inlet elbow: ED7-2 r/D 1.0, L/D 0.5 -> C %.4f x Pv(1000)" %
       abs(ra35.get('fse_inwc', -1) - c35v * pv(1000.0)) < 1e-9,
       "got %r" % ra35.get('fse_inwc'))
 _n35 = ra35.get('fse_notes', ())
-check("case35 inlet swirl is warned, never priced",
-      any(k == 'warn' and 'FSE1,sw' in t and 'not priced' in t for k, t in _n35),
+check("case35 inlet swirl is not reported",
+      not any('swirl' in t.lower() for k, t in _n35),
       "notes %r" % (_n35,))
 check("case35 C 1.07 is GRAY: increase length of duct to 1.6 ft (C under 1.0 from L/D 0.755)",
       any(k == 'gray' and 'increase length of duct to 1.6 ft' in t for k, t in _n35),

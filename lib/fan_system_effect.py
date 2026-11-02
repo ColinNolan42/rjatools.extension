@@ -43,9 +43,9 @@ RJA DECISIONS (Colin, 2026-10-29):
     walk does not price that elbow again; the outlet SR7 Co is the system
     effect only and the elbow is priced separately.
   - ED7-2 and ER7-1 are printed for SWSI fans. With DWDI selected they are
-    used as a stated ASSUMPTION (method_lines). Inlet swirl, FSE1,sw, has no coefficient in the book
-    (p. 34.13: inlet spin changes the fan curve itself), so it is never
-    priced, only warned about.
+    used as a stated ASSUMPTION (method_lines). Inlet swirl, FSE1,sw, has no
+    coefficient in the book (p. 34.13: inlet spin changes the fan curve
+    itself); it is ignored and not reported (Colin, 2026-11-02).
   - A transition or tap inside the window is flagged, never priced (no table).
   - C at or above HIGH_C is GRAY (Colin, 2026-10-29, was RED): "System
     Effect Pressure Loss too high, increase length of duct to X ft", X the
@@ -387,13 +387,6 @@ def high_text(rec, where):
                 where, fix, rec['c'], rec['l_ft'], basis, HIGH_C))
 
 
-def swirl_text(where, l_ft):
-    """The inlet swirl warning: never priced, the book has no coefficient."""
-    return ('WARNING: elbow %.1f ft from the %s. Inlet swirl (FSE1,sw) is not '
-            'priced: the 2001 Fundamentals gives no coefficient for it (p. 34.13, '
-            'inlet spin changes the fan curve itself).' % (float(l_ft), where))
-
-
 def disruption_text(kind, where, l_ft, limit_ft, limit_name):
     """A transition, tap or other fitting inside the window: flagged, not
     priced. limit_name: 'Le' (outlet) or 'the inlet window'."""
@@ -433,8 +426,7 @@ def method_lines(settings):
               'with the straight length that brings it under. '
               'A transition within %.1f ft of the unit is taken as its connection '
               'adapter, priced as a fitting only, and the next disruption is judged. '
-              'Inlet swirl not priced (no 2001 coefficient); transitions and taps '
-              'flagged, not priced.' % (
+              'Transitions and taps flagged, not priced.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_C,
                   ADAPTER_TRANSITION_FT))

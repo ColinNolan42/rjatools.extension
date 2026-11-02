@@ -146,6 +146,31 @@ def _grid2(grid, rows, cols, r, c):
     return _lerp(top, bot, fr), (cl_r or cl_c), blank
 
 
+# Report wording for a table axis: (plain name, unit suffix, number format).
+_AXIS_TEXT = {
+    'theta_deg': ('angle', ' deg', '%.1f'),
+    'D_mm': ('diameter', ' mm', '%.0f'),
+    'Re/1000': ('Reynolds number / 1000', '', '%.0f'),
+}
+
+
+def _clamp_text(key, axis, x):
+    """One plain sentence for a value past the printed axis, or None:
+    'SR4-1: angle 7.6 deg is below the table's lowest column, 10 deg; the
+    10 deg column was used'."""
+    xs = axis['values']
+    x = float(x)
+    if xs[0] <= x <= xs[-1]:
+        return None
+    name, unit, fmt = _AXIS_TEXT.get(axis['name'], (axis['name'], '', '%.2f'))
+    low = x < xs[0]
+    edge = xs[0] if low else xs[-1]
+    e = (fmt % edge) + unit
+    return ('%s: %s %s is %s the table\'s %s value, %s; the %s value was used'
+            % (key, name, (fmt % x) + unit, 'below' if low else 'above',
+               'lowest' if low else 'highest', e, e))
+
+
 def lookup(key, *args):
     """C from table `key` at the given independent variables, in the order the
     table lists them (x; rows, cols; layers, rows, cols).
@@ -166,8 +191,7 @@ def lookup(key, *args):
             a = b = (a if a is not None else b)
             notes.append('%s: next to a blank cell' % key)
         if cl:
-            notes.append('%s: %s %.2f outside the table, edge value used'
-                         % (key, t['x']['name'], float(args[0])))
+            notes.append(_clamp_text(key, t['x'], args[0]))
         return _lerp(a, b, f), notes
     if kind == '2d':
         v, cl, blank = _grid2(t['C'], t['rows']['values'], t['cols']['values'],
@@ -183,8 +207,11 @@ def lookup(key, *args):
     else:
         return None, ['%s: unknown table kind %r' % (key, kind)]
     if cl:
-        notes.append('%s: outside the table at %s, edge value used'
-                     % (key, ', '.join('%.2f' % float(a) for a in args)))
+        axes = ([t['layers']] if kind == '3d' else []) + [t['rows'], t['cols']]
+        for axis, x in zip(axes, args):
+            n = _clamp_text(key, axis, x)
+            if n:
+                notes.append(n)
     if blank:
         notes.append('%s: blank cell in the book, nearest printed value used' % key)
     return v, notes

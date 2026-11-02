@@ -136,7 +136,7 @@ class InletTest(unittest.TestCase):
 
     def test_mitered_radius_clamps_with_note(self):
         _c, _k, _r, notes = F.inlet_c(False, 0.1, 0.0)
-        self.assertTrue(any('edge value' in n for n in notes))
+        self.assertTrue(any('lowest value' in n and 'was used' in n for n in notes))
 
     def test_floor_ratio(self):
         self.assertEqual(F.floor_ratio('ED7-2', 1.0), 5.0)
@@ -243,8 +243,6 @@ class SettingsTest(unittest.TestCase):
         self.assertTrue(F.ER7_1_SQUARE_ASSUMPTION.startswith('ASSUMPTION: ER7-1'))
 
     def test_text_builders(self):
-        self.assertIn('FSE1,sw', F.swirl_text('return inlet', 2.0))
-        self.assertTrue(F.swirl_text('return inlet', 2.0).startswith('WARNING'))
         t = F.disruption_text('transition', 'supply outlet', 1.0, 5.7, 'Le')
         self.assertIn('not priced', t)
         self.assertIn('inside Le (5.7 ft)', t)

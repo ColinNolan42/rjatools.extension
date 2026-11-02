@@ -559,8 +559,7 @@ def _show_velocity_settings_xaml(use_theme):
         'The first elbow within Le of each unit outlet, or 5 diameters of each inlet, '
         'is priced from the 2001 ASHRAE Fundamentals (outlet SR7, worst of positions '
         'A to D; inlet ED7-2 or ER7-1). C %.1f or more is gray, with the straight '
-        'length that brings it under. Inlet swirl is warned, '
-        'not priced. The inlet tables are printed for SWSI fans.'
+        'length that brings it under. The inlet tables are printed for SWSI fans.'
         % fan_system_effect.HIGH_C)
     for b in (tb_tol, tb_sf, tb_filter, tb_blast):
         ui_helpers.rja_attach_clear_on_edit(b)
@@ -832,8 +831,7 @@ def _show_velocity_settings_xaml(use_theme):
                               'Ab/Ao and L/Le, elbow priced separately. Inlet elbow: '
                               'ED7-2 round, ER7-1 rect (SWSI tables, an assumption for '
                               'DWDI), at r/D and L/D, elbow included. Added before the '
-                              'safety factor. Inlet swirl has no coefficient and is '
-                              'warned, not priced. Transitions and taps are flagged, '
+                              'safety factor. Transitions and taps are flagged, '
                               'not priced.'),
     ] + vav_checks.basis_rows()
     for r, (lab, val) in enumerate(ref_rows):
@@ -2465,7 +2463,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         vc = qc / dr.area_ft2
                         res = (ec * hvac_graph.velocity_pressure_inwg(vc),
                                '%s, end of main turn, C %.2f at main %.0f fpm'
-                               % (elabel, ec, vc), list(enotes))
+                               % (elabel, ec, vc),
+                               _located('tap %s, end of main %s (%s %s)' % (
+                                   tap_id, main, dr.sys_class, getattr(dr, 'size', '')), enotes))
                         tapprice_cache[tap_id] = res
                         return res
                 cb, label, notes = ashrae_fittings.tap_branch_c(
@@ -2480,7 +2480,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         cb * hvac_graph.velocity_pressure_inwg(vc), dr.sys_class,
                         'tap %s branch loss' % tap_id)
                     res = (loss, '%s at main %.0f fpm' % (label, vc),
-                           list(notes) + fl)
+                           _located('tap %s on main %s (%s %s)' % (
+                               tap_id, main, dr.sys_class, getattr(dr, 'size', '')), notes) + fl)
         tapprice_cache[tap_id] = res
         return res
 
@@ -2551,13 +2552,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 notes.append(fb)
         return loss, len(passed), parts, notes
 
-    def _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area):
+    def _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area, loc_id=None):
         """(loss in. wc, label, notes, downstream area) from the 2001 tables,
         or None to fall back to the worksheet."""
+        eid = loc_id if loc_id is not None else '?'
         if role == 'elbow':
             g = hvac_graph.elbow_geometry(elem)
             if g is None:
                 return None
+            where = ('elbow %s (%s, %s, %.0f deg)'
+                     % (eid, sys_class, _size_text(g['round'], g['d_in'], g['w_in'],
+                                                   g['h_in']), g['angle'] or 90.0))
             f = (fam or '').lower()
             if g['round']:
                 if not g['d_in']:
@@ -2578,7 +2583,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if c is None:
                 return None
             return (c * hvac_graph.velocity_pressure_inwg(up_fpm),
-                    '%s, C %.2f' % (label, c), notes, None)
+                    '%s, C %.2f' % (label, c), _located(where, notes), None)
         if role == 'transition':
             ends, theta = hvac_graph.transition_geometry(elem)
             if not ends or theta is None or not up_area or not up_fpm:
@@ -2592,9 +2597,37 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if c is None:
                 return None
             vo = up_fpm * up_area / eo[0]
+            where = ('transition %s (%s, %s to %s, %.1f deg)'
+                     % (eid, sys_class,
+                        _size_text(e1[1] == 'round', e1[2], e1[2], e1[3]),
+                        _size_text(eo[1] == 'round', eo[2], eo[2], eo[3]), theta))
             return (c * hvac_graph.velocity_pressure_inwg(vo),
-                    '%s, Co %.2f at %.0f fpm' % (label, c, vo), notes, eo[0])
+                    '%s, Co %.2f at %.0f fpm' % (label, c, vo),
+                    _located(where, notes), eo[0])
         return None
+
+    def _terminal_label(nid):
+        """'D-6 (id 3639741)': the terminal's Mark and id, so the end of the
+        index run can be found on the plan. Id alone when there is no Mark."""
+        mark = None
+        try:
+            p = all_nodes.get(nid).LookupParameter('Mark')
+            mark = p.AsString() if p is not None else None
+        except Exception:
+            pass
+        return '%s (id %s)' % (mark, nid) if mark else 'id %s' % nid
+
+    def _size_text(is_round, d_in, w_in, h_in):
+        """'16x12"' or '10"dia' for a report note."""
+        if is_round:
+            return '%.0f"dia' % float(d_in or 0)
+        return '%.0fx%.0f"' % (float(w_in or 0), float(h_in or 0))
+
+    def _located(where, notes):
+        """Lookup notes led by the fitting they belong to, so the reader can
+        find it: 'transition 3639637 (Supply Air, 18x12" to 16x12", 7.6 deg):
+        SR4-1: angle 7.6 deg is below ...'."""
+        return ['%s: %s' % (where, n) for n in (notes or []) if n]
 
     _COMP_LABEL = dict((k, lbl) for k, lbl, _v in fitting_tables.COMPONENT_TABLE)
     _C_IN_DETAIL = re.compile(r'\b(?:C|Cb|Co|Cs)\s+(-?\d+\.\d+)')
@@ -2643,7 +2676,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return ('NOTE: ' + '; '.join(notes)) if notes else None
 
     def _price_fitting(elem, sys_class, up_fpm, up_area, against_flow=False,
-                       nid=None):
+                       nid=None, loc_id=None):
         """(loss in. wc, counted 0/1, unpriced note or None, downstream area,
         detail text).
 
@@ -2669,7 +2702,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 return t[0], 1, _notes_text(t[2]), None, t[1]
         reversed_walk = against_flow != fitting_tables.flows_toward_unit(sys_class)
         if role in ('elbow', 'transition') and not (role == 'transition' and reversed_walk):
-            a = _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area)
+            a = _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area,
+                                loc_id=nid if loc_id is None else loc_id)
             if a is not None:
                 return a[0], 1, _notes_text(a[2]), a[3], a[1]
         up_a, down_a = (None, None)
@@ -2758,7 +2792,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     loss, counted, note, down_a, _detail = _price_fitting(
                         elem, root_dr.sys_class, up_fpm, up_area,
                         against_flow=not fitting_tables.flows_toward_unit(
-                            root_dr.sys_class))
+                            root_dr.sys_class), loc_id=n)
                     fit   += loss
                     n_fit += counted
                     if note:
@@ -3035,12 +3069,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     rec['assumptions'].append(_t)
                 else:
                     notes.append((_k, _t))
-            notes.append(('warn', fan_system_effect.swirl_text(where, l_ft)))
             notes.append(('note', 'NOTE: the %s C includes the elbow\'s own loss; elbow %s '
                           'is not priced again as a fitting' % (r['table'], did)))
             rec['skip'].add(did)
         loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
-        notes.extend(('note', 'NOTE: ' + n) for n in r['notes'])
+        notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
+                     for n in r['notes'])
         if r['high']:
             # GRAY, not RED (Colin, 2026-10-29): still priced in the total,
             # reported with the straight length that brings C under HIGH_C,
@@ -3320,6 +3354,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'length_ft':        dlen,
                         'terminal_id':      nid,
                         'terminal_name':    _family or '-',
+                        'terminal_label':   _terminal_label(nid),
                         'unpriced':         unpriced,
                         'items':            fse_items + items + (((
                             'Accessory (assumed)', 'Balancing damper at ' + (_family or '-'),
@@ -4080,7 +4115,7 @@ def _draw_system_summary(st, view, y, total_w, rep):
 def _draw_external_static(st, view, y, total_w, esp_rec):
     """EXTERNAL STATIC PRESSURE: per unit one take-off table (supply then
     return, ending in the unit total) with its notes, then picked duct
-    pairings, run wide warnings, and METHOD / NOT INCLUDED. The rows come
+    pairings and run wide warnings. The rows come
     from duct_perf_console.esp_unit_rows, the same rows the console table
     shows. Returns the y under it."""
     draft = rja_drafting
@@ -4108,10 +4143,11 @@ def _draw_external_static(st, view, y, total_w, esp_rec):
                         draft.SUB_BAND_H)
         y = draft._note_panel(st, view, 0.0, y, total_w, [comb['text']])
         y -= draft.GAP
+    # No METHOD / ASSUMPTION / NOT INCLUDED block on the sheet (Colin,
+    # 2026-11-02): the engineer reads the basis in the dialog's Calculation
+    # basis. The console still prints it.
     tail = duct_perf_console.sheet_lines(
         [('warn', w) for w in esp_rec.get('warnings') or []])
-    tail.extend(t for t in [esp_rec.get('method')] + list(esp_rec.get('assumptions') or [])
-                + [esp_rec.get('not_included')] if t)
     if tail:
         y = draft._note_panel(st, view, 0.0, y, total_w, tail)
         y -= draft.GAP
@@ -4834,7 +4870,8 @@ def main():
                     notes.append(_msg)
                 safety_inwc = c['total_inwc'] - c['subtotal_inwc']
                 safety_det = '+{:.0f}%'.format(safety_pct)
-                total_det = 'worst run ends at {}'.format(c['terminal_name'])
+                total_det = 'worst run ends at {}'.format(
+                    c.get('terminal_label') or c['terminal_name'])
                 summary_lines.append(_esp_text_line('Subtotal', c['subtotal_inwc']))
                 summary_lines.append(_esp_text_line('Safety factor', safety_inwc, safety_det))
                 summary_lines.append(_esp_text_line('TOTAL', c['total_inwc'], total_det))
