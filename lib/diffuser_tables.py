@@ -2,9 +2,14 @@
 """
 diffuser_tables.py
 
-Diffuser / grille sizing tables from RJA's MEP Design Standards, section
-"1. Diffuser and Branch Ducting Standards" (discussion draft effective
-2026-09-17). Pure data + lookup module, same shape as gas_tables.py:
+Diffuser / grille sizing tables. Source: the RJA auto sizing diffuser and
+grate families (Colin, 2026-11-02: the families are the reference; the MEP
+Design Standards doc, section "1. Diffuser and Branch Ducting Standards",
+and this module both follow them). Read live on the loaded families 1 cfm
+at each edge, 2026-11-02. A family steps to the next size AT that size's
+first cfm, so each intermediate row's max is the next size's start - 1, and
+a module's last size runs to the module cap. Bands are contiguous: the next
+size's Min CFM is this Max + 1. Pure data + lookup module, same shape as gas_tables.py:
 plain module-level data, free functions, no classes, no Revit API, no I/O.
 
 Why this module exists at all
@@ -15,12 +20,10 @@ one such diffuser is therefore redundant and produces false flags. The real
 risk left on that run is a plain size mismatch: is the duct actually the
 size the diffuser needs?
 
-These capacities are transcribed here independently of the diffuser
-families' own live sizing formulas on purpose. An independent lookup still
-catches a branch whose family formula has drifted from its own catalog data
-- that has actually happened on this project (CONFIRMED BUG 2026-09-16, the
-live Return Grate family disagreeing with its own source table). Reading the
-family's formula instead would just agree with the bug.
+These numbers were once kept independent of the families on purpose, to
+catch a drifted family formula. Superseded 2026-11-02: one set of numbers
+everywhere, matching the families, with no fallback. Non auto sizing
+diffusers are judged on the same tables.
 
 Units and snapping contract
 ---------------------------
@@ -48,12 +51,12 @@ IronPython 2.7 compatible. Pure ASCII source.
 # Ceiling diffusers / grates - round neck, (diameter_in, max_cfm)
 # ---------------------------------------------------------------------------
 #
-# Both ceiling tables are MERGED across face modules (12x12 / 24x12 / 24x24).
-# Verified against the source doc: every module publishes identical CFM
-# limits for every neck size it shares with the others - the modules differ
-# only in how far up the neck range they go. A single diameter -> max-CFM
-# curve is therefore valid regardless of face size, and no module/face-size
-# detection is needed anywhere in the branch check.
+# The tables below are the LARGEST module (24x24) of each family. Smaller
+# modules end at their own cap, which can sit one cfm above the 24x24 row for
+# the same neck (12x12 supply 8 in. runs to 200, 24x24 8 in. to 199 because
+# 24x24 steps to 10 in. at 200), so the branch check picks the module's own
+# table via ceiling_module_table() when the module can be read. A diffuser
+# whose module cannot be read (a non RJA family) uses the 24x24 table.
 #
 # Ascending by diameter. Rows are the MAXIMUM CFM for that neck; the source
 # doc also publishes a Min CFM per row (the bottom of each selection band),
@@ -61,16 +64,14 @@ IronPython 2.7 compatible. Pure ASCII source.
 # only, per the approved plan.
 
 # Basis of design: flex duct manufacturer maximum recommended airflow per
-# neck diameter. Even neck sizes only, capped at 14".
-# NOTE: the 4" row is flagged "residential only" in the source doc. It is
-# kept here so a residential 4" neck can still be checked rather than
-# reported as an unpublished size; it is not a commercial selection.
+# neck diameter. Even neck sizes only, capped at 14". The families have no
+# 4 in. neck, so neither does this table (the doc's 4 in. residential row was
+# dropped 2026-11-02).
 CEILING_SUPPLY_NECK_TABLE = [
-    (4,   35),
-    (6,  110),
-    (8,  200),
-    (10, 375),
-    (12, 580),
+    (6,  109),
+    (8,  199),
+    (10, 374),
+    (12, 579),
     (14, 750),
 ]
 
@@ -102,18 +103,37 @@ ROUND_GRILLE_SUPPLY_NECK_TABLE = [
 # Basis of design: Titus PAR perforated face grate. Return and Exhaust share
 # identical published data, hence one table for both.
 CEILING_RETURN_EXHAUST_NECK_TABLE = [
-    (6,   85),
-    (8,  185),
-    (10, 325),
-    (12, 470),
-    (14, 640),
+    (6,   84),
+    (8,  184),
+    (10, 324),
+    (12, 469),
+    (14, 639),
     (16, 840),
 ]
+
+# Per module, keyed by the face (width_in, height_in) the family's Type
+# parameters "Diffuser Width" / "Diffuser Height" read (orientation does not
+# matter). Each module's last neck runs to the module cap (the family's Type
+# name carries the same cap, e.g. "12x12 - 200 CFM Max").
+CEILING_SUPPLY_MODULE_TABLES = {
+    (12, 12): [(6, 109), (8, 200)],
+    (24, 24): CEILING_SUPPLY_NECK_TABLE,
+}
+
+CEILING_RETURN_EXHAUST_MODULE_TABLES = {
+    (12, 12): [(6, 84), (8, 185)],
+    (24, 12): [(6, 84), (8, 184), (10, 325)],
+    (24, 24): CEILING_RETURN_EXHAUST_NECK_TABLE,
+}
 
 
 # ---------------------------------------------------------------------------
 # Sidewall grilles - rectangular face, (width_in, height_in, max_cfm, nc)
 # ---------------------------------------------------------------------------
+#
+# Each row's max follows the families (2026-11-02): the next face starts at
+# this max + 1; each aspect's last face runs to the family cap (2485 supply,
+# 1875 return/exhaust).
 #
 # Flattened from the source doc's three separate aspect-ratio tables
 # (Square / 2:1 / 3:1) into one list of real published W x H points. They are
@@ -131,60 +151,60 @@ CEILING_RETURN_EXHAUST_NECK_TABLE = [
 
 SIDEWALL_SUPPLY_TABLE = [
     # --- Square type ---
-    (6,   6,  125, 20),
-    (8,   8,  245, 23),
-    (10, 10,  390, 25),
-    (12, 12,  585, 27),
-    (14, 14,  810, 28),
-    (16, 16, 1075, 29),
-    (18, 18, 1370, 30),
-    (20, 20, 1705, 31),
-    (22, 22, 2080, 32),
+    (6,   6,  124, 20),
+    (8,   8,  244, 23),
+    (10, 10,  389, 25),
+    (12, 12,  584, 27),
+    (14, 14,  809, 28),
+    (16, 16, 1074, 29),
+    (18, 18, 1369, 30),
+    (20, 20, 1704, 31),
+    (22, 22, 2079, 32),
     (24, 24, 2485, 33),
     # --- 2:1 type ---
-    (10,  6,  150, 23),
-    (12,  6,  270, 24),
-    (18,  8,  585, 27),
-    (18, 10,  735, 28),
-    (22, 10,  910, 28),
-    (24, 12, 1205, 30),
-    (30, 16, 2060, 32),
+    (10,  6,  149, 23),
+    (12,  6,  269, 24),
+    (18,  8,  584, 27),
+    (18, 10,  734, 28),
+    (22, 10,  909, 28),
+    (24, 12, 1204, 30),
+    (30, 16, 2059, 32),
     (36, 16, 2485, 33),
     # --- 3:1 type ---
-    (16,  6,  380, 25),
-    (18,  6,  415, 26),
-    (20,  6,  475, 26),
-    (36, 12, 1820, 32),
-    (48, 10, 2060, 32),
-    (42, 12, 2135, 32),
+    (16,  6,  379, 25),
+    (18,  6,  414, 26),
+    (20,  6,  474, 26),
+    (36, 12, 1819, 32),
+    (48, 10, 2059, 32),
+    (42, 12, 2134, 32),
     (48, 12, 2485, 33),
 ]
 
 SIDEWALL_RETURN_EXHAUST_TABLE = [
     # --- Square type ---
-    (6,   6,   95, 10),
-    (8,   8,  185, 10),
-    (10, 10,  295, 10),
-    (12, 12,  440, 11),
-    (14, 14,  610, 12),
-    (16, 16,  810, 14),
-    (18, 18, 1035, 14),
-    (20, 20, 1285, 16),
-    (22, 22, 1570, 17),
+    (6,   6,   94, 10),
+    (8,   8,  184, 10),
+    (10, 10,  294, 10),
+    (12, 12,  439, 11),
+    (14, 14,  609, 12),
+    (16, 16,  809, 14),
+    (18, 18, 1034, 14),
+    (20, 20, 1284, 16),
+    (22, 22, 1569, 17),
     (24, 24, 1875, 18),
     # --- 2:1 type ---
-    (10,  6,  170, 10),
-    (12,  6,  205, 10),
-    (18, 10,  555, 12),
-    (22, 10,  685, 13),
-    (24, 12,  910, 14),
-    (30, 16, 1555, 17),
+    (10,  6,  169, 10),
+    (12,  6,  204, 10),
+    (18, 10,  554, 12),
+    (22, 10,  684, 13),
+    (24, 12,  909, 14),
+    (30, 16, 1875, 17),
     # --- 3:1 type ---
-    (16,  6,  285, 10),
-    (18,  6,  315, 10),
-    (20,  6,  360, 11),
-    (36, 12, 1375, 16),
-    (42, 12, 1610, 17),
+    (16,  6,  284, 10),
+    (18,  6,  314, 10),
+    (20,  6,  359, 11),
+    (36, 12, 1374, 16),
+    (42, 12, 1609, 17),
     (48, 12, 1875, 18),
 ]
 
@@ -272,6 +292,26 @@ def row_size_label(row):
 # ---------------------------------------------------------------------------
 # Round-neck lookups (ceiling supply, ceiling return/exhaust)
 # ---------------------------------------------------------------------------
+
+def ceiling_module_table(table, w_in, h_in):
+    """The neck table for a ceiling diffuser's own module, or table itself.
+
+    table: CEILING_SUPPLY_NECK_TABLE or CEILING_RETURN_EXHAUST_NECK_TABLE
+    (the 24x24 rows). w_in / h_in: the module face in inches, from the
+    family's "Diffuser Width" / "Diffuser Height" Type parameters, or None
+    when unreadable (a non RJA family), which keeps the 24x24 table.
+    Orientation does not matter (24x12 and 12x24 are the same module)."""
+    modules = {id(CEILING_SUPPLY_NECK_TABLE): CEILING_SUPPLY_MODULE_TABLES,
+               id(CEILING_RETURN_EXHAUST_NECK_TABLE):
+                   CEILING_RETURN_EXHAUST_MODULE_TABLES}.get(id(table))
+    if modules is None or w_in is None or h_in is None:
+        return table
+    for (mw, mh), rows in modules.items():
+        if ((_same_in(mw, w_in) and _same_in(mh, h_in)) or
+                (_same_in(mw, h_in) and _same_in(mh, w_in))):
+            return rows
+    return table
+
 
 def max_cfm_for_diameter(table, diameter_in):
     """Max CFM the design standard publishes for a given round neck size.
@@ -449,10 +489,13 @@ def reference_tables():
 
     return [
         ('Ceiling supply, round neck',
-         'Flex duct manufacturer maximum airflow per neck. 4 in. is residential only.',
+         'Flex duct manufacturer maximum airflow per neck, 24x24 module (12x12 '
+         'module: 6 in. 109, 8 in. 200). Matches the RJA auto sizing families.',
          ['Neck', 'Max CFM'], _round(CEILING_SUPPLY_NECK_TABLE)),
         ('Ceiling return / exhaust grate, round neck',
-         'Titus PAR perforated face grate.',
+         'Titus PAR perforated face grate, 24x24 module (12x12: 6 in. 84, 8 in. '
+         '185; 24x12: 6 in. 84, 8 in. 184, 10 in. 325). Matches the RJA auto '
+         'sizing families.',
          ['Neck', 'Max CFM'], _round(CEILING_RETURN_EXHAUST_NECK_TABLE)),
         ('Round supply grille (sidewall circle)',
          'Price RSG, 1 in. blade spacing; smaller of 800 fpm and 0.08 in. wc/100 ft.',
@@ -485,40 +528,52 @@ def _self_test():
     print('diffuser_tables.py self-test')
 
     # Row counts as transcribed from the source doc.
-    assert len(CEILING_SUPPLY_NECK_TABLE) == 6, 'ceiling supply row count'
+    assert len(CEILING_SUPPLY_NECK_TABLE) == 5, 'ceiling supply row count'
     assert len(CEILING_RETURN_EXHAUST_NECK_TABLE) == 6, 'ceiling ret/exh row count'
     assert len(SIDEWALL_SUPPLY_TABLE) == 25, 'sidewall supply row count'
     assert len(SIDEWALL_RETURN_EXHAUST_TABLE) == 22, 'sidewall ret/exh row count'
 
     # Round lookups
-    assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 10) == 375
-    assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 10.000000000000002) == 375
+    assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 10) == 374
+    assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 10.000000000000002) == 374
     assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 18) is None
     assert max_cfm_for_diameter(CEILING_RETURN_EXHAUST_NECK_TABLE, 4) is None
     assert max_cfm_for_diameter(CEILING_RETURN_EXHAUST_NECK_TABLE, 16) == 840
 
-    assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 200) == 8
-    assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 201) == 10
+    # The family steps to the next neck AT its first cfm (2026-11-02).
+    assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 109) == 6
+    assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 110) == 8
+    assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 199) == 8
+    assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 200) == 10
+    # Module tables: 12x12 supply 8 in. runs to its 200 cap, 24x12 grate 10 in. to 325.
+    t12 = ceiling_module_table(CEILING_SUPPLY_NECK_TABLE, 12, 12)
+    assert max_cfm_for_diameter(t12, 8) == 200 and min_diameter_for_cfm(t12, 201) is None
+    t2412 = ceiling_module_table(CEILING_RETURN_EXHAUST_NECK_TABLE, 12, 24)
+    assert max_cfm_for_diameter(t2412, 10) == 325
+    assert ceiling_module_table(CEILING_SUPPLY_NECK_TABLE, None, None) is CEILING_SUPPLY_NECK_TABLE
+    assert ceiling_module_table(CEILING_SUPPLY_NECK_TABLE, 18, 18) is CEILING_SUPPLY_NECK_TABLE
+    assert max_cfm_for_diameter(CEILING_SUPPLY_NECK_TABLE, 4) is None, 'no 4 in. neck'
     assert min_diameter_for_cfm(CEILING_SUPPLY_NECK_TABLE, 751) is None
     assert largest_diameter(CEILING_SUPPLY_NECK_TABLE) == 14
     ref = reference_tables()
-    assert len(ref) == 7 and ref[0][3][2] == ['8 in.', '200'], 'reference tables'
+    assert len(ref) == 7 and ref[0][3][1] == ['8 in.', '199'], 'reference tables'
     assert ref[5][3][2][-1] == '875' and ref[6][3][4][-1] == '1,600', 'slot tables'
     assert all(len(r) == 9 for _l, cfms in SLOT_SUPPLY_TABLE for r in [[_l] + cfms])
     assert len(ref[3][3]) == len(SIDEWALL_SUPPLY_TABLE)
 
     # Sidewall lookups
-    assert sidewall_row(SIDEWALL_SUPPLY_TABLE, 18, 10) == (18, 10, 735, 28)
-    assert sidewall_row(SIDEWALL_SUPPLY_TABLE, 10, 18) == (18, 10, 735, 28), \
+    assert sidewall_row(SIDEWALL_SUPPLY_TABLE, 18, 10) == (18, 10, 734, 28)
+    assert sidewall_row(SIDEWALL_SUPPLY_TABLE, 10, 18) == (18, 10, 734, 28), \
         'orientation-insensitive match'
     assert sidewall_row(SIDEWALL_SUPPLY_TABLE, 14, 6) is None, 'unpublished face'
 
     row, exact = nearest_sidewall_row(SIDEWALL_SUPPLY_TABLE, 12, 12)
-    assert exact and row == (12, 12, 585, 27)
+    assert exact and row == (12, 12, 584, 27)
     row, exact = nearest_sidewall_row(SIDEWALL_SUPPLY_TABLE, 14, 6)
     assert not exact and row is not None, 'nearest fallback returns something'
 
-    assert min_row_for_cfm(SIDEWALL_RETURN_EXHAUST_TABLE, 440) == (12, 12, 440, 11)
+    assert min_row_for_cfm(SIDEWALL_RETURN_EXHAUST_TABLE, 439) == (12, 12, 439, 11)
+    assert sidewall_row(SIDEWALL_RETURN_EXHAUST_TABLE, 30, 16)[2] == 1875, 'family cap'
     assert min_row_for_cfm(SIDEWALL_RETURN_EXHAUST_TABLE, 441) is not None
     assert min_row_for_cfm(SIDEWALL_RETURN_EXHAUST_TABLE, 441)[2] >= 441
     assert min_row_for_cfm(SIDEWALL_RETURN_EXHAUST_TABLE, 99999) is None

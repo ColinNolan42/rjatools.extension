@@ -103,6 +103,61 @@ class TestCeiling(unittest.TestCase):
         self.assertEqual(r.reason, 'Branch smaller than diffuser')
 
 
+class _Param(object):
+    def __init__(self, ft):
+        self.ft = ft
+        self.HasValue = True
+
+    def AsDouble(self):
+        return self.ft
+
+
+class _Symbol(object):
+    """Type parameters "Diffuser Width" / "Diffuser Height", in feet."""
+    def __init__(self, w_in, h_in):
+        self.p = {'Diffuser Width': _Param(w_in / 12.0),
+                  'Diffuser Height': _Param(h_in / 12.0)}
+
+    def LookupParameter(self, name):
+        return self.p.get(name)
+
+
+def _ceiling(neck, w_in=None, h_in=None, sys_class='Supply Air'):
+    t = _Terminal(('round', float(neck)), 'ceiling', sys_class)
+    t.LookupParameter = lambda name: None
+    if w_in is not None:
+        t.Symbol = _Symbol(w_in, h_in)
+    return t
+
+
+class TestFamilyBands(unittest.TestCase):
+    """Tables follow the auto sizing families, 2026-11-02: the family steps to
+    the next neck AT its first cfm, and a module's last neck runs to its cap."""
+
+    def test_24x24_steps_at_110(self):
+        self.assertEqual(check(_ceiling(6, 24, 24), 109.0, 6.0).status, 'GREEN')
+        self.assertEqual(check(_ceiling(6, 24, 24), 110.0, 6.0).status, 'RED')
+
+    def test_12x12_8in_runs_to_200_cap(self):
+        self.assertEqual(check(_ceiling(8, 12, 12), 200.0, 8.0).status, 'GREEN')
+        r = check(_ceiling(8, 12, 12), 201.0, 8.0)
+        self.assertEqual((r.status, r.reason), ('RED', 'Max CFM reached, split diffuser'))
+
+    def test_24x24_8in_at_200_needs_10in(self):
+        r = check(_ceiling(8, 24, 24), 200.0, 8.0)
+        self.assertEqual(r.status, 'RED')
+        self.assertIn('10', r.required_size)
+
+    def test_no_module_uses_24x24(self):
+        self.assertEqual(check(_ceiling(8), 200.0, 8.0).status, 'RED')
+
+    def test_24x12_grate_10in_to_325(self):
+        self.assertEqual(check(_ceiling(10, 24, 12, 'Return Air'), 325.0, 10.0).status,
+                         'GREEN')
+        self.assertEqual(check(_ceiling(10, 24, 24, 'Return Air'), 325.0, 10.0).status,
+                         'RED')
+
+
 class TestSidewall(unittest.TestCase):
 
     def test_over_largest_face_is_split_diffuser(self):

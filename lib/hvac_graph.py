@@ -1176,6 +1176,43 @@ def is_auto_sizing_diffuser(elem):
     return False
 
 
+_MODULE_PARAMS = ('Diffuser Width', 'Diffuser Height')
+
+
+def ceiling_module_in(elem):
+    """(width_in, height_in) of a ceiling diffuser's face module, or
+    (None, None).
+
+    Read from the RJA auto sizing families' Type parameters "Diffuser Width"
+    and "Diffuser Height" (confirmed live 2026-11-02 on the 12x12, 24x12 and
+    24x24 Types), parameters, not names. A non RJA family without them reads
+    (None, None) and is judged on the 24x24 table."""
+    tid = None
+    try:
+        tid = eid_int(elem.Id)
+    except Exception:
+        pass
+    vals = []
+    for name in _MODULE_PARAMS:
+        val = None
+        for holder in (elem, getattr(elem, 'Symbol', None)):
+            if holder is None:
+                continue
+            try:
+                p = holder.LookupParameter(name)
+                if p is not None and p.HasValue and p.AsDouble() > 0:
+                    val = _nominal_even_in(p.AsDouble() * 12.0)
+                    break
+            except Exception as ex:
+                log.info('ceiling_module_in: terminal %s %s unreadable: %s', tid, name, ex)
+        vals.append(val)
+    if None in vals:
+        log.info('ceiling_module_in: terminal %s module NOT FOUND, 24x24 table used', tid)
+        return None, None
+    log.info('ceiling_module_in: terminal %s module %sx%s', tid, vals[0], vals[1])
+    return vals[0], vals[1]
+
+
 def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
     """Branch to an auto-sized linear slot diffuser (Colin, 2026-10-22).
 
@@ -1313,6 +1350,10 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
     over_max    = False   # Flow above the largest size in the table
 
     if res.category == 'ceiling':
+        # The module's own bands (Colin, 2026-11-02): a 12x12 runs its last
+        # neck to its cap, one cfm past the 24x24 row for the same neck.
+        mod_w, mod_h = ceiling_module_in(terminal_elem)
+        table        = diffuser_tables.ceiling_module_table(table, mod_w, mod_h)
         neck_dia          = geom[1]
         res.diffuser_size = diffuser_tables.round_size_label(neck_dia)
 
