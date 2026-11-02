@@ -1725,6 +1725,32 @@ check("case52 branch damper alone: charged once, nothing assumed, items trace th
       and abs(_items_sum(sa52c) - sa52c['subtotal_inwc']) < 1e-9,
       "keys %r" % (sa52c['component_keys'],))
 
+# 53: a fitting past the last tap on an unbroken main is priced at the flow
+#     the taps left (Colin, 2026-11-02), the same flow _seg_friction ends on.
+#     Case 51's main (1000 cfm, 1.0 ft2, taps taking 300 and 400 cfm), carrying
+#     on through elbow 330 to duct 313 (the index run): the elbow sees
+#     (1000 - 300 - 400) / 1.0 = 300 fpm, not the unit end 1000 fpm.
+ch53 = {299: [300], 300: [301, 302, 330], 301: [311], 302: [312], 311: [321],
+        312: [322], 330: [313], 313: [323]}
+n53 = dict(n51)
+n53[330] = Elem(kind='elbow', family_name='Round Elbow - Fixed L1', is_round=True)
+end53 = _sa(crit([299], ch53, _d51(0.0, 0.0, 1.0), t51, n53), 299)
+_it53 = [i for i in end53.get('items', ()) if i[0] == 'Fitting 330']
+check("case53 the elbow past the last tap is priced at the remaining 300 fpm",
+      end53.get('terminal_id') == 323 and len(_it53) == 1
+      and abs(_it53[0][2] - 300.0) < 1e-9,
+      "term %r items %r" % (end53.get('terminal_id'), _it53))
+# The same run with the tap positions unreadable: friction stays whole at the
+# unit end cfm, the elbow at 1000 fpm, and the run says so once.
+n53u = dict(n53)
+n53u[300] = Elem(kind='duct')
+u53 = _sa(crit([299], ch53, _d51(0.0, 0.0, 1.0), t51, n53u), 299)
+_note53 = [u for u in u53.get('unpriced', ()) if 'tap positions on duct 300 unreadable' in u]
+check("case53 unreadable tap positions: one NOTE on the run, elbow at the unit end 1000 fpm",
+      len(_note53) == 1
+      and [i[2] for i in u53.get('items', ()) if i[0] == 'Fitting 330'] == [1000.0],
+      "unpriced %r" % (u53.get('unpriced'),))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

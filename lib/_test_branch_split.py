@@ -4,8 +4,9 @@
 RJA rule (Colin, 2026-11-02): a duct with one terminal downstream is a
 BRANCH. A root unit connection that serves only one terminal makes its whole
 run one branch, which is nearly always a model set up problem or a rare
-point of use unit, so the tools WARN on it, and Duct Performance judges it
-as a main when its option is ticked. VAV boxes serving one diffuser are
+point of use unit, so the tools always judge (Duct Performance) or size
+(Size Duct) that run as a main and print one short NOTE (Colin, 2026-11-02,
+always on, no dialog option). VAV boxes serving one diffuser are
 normal and are not reported. The pure block of hvac_graph.py is run on its
 own, since hvac_graph itself imports the Revit API.
 
@@ -25,10 +26,10 @@ def _load():
     end = src.index("def solid_fill_pattern_id(")
     ns = {}
     exec(src[start:end], ns)
-    return ns["single_terminal_runs"]
+    return ns["single_terminal_runs"], ns["single_terminal_text"]
 
 
-RUNS = _load()
+RUNS, TEXT = _load()
 
 
 def downstream(root, children, terminals):
@@ -89,6 +90,14 @@ class TestSingleTerminalRuns(unittest.TestCase):
         ch = {1: [2], 2: [3], 3: [2, 4]}
         ds = {1: {4}, 2: {4}, 3: {4}, 4: {4}}
         self.assertEqual(RUNS(1, ch, ds, {1}), {2: {2, 3, 4}})
+
+
+class NoteText(unittest.TestCase):
+    def test_note_says_judged_as_a_main(self):
+        t = TEXT(101, 202)
+        self.assertTrue(t.startswith("NOTE: unit 101 connection at element 202"))
+        self.assertIn("judged as a main", t)
+        self.assertNotIn("WARNING", t)
 
 
 if __name__ == "__main__":

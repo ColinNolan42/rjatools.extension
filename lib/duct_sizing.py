@@ -11,9 +11,15 @@
 #   - Rectangular: hold the DRAWN height (ceiling depth) and solve the width.
 #     4:1 maximum aspect ratio either way. When no width fits at that height
 #     within 4:1, the height steps up 2 in at a time.
-#   - Mains only. Branches (one terminal downstream), takeoff boots and
-#     diffusers are never sized: the auto-sizing diffusers set the branch, and
-#     Duct Performance reports a custom one that is off.
+#   - Mains. A branch (one terminal downstream) to an RJA auto-sizing
+#     diffuser, takeoff boots and diffusers are never sized: the auto-sizing
+#     diffuser sets the branch. A branch to any other diffuser is sized like
+#     a main (Colin, 2026-10-22), never smaller than that diffuser's own
+#     connection (Colin, 2026-11-02), and so is a unit connection that serves
+#     only one terminal (always a main, Colin 2026-11-02).
+#   - A system with no limits of its own is sized to vav_checks.FALLBACK_LIMITS
+#     (600 fpm, 0.05), the same fallback Duct Performance checks against, with
+#     a note (Colin, 2026-11-02).
 #   - Flex duct and oval duct are reported, not sized.
 #
 # Pure logic: the friction function is passed in (hvac_graph's Altshul-Tsal
@@ -21,9 +27,12 @@
 #
 # IronPython 2.7
 
+import logging
 import math
 
 import vav_checks
+
+log = logging.getLogger(__name__)
 
 # Standard round sizes, 2 in increments (firm), and the smallest dimension
 # ever used, rectangular or round. Up to 60 in (Colin, 2026-10-20: no reason
@@ -74,20 +83,34 @@ def _passes(cfm, area_ft2, dh_in, max_fpm, max_fric, friction_fn):
     return fpm <= max_fpm + 1e-9 and fric <= max_fric + 1e-12
 
 
-def size_round(cfm, max_fpm, max_fric, friction_fn):
-    """Smallest firm round size meeting both limits, or None (over 36 in)."""
+def size_round(cfm, max_fpm, max_fric, friction_fn, min_d=None):
+    """Smallest firm round size meeting both limits and at least min_d (a
+    diffuser neck, inches), or None (over the largest size, 60 in)."""
     for d in ROUND_SIZES:
+        if min_d is not None and d < float(min_d) - 0.01:
+            continue
         if _passes(cfm, round_area_ft2(d), float(d), max_fpm, max_fric,
                    friction_fn):
             return d
     return None
 
 
-def size_rect(cfm, drawn_h_in, max_fpm, max_fric, friction_fn):
+def _covers(w, h, min_wh):
+    """A rect duct at least a diffuser face, either way round (the same
+    either orientation rule as Duct Performance's branch check)."""
+    if min_wh is None:
+        return True
+    fw, fh = float(min_wh[0]), float(min_wh[1])
+    return ((w >= fw - 0.01 and h >= fh - 0.01) or
+            (w >= fh - 0.01 and h >= fw - 0.01))
+
+
+def size_rect(cfm, drawn_h_in, max_fpm, max_fric, friction_fn, min_wh=None):
     """(width, height) at the drawn height, or the next height that fits.
 
     Width is searched from the narrowest the 4:1 limit allows, in 2 in
-    steps, up to 4 x height. Returns None when nothing up to MAX_RECT_DIM
+    steps, up to 4 x height. min_wh: a diffuser face (w, h) the duct shall
+    cover, either way round. Returns None when nothing up to MAX_RECT_DIM
     fits.
     """
     h = max(snap_even(drawn_h_in), MIN_DUCT_DIM)
@@ -96,8 +119,9 @@ def size_rect(cfm, drawn_h_in, max_fpm, max_fric, friction_fn):
         w_max = min(int(h * MAX_ASPECT), MAX_RECT_DIM)
         w = w_min
         while w <= w_max:
-            if _passes(cfm, rect_area_ft2(w, h), rect_dh_in(w, h), max_fpm,
-                       max_fric, friction_fn):
+            if _covers(w, h, min_wh) and _passes(
+                    cfm, rect_area_ft2(w, h), rect_dh_in(w, h), max_fpm,
+                    max_fric, friction_fn):
                 return w, h
             w += 2
         h += 2
@@ -120,22 +144,30 @@ class DuctPlan(object):
         self.friction = None
         self.length_ft = 0.0
         self.limit_key = ""      # which limits row sized it (system, or MP)
+        self.limits = None       # (max fpm, max friction) it was sized to
+        self.min_size = None     # diffuser connection it may not go under
+        self.notes = []          # printed with the plan
 
 
 def plan_duct(element_id, shape, current, cfm, sys_class, limits,
               friction_fn, is_branch=False, is_flex=False, is_existing=False,
-              flow_missing=False, limit_key=None, is_inlet_runout=False):
+              flow_missing=False, limit_key=None, is_inlet_runout=False,
+              min_size=None):
     """Decide one duct.
 
     Args:
         shape: SHAPE_ROUND, SHAPE_RECT or None (oval / unknown).
         current: inches, d for round, (w, h) for rect.
         limits: {sys_class: (max_fpm, max_friction)}; a class not listed is
-            not sized.
+            sized to vav_checks.FALLBACK_LIMITS, with a note. A missing MP
+            row is not sized.
         limit_key: the limits row to size against when it is not the duct's
             own system: vav_checks.MP_KEY for a VAV medium pressure main.
         is_inlet_runout: a VAV inlet runout (MP, one box downstream). Sized
             to the box by the engineer, so never resized, like a branch.
+        min_size: the diffuser connection a branch to a non-RJA diffuser
+            shall not go under, in the duct's own shape: d for round, (w, h)
+            for rect (either way round). None = no floor.
 
     Returns DuctPlan.
     """
@@ -169,13 +201,25 @@ def plan_duct(element_id, shape, current, cfm, sys_class, limits,
     if plan.cfm <= 0.0:
         plan.skip_reason = "no airflow reaches it"
         return plan
-    if plan.limit_key not in limits:
+    if plan.limit_key == vav_checks.MP_KEY and plan.limit_key not in limits:
+        # The MP row always comes with VAV ticked; without it nothing is
+        # known about the MP design, so fail closed rather than size an MP
+        # main to low pressure limits.
         plan.skip_reason = "no limits for system '{}'".format(plan.limit_key)
         return plan
-
-    max_fpm, max_fric = limits[plan.limit_key]
+    if plan.limit_key in limits:
+        max_fpm, max_fric = limits[plan.limit_key]
+    else:
+        max_fpm, max_fric = vav_checks.FALLBACK_LIMITS
+        plan.notes.append("no limits for system '{}', sized to {:.0f} fpm and "
+                          "{:.2f} in. wc per 100 ft".format(
+                              plan.limit_key, float(max_fpm), float(max_fric)))
+        log.info("plan_duct: duct %s system %r not in limits, fallback %s",
+                 element_id, plan.limit_key, (max_fpm, max_fric))
+    plan.limits = (max_fpm, max_fric)
+    plan.min_size = min_size
     if shape == SHAPE_ROUND:
-        d = size_round(plan.cfm, max_fpm, max_fric, friction_fn)
+        d = size_round(plan.cfm, max_fpm, max_fric, friction_fn, min_size)
         if d is None:
             plan.skip_reason = "needs more than {} in round".format(
                 ROUND_SIZES[-1])
@@ -187,7 +231,8 @@ def plan_duct(element_id, shape, current, cfm, sys_class, limits,
                         abs(float(current) - d) > 0.01)
     else:
         drawn_h = current[1] if current else MIN_DUCT_DIM
-        wh = size_rect(plan.cfm, drawn_h, max_fpm, max_fric, friction_fn)
+        wh = size_rect(plan.cfm, drawn_h, max_fpm, max_fric, friction_fn,
+                       min_size)
         if wh is None:
             plan.skip_reason = "needs more than {} in".format(MAX_RECT_DIM)
             return plan
@@ -311,9 +356,11 @@ def size_label(shape, size):
 
 def basis_lines(limits):
     lines = [
-        "Size Duct basis: mains only (two or more terminals downstream). "
-        "Smallest even size, {} in minimum, meeting BOTH the max velocity "
-        "and the max friction.".format(MIN_DUCT_DIM),
+        "Size Duct basis: mains (two or more terminals downstream), branches "
+        "to diffusers other than the RJA auto-sizing ones (never smaller than "
+        "the diffuser's connection), and unit connections serving one "
+        "terminal. Smallest even size, {} in minimum, meeting BOTH the max "
+        "velocity and the max friction.".format(MIN_DUCT_DIM),
         "  Round: {} to {} in, 2 in steps. Rectangular: drawn height held, "
         "width solved, {:.0f}:1 maximum aspect; the height steps up 2 in only "
         "when no width fits.".format(ROUND_SIZES[0], ROUND_SIZES[-1],
@@ -324,8 +371,11 @@ def basis_lines(limits):
             STEP_CLEARANCE_FT),
         "  Friction: Darcy-Weisbach, Altshul-Tsal friction factor (same as "
         "Duct Performance).",
-        "  Not sized: branches, takeoff boots and diffusers (auto-sizing "
-        "diffusers), flex and oval duct, existing phase ductwork.",
+        "  Not sized: branches to RJA auto-sizing diffusers, takeoff boots "
+        "and diffusers, flex and oval duct, existing phase ductwork.",
+        "  A system with no limits of its own: {:.0f} fpm, {:.2f} in. wc per "
+        "100 ft.".format(float(vav_checks.FALLBACK_LIMITS[0]),
+                         vav_checks.FALLBACK_LIMITS[1]),
     ]
     if vav_checks.MP_KEY in limits:
         lines.append(

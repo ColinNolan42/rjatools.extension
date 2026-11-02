@@ -131,13 +131,49 @@ class TestPlan(unittest.TestCase):
         self.assertIsNone(p.new)
         self.assertIn("no Flow", p.skip_reason)
 
-    def test_no_flow_or_unknown_system(self):
+    def test_no_flow(self):
         p = ds.plan_duct(1, ds.SHAPE_ROUND, 10, 0, "Supply Air", LIMITS,
                          FRICTION)
         self.assertIn("airflow", p.skip_reason)
-        p = ds.plan_duct(1, ds.SHAPE_ROUND, 10, 500, "Hydronic", LIMITS,
+
+    def test_unlisted_system_falls_back_to_600_and_005(self):
+        # Like Duct Performance (vav_checks.FALLBACK_LIMITS), with a note
+        # (Colin, 2026-11-02).
+        p = ds.plan_duct(1, ds.SHAPE_ROUND, 10, 500, "Supply Air 2", LIMITS,
                          FRICTION)
-        self.assertIn("no limits", p.skip_reason)
+        self.assertEqual(p.limits, (600, 0.05))
+        self.assertEqual(p.new, ds.size_round(500, 600, 0.05, FRICTION))
+        self.assertTrue(any("no limits" in n for n in p.notes))
+        listed = ds.plan_duct(1, ds.SHAPE_ROUND, 10, 500, "Supply Air",
+                              LIMITS, FRICTION)
+        self.assertEqual(listed.notes, [])
+
+    def test_round_never_under_the_diffuser_neck(self):
+        # 100 cfm sizes to 8 in on velocity and friction; a 10 in neck
+        # floors it at 10 (Colin, 2026-11-02).
+        self.assertEqual(ds.size_round(100, 800, 0.08, FRICTION), 8)
+        p = ds.plan_duct(1, ds.SHAPE_ROUND, 6, 100, "Supply Air", LIMITS,
+                         FRICTION, min_size=10.0)
+        self.assertEqual(p.new, 10)
+        self.assertTrue(p.changed)
+        # A floor below the airflow size changes nothing.
+        big = ds.plan_duct(1, ds.SHAPE_ROUND, 6, 1500, "Supply Air", LIMITS,
+                           FRICTION, min_size=6.0)
+        self.assertEqual(big.new, ds.size_round(1500, 800, 0.08, FRICTION))
+
+    def test_rect_covers_the_grille_face_either_way(self):
+        # 150 cfm at a drawn 8 in height wants 8 wide on airflow alone; a
+        # 20x8 grille face floors the width at 20.
+        free = ds.plan_duct(1, ds.SHAPE_RECT, (8, 8), 150, "Supply Air",
+                            LIMITS, FRICTION)
+        self.assertLess(free.new[0], 20)
+        p = ds.plan_duct(1, ds.SHAPE_RECT, (8, 8), 150, "Supply Air", LIMITS,
+                         FRICTION, min_size=(20.0, 8.0))
+        self.assertEqual(p.new, (20, 8))
+        # Face given the other way round (8x20) is the same floor.
+        q = ds.plan_duct(1, ds.SHAPE_RECT, (8, 8), 150, "Supply Air", LIMITS,
+                         FRICTION, min_size=(8.0, 20.0))
+        self.assertEqual(q.new, (20, 8))
 
     def test_oval_not_sized(self):
         p = ds.plan_duct(1, None, None, 500, "Supply Air", LIMITS, FRICTION)
@@ -159,6 +195,15 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(p.new[1], 14)
         self.assertLessEqual(p.fpm, 800.0)
         self.assertLessEqual(p.friction, 0.08)
+
+
+class TestBasis(unittest.TestCase):
+
+    def test_basis_names_branches_and_the_fallback(self):
+        text = " ".join(ds.basis_lines(LIMITS))
+        self.assertNotIn("mains only", text)
+        self.assertIn("connection", text)
+        self.assertIn("600 fpm, 0.05", text)
 
 
 class TestStepDowns(unittest.TestCase):

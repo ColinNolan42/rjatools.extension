@@ -58,6 +58,7 @@ class _Terminal(object):
         self.geom, self.category, self.sys_class = geom, category, sys_class
 
 
+_REAL_CLASSIFY = HG.classify_diffuser_branch
 HG.terminal_connector_geometry = lambda t: t.geom
 HG.classify_diffuser_branch = lambda t: t.category
 HG.terminal_sys_class = lambda t: t.sys_class
@@ -109,6 +110,45 @@ class TestSidewall(unittest.TestCase):
         r = check(term, 100000.0, (24.0, 12.0))
         self.assertEqual(r.status, 'RED')
         self.assertEqual(r.reason, 'Max CFM reached, split diffuser')
+
+
+class TestClassifyRectNeck(unittest.TestCase):
+    """A rectangular neck pointing up or down is 'rect_ceiling', never a
+    sidewall (Colin, 2026-11-02). The real classify_diffuser_branch, with the
+    connector reads stubbed."""
+
+    def setUp(self):
+        self._slot = HG._is_slot_diffuser
+        self._horiz = HG._terminal_neck_is_horizontal
+        HG._is_slot_diffuser = lambda t: False
+        HG._terminal_neck_is_horizontal = lambda t: t.horizontal
+
+    def tearDown(self):
+        HG._is_slot_diffuser = self._slot
+        HG._terminal_neck_is_horizontal = self._horiz
+
+    def kind(self, geom, horizontal):
+        term = _Terminal(geom, None)
+        term.horizontal = horizontal
+        return _REAL_CLASSIFY(term)
+
+    def test_rect_neck_down_is_rect_ceiling(self):
+        self.assertEqual(self.kind(('rect', 12.0, 12.0), False), 'rect_ceiling')
+
+    def test_rect_neck_sideways_is_sidewall(self):
+        self.assertEqual(self.kind(('rect', 20.0, 8.0), True), 'sidewall')
+
+    def test_rect_neck_direction_unknown_stays_sidewall(self):
+        self.assertEqual(self.kind(('rect', 20.0, 8.0), None), 'sidewall')
+
+    def test_round_necks_unchanged(self):
+        self.assertEqual(self.kind(('round', 10.0), False), 'ceiling')
+        self.assertEqual(self.kind(('round', 10.0), True), 'round_sidewall')
+
+    def test_rect_ceiling_is_not_judged_on_a_table(self):
+        term = _Terminal(('rect', 12.0, 12.0), 'rect_ceiling')
+        r = check(term, 300.0, (12.0, 12.0))
+        self.assertEqual(r.status, 'GRAY')
 
 
 if __name__ == '__main__':

@@ -218,10 +218,6 @@ _SETTINGS_XAML = '''
                           ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
                            Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
-                <CheckBox x:Name="cb_single" Content="Check single terminal unit runs as mains"
-                          ToolTip="A unit connection serving only one terminal makes its whole run one branch, with no velocity or friction check. It is warned on either way. Ticked, that run is judged as a main."/>
-                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
-                           Text="Rare: usually a disconnected run in the model, or a point of use unit."/>
                 <CheckBox x:Name="cb_vav" Content="VAV System"
                           ToolTip="Supply mains between the unit and the VAV box inlets are checked as medium pressure (MP). Single duct and fan powered boxes alike."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -437,7 +433,7 @@ def _wpf_named(win, name):
 
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
-                     vav, vav_settings, fan_effect=None, single_main=False):
+                     vav, vav_settings, fan_effect=None):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
@@ -446,9 +442,6 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
 
     fan_effect: {'on', 'fan_type', 'blast_ratio'}; None (the legacy dialog,
     which has no fields for it) takes fan_system_effect.default_settings().
-
-    single_main: judge a unit connection that serves only one terminal as a
-    main (Colin, 2026-11-02, default off; the legacy dialog has no box).
     """
     limits = dict(limits)
     if vav:
@@ -467,7 +460,6 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'vav':           bool(vav),
         'vav_settings':  vav_settings,
         'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
-        'single_main':   bool(single_main),
     }
 
 
@@ -491,7 +483,6 @@ def _show_velocity_settings_xaml(use_theme):
     N = lambda name: _wpf_named(win, name)
     img_logo = N('img_logo')
     cb_full_diag = N('cb_full_diag')
-    cb_single = N('cb_single')
     cb_vav = N('cb_vav')
     exp_vav = N('exp_vav')
     grid_vav = N('grid_vav')
@@ -575,7 +566,6 @@ def _show_velocity_settings_xaml(use_theme):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
-    cb_single.IsChecked = False
     cb_vav.IsChecked = False
     cb_static.IsChecked = False
     cb_filter.IsChecked = True       # default on (Colin, 2026-11-02)
@@ -988,7 +978,7 @@ def _show_velocity_settings_xaml(use_theme):
         values = _settings_result(out, gpct, selected_cols, full_diag,
                                   ext_static, safety_pct, c_values, comp_values,
                                   calc_basis, filter_inwc, vav, vav_settings,
-                                  fan_effect, bool(cb_single.IsChecked))
+                                  fan_effect)
         return errors, values
 
     def on_ok(s, e):
@@ -2426,7 +2416,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         the slower stream, a credit. On return and exhaust a tap loss is
         floored at zero for external static, a conservative estimate (Colin,
         2026-10-23); the report names each one floored."""
-        if loss < 0.0 and not fitting_tables._is_supply(sys_class):
+        if loss < 0.0 and not vav_checks.is_supply_class(sys_class):
             return 0.0, ['%s %.3f in. wc from the 2001 table, floored at 0'
                          % (what, loss)]
         return loss, []
@@ -2482,7 +2472,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         tapprice_cache[tap_id] = res
                         return res
                 cb, label, notes = ashrae_fittings.tap_branch_c(
-                    fitting_tables._is_supply(dr.sys_class),
+                    vav_checks.is_supply_class(dr.sys_class),
                     'round' if hvac_graph.fitting_is_round(elem) else 'rect',
                     'round' if _is_round_duct(dr) else 'rect',
                     _is_45_tap(fam), ab / dr.area_ft2, min(qb / qc, 1.0),
@@ -2517,7 +2507,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             fam = hvac_graph.fitting_family_name(elem)
             qs = max(qc - qb, 0.0)
             cs, lbl, _n = ashrae_fittings.tap_main_c(
-                fitting_tables._is_supply(dr.sys_class),
+                vav_checks.is_supply_class(dr.sys_class),
                 'round' if hvac_graph.fitting_is_round(elem) else 'rect',
                 'round' if _is_round_duct(dr) else 'rect',
                 _is_45_tap(fam), 1.0, qs / qc,
@@ -2564,6 +2554,29 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if fb:
                 notes.append(fb)
         return loss, len(passed), parts, notes
+
+    def _remaining_cfm(duct_id):
+        """Flow left on an unbroken main past its last tap: the duct's unit
+        end cfm less every tap's branch cfm, the same flow _seg_friction ends
+        on. None when the duct has no taps or their order cannot be read."""
+        dr = dr_by_int_id[duct_id]
+        taps = _taps(duct_id)
+        if not taps:
+            return None
+        flows, ordered = _tap_flows(duct_id)
+        if not ordered:
+            return None
+        return max(dr.cfm - sum([(flows[t][1] or 0.0) for t in taps], 0.0), 0.0)
+
+    def _tap_order_note(duct_id):
+        """The NOTE for a main whose tap positions cannot be read, or None.
+        Without the order, _seg_friction keeps the whole duct at its unit end
+        cfm (Colin, 2026-11-02: say so in the run's notes)."""
+        dr = dr_by_int_id[duct_id]
+        if not _taps(duct_id) or not dr.area_ft2 or _tap_flows(duct_id)[1]:
+            return None
+        return ('NOTE: tap positions on duct %s unreadable, friction charged over '
+                'its whole length at its unit end cfm' % duct_id)
 
     def _seg_friction(duct_id, child_id):
         """(friction in. wc, feet charged) on an unbroken main with taps, or
@@ -2646,7 +2659,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             # alike, so the walk order IS the table order.
             e1, eo = sorted(ends, key=lambda e: abs(e[0] - up_area))
             c, label, notes = ashrae_fittings.transition_c(
-                fitting_tables._is_supply(sys_class), e1[1], eo[1], e1[0], eo[0], theta)
+                vav_checks.is_supply_class(sys_class), e1[1], eo[1], e1[0], eo[0], theta)
             if c is None:
                 return None
             vo = up_fpm * up_area / eo[0]
@@ -3476,7 +3489,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # charged twice; one on a main upstream of the branch is a
                 # fire/smoke damper and does not cancel it (Colin, 2026-11-02).
                 _assumed_damper = (
-                        fitting_tables._is_supply(term[1] or sys_class)
+                        vav_checks.is_supply_class(term[1] or sys_class)
                         and not br_damper)
                 if _assumed_damper:
                     keys_here = keys_here + ('damper',)
@@ -3562,6 +3575,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     # Friction along a main with taps: each piece at its own
                     # flow, only as far as this run goes (_seg_friction).
                     seg = _seg_friction(nid, child_id)
+                    _on = _tap_order_note(nid)
+                    if _on and _on not in extra_unpriced:
+                        extra_unpriced = extra_unpriced + (_on,)
                     if seg is not None:
                         _sf, _ft = seg
                         c_fric = fric - dr.friction_loss_inwc + _sf
@@ -3618,6 +3634,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 ('End of main tap adjustment', 'RJA worksheet', None, None)),)
                 c_fpm, c_area = up_fpm, up_area
                 c_class = sys_class
+                if dr is not None and dr.area_ft2 and child_id not in _taps(nid):
+                    # Past the last tap on an unbroken main only the flow the
+                    # taps left is still moving, so a fitting there is priced
+                    # at that velocity, not the unit end cfm (Colin,
+                    # 2026-11-02, _remaining_cfm).
+                    _rem = _remaining_cfm(nid)
+                    if _rem is not None:
+                        c_fpm = _rem / dr.area_ft2
                 if nid == root_id and dr is None:
                     # Leaving the unit: start at the unit connection's
                     # velocity, not 0, so a fitting right on the unit is
@@ -3870,6 +3894,7 @@ _ROLE_LABELS = {
     'sidewall': 'Branch (Sidewall)',
     'slot':     'Branch (Slot)',
     'round_sidewall': 'Branch (Round Sidewall)',
+    'rect_ceiling':   'Branch (Rect Ceiling)',
 }
 
 
@@ -3960,9 +3985,12 @@ def _label_duct_checked(dr, custom_limits, tol_pct, downstream_height_in, branch
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
         return label, cap, reason, None
 
-    if kind == 'round_sidewall':
+    if kind in ('round_sidewall', 'rect_ceiling'):
         # Round sidewall diffusers have no table yet; Colin plans to add round
-        # diffuser data later (2026-10-16). Fall back to the main check.
+        # diffuser data later (2026-10-16). A rectangular neck pointing up or
+        # down is a ceiling diffuser, never judged on the sidewall tables, and
+        # has no table of its own yet (Colin, 2026-11-02). Both fall back to
+        # the main check.
         # Slots are judged off the auto-sized family instead, in
         # hvac_graph.branch_diffuser_check (Colin, 2026-10-22).
         label, cap, reason = _duct_label(dr, custom_limits, tol_pct, downstream_height_in)
@@ -4075,7 +4103,7 @@ def _suggest_shrink_info(dr, custom_limits, downstream_height_in=None):
                     continue
                 area_ft2 = math.pi * (std_d / 24.0) ** 2
                 vel      = dr.cfm / area_ft2
-                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d), dr.roughness_ft)
                 if vel <= max_fpm and fric <= max_friction:
                     return '{}"'.format(std_d), area_ft2
             return '-', None
@@ -4098,7 +4126,7 @@ def _suggest_shrink_info(dr, custom_limits, downstream_height_in=None):
                     area_ft2 = new_w * new_h / 144.0
                     vel      = dr.cfm / area_ft2
                     d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
-                    fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                    fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h, dr.roughness_ft)
                     if vel <= max_fpm and fric <= max_friction:
                         if best is None or area_ft2 < best[1]:
                             best = ('{}"x{}"'.format(new_w, new_h), area_ft2)
@@ -4154,7 +4182,7 @@ def _suggest_size_info(dr, custom_limits, downstream_height_in=None):
                     continue
                 area_ft2 = math.pi * (std_d / 24.0) ** 2
                 vel      = dr.cfm / area_ft2
-                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d))
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, float(std_d), dr.roughness_ft)
                 if vel <= max_fpm and fric <= max_friction:
                     return '{}"'.format(std_d), area_ft2
             return '>{}"'.format(_ROUND_SIZES[-1]), None
@@ -4176,7 +4204,7 @@ def _suggest_size_info(dr, custom_limits, downstream_height_in=None):
                 area_ft2 = w_in * new_h / 144.0
                 vel      = dr.cfm / area_ft2
                 d_h      = 4.0 * w_in * new_h / (2.0 * (w_in + new_h))
-                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h, dr.roughness_ft)
                 if vel <= max_fpm and fric <= max_friction:
                     return '{}"x{}"'.format(w_in, new_h), area_ft2
 
@@ -4190,7 +4218,7 @@ def _suggest_size_info(dr, custom_limits, downstream_height_in=None):
                     area_ft2 = new_w * new_h / 144.0
                     vel      = dr.cfm / area_ft2
                     d_h      = 4.0 * new_w * new_h / (2.0 * (new_w + new_h))
-                    fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h)
+                    fric     = hvac_graph.duct_friction_loss_per_100ft(vel, d_h, dr.roughness_ft)
                     if vel <= max_fpm and fric <= max_friction:
                         return '{}"x{}"'.format(new_w, new_h), area_ft2
     except Exception:
@@ -4676,7 +4704,6 @@ def main():
     tol_pct       = dialog_result['tol_pct']
     selected_cols = dialog_result['selected_cols']
     full_diag     = dialog_result['full_diag']
-    single_main   = dialog_result.get('single_main', False)
     ext_static    = dialog_result['ext_static']
     safety_pct    = dialog_result['safety_pct']
     c_values      = dialog_result['c_values']
@@ -4878,10 +4905,11 @@ def main():
     # reach, so taking one root's answer and discarding the other's could turn
     # a real main into an apparent branch.
     #
-    # A unit connection serving only one terminal makes its whole run one
+    # A unit connection serving only one terminal would make its whole run one
     # branch: nearly always a disconnected run or a rare point of use unit.
-    # Warned on every time; judged as a main only with the dialog option
-    # (Colin, 2026-11-02, hvac_graph.single_terminal_runs).
+    # Such a run is always judged as a MAIN (velocity and friction), with one
+    # short note per run (Colin, 2026-11-02: always on and quiet,
+    # hvac_graph.single_terminal_runs).
     term_ids = set(all_terminals.keys())
     equip_ids = set(nid for nid, e in all_nodes.items()
                     if e is not None and hvac_graph.is_equipment(e))
@@ -4900,12 +4928,10 @@ def main():
             single_runs[(rid, first)] = run
     single_main_ids = set()
     for (rid, first), run in sorted(single_runs.items()):
-        output.print_md(':warning: ' + hvac_graph.single_terminal_text(
-            rid, first, checked_as_main=single_main))
-        if single_main:
-            single_main_ids |= run
-    hvac_graph.log.info('Branch rule: %d single terminal unit run(s), option %s',
-                        len(single_runs), single_main)
+        output.print_md(hvac_graph.single_terminal_text(rid, first))
+        single_main_ids |= run
+    hvac_graph.log.info('Branch rule: %d single terminal unit run(s), judged as mains',
+                        len(single_runs))
 
     branch_ctx    = {}   # ElementId -> (category, terminal_elem, terminal_cfm) or None
     duct_roles    = {}   # ElementId -> Duct Role display string
@@ -4927,7 +4953,7 @@ def main():
             term_elem = all_nodes.get(list(tset)[0])
         if term_elem is None:
             # 0 terminals downstream (a dead-end run), 2+ (a real main), a
-            # single terminal unit run with the option ticked, or a terminal
+            # single terminal unit run, or a terminal
             # that somehow isn't in the merged node map: all keep the
             # velocity/friction treatment.
             branch_ctx[eid] = None

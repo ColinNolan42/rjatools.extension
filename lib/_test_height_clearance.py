@@ -10,6 +10,7 @@ Run:  python _test_height_clearance.py
 """
 
 import io
+import math
 import os
 import unittest
 
@@ -25,7 +26,17 @@ def _load():
     return ns
 
 
+def _load_nominal():
+    src = io.open(os.path.join(HERE, "hvac_graph.py"), encoding="utf-8").read()
+    start = src.index("def _nominal_even_in(")
+    end = src.index("CLEARANCE_MARGIN_IN = ")
+    ns = {"math": math}
+    exec(src[start:end], ns)
+    return ns["_nominal_even_in"]
+
+
 NS = _load()
+NOMINAL = _load_nominal()
 ROUND = NS["_clearance_height_in"]
 FAILS = NS["fails_height_clearance"]
 
@@ -63,6 +74,21 @@ class TestHeightClearance(unittest.TestCase):
 
     def test_margin_is_two_inches(self):
         self.assertEqual(NS["CLEARANCE_MARGIN_IN"], 2.0)
+
+
+class TestNominalEven(unittest.TestCase):
+    """_nominal_even_in rounds half way UP on every interpreter (Colin,
+    2026-11-02): CPython's round() sends 9 to 8, IronPython's to 10."""
+
+    def test_half_way_rounds_up(self):
+        self.assertEqual(NOMINAL(9.0), 10.0)
+        self.assertEqual(NOMINAL(13.0), 14.0)
+
+    def test_nearest_and_noise(self):
+        self.assertEqual(NOMINAL(10.000000000000002), 10.0)
+        self.assertEqual(NOMINAL(9.9), 10.0)
+        self.assertEqual(NOMINAL(10.9), 10.0)
+        self.assertEqual(NOMINAL(11.1), 12.0)
 
 
 if __name__ == "__main__":

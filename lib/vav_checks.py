@@ -138,6 +138,11 @@ def basis_rows(settings=None):
 
 # -- Shared limits lookup ------------------------------------------------------
 
+# (max fpm, max friction) for a system with no limits of its own, the firm
+# return/exhaust row. Both tools fall back to it (Colin, 2026-11-02).
+FALLBACK_LIMITS = (600, 0.05)
+
+
 def limits_for(sys_class, limits, defaults, is_mp=False):
     """(max_fpm, max_friction) for one duct.
 
@@ -151,13 +156,18 @@ def limits_for(sys_class, limits, defaults, is_mp=False):
     limits = limits or {}
     if is_mp:
         return tuple(limits.get(MP_KEY, (MP_DEFAULT_FPM, MP_DEFAULT_FRICTION)))
-    fallback = (defaults or {}).get(sys_class, (600, 0.05))
+    fallback = (defaults or {}).get(sys_class, FALLBACK_LIMITS)
     return tuple(limits.get(sys_class, fallback))
 
 
 def is_supply_class(sys_class):
-    """Supply side? Matches 'Supply Air' and any System Type name with Supply
-    in it, the same test Duct Performance uses to tell a picked duct's side."""
+    """Supply side? Matches 'Supply Air' and any name with Supply in it.
+
+    The ONE supply test for every duct module (Colin, 2026-11-02): Duct
+    Performance, Size Duct, hvac_graph and fitting_tables all import it, so
+    a picked duct's side, the VAV walk and the fitting tables can never
+    disagree. Anything else (return, exhaust, outside air, unknown) is the
+    return/exhaust side."""
     return bool(sys_class) and 'supply' in sys_class.lower()
 
 

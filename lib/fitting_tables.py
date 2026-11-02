@@ -26,6 +26,8 @@ IronPython 2.7 / pyRevit -- no f-strings, no walrus, no nonlocal.
 
 import logging
 
+import vav_checks
+
 log = logging.getLogger(__name__)
 
 
@@ -225,9 +227,11 @@ def _is_supply(sys_class):
 
     The worksheet publishes separate supply and exhaust take-off coefficients
     and they are far apart (0.98 vs 0.76 on the branch, 3.63 vs 0.54 at the end
-    of a main), so getting this wrong matters.
+    of a main), so getting this wrong matters. The test itself is
+    vav_checks.is_supply_class, the one supply test every duct module shares
+    (Colin, 2026-11-02; this used to be an exact 'Supply Air' match).
     """
-    return sys_class == 'Supply Air'
+    return vav_checks.is_supply_class(sys_class)
 
 
 def flows_toward_unit(sys_class):

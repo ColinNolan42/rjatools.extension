@@ -197,8 +197,12 @@ def _nominal_even_in(inches):
     a false diffuser/duct clearance flag on a step-down that's actually
     exactly at the safe margin. Snapping to the nominal grid kills that
     class of noise categorically, not just the one boundary it was found on.
+
+    Half way values round UP (9 to 10, 13 to 14) on both interpreters:
+    round() gives 10 in IronPython 2.7 but 8 in CPython 3 (banker's
+    rounding), so it is not used here (Colin, 2026-11-02).
     """
-    return round(inches / 2.0) * 2.0
+    return int(math.floor(inches / 2.0 + 0.5)) * 2.0
 
 
 # Diffuser/duct height clearance (RJA rule, Colin 2026-10-23): a duct that
@@ -401,7 +405,7 @@ _SHAPE_TO_CATEGORY = {
 
 def classify_diffuser_branch(elem):
     """Which diffuser sizing table applies to this terminal: 'ceiling',
-    'sidewall', 'slot', 'round_sidewall', or None.
+    'sidewall', 'slot', 'round_sidewall', 'rect_ceiling', or None.
 
     - A slot is recognised by a slot-only parameter first (its neck is now
       round), then by an oval neck.
@@ -411,6 +415,12 @@ def classify_diffuser_branch(elem):
       ('round_sidewall'). The standard has no round sidewall table yet, so
       callers send it to the main velocity/friction check (Colin, 2026-10-16;
       round diffuser data is to be added later).
+    - A rectangular neck pointing up or down (BasisZ, the same test as the
+      round neck) is a rectangular ceiling diffuser ('rect_ceiling'), not a
+      sidewall grille. Colin has not ruled on a rectangular ceiling table,
+      so callers send it to the main velocity/friction check, never the
+      sidewall tables (Colin, 2026-11-02). An unreadable direction keeps
+      'sidewall'.
 
     None means the terminal has no readable connection geometry, so no table
     can be chosen. Callers must treat that as "cannot check", not as a pass.
@@ -424,6 +434,9 @@ def classify_diffuser_branch(elem):
     if cat == 'ceiling' and _terminal_neck_is_horizontal(elem):
         log.info('classify_diffuser_branch: id=%s round neck, horizontal -> round_sidewall', eid)
         return 'round_sidewall'
+    if cat == 'sidewall' and _terminal_neck_is_horizontal(elem) is False:
+        log.info('classify_diffuser_branch: id=%s rect neck, vertical -> rect_ceiling', eid)
+        return 'rect_ceiling'
     if cat is None:
         log.info('classify_diffuser_branch: id=%s NOT CLASSIFIED (no connector geometry)', eid)
     return cat
@@ -518,13 +531,71 @@ def duct_installed_size_in(duct):
     return None
 
 
-def duct_sys_class(duct):
-    """Returns system classification string e.g. 'Supply Air'."""
+def _read_sys_classification(elem):
+    """The element's System Classification parameter, without 'Undefined',
+    or None when the parameter is missing or empty.
+
+    Revit lists one entry per connector, so a terminal with a spare,
+    unconnected connector reads e.g. 'Supply Air,Undefined', which matches no
+    diffuser table and turned whole slot branches gray (OLMC, 2026-10-16).
+    """
+    p = elem.LookupParameter('System Classification')
+    if p is None:
+        return None
+    v = p.AsString()
+    if not v:
+        return None
+    parts = []
+    for s in v.split(','):
+        s = s.strip()
+        if s and s.lower() != 'undefined' and s not in parts:
+            parts.append(s)
+    return ','.join(parts) if parts else None
+
+
+def duct_system_type_name(duct):
+    """The duct's System TYPE name (e.g. 'Supply Air 2'), or None. Display
+    and fallback only: limits and tables key on duct_sys_class()."""
     p = duct.get_Parameter(BuiltInParameter.RBS_DUCT_SYSTEM_TYPE_PARAM)
     if p is not None:
         v = p.AsValueString()
         if v:
             return v
+    return None
+
+
+def duct_sys_class(duct):
+    """The duct's system class for limits, tables and the supply test, e.g.
+    'Supply Air'.
+
+    Until 2026-11-02 this was the System TYPE name, so a type named
+    'Supply Air 2' matched no firm row and fell back to the return limits
+    and tables. Now (Colin, 2026-11-02):
+      1. a System Type name that IS a firm row (FIRM_DEFAULTS) is used as
+         is. Revit's classification has no Outside Air or Transfer Air, so
+         those firm rows exist only as type names;
+      2. otherwise the System Classification parameter (the one
+         terminal_sys_class reads), e.g. 'Supply Air' for 'Supply Air 2';
+      3. otherwise the type name as before, logged as a fallback.
+    """
+    eid = eid_int(duct.Id)
+    type_name = duct_system_type_name(duct)
+    if type_name in FIRM_DEFAULTS:
+        return type_name
+    try:
+        cls = _read_sys_classification(duct)
+    except Exception as ex:
+        log.warning('duct_sys_class: id=%s System Classification unreadable: %s', eid, ex)
+        cls = None
+    if cls:
+        log.info('duct_sys_class: id=%s System Type %r is not a firm row, '
+                 'classification %r used', eid, type_name, cls)
+        return cls
+    if type_name:
+        log.warning('duct_sys_class: id=%s System Classification NOT FOUND, '
+                    'System Type name %r used', eid, type_name)
+        return type_name
+    log.info('duct_sys_class: id=%s NOT FOUND (no classification, no type)', eid)
     return 'Unknown'
 
 def terminal_family_name(elem):
@@ -534,24 +605,9 @@ def terminal_family_name(elem):
         return 'Unknown'
 
 def terminal_sys_class(elem):
-    """The terminal's System Classification, without 'Undefined'.
-
-    Revit lists one entry per connector, so a terminal with a spare,
-    unconnected connector reads e.g. 'Supply Air,Undefined', which matches no
-    diffuser table and turned whole slot branches gray (OLMC, 2026-10-16).
-    """
-    p = elem.LookupParameter('System Classification')
-    if p is not None:
-        v = p.AsString()
-        if v:
-            parts = []
-            for s in v.split(','):
-                s = s.strip()
-                if s and s.lower() != 'undefined' and s not in parts:
-                    parts.append(s)
-            if parts:
-                return ','.join(parts)
-    return 'Unknown'
+    """The terminal's System Classification, without 'Undefined'
+    (_read_sys_classification), or 'Unknown'."""
+    return _read_sys_classification(elem) or 'Unknown'
 
 def elem_sys_class(elem):
     """System classification for a duct or terminal, or None if undetermined.
@@ -1694,13 +1750,13 @@ def single_terminal_runs(root_id, children, downstream, equipment_ids=()):
     """{first node id: set of node ids on that run} for each connection of
     the root UNIT that serves exactly one terminal.
 
-    A duct with one terminal downstream is a BRANCH, so such a run, trunk
-    included, is one branch and never gets the velocity and friction check.
-    That is nearly always a model set up problem (a run disconnected from
-    the rest of the system) or a rare point of use unit, so the callers
-    WARN on every run found here, and Duct Performance judges these runs as
-    mains when its "Check single terminal unit runs as mains" option is
-    ticked (Colin, 2026-11-02: an option, not a hard rule, for a rare case).
+    A duct with one terminal downstream is a BRANCH, so without this check
+    such a run, trunk included, would be one branch and never get the
+    velocity and friction check. That is nearly always a model set up problem
+    (a run disconnected from the rest of the system) or a rare point of use
+    unit, so the callers ALWAYS judge (Duct Performance) or size (Size Duct)
+    these runs as mains and print one short note per run (Colin, 2026-11-02:
+    always on and quiet, no dialog option).
 
     Only the root unit's own connections count. A VAV box serving one
     diffuser is normal and keeps the branch rule; a root that is a picked
@@ -1727,16 +1783,12 @@ def single_terminal_runs(root_id, children, downstream, equipment_ids=()):
     return out
 
 
-def single_terminal_text(unit_id, first_id, checked_as_main=False):
-    """The WARNING line for one single terminal unit run, shared by Duct
+def single_terminal_text(unit_id, first_id):
+    """The NOTE line for one single terminal unit run, shared by Duct
     Performance and Size Duct so the wording matches."""
-    how = ('judged as a main on velocity and friction (option ticked)'
-           if checked_as_main else
-           'judged as one branch, so its trunk gets no velocity or friction check')
-    return ('WARNING: unit %s connection at element %s serves only one terminal. '
-            'Check the model for a disconnected run; if the unit really serves one '
-            'terminal (a rare point of use unit), the run is %s.'
-            % (unit_id, first_id, how))
+    return ('NOTE: unit %s connection at element %s serves only one terminal; '
+            'its run is judged as a main (check the model if this is not a '
+            'point of use unit).' % (unit_id, first_id))
 
 
 # ── solid fill pattern ───────────────────────────────────────────────────────
@@ -2169,22 +2221,35 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
         if not is_terminal(elem):
             continue
 
-        # Try named parameters first
+        # Try named parameters first. 'found' remembers that a flow
+        # parameter exists even when it reads 0, so a terminal with Flow = 0
+        # is reported as zero flow, not as missing the parameter (Colin,
+        # 2026-11-02).
         fp = None
+        found = False
         for pname in _FLOW_PARAM_NAMES:
             candidate = elem.LookupParameter(pname)
-            if candidate is not None and candidate.AsDouble() > 0:
-                fp = candidate
-                break
+            if candidate is not None:
+                found = True
+                if candidate.AsDouble() > 0:
+                    fp = candidate
+                    break
         # Fall back to built-in RBS_DUCT_FLOW_PARAM
-        if fp is None or fp.AsDouble() <= 0:
-            builtin = elem.get_Parameter(BuiltInParameter.RBS_DUCT_FLOW_PARAM)
-            if builtin is not None and builtin.AsDouble() > 0:
-                fp = builtin
-
         if fp is None:
+            builtin = elem.get_Parameter(BuiltInParameter.RBS_DUCT_FLOW_PARAM)
+            if builtin is not None:
+                found = True
+                if builtin.AsDouble() > 0:
+                    fp = builtin
+
+        if fp is None and found:
+            net.terminal_cfms[nid] = 0.0
+            net.zero_terminals.append(nid)
+            log.info('build_network: terminal id=%s flow parameter reads 0', nid)
+        elif fp is None:
             net.terminal_cfms[nid] = 0.0
             net.missing_flow.append(nid)
+            log.info('build_network: terminal id=%s flow parameter NOT FOUND', nid)
         else:
             cfm = to_cfm(fp.AsDouble(), cfm_is_direct)
             net.terminal_cfms[nid] = cfm

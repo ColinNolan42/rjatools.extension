@@ -96,9 +96,10 @@ def run(doc, uidoc, output, forms):
             if warning.startswith("Equipment id"):
                 output.print_md(":warning: " + warning)
 
-    for line in _single_terminal_warnings(net):
-        output.print_md(":warning: " + line)
-    plans = _plan(doc, net, settings["limits"], mp_ids, runout_ids)
+    single_lines, single_ids = _single_terminal_runs(net)
+    for line in single_lines:
+        output.print_md(line)
+    plans = _plan(doc, net, settings["limits"], mp_ids, runout_ids, single_ids)
     _print_plan(output, plans)
     runouts = sorted(p.element_id for p in plans
                      if p.skip_reason == duct_sizing.SKIP_INLET_RUNOUT)
@@ -212,11 +213,13 @@ def _pick(uidoc, doc, output, forms):
 # Plan
 # ---------------------------------------------------------------------------
 
-def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
+def _plan(doc, net, limits, mp_ids=None, runout_ids=None, single_ids=None):
     """mp_ids: ducts between the unit and the VAV box inlets (VAV ticked).
     They are always mains, sized to the MP limits at the boxes' diffuser
     total. runout_ids: the MP ducts with exactly one box downstream (inlet
-    runouts), sized to the box by the engineer and never resized."""
+    runouts), sized to the box by the engineer and never resized.
+    single_ids: nodes on a unit connection that serves one terminal, always
+    sized as mains (Colin, 2026-11-02)."""
     root_id = eid_int(net.root.Id)
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
@@ -224,6 +227,8 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
     parents = _parents(net)
     mp_ids = mp_ids or set()
     runout_ids = runout_ids or set()
+    single_ids = single_ids or set()
+    floor_cache = {}
 
     plans = []
     for eid, dr in net.duct_results.items():
@@ -234,10 +239,18 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
         # A branch is left alone only when it feeds an RJA auto-sizing
         # diffuser; a branch to any other diffuser is sized like a main
         # (Colin, 2026-10-22).
-        is_branch = len(below) == 1 and not is_mp
-        if is_branch:
+        # A unit connection serving one terminal is always a main (Colin,
+        # 2026-11-02, hvac_graph.single_terminal_runs).
+        term = None
+        if len(below) == 1 and not is_mp:
             term = net.nodes.get(next(iter(below)))
-            is_branch = term is not None and hvac_graph.is_auto_sizing_diffuser(term)
+        is_branch = (term is not None and nid not in single_ids and
+                     hvac_graph.is_auto_sizing_diffuser(term))
+        # Any one terminal duct that IS sized never goes under that
+        # diffuser's own connection (Colin, 2026-11-02).
+        min_size, floor_note = None, None
+        if term is not None and not is_branch:
+            min_size, floor_note = _connection_floor(term, shape, floor_cache)
         plan = duct_sizing.plan_duct(
             nid, shape, current, dr.cfm, dr.sys_class, limits,
             hvac_graph.duct_friction_loss_per_100ft,
@@ -246,18 +259,47 @@ def _plan(doc, net, limits, mp_ids=None, runout_ids=None):
             is_existing=not is_new_construction(doc, dr.elem),
             flow_missing=bool(below & no_flow),
             limit_key=vav_checks.MP_KEY if is_mp else None,
-            is_inlet_runout=nid in runout_ids)
+            is_inlet_runout=nid in runout_ids,
+            min_size=min_size)
         plan.length_ft = dr.length_ft
         plan.sections = None
-        plan.step_notes = []
+        plan.step_notes = list(plan.notes)
+        if floor_note and plan.new is not None:
+            plan.step_notes.append(floor_note)
         if plan.new is not None:
-            _plan_steps(net, dr.elem, plan, limits, parents)
+            _plan_steps(net, dr.elem, plan, parents)
         plans.append(plan)
     plans.sort(key=lambda p: (p.sys_class, -p.cfm))
     return plans
 
 
-def _plan_steps(net, duct, plan, limits, parents):
+def _connection_floor(term, duct_shape, cache):
+    """(min size in the duct's shape, note) for a sized duct feeding one
+    terminal: the terminal's own connection read off its connector
+    (hvac_graph.terminal_connector_geometry). A round neck floors a round
+    duct, a rect face a rect duct (either way round); a shape mismatch, an
+    oval (slot) neck or an unreadable connector gives no floor and a note,
+    the same same shape only rule Duct Performance's branch check uses."""
+    tid = eid_int(term.Id)
+    if tid not in cache:
+        cache[tid] = hvac_graph.terminal_connector_geometry(term)
+    geom = cache[tid]
+    kind = geom[0]
+    if kind == 'round' and duct_shape == duct_sizing.SHAPE_ROUND and geom[1]:
+        return float(geom[1]), None
+    if kind == 'rect' and duct_shape == duct_sizing.SHAPE_RECT and \
+            geom[1] and geom[2]:
+        return (float(geom[1]), float(geom[2])), None
+    if kind is None:
+        why = "terminal {} connection unreadable".format(tid)
+    else:
+        why = "terminal {} connection is {}, duct is {}".format(
+            tid, kind, duct_shape or "oval")
+    hvac_graph.log.info("Size Duct: no connection floor, %s", why)
+    return None, "not checked against the diffuser connection ({})".format(why)
+
+
+def _plan_steps(net, duct, plan, parents):
     """Step-downs along one main, after taps where the airflow allows."""
     ends = _flow_ends(duct, parents.get(eid_int(duct.Id)))
     if ends is None:
@@ -267,7 +309,7 @@ def _plan_steps(net, duct, plan, limits, parents):
     taps = _taps_on(net, duct, up_pt, direction)
     if not taps:
         return
-    max_fpm, max_fric = limits[plan.limit_key]
+    max_fpm, max_fric = plan.limits
     sections, notes = duct_sizing.plan_sections(
         plan.shape, plan.current, plan.cfm, plan.length_ft, taps, max_fpm,
         max_fric, hvac_graph.duct_friction_loss_per_100ft)
@@ -336,11 +378,11 @@ def _taps_on(net, duct, up_pt, direction):
 _conn_size_in = hvac_graph.connector_size_in
 
 
-def _single_terminal_warnings(net):
-    """One line per root unit connection that serves a single terminal
-    (hvac_graph.single_terminal_runs, Colin 2026-11-02). Its whole run is a
-    branch, so a branch to an RJA auto-sizing diffuser is left as drawn: the
-    engineer checks it, or fixes the model if the run is disconnected."""
+def _single_terminal_runs(net):
+    """(note lines, node ids) for the root unit connections that serve a
+    single terminal (hvac_graph.single_terminal_runs). Those runs are always
+    sized as mains, never left as an auto-sizing branch, with one short note
+    each (Colin, 2026-11-02, the same as Duct Performance)."""
     root_id = eid_int(net.root.Id)
     downstream = hvac_graph.compute_downstream_terminal_ids(
         root_id, net.nodes, net.children, set(net.terminal_cfms.keys()))
@@ -348,11 +390,13 @@ def _single_terminal_warnings(net):
                     if e is not None and hvac_graph.is_equipment(e))
     runs = hvac_graph.single_terminal_runs(root_id, net.children, downstream, equip_ids)
     lines = []
+    ids = set()
     for first in sorted(runs):
         lines.append(hvac_graph.single_terminal_text(root_id, first))
-    hvac_graph.log.info('Size Duct: %d single terminal unit run(s) on root %s',
-                        len(lines), root_id)
-    return lines
+        ids |= runs[first]
+    hvac_graph.log.info('Size Duct: %d single terminal unit run(s) on root %s, '
+                        'sized as mains', len(lines), root_id)
+    return lines, ids
 
 
 def _parents(net):
@@ -830,7 +874,7 @@ def _print_plan(output, plans):
     notes = ["- duct {}: {}".format(p.element_id, n) for p in sized
              for n in getattr(p, "step_notes", [])]
     if notes:
-        output.print_md("Step-down notes:\n" + "\n".join(notes))
+        output.print_md("Notes:\n" + "\n".join(notes))
     if rows:
         output.print_table(table_data=rows, title="Mains",
                            columns=["Duct", "System", "CFM", "Drawn", "Size",
