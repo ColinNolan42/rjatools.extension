@@ -296,7 +296,10 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertIn('Supply Air total', vals)
         self.assertNotIn('worst run ends at ' + LONG_TERMINAL, vals)
         self.assertIn('EXTERNAL STATIC PRESSURE - Duct 3 + Duct 4', vals)
-        self.assertIn('METHOD: Darcy-Weisbach', vals)
+        # No METHOD / NOT INCLUDED on the sheet (Colin, 2026-11-02): the
+        # basis is read in the dialog.
+        self.assertNotIn('METHOD: Darcy-Weisbach', vals)
+        self.assertNotIn('NOT INCLUDED: coil and cabinet', vals)
         self.assertNotIn('EXTERNAL STATIC TAKE-OFF', ' '.join(vals))
         total = [t for t in self.rec.texts if t[2] == 'TOTAL EXTERNAL STATIC PRESSURE'][0]
         self.assertEqual(total[3], 'bold')
