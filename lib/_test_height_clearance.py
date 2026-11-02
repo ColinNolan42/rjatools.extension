@@ -21,7 +21,7 @@ def _load():
     src = io.open(os.path.join(HERE, "hvac_graph.py"), encoding="utf-8").read()
     start = src.index("CLEARANCE_MARGIN_IN = ")
     end = src.index("def effective_height_in(")
-    ns = {}
+    ns = {"math": math}
     exec(src[start:end], ns)
     return ns
 
@@ -89,6 +89,38 @@ class TestNominalEven(unittest.TestCase):
         self.assertEqual(NOMINAL(9.9), 10.0)
         self.assertEqual(NOMINAL(10.9), 10.0)
         self.assertEqual(NOMINAL(11.1), 12.0)
+
+
+class TestClearanceTexts(unittest.TestCase):
+    """The clearance Reason names its cause (Colin, 2026-11-02)."""
+
+    TEXTS = staticmethod(NS["clearance_texts"])
+
+    def test_main_step(self):
+        # TB-M01 seed S01-5: SA-A2 12x12 into SA-A3 8x11.
+        reason, note = self.TEXTS('step', 'Main', 12.0, 11.0,
+                                  '3650050 (12"x12")', '3650051 (8"x11")')
+        self.assertEqual(reason, 'Main step 12" to 11", 2" min')
+        self.assertIn('Make duct 3650051 10" tall or less, or keep it 12" tall', note)
+        self.assertIn('3650050 (12"x12")', note)
+
+    def test_branch_too_tall_for_main(self):
+        reason, note = self.TEXTS('branch', 'Main', 12.0, 11.0,
+                                  '100 (24"x12")', '200 (12"x11")')
+        self.assertEqual(reason, 'Branch 11" too tall for 12" main')
+        self.assertIn('Raise the main to 14" tall', note)
+        self.assertIn('make the branch 10" tall or less', note)
+
+    def test_neck(self):
+        reason, note = self.TEXTS('neck', 'Branch', 9.0, 8.0,
+                                  '300 (9")', '400 (8" neck)')
+        self.assertEqual(reason, 'Neck 8" too tall for 9" branch')
+        self.assertIn('Raise the duct to 10" tall', note)
+        self.assertIn('reduce the neck to 7" or less', note)
+
+    def test_branch_step_and_fraction(self):
+        reason, _ = self.TEXTS('step', 'Branch', 10.5, 10.0, 'a', 'b')
+        self.assertEqual(reason, 'Branch step 10.5" to 10", 2" min')
 
 
 if __name__ == "__main__":

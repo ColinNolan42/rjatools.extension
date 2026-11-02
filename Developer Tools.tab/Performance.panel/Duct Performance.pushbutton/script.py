@@ -3807,6 +3807,30 @@ def _fails_height_clearance(dr, downstream_height_in):
         _CLEARANCE_MARGIN_IN)
 
 
+def _clearance_reason(dr, down_h, down_elem, is_branch, branch_duct_ids, notes):
+    """Specific Reason text for a clearance failure, and its NOTE appended to
+    notes. What sits downstream decides the wording: the next duct of the same
+    run, a branch duct leaving a main, or a diffuser neck."""
+    duct_h = hvac_graph.effective_height_in(dr.elem)
+    if duct_h is None or down_h is None or down_elem is None:
+        return 'Diffuser/Duct Clearance'
+    role = 'Branch' if is_branch else 'Main'
+    down_id = eid_int(down_elem.Id)
+    if hvac_graph.is_terminal(down_elem):
+        kind = 'neck'
+        down_label = '{} ({}" neck)'.format(down_id, hvac_graph._fmt_in(down_h))
+    else:
+        kind = ('branch' if (not is_branch and down_id in branch_duct_ids)
+                else 'step')
+        down_label = '{} ({})'.format(down_id, _duct_size_label(down_elem))
+    up_label = '{} ({})'.format(dr.element_id, _duct_size_label(dr.elem))
+    reason, note = hvac_graph.clearance_texts(kind, role, duct_h, down_h,
+                                              up_label, down_label,
+                                              _CLEARANCE_MARGIN_IN)
+    notes.append(note)
+    return reason
+
+
 def _limits_of(dr, custom_limits):
     """(max_fpm, max_friction) for one duct: the one lookup every check uses
     (vav_checks.limits_for), MP limits for a VAV medium pressure duct."""
@@ -5433,9 +5457,15 @@ def main():
         # eid -> effective height (in) of this duct's real downstream neighbor,
         # precomputed once here so _duct_label/_suggest_size don't need graph access
         downstream_heights = {}
+        # One NOTE per clearance failure, naming both elements (Colin,
+        # 2026-11-02: a main stepping down too little and a branch too tall for
+        # its main shall read differently).
+        clearance_notes = []
+        branch_duct_ids = set(eid_int(k) for k, v in branch_ctx.items() if v is not None)
 
         for eid, dr in all_duct_results.items():
-            downstream_h = hvac_graph.max_downstream_height_in(eid_int(eid), all_nodes, all_children)
+            downstream_h, downstream_elem = hvac_graph.downstream_height_elem(
+                eid_int(eid), all_nodes, all_children)
             downstream_heights[eid] = downstream_h
             if dr.element_id in inlet_runout_ids:
                 # A VAV inlet runout is sized to its box by the engineer: not
@@ -5454,6 +5484,10 @@ def main():
             branch_results[eid] = branch_res
             if reason == 'Diffuser/Duct Clearance':
                 clearance_count += 1
+                reason = _clearance_reason(dr, downstream_h, downstream_elem,
+                                           eid_int(eid) in branch_duct_ids,
+                                           branch_duct_ids, clearance_notes)
+                duct_labels[eid] = (label, green_cap, reason)
             counts[label] = counts.get(label, 0) + 1
             elem_labels[eid] = label
 
@@ -5848,6 +5882,7 @@ def main():
         'clearance': (clearance_count > 0,
                       'Diffuser/duct height clearance issues (flagged Red): {}'.format(
                           clearance_count)),
+        'clearance_notes': sorted(clearance_notes),
     }
 
     def _legend_text():
@@ -5865,6 +5900,8 @@ def main():
             ['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
             legend_rows))
         output.print_md('**{}**'.format(legend_rec['clearance'][1]))
+        for _n in legend_rec['clearance_notes']:
+            output.print_md(_n)
 
     _emit_html(duct_perf_console.limits_and_legend(legend_rec), _legend_text)
 

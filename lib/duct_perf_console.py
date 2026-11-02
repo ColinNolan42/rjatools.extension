@@ -346,7 +346,8 @@ def limits_and_legend(rec):
 
     rec = {'roles_note', 'limits_caption', 'limits': [[system, fpm, fric]],
     'vav_basis': [(label, value)], 'notes': [(bold lead, text)],
-    'legend': [[key, ducts, fittings, meaning]], 'clearance': text}
+    'legend': [[key, ducts, fittings, meaning]], 'clearance': text,
+    'clearance_notes': [text]}
     """
     out = [cr.section('Design Limits and Legend')]
     if rec.get('roles_note'):
@@ -365,6 +366,8 @@ def limits_and_legend(rec):
     if rec.get('clearance'):
         out.append(cr.callout(rec['clearance'][1],
                               'error' if rec['clearance'][0] else 'ok'))
+    for note in rec.get('clearance_notes') or []:
+        out.append(cr.paragraph(note))
     return ''.join(out)
 
 

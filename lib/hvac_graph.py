@@ -233,6 +233,47 @@ def fails_height_clearance(duct_height_in, downstream_height_in,
     return 0.0 < step < margin_in - 1e-9
 
 
+def _fmt_in(inches):
+    """12.0 -> '12', 10.5 -> '10.5' (heights are already on a 1/16 in. grid)."""
+    return '{:g}'.format(float(inches))
+
+
+def clearance_texts(kind, role, duct_h, down_h, up_label, down_label,
+                    margin_in=CLEARANCE_MARGIN_IN):
+    """(reason, note) for a duct that fails the height clearance rule.
+
+    kind is what set the downstream height (Colin, 2026-11-02, the two causes
+    shall read differently):
+      'step'   - the next duct of the same run steps down too little
+      'branch' - a branch duct off a tap is too tall for the main it leaves
+      'neck'   - a diffuser neck is too tall for the duct feeding it
+    role is 'Main' or 'Branch', the duct being judged. up_label and
+    down_label name the two elements (id and size) for the NOTE.
+    """
+    h, d = _fmt_in(duct_h), _fmt_in(down_h)
+    need = _fmt_in(math.ceil((down_h + margin_in) / 2.0) * 2.0)
+    max_ok = _fmt_in(duct_h - margin_in)
+    step = _fmt_in(duct_h - down_h)
+    m = _fmt_in(margin_in)
+    if kind == 'branch':
+        reason = 'Branch {}" too tall for {}" main'.format(d, h)
+        note = ('NOTE: branch duct {} leaves main {} with only {}" of height, '
+                '{}" min. Raise the main to {}" tall, or make the branch {}" '
+                'tall or less.').format(down_label, up_label, step, m, need, max_ok)
+    elif kind == 'neck':
+        reason = 'Neck {}" too tall for {}" {}'.format(d, h, role.lower())
+        note = ('NOTE: diffuser {} neck is within {}" of the height of duct {}, '
+                '{}" min. Raise the duct to {}" tall, or reduce the neck to {}" '
+                'or less.').format(down_label, step, up_label, m, need, max_ok)
+    else:
+        reason = '{} step {}" to {}", {}" min'.format(role, h, d, m)
+        note = ('NOTE: {} duct {} steps down to duct {} by only {}" of height, '
+                '{}" min. Make duct {} {}" tall or less, or keep it {}" tall.'
+                ).format(role.lower(), up_label, down_label, step, m,
+                         down_label.split(' ')[0], max_ok, h)
+    return reason, note
+
+
 def effective_height_in(elem):
     """Height (rectangular) or diameter (round) in inches, used for the
     diffuser/duct height clearance check. Ducts read RBS_CURVE_* built-in
@@ -471,14 +512,21 @@ def max_downstream_height_in(node_id, nodes, children):
     the duct being checked (a genuine size reduction), not wherever it's
     equal or larger (a continuous run needs no transition clearance).
     """
-    best = None
+    return downstream_height_elem(node_id, nodes, children)[0]
+
+
+def downstream_height_elem(node_id, nodes, children):
+    """(height_in, element) of the tallest real duct/terminal immediately
+    downstream of node_id, or (None, None). The element says what set the
+    clearance height: the next duct, a branch duct off a tap, or a diffuser."""
+    best, best_elem = None, None
     for elem in next_real_downstream(node_id, nodes, children):
         h = effective_height_in(elem)
         if h is None:
             continue
         if best is None or h > best:
-            best = h
-    return best
+            best, best_elem = h, elem
+    return best, best_elem
 
 
 def duct_area_ft2(duct):
