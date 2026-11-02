@@ -2394,6 +2394,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         pos = {}
         elem = all_nodes.get(duct_id)
         par = parent_of.get(duct_id)
+        if par is None and duct_rooted_ids and duct_id in duct_rooted_ids and taps:
+            # A picked duct has no parent in the walk: its taps are measured
+            # from its unit side neighbor, the end the fan system effect walk
+            # also uses (F2, Colin 2026-11-02).
+            side = _unit_side_firsts(duct_id)
+            par = side[0][0] if side else None
+            fan_system_effect.log.info('tap order: picked duct %s measured from %s',
+                                       duct_id, par if par is not None else 'NOT FOUND')
         if elem is not None and par is not None and taps:
             try:
                 pos = hvac_graph.tap_positions_ft(elem, par)

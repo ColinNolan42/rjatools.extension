@@ -1433,6 +1433,12 @@ check("case38c tap on the picked duct measured from its unit side neighbor, flag
       and any(k == 'warn' and t.startswith('WARNING: tap 2205, 1.5 ft from the supply outlet')
               for k, t in sa38c.get('fse_notes', ())),
       "from %r notes %r" % (getattr(n38c[2200], 'tap_from', None), sa38c.get('fse_notes')))
+# F2 (2026-11-02): external static orders the same taps from the same end,
+# so the picked duct's friction is stepped, not charged whole with a NOTE.
+check("case38c external static orders the picked duct's taps (no 'unreadable' NOTE)",
+      not any('tap positions on duct 2200 unreadable' in u
+              for u in sa38c.get('unpriced', ())),
+      "unpriced %r" % (sa38c.get('unpriced'),))
 
 # 39: SWSI switches the outlet tables (Ab/Ao 0.5, L 0: SR7-7 3.80); off = none.
 sa39 = _fse_run(n32, c32, d32, t32, 920,
