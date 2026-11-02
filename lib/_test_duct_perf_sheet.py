@@ -111,20 +111,26 @@ def _cls(name, total, takeoff=True):
             'filter': 0.14 if name == 'Return Air' else None,
             'subtotal': total / 1.1, 'safety': total - total / 1.1,
             'safety_detail': '+10%', 'total': total,
-            'total_detail': 'worst run ends at ' + LONG_TERMINAL,
-            'notes': ['(Includes 2 fitting(s) between the picked duct and the unit connection.)'],
-            'warnings': ['UNPRICED: Fitting 777']}
+            'total_detail': 'worst run ends at ' + LONG_TERMINAL}
 
 
 def _unit():
     return {'label': 'RTU-1 (id 123456)',
             'classes': [_cls('Supply Air', 0.55), _cls('Return Air', 0.30),
                         _cls('Exhaust Air', 0.10)],
-            'untraced': [], 'one_sided': None,
-            'checks': [(False, 'Unit max external static 0.750 in. wc: computed 0.850 '
-                               'in. wc (Supply Air + Return Air), EXCEEDS IT.')],
-            'warnings': ['Parallel units on one main. This external static is unreliable.'],
+            'one_sided': None,
+            'checks': [(True, 'Unit max external static 1.000 in. wc: computed 0.850 '
+                              'in. wc (Supply Air + Return Air), within it.')],
             'esp_total': 0.85, 'esp_sides': ['Supply Air', 'Return Air']}
+
+
+def _corrections():
+    c = dpc.correction
+    return [c('warn', 'UNPRICED: Fitting 777', 'RTU-1 (id 123456)'),
+            c('warn', 'Parallel units on one main. Its external static is unreliable.',
+              'RTU-1 (id 123456)'),
+            c('note', 'NOTE: oval duct 8 read as rectangular W x H.'),
+            c('warn', 'UNPRICED: Fitting 777', 'RTU-1 (id 123456)')]
 
 
 class ClipTests(unittest.TestCase):
@@ -221,12 +227,12 @@ class SheetRowTests(unittest.TestCase):
         self.assertNotIn('not counted', bands[1])
         self.assertIn('not counted', bands[2])
 
-    def test_sheet_notes_carry_run_end_and_leads(self):
+    def test_sheet_notes_carry_run_end_and_check_only(self):
         lines = dpc.sheet_lines(dpc.esp_unit_notes(_unit(), sheet=True))
         self.assertIn('Supply Air: worst run ends at ' + LONG_TERMINAL + '.', lines)
-        self.assertIn('UNPRICED: Fitting 777', lines)          # own lead kept
-        self.assertTrue(any(l.startswith('CHECK FAILED: Unit max') for l in lines))
-        self.assertTrue(any(l.startswith('WARNING: Parallel units') for l in lines))
+        self.assertTrue(any(l.startswith('CHECK: Unit max') for l in lines))
+        # warnings and notes are System Corrections lines (Colin, 2026-11-02)
+        self.assertFalse(any('UNPRICED' in l or 'WARNING' in l for l in lines))
         console = dpc.esp_unit_notes(_unit())
         self.assertFalse(any('worst run ends' in t for _k, t in console))
 
@@ -273,7 +279,8 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertEqual(vals[0], 'SYSTEM SUMMARY')
         self.assertIn('Grand total airflow 5,250 CFM', vals)
         self.assertIn('RJA - Supply Diffuser - Linear Slot (CFM Auto-Sizing)', vals)
-        self.assertIn('WARNING: 1 diffuser(s) with Flow = 0 (missing CFM data)', vals)
+        # no note panel after the section (Colin, 2026-11-02)
+        self.assertFalse(any('Flow = 0' in v for v in vals))
         self.assertLess(y, 0.0)
         # by class and types side by side: same top, inside the width
         heads = [t for t in self.rec.texts if t[2] in ('System', 'Diffuser type')]
@@ -301,6 +308,7 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertNotIn('METHOD: Darcy-Weisbach', vals)
         self.assertNotIn('NOT INCLUDED: coil and cabinet', vals)
         self.assertNotIn('EXTERNAL STATIC TAKE-OFF', ' '.join(vals))
+        self.assertFalse(any('UNPRICED' in v or 'WARNING' in v for v in vals))
         total = [t for t in self.rec.texts if t[2] == 'TOTAL EXTERNAL STATIC PRESSURE'][0]
         self.assertEqual(total[3], 'bold')
         self.assertLess(y, 0.0)
@@ -340,8 +348,41 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertEqual(vals[0], 'VAV BOXES')
         self.assertIn('MP supply 1500 FPM, 0.10 in. wc per 100 ft', vals)
         self.assertIn('LOW', vals)
-        self.assertTrue(any(v.startswith('WARNING: RTU-1 (id 1): 2 diffuser') for v in vals))
+        self.assertIn('Values in in. wc.', vals)
+        # the MP diffuser line is a System Corrections line now
+        self.assertFalse(any('2 diffuser' in v for v in vals))
         self.assertLess(y, 0.0)
+
+    def _corrections_block(self, rows, entries):
+        cols = [('#', 0.05), ('Status', 0.1), ('Reason', TOTAL_W - 0.15)]
+        y = DRAW['_draw_system_corrections'](None, None, 0.0, TOTAL_W, cols, rows,
+                                             (2,), entries)
+        return y, self.rec.values()
+
+    def test_system_corrections_block(self):
+        y, vals = self._corrections_block([['1', 'RED', 'Velocity']], _corrections())
+        self.assertEqual(vals[0], 'SYSTEM CORRECTIONS')
+        self.assertIn('1 duct(s)', vals)
+        self.assertNotIn('DUCTS NEEDING ATTENTION', vals)
+        self.assertIn('RED', vals)
+        a, n = vals.index('ACTION REQUIRED'), vals.index('NOTES')
+        self.assertLess(vals.index('Velocity'), a)
+        self.assertLess(a, n)
+        joined = ' '.join(vals)
+        self.assertEqual(joined.count('UNPRICED: Fitting 777'), 1)       # deduped
+        self.assertIn('RTU-1 (id 123456): WARNING: Parallel units', joined)
+        self.assertIn('NOTE: oval duct 8', ' '.join(vals[n:]))
+        self.assertLess(y, 0.0)
+
+    def test_system_corrections_empty(self):
+        _y, vals = self._corrections_block([], [])
+        self.assertEqual(vals, ['SYSTEM CORRECTIONS', dpc.NO_CORRECTIONS])
+
+    def test_system_corrections_without_ducts(self):
+        _y, vals = self._corrections_block([], _corrections()[2:3])
+        self.assertIn(dpc.NO_FLAGGED, vals)
+        self.assertNotIn('ACTION REQUIRED', vals)
+        self.assertIn('NOTES', vals)
 
     def test_vav_without_boxes_draws_nothing(self):
         y = DRAW['_draw_vav_boxes'](None, None, -1.0, TOTAL_W, {'units': []})

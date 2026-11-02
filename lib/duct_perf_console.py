@@ -13,27 +13,30 @@ Kept out of script.py so the layout can be exercised under CPython
 Record shapes (all text already formatted unless noted):
 
   system summary  {'grand': [(label, value)], 'equipment': [[unit, cfm,
-                  diffusers, other]], 'warnings': [text], 'notes': [text]}
-                  (by_class and types
-                  may be present; the console no longer shows them)
+                  diffusers, other]]} (by_class and types may be present; the
+                  console no longer shows them)
 
   external static {'units': [unit], 'combined': [{'title', 'text'}],
-                  'warnings': [text], 'method': text, 'assumptions': [text]
-                  (optional), 'not_included': text}
-                  unit = {'label', 'classes': [cls], 'untraced': [text],
-                  'esp': text or None, 'one_sided': text or None,
-                  'checks': [(ok bool, text)], 'warnings': [text],
-                  'esp_total': float or None, 'esp_sides': [class names],
-                  'fse': [(kind, text)] fan system effect notes, kind 'note',
-                  'warn' or 'gray'}
+                  'method': text, 'assumptions': [text] (optional),
+                  'not_included': text}
+                  unit = {'label', 'classes': [cls], 'esp': text or None,
+                  'one_sided': text or None, 'checks': [(ok bool, text)]
+                  (passed checks; a failed one is a correction),
+                  'esp_total': float or None, 'esp_sides': [class names]}
                   cls = {'sys_class', 'airflow', 'rows': [(item, inwc float,
                   detail)], 'subtotal' float, 'safety' float, 'safety_detail',
-                  'total' float, 'total_detail', 'notes': [text],
-                  'warnings': [text], 'takeoff': [[item, table, qty, C,
-                  in. wc]] (optional, from takeoff_rows; rendered instead of
-                  'rows' when present), 'filter': float or None}
+                  'total' float, 'total_detail', 'takeoff': [[item, table,
+                  qty, C, in. wc]] (optional, from takeoff_rows; rendered
+                  instead of 'rows' when present), 'filter': float or None}
+
+                  Warnings, notes, fan system effect lines and unpriced
+                  fittings are not in these records: they are System
+                  Corrections entries (Colin, 2026-11-02).
 
   VAV boxes       the dict returned by script.py _vav_box_report()
+
+  corrections     [(group, unit label or None, kind, text)] from correction(),
+                  gathered by main() over the whole run (System Corrections)
 
 IronPython 2.7: no f-strings; floats are cast with float() before '{:.3f}'.
 """
@@ -65,10 +68,6 @@ def system_summary(rec):
         out.append(cr.table(
             ['Equipment', 'Supply discharge CFM', 'Diffusers', 'Other air feeding it'],
             rec['equipment'], align=['l', 'r', 'r', 'l'], widths=W_EQUIPMENT))
-    for w in rec.get('warnings') or []:
-        out.append(cr.callout(w, 'warn'))
-    for n in rec.get('notes') or []:
-        out.append(cr.callout(n, 'info'))
     return ''.join(out)
 
 
@@ -195,30 +194,21 @@ def _esp_unit_table(unit):
 
 
 def esp_unit_notes(unit, sheet=False):
-    """Everything said under a unit's table, in console order, as
-    [(kind, text)] with kind 'note', 'warn', 'ok' or 'error'. sheet True
-    first adds where each class's index run ends ('note'), which the sheet
-    table leaves out of its total row."""
+    """The results said under a unit's table, as [(kind, text)] with kind
+    'note', 'warn', 'ok' or 'error': a one sided total and the unit max
+    check. sheet True first adds where each class's index run ends ('note'),
+    which the sheet table leaves out of its total row. Every correction,
+    warning and note is in System Corrections instead (Colin, 2026-11-02)."""
     out = []
-    for cls in unit.get('classes') or []:
-        if sheet and cls.get('total_detail'):
-            out.append(('note', '{}: {}.'.format(cls['sys_class'], cls['total_detail'])))
-        for n in cls.get('notes') or []:
-            out.append(('note', '{}: {}'.format(cls['sys_class'], n)))
-        for w in cls.get('warnings') or []:
-            out.append(('warn', w))
-    # The unit's fan system effect, once per unit (not per class): every
-    # connection's notes, kind 'note', 'warn' or 'gray' (Colin, 2026-10-29).
-    for kind, text in unit.get('fse') or []:
-        out.append((kind, text))
-    for w in unit.get('untraced') or []:
-        out.append(('warn', w))
+    if sheet:
+        for cls in unit.get('classes') or []:
+            if cls.get('total_detail'):
+                out.append(('note', '{}: {}.'.format(cls['sys_class'],
+                                                     cls['total_detail'])))
     if unit.get('one_sided'):
         out.append(('warn', unit['one_sided']))
     for ok, text in unit.get('checks') or []:
         out.append(('ok' if ok else 'error', text))
-    for w in unit.get('warnings') or []:
-        out.append(('warn', w))
     return out
 
 
@@ -243,6 +233,135 @@ def sheet_lines(notes):
     return lines
 
 
+# ── System Corrections ──────────────────────────────────────────────────────
+#
+# Every correction, warning and note of a run is gathered into ONE section
+# under the duct table, console and sheet alike (Colin, 2026-11-02), instead
+# of following the section that found it. main() collects them as it runs
+# with correction(); system_corrections() and corrections_sheet() render
+# them in two groups, Action required first, then Notes.
+
+ACTION = 'action'
+NOTES = 'note'
+GROUP_TITLES = ((ACTION, 'Action required'), (NOTES, 'Notes'))
+NO_CORRECTIONS = 'No corrections. Every judged duct is within its limits.'
+NO_FLAGGED = 'No flagged ducts.'
+
+# A line that asks the engineer to change something.
+_ACTION_KINDS = ('warn', 'gray', 'error')
+_ACTION_LEADS = ('WARNING', 'FALLBACK', 'UNPRICED', 'GRAY', 'LOW', 'CHECK FAILED')
+
+
+def correction_group(kind, text):
+    """ACTION or NOTES for one line. Its own lead decides first: NOTE is
+    informational whatever its kind (a lookup read on a table edge, a duct
+    pick), WARNING / FALLBACK / UNPRICED / GRAY / LOW ask for a change. With
+    no lead, kind 'warn', 'gray' or 'error' is an action."""
+    lead = (text or '').lstrip().upper()
+    if lead.startswith('NOTE'):
+        return NOTES
+    if lead.startswith(_ACTION_LEADS) or kind in _ACTION_KINDS:
+        return ACTION
+    return NOTES
+
+
+def correction(kind, text, unit=None, group=None):
+    """One System Corrections entry, (group, unit label or None, kind, text).
+    kind: 'note', 'warn', 'gray' or 'error' (a failed check). group None
+    classifies it (correction_group); pass ACTION to force a line whose text
+    reads NOTE but asks for a change (a clearance failure)."""
+    if group is None:
+        group = correction_group(kind, text)
+    if group == ACTION and kind == 'note':
+        kind = 'warn'
+    return (group, unit, kind, text)
+
+
+def correction_lines(entries):
+    """The entries as {ACTION: [(kind, line)], NOTES: [(kind, line)]}.
+
+    Each line carries the sheet lead (sheet_lines: 'WARNING: ' on a warning
+    without its own lead, 'CHECK FAILED: ' on a failed check) and then its
+    unit, 'RTU-1 (id 5): WARNING: ...'. A line already said for the same unit
+    is dropped. Run wide lines (no unit) come first, then each unit in the
+    order it first appears; within that, the order they were found."""
+    units = []
+    for _g, unit, _k, _t in entries:
+        if unit not in units:
+            units.append(unit)
+    rank = dict((u, (0 if u is None else 1, i)) for i, u in enumerate(units))
+    out = {ACTION: [], NOTES: []}
+    seen = set()
+    ordered = sorted(enumerate(entries), key=lambda it: (rank[it[1][1]], it[0]))
+    for _i, (group, unit, kind, text) in ordered:
+        text = (text or '').strip()
+        if not text:
+            continue
+        key = (unit, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        line = sheet_lines([(kind, text)])[0] if group == ACTION else text
+        if unit:
+            line = '{}: {}'.format(unit, line)
+        out[group if group in out else NOTES].append((kind, line))
+    return out
+
+
+def _callout_kind(kind):
+    return kind if kind in ('gray', 'error') else 'warn'
+
+
+def system_corrections(headers, rows, entries, status_col=None, align=None,
+                       widths=None, subtitle=None):
+    """Section e: System Corrections. The duct table (when any duct is
+    listed), then every correction line, Action required (gray, error or
+    warn callouts) then Notes (muted lines). Nothing at all: one
+    NO_CORRECTIONS line, so the section is always there."""
+    groups = correction_lines(entries)
+    if subtitle is None:
+        subtitle = '{} duct(s)'.format(len(rows))
+    out = [cr.section('System Corrections', subtitle)]
+    if rows:
+        out.append(cr.table(headers, rows, align=align, status_col=status_col,
+                            widths=widths))
+    elif groups[ACTION] or groups[NOTES]:
+        out.append(cr.note(NO_FLAGGED))
+    else:
+        out.append(cr.callout(NO_CORRECTIONS, 'ok'))
+        return ''.join(out)
+    for group, title in GROUP_TITLES:
+        if not groups[group]:
+            continue
+        out.append(cr.subsection(title))
+        for kind, line in groups[group]:
+            out.append(cr.callout(line, _callout_kind(kind)) if group == ACTION
+                       else cr.note(line))
+    return ''.join(out)
+
+
+def corrections_text(entries, any_rows=False):
+    """The correction lines as markdown lines, for the print_md fallback
+    under the duct table text."""
+    groups = correction_lines(entries)
+    if not (groups[ACTION] or groups[NOTES]):
+        return [] if any_rows else [NO_CORRECTIONS]
+    out = [] if any_rows else [NO_FLAGGED]
+    for group, title in GROUP_TITLES:
+        if groups[group]:
+            out.append('**{}**'.format(title))
+            out.extend('- ' + line for _k, line in groups[group])
+    return out
+
+
+def corrections_sheet(entries):
+    """[(heading, [line])] for the drafting view's System Corrections block,
+    Action required then Notes, empty groups left out."""
+    groups = correction_lines(entries)
+    return [(title.upper(), [line for _k, line in groups[group]])
+            for group, title in GROUP_TITLES if groups[group]]
+
+
 def summary_band_text(rec):
     """The System Summary grand totals as one line for the right end of the
     sheet's SYSTEM SUMMARY band, e.g. 'Grand total airflow 5,250 CFM |
@@ -265,8 +384,6 @@ def external_static(rec):
     for comb in rec.get('combined') or []:
         out.append(cr.subsection(comb['title']))
         out.append(cr.callout(comb['text'], 'info'))
-    for w in rec.get('warnings') or []:
-        out.append(cr.callout(w, 'warn'))
     if rec.get('method'):
         out.append(cr.note(rec['method']))
     # Stated assumptions, e.g. the SWSI inlet tables used for a DWDI fan
@@ -304,12 +421,11 @@ def vav_rows(rep, sheet=False):
 
 
 def vav_notes(rep, sheet=False):
-    """The notes under the VAV table as [(kind, text)]. sheet True adds what
-    the short 'not reached' and 'not checked' cells mean, when present."""
-    out = []
-    if rep.get('minimum') is not None:
-        out.append(('note', 'LOW: pressure left under the {:.2f} in. wc minimum. '
-                            'Values in in. wc.'.format(float(rep['minimum']))))
+    """The table key under the VAV table as [(kind, text)]: the unit of its
+    values, and (sheet True) what the short 'not reached' and 'not checked'
+    cells mean, when present. A LOW box and a diffuser on an MP main are
+    corrections, not table notes: see vav_corrections (Colin, 2026-11-02)."""
+    out = [('note', 'Values in in. wc.')]
     if sheet:
         statuses = set(b.get('status') for u in rep.get('units') or []
                        for b in u.get('boxes') or [])
@@ -317,9 +433,24 @@ def vav_notes(rep, sheet=False):
             out.append(('note', 'Not reached: the index run search did not reach the box.'))
         if 'NOT CHECKED' in statuses:
             out.append(('note', 'Not checked: no unit max external static entered.'))
+    return out
+
+
+def vav_corrections(rep):
+    """The VAV lines for System Corrections, as correction() entries: one LOW
+    line per box under the minimum, and each unit's diffusers on an MP main."""
+    out = []
+    minimum = rep.get('minimum')
     for unit in rep.get('units') or []:
+        for b in unit.get('boxes') or []:
+            if b.get('status') == 'LOW':
+                text = 'LOW: VAV box {}, pressure left {} in. wc'.format(
+                    b['box'], _f3(b.get('left')))
+                if minimum is not None:
+                    text += ', under the {:.2f} in. wc minimum'.format(float(minimum))
+                out.append(correction('warn', text + '.', unit['label']))
         if unit.get('mp_terminal_text'):
-            out.append(('warn', '{}: {}'.format(unit['label'], unit['mp_terminal_text'])))
+            out.append(correction('warn', unit['mp_terminal_text'], unit['label']))
     return out
 
 
@@ -334,20 +465,13 @@ def vav_boxes(rep):
     return ''.join(out)
 
 
-def duct_table(title, headers, rows, status_col=None, align=None, widths=None):
-    """Section e: Flagged Ducts / All Ducts. widths: the _COLUMN_DEFS console
-    widths, so the columns keep the same proportions as the sheet table."""
-    return cr.section(title, '{} duct(s)'.format(len(rows))) + cr.table(
-        headers, rows, align=align, status_col=status_col, widths=widths)
-
-
 def limits_and_legend(rec):
     """Section f: Design Limits and Legend.
 
     rec = {'roles_note', 'limits_caption', 'limits': [[system, fpm, fric]],
     'vav_basis': [(label, value)], 'notes': [(bold lead, text)],
-    'legend': [[key, ducts, fittings, meaning]], 'clearance': text,
-    'clearance_notes': [text]}
+    'legend': [[key, ducts, fittings, meaning]], 'clearance': (failed bool,
+    text)}. Each clearance failure's own NOTE is a System Corrections line.
     """
     out = [cr.section('Design Limits and Legend')]
     if rec.get('roles_note'):
@@ -366,8 +490,6 @@ def limits_and_legend(rec):
     if rec.get('clearance'):
         out.append(cr.callout(rec['clearance'][1],
                               'error' if rec['clearance'][0] else 'ok'))
-    for note in rec.get('clearance_notes') or []:
-        out.append(cr.paragraph(note))
     return ''.join(out)
 
 

@@ -280,8 +280,10 @@ class SettingsTest(unittest.TestCase):
 
 
 class ReportTest(unittest.TestCase):
-    """The unit's fan system effect notes print once per unit, a GRAY one as
-    a gray callout in the console and as its own 'GRAY:' line on the sheet."""
+    """The unit's fan system effect notes are System Corrections lines
+    (Colin, 2026-11-02): said once per unit, a GRAY one under Action required
+    as a gray callout in the console and as its own 'GRAY:' line on the
+    sheet, a NOTE under Notes; none under the external static table."""
 
     def test_gray_once_per_unit_console_and_sheet(self):
         import console_report as cr
@@ -290,18 +292,24 @@ class ReportTest(unittest.TestCase):
                            921)
         unit = {'label': 'RTU-1', 'classes': [
             {'sys_class': 'Supply Air', 'rows': [], 'subtotal': 0.1, 'safety': 0.01,
-             'total': 0.11, 'notes': [], 'warnings': []},
+             'total': 0.11},
             {'sys_class': 'Return Air', 'rows': [], 'subtotal': 0.1, 'safety': 0.01,
-             'total': 0.11, 'notes': [], 'warnings': []}],
-            'fse': [('gray', gray), ('note', 'NOTE: x')]}
-        notes = dpc.esp_unit_notes(unit)
-        self.assertEqual([k for k, t in notes if t == gray], ['gray'])
-        sheet = dpc.sheet_lines(dpc.esp_unit_notes(unit, sheet=True))
-        self.assertEqual(sum(1 for line in sheet if line == gray), 1)   # no 'WARNING:' lead
-        html = dpc.external_static({'units': [unit]})
+             'total': 0.11}]}
+        fse = [('gray', gray), ('note', 'NOTE: x')]
+        # the walker hands every class leaf the same list: gathered twice
+        entries = [dpc.correction(k, t, 'RTU-1') for k, t in fse + fse]
+        groups = dpc.correction_lines(entries)
+        self.assertEqual(groups[dpc.ACTION], [('gray', 'RTU-1: ' + gray)])
+        self.assertEqual(groups[dpc.NOTES], [('note', 'RTU-1: NOTE: x')])
+        sheet = dpc.corrections_sheet(entries)
+        self.assertEqual(sheet[0], ('ACTION REQUIRED', ['RTU-1: ' + gray]))  # no 'WARNING:'
+        html = dpc.system_corrections(['#'], [], entries)
         self.assertEqual(html.count('System Effect Pressure Loss too high'), 1)
         self.assertIn(cr.CALLOUT_STYLES['gray'][1], html)
         self.assertIn(cr.STATUS_COLORS['GRAY'], html)
+        esp = dpc.external_static({'units': [unit]})
+        self.assertNotIn('System Effect Pressure Loss', esp)
+        self.assertEqual(dpc.esp_unit_notes(unit), [])
 
 
 class DialogTest(unittest.TestCase):

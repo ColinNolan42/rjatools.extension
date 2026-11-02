@@ -236,16 +236,16 @@ def _sample_esp():
                     ('Fitting losses', 0.301, '9 fittings, 4 taps restricting the main'),
                     ('Components', 0.3, 'Diffuser / grille x1 @ 0.050')],
            'subtotal': 0.813, 'safety': 0.0813, 'safety_detail': '+10%',
-           'total': 0.8943, 'total_detail': 'worst run ends at CD-1 [12]',
-           'notes': ['(Includes 2 fitting(s) between the picked duct and the unit connection.)'],
-           'warnings': ['UNPRICED: Fitting 777']}
-    return {'units': [{'label': 'RTU-1 (id 1)', 'classes': [cls], 'untraced': [],
+           'total': 0.8943, 'total_detail': 'worst run ends at CD-1 [12]'}
+    return {'units': [{'label': 'RTU-1 (id 1)', 'classes': [cls],
                        'esp': 'EXTERNAL STATIC PRESSURE = 1.257 in. wc (Supply Air + Return Air)',
                        'esp_total': 0.8943, 'esp_sides': ['Supply Air'],
-                       'one_sided': None, 'checks': [(False, 'Unit max ... EXCEEDS IT.')],
-                       'warnings': ['Parallel units on one main.']}],
+                       'one_sided': None,
+                       'checks': [(True, 'Unit max 1.000 in. wc: computed 0.894, within it.')]}],
             'combined': [{'title': 'Duct 3 + Duct 4', 'text': 'EXTERNAL STATIC PRESSURE = 0.700'}],
-            'warnings': [], 'method': 'METHOD: Darcy-Weisbach', 'not_included': 'NOT INCLUDED: coil'}
+            'method': 'METHOD: Darcy-Weisbach',
+            'assumptions': ['ASSUMPTION: SWSI tables used for a DWDI fan'],
+            'not_included': 'NOT INCLUDED: coil'}
 
 
 class DuctPerfSectionTests(unittest.TestCase):
@@ -263,9 +263,12 @@ class DuctPerfSectionTests(unittest.TestCase):
                                     '', '', '0.894'])
         html = dpc.external_static(_sample_esp())
         self.assertIn('colspan="5"', html)
-        self.assertIn(cr.CALLOUT_STYLES['error'][1], html)
-        self.assertIn(cr.CALLOUT_STYLES['warn'][1], html)
+        self.assertIn(cr.CALLOUT_STYLES['ok'][1], html)       # passed unit max check
+        self.assertNotIn(cr.CALLOUT_STYLES['warn'][1], html)  # no correction lines here
         self.assertIn('Duct 3 + Duct 4', html)
+        # The basis stays with the take-off in the console (Colin, 2026-11-02).
+        for basis in ('METHOD: Darcy-Weisbach', 'ASSUMPTION: SWSI', 'NOT INCLUDED: coil'):
+            self.assertIn(basis, html)
 
     def test_supply_and_return_in_one_table(self):
         """Colin, 2026-10-23: one chart per unit, supply then return, ending in
@@ -336,16 +339,142 @@ class DuctPerfSectionTests(unittest.TestCase):
 
     def test_summary_and_legend_and_sheets(self):
         rec = {'grand': [('Grand total airflow', '5,250 CFM')],
-               'equipment': [['RTU-1 (id 1)', '950', '3', '-']],
-               'warnings': ['1 diffuser(s) with Flow = 0']}
+               'equipment': [['RTU-1 (id 1)', '950', '3', '-']]}
         for html in (dpc.system_summary(rec),
                      dpc.limits_and_legend({'limits': [['Supply Air', '800 FPM', '0.080']],
                                             'legend': [['Red', '3', '1', 'exceeds']],
                                             'clearance': (True, 'clearance: 2')}),
                      dpc.sheets_created(['M-601']), dpc.sheets_created([]),
-                     dpc.duct_table('Flagged Ducts', ['#', 'Status'], [['1', 'RED']],
-                                    status_col=1)):
+                     dpc.system_corrections(['#', 'Status'], [['1', 'RED']], [],
+                                            status_col=1)):
             self.assertEqual(shape(html).errors, [])
+
+    def test_legend_has_no_clearance_notes(self):
+        html = dpc.limits_and_legend({'limits': [], 'legend': [],
+                                      'clearance': (True, 'clearance: 1'),
+                                      'clearance_notes': ['NOTE: main duct 5 steps down']})
+        self.assertIn('clearance: 1', html)
+        self.assertNotIn('steps down', html)
+
+
+def _entries():
+    c = dpc.correction
+    return [
+        c('warn', '1 terminal(s) have Flow = 0. Assign CFM values in the model.', 'RTU-2 (id 2)'),
+        c('note', 'NOTE: unit 1 connection at element 9 is a single diffuser main.', 'RTU-1 (id 1)'),
+        c('gray', 'GRAY: System Effect Pressure Loss too high at elbow 921.', 'RTU-1 (id 1)'),
+        c('warn', 'FALLBACK: tap 5 passed on duct 4, RJA worksheet C 0.20', 'RTU-1 (id 1)'),
+        c('warn', 'NOTE: transition 7: angle below the lowest table value', 'RTU-1 (id 1)'),
+        c('warn', 'NOTE: main duct 5 steps down by only 1 in. of height.', 'RTU-1 (id 1)',
+          dpc.ACTION),
+        c('error', 'Unit max external static 0.750 in. wc: computed 0.850, EXCEEDS IT.',
+          'RTU-1 (id 1)'),
+        c('note', 'NOTE: oval duct 8 read as rectangular W x H.'),
+        c('warn', 'More than one system was selected.'),
+        # duplicates: same unit and text said twice (two classes, two passes)
+        c('warn', 'FALLBACK: tap 5 passed on duct 4, RJA worksheet C 0.20', 'RTU-1 (id 1)'),
+        c('gray', 'GRAY: System Effect Pressure Loss too high at elbow 921.', 'RTU-1 (id 1)'),
+        # the same text for a different unit is not a duplicate
+        c('warn', '1 terminal(s) have Flow = 0. Assign CFM values in the model.', 'RTU-1 (id 1)'),
+    ]
+
+
+class SystemCorrectionsTests(unittest.TestCase):
+    """Colin, 2026-11-02: every correction in one System Corrections section,
+    Action required then Notes, each line under its unit, no duplicates."""
+
+    def test_grouping(self):
+        g = dpc.correction_group
+        self.assertEqual(g('warn', 'anything'), dpc.ACTION)
+        self.assertEqual(g('gray', 'GRAY: x'), dpc.ACTION)
+        self.assertEqual(g('error', 'Unit max x'), dpc.ACTION)
+        self.assertEqual(g('note', 'WARNING: x'), dpc.ACTION)
+        self.assertEqual(g('note', 'FALLBACK: x'), dpc.ACTION)
+        self.assertEqual(g('note', 'UNPRICED: x'), dpc.ACTION)
+        self.assertEqual(g('note', 'LOW: x'), dpc.ACTION)
+        self.assertEqual(g('warn', 'NOTE: x'), dpc.NOTES)    # its own lead wins
+        self.assertEqual(g('note', 'plain'), dpc.NOTES)
+        # forced: a clearance NOTE asks for a resize
+        e = dpc.correction('note', 'NOTE: steps down', 'U', dpc.ACTION)
+        self.assertEqual(e, (dpc.ACTION, 'U', 'warn', 'NOTE: steps down'))
+
+    def test_lines_grouped_prefixed_ordered_and_deduped(self):
+        g = dpc.correction_lines(_entries())
+        action = [line for _k, line in g[dpc.ACTION]]
+        notes = [line for _k, line in g[dpc.NOTES]]
+        self.assertEqual(action, [
+            'WARNING: More than one system was selected.',
+            'RTU-2 (id 2): WARNING: 1 terminal(s) have Flow = 0. Assign CFM values in the model.',
+            'RTU-1 (id 1): GRAY: System Effect Pressure Loss too high at elbow 921.',
+            'RTU-1 (id 1): FALLBACK: tap 5 passed on duct 4, RJA worksheet C 0.20',
+            'RTU-1 (id 1): NOTE: main duct 5 steps down by only 1 in. of height.',
+            'RTU-1 (id 1): CHECK FAILED: Unit max external static 0.750 in. wc: computed '
+            '0.850, EXCEEDS IT.',
+            'RTU-1 (id 1): WARNING: 1 terminal(s) have Flow = 0. Assign CFM values in the model.',
+        ])
+        self.assertEqual(notes, [
+            'NOTE: oval duct 8 read as rectangular W x H.',
+            'RTU-1 (id 1): NOTE: unit 1 connection at element 9 is a single diffuser main.',
+            'RTU-1 (id 1): NOTE: transition 7: angle below the lowest table value',
+        ])
+
+    def test_console_section(self):
+        html = dpc.system_corrections(['#', 'Status'], [['1', 'RED']], _entries(),
+                                      status_col=1)
+        p = shape(html)
+        self.assertEqual(p.errors, [])
+        self.assertIn('System Corrections', html)
+        self.assertNotIn('Flagged Ducts', html)
+        self.assertLess(html.index('Action required'), html.index('>Notes<'))
+        self.assertLess(html.index('<table'), html.index('Action required'))
+        self.assertEqual(html.count('elbow 921'), 1)
+        self.assertEqual(html.count('worksheet C 0.20'), 1)
+        self.assertIn(cr.CALLOUT_STYLES['gray'][1], html)
+        self.assertIn(cr.CALLOUT_STYLES['warn'][1], html)
+        self.assertIn(cr.CALLOUT_STYLES['error'][1], html)
+        # Notes are muted lines, not callouts
+        i = html.index('single diffuser main')
+        self.assertIn(cr.MUTED, html[html.rindex('<div', 0, i):i])
+
+    def test_no_corrections(self):
+        html = dpc.system_corrections(['#'], [], [])
+        self.assertIn('System Corrections', html)
+        self.assertIn(dpc.NO_CORRECTIONS, html)
+        self.assertNotIn('<table', html)
+        self.assertEqual(dpc.corrections_text([]), [dpc.NO_CORRECTIONS])
+        self.assertEqual(dpc.corrections_sheet([]), [])
+
+    def test_corrections_without_flagged_ducts(self):
+        html = dpc.system_corrections(['#'], [], _entries()[:1])
+        self.assertIn(dpc.NO_FLAGGED, html)
+        self.assertNotIn(dpc.NO_CORRECTIONS, html)
+        self.assertIn('Action required', html)
+        self.assertNotIn('>Notes<', html)
+
+    def test_text_fallback_and_sheet(self):
+        text = dpc.corrections_text(_entries(), any_rows=True)
+        self.assertEqual(text[0], '**Action required**')
+        self.assertIn('**Notes**', text)
+        self.assertTrue(all(t.startswith(('**', '- ')) for t in text))
+        sheet = dpc.corrections_sheet(_entries())
+        self.assertEqual([h for h, _l in sheet], ['ACTION REQUIRED', 'NOTES'])
+        self.assertEqual(len(sheet[0][1]), 7)
+        self.assertEqual(len(sheet[1][1]), 3)
+
+    def test_vav_corrections(self):
+        rep = {'minimum': 0.75, 'units': [
+            {'label': 'RTU-1 (id 1)', 'mp_terminal_text': '1 diffuser(s) on an MP main.',
+             'boxes': [{'box': 101, 'status': 'OK', 'left': 1.0},
+                       {'box': 102, 'status': 'LOW', 'left': 0.07}]}]}
+        ents = dpc.vav_corrections(rep)
+        self.assertEqual([e[0] for e in ents], [dpc.ACTION, dpc.ACTION])
+        self.assertEqual(ents[0][3], 'LOW: VAV box 102, pressure left 0.070 in. wc, '
+                                     'under the 0.75 in. wc minimum.')
+        self.assertEqual(ents[0][1], 'RTU-1 (id 1)')
+        # the VAV section keeps only its table key
+        html = dpc.vav_boxes(rep)
+        self.assertNotIn('MP main', html)
+        self.assertIn('Values in in. wc.', html)
 
 
 class TakeoffTests(unittest.TestCase):

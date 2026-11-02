@@ -1754,16 +1754,17 @@ def _pick_side(duct):
 def _warn_if_same_side(picked):
     """Fail-safe for the single-system route: one supply duct and one return
     duct make one system. Two of the same side cannot, so say so (Colin,
-    2026-10-08). A warning, not a stop: the run still goes ahead."""
+    2026-10-08). A warning, not a stop: the run still goes ahead. Returns the
+    warning text for System Corrections, or None."""
     if len(picked) != 2:
-        return
+        return None
     a, b = _pick_side(picked[0]), _pick_side(picked[1])
     if a is not None and a == b:
-        output.print_md(
-            ':warning: **Both picked ducts are {} ducts.** A single system needs '
-            'one supply duct and one return duct, so the external static below '
-            'will not be a complete supply + return total. Run again and pick '
-            'one of each.'.format(a))
+        return ('Both picked ducts are {} ducts. A single system needs one supply '
+                'duct and one return duct, so the external static is not a '
+                'complete supply + return total. Run again and pick one of '
+                'each.'.format(a))
+    return None
 
 
 _PICKER_DUCT_TAG = '__select_duct_system__'
@@ -2126,6 +2127,26 @@ def _emit_html(html, fallback):
             'Duct Performance: plain text fallback failed too ({}: {}).'.format(
                 type(ex).__name__, ex))
     return False
+
+
+def _emit_corrections(corrections, headers=(), rows=(), status_col=None,
+                      align=None, widths=None, subtitle=None, rows_text=None):
+    """Print the System Corrections section: the duct table (rows may be
+    empty) and every gathered correction line, Action required then Notes.
+    rows_text: the padded monospace duct table lines for the plain text
+    fallback, or None."""
+    rows = list(rows)
+
+    def _text():
+        output.print_md('### System Corrections')
+        if rows_text:
+            output.print_code('\n'.join(rows_text))
+        for line in duct_perf_console.corrections_text(corrections, bool(rows)):
+            output.print_md(line)
+
+    _emit_html(duct_perf_console.system_corrections(
+        list(headers), rows, corrections, status_col=status_col, align=align,
+        widths=widths, subtitle=subtitle), _text)
 
 
 def _root_class_airflow(root_id, all_children, all_terminals):
@@ -3710,8 +3731,10 @@ def _vav_box_report(root_ids, vav_by_root, root_labels, critical, vav_set):
     Only shown when the engineer entered the unit's max (VAV plan item 8).
 
     Every value is worked out once here. _vav_summary_lines() flattens the
-    'lines' of each record into the drafting view text; the console renders
-    the other fields as a table.
+    'lines' of each record into the console's plain text fallback; the
+    console and the drafting view render the other fields as a table, and
+    duct_perf_console.vav_corrections() turns LOW boxes and diffusers on an
+    MP main into System Corrections lines.
 
     Returns {'title', 'basis', 'minimum', 'lines' (block header lines), 'units': [{'label',
     'lines', 'boxes': [{'box', 'lines', 'loss', 'loss_sf', 'left',
@@ -3782,8 +3805,8 @@ def _vav_summary_lines(report):
         lines.extend(unit['lines'])
         for rec in unit['boxes']:
             lines.extend(rec['lines'])
-        if unit['mp_terminal_text']:
-            lines.append('    ' + unit['mp_terminal_text'])
+    # The MP diffuser line is a System Corrections line
+    # (duct_perf_console.vav_corrections), not repeated here.
     return lines
 
 
@@ -4365,7 +4388,8 @@ def _sheet_columns(headers, fractions, width):
 
 def _draw_system_summary(st, view, y, total_w, rep):
     """SYSTEM SUMMARY: equipment table, by system class and diffuser types
-    side by side, warnings. Returns the y under it."""
+    side by side. Its warnings are in SYSTEM CORRECTIONS. Returns the y under
+    it."""
     draft = rja_drafting
     y = draft._band(st, view, 0.0, y, total_w, 'SYSTEM SUMMARY',
                     duct_perf_console.summary_band_text(rep), draft.SUB_BAND_H)
@@ -4392,20 +4416,15 @@ def _draw_system_summary(st, view, y, total_w, rep):
             rep['types'], clip=True))
     if bottoms:
         y = min(bottoms) - draft.GAP
-    if rep.get('warnings') or rep.get('notes'):
-        y = draft._note_panel(st, view, 0.0, y, total_w, duct_perf_console.sheet_lines(
-            [('warn', w) for w in rep.get('warnings') or []] +
-            [('note', n) for n in rep.get('notes') or []]))
-        y -= draft.GAP
     return y
 
 
 def _draw_external_static(st, view, y, total_w, esp_rec):
     """EXTERNAL STATIC PRESSURE: per unit one take-off table (supply then
-    return, ending in the unit total) with its notes, then picked duct
-    pairings and run wide warnings. The rows come
-    from duct_perf_console.esp_unit_rows, the same rows the console table
-    shows. Returns the y under it."""
+    return, ending in the unit total) with where each index run ends and the
+    unit max check, then picked duct pairings. Its warnings and notes are in
+    SYSTEM CORRECTIONS. The rows come from duct_perf_console.esp_unit_rows,
+    the same rows the console table shows. Returns the y under it."""
     draft = rja_drafting
     cols = _sheet_columns(duct_perf_console.TAKEOFF_HEADERS, _SHEET_TAKEOFF_COLS,
                           total_w)
@@ -4434,16 +4453,13 @@ def _draw_external_static(st, view, y, total_w, esp_rec):
     # No METHOD / ASSUMPTION / NOT INCLUDED block on the sheet (Colin,
     # 2026-11-02): the engineer reads the basis in the dialog's Calculation
     # basis. The console still prints it.
-    tail = duct_perf_console.sheet_lines(
-        [('warn', w) for w in esp_rec.get('warnings') or []])
-    if tail:
-        y = draft._note_panel(st, view, 0.0, y, total_w, tail)
-        y -= draft.GAP
     return y
 
 
 def _draw_vav_boxes(st, view, y, total_w, vav_rep):
-    """VAV BOXES table, one row per box, with its notes. Returns the y under it."""
+    """VAV BOXES table, one row per box, with its table key (values in in.
+    wc, the short cell texts). LOW boxes are in SYSTEM CORRECTIONS. Returns
+    the y under it."""
     draft = rja_drafting
     rows = duct_perf_console.vav_rows(vav_rep, sheet=True)
     if not rows:
@@ -4460,14 +4476,42 @@ def _draw_vav_boxes(st, view, y, total_w, vav_rep):
     return y - draft.GAP
 
 
+def _draw_system_corrections(st, view, y, total_w, columns, rows, left_cols,
+                             corrections):
+    """SYSTEM CORRECTIONS: the flagged duct table (columns [(header,
+    width)], rows already in keynote order), then every correction of the
+    run in one block per group, ACTION REQUIRED then NOTES (Colin,
+    2026-11-02). Nothing at all: one 'No corrections' line. Returns the y
+    under it."""
+    draft = rja_drafting
+    y = draft._band(st, view, 0.0, y, total_w, 'SYSTEM CORRECTIONS',
+                    '{} duct(s)'.format(len(rows)) if rows else None,
+                    draft.SUB_BAND_H)
+    groups = duct_perf_console.corrections_sheet(corrections)
+    if rows:
+        y = draft._styled_table(st, view, 0.0, y, columns, rows, left_cols=left_cols)
+    else:
+        y = draft._note_panel(st, view, 0.0, y, total_w, [
+            duct_perf_console.NO_FLAGGED if groups
+            else duct_perf_console.NO_CORRECTIONS])
+    for heading, lines in groups:
+        y -= draft.GAP / 2.0
+        draft._t(st, view, 0.0, y, heading, 'bold')
+        y -= draft.ROW_H
+        y = draft._note_panel(st, view, 0.0, y, total_w, lines)
+    return y - draft.GAP
+
+
 def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
                         source_sheet_num, tn_type_id, ts, fill_id,
-                        show_r_marker_note=False):
+                        show_r_marker_note=False, corrections=()):
     """Create a Drafting View in the RJA table look: the System Summary,
     External Static Pressure and VAV Boxes sections drawn as tables from the
     same records the console renders (rep, esp_rec, vav_rep; the last two
-    None when not computed), then the flagged-duct table and the note legend
-    (Colin, 2026-10-23: the summary looks as good as the rest of the sheet).
+    None when not computed), then SYSTEM CORRECTIONS (the flagged-duct table
+    and every correction line of the run, corrections from main()) and the
+    note legend (Colin, 2026-10-23: the summary looks as good as the rest of
+    the sheet; 2026-11-02: one corrections block, no notes after a section).
 
     flagged_rows: list of per-duct cell dicts from _row_cells(), already in
     the order they should appear, the same order the numbered keynote circles
@@ -4516,21 +4560,12 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
                                        draw.__name__, ex)
                 y -= rja_drafting.GAP
 
-        y = rja_drafting._band(st, sched_view, 0.0, y, total_w,
-                               'DUCTS NEEDING ATTENTION', None,
-                               rja_drafting.SUB_BAND_H)
-        if flagged_rows:
-            # '#' is this table's own row index: it matches the numbered
-            # keynote circle placed on the same duct in the plan view.
-            rows = [[str(ri + 1) if c[0] == 'num' else cells.get(c[0], '')
-                     for c in cols] for ri, cells in enumerate(flagged_rows)]
-            y = rja_drafting._styled_table(st, sched_view, 0.0, y, columns,
-                                           rows, left_cols=left)
-        else:
-            y = rja_drafting._note_panel(
-                st, sched_view, 0.0, y, total_w,
-                ['Every judged duct is within its limits.'])
-        y -= rja_drafting.GAP
+        # '#' is this table's own row index: it matches the numbered
+        # keynote circle placed on the same duct in the plan view.
+        rows = [[str(ri + 1) if c[0] == 'num' else cells.get(c[0], '')
+                 for c in cols] for ri, cells in enumerate(flagged_rows)]
+        y = _draw_system_corrections(st, sched_view, y, total_w, columns, rows,
+                                     left, corrections)
 
         # Legend: the plan colour as a swatch, then its meaning, boxed.
         # Named NOTE LEGEND and kept to the plan marks only (Colin, 2026-10-23).
@@ -4804,6 +4839,14 @@ def main():
         output.print_md('**Cancelled.**')
         return
 
+    # Every correction, warning and note of the run, gathered here and printed
+    # once in System Corrections under the duct table, console and sheet
+    # (Colin, 2026-11-02). Entries from duct_perf_console.correction().
+    corrections = []
+
+    def _correct(kind, text, unit=None, group=None):
+        corrections.append(duct_perf_console.correction(kind, text, unit, group))
+
     mode, names = choice
     if mode == 'equipment':
         sel_elems = [name_to_elem[n] for n in names]
@@ -4812,7 +4855,9 @@ def main():
         if not sel_elems:
             output.print_md('**Cancelled.**')
             return
-        _warn_if_same_side(sel_elems)
+        _same_side = _warn_if_same_side(sel_elems)
+        if _same_side:
+            _correct('warn', _same_side)
 
     # 4. Traverse each system and merge results
     all_duct_results = {}   # ElementId -> DuctResult  (worst-wins on overlap)
@@ -4832,8 +4877,11 @@ def main():
         net = hvac_graph.build_network(sel_elem, doc, equipment_level=True)
 
         if net.errors:
+            # The unit is skipped: an action for the engineer, in System
+            # Corrections (printed even when no unit traced, see below).
             for e in net.errors:
-                output.print_md(':warning: **{}**: {}'.format(_elem_name(sel_elem), e))
+                _correct('warn', e, '{} (id {})'.format(
+                    _elem_name(sel_elem), eid_int(sel_elem.Id)))
             continue
 
         # Two picked ducts on the same system re-root at the same AHU. Without
@@ -4851,26 +4899,30 @@ def main():
         if str(net.ahu_method).startswith('fallback'):
             duct_rooted_ids.add(eid_int(net.root.Id))
 
-        # VAV: boxes and the MP supply. Run before the warnings print so an
-        # unreadable box direction is listed.
+        unit_label_here = '{} (id {})'.format(_elem_name(net.root), eid_int(net.root.Id))
+
+        # VAV: boxes and the MP supply. Run before the warnings are gathered
+        # so an unreadable box direction is listed.
         if vav_on:
             vs = hvac_graph.analyze_vav(net)
             vav_by_root[eid_int(net.root.Id)] = vs
             if not vs.is_vav:
-                output.print_md(':warning: VAV System is ticked but no VAV box '
-                                'was found on this unit\'s supply. Judged as a '
-                                'constant volume system.')
+                _correct('warn', 'VAV System is ticked but no VAV box was found on '
+                                 'this unit\'s supply. Judged as a constant volume '
+                                 'system.', unit_label_here)
         nodes_by_root[eid_int(net.root.Id)] = set(net.nodes.keys())
 
-        if net.warnings:
-            for w in net.warnings:
-                output.print_md(':warning: {}'.format(w))
-
+        # Traversal warnings (Flow = 0, missing Flow, no dimensions, no unit
+        # found). The pruned branch counts only say what was not walked: Notes.
+        for w in net.warnings or []:
+            if 'not traversed' in w:
+                _correct('note', w, unit_label_here)
+            else:
+                _correct('warn', w, unit_label_here)
 
         root_id = eid_int(net.root.Id)
         all_root_ids.append(root_id)
-        root_labels[root_id] = '{} (id {})'.format(
-            _elem_name(net.root), eid_int(net.root.Id))
+        root_labels[root_id] = unit_label_here
         ahu_totals.append((
             _elem_name(net.root), root_id,
             net.equipment_discharge_cfm(root_id), len(net.terminal_cfms),
@@ -4902,7 +4954,8 @@ def main():
                     all_duct_results[eid] = dr
 
     if not all_duct_results:
-        output.print_md('**No duct results — check errors above.**')
+        _emit_corrections(corrections, subtitle='no duct results')
+        output.print_md('**No duct results, check System Corrections above.**')
         return
 
     # 4-VAV. Parallel units, the MP set, and the VAV red rules.
@@ -4915,9 +4968,8 @@ def main():
         if vs.reversed:
             parallel_roots.add(rid)
     for rid in sorted(parallel_roots):
-        output.print_md(':warning: **Parallel units on one main** at {}. Its '
-                        'external static is unreliable.'.format(
-                            root_labels.get(rid, 'id {}'.format(rid))))
+        _correct('warn', 'Parallel units on one main. Its external static is unreliable.',
+                 root_labels.get(rid, 'id {}'.format(rid)))
 
     mp_ids = set()
     vav_box_ids = set()
@@ -4971,7 +5023,8 @@ def main():
                 rid, all_children, partial, equip_ids).items():
             single_runs[(rid, first)] = run
     for (rid, first), _run in sorted(single_runs.items()):
-        output.print_md(hvac_graph.single_terminal_text(rid, first))
+        _correct('note', hvac_graph.single_terminal_text(rid, first),
+                 root_labels.get(rid, 'id {}'.format(rid)))
     hvac_graph.log.info('Branch rule: %d single diffuser main(s), judged as branches',
                         len(single_runs))
 
@@ -5025,8 +5078,7 @@ def main():
     # records for the themed console sections (lib/duct_perf_console.py) and
     # the drafting view tables. Every number below is worked out once and
     # handed to both.
-    rep = {'grand': [], 'equipment': [], 'by_class': [], 'types': [],
-           'warnings': [], 'notes': []}
+    rep = {'grand': [], 'equipment': [], 'by_class': [], 'types': []}
     esp_rec = None       # External Static Pressure records, when computed
     vav_rep = None       # VAV Boxes records, when VAV is on with boxes
     summary_lines = ['SYSTEM SUMMARY']
@@ -5056,16 +5108,11 @@ def main():
         t_cnt, t_cfm = type_totals[family]
         summary_lines.append('  {}  x{}  ({:.0f} CFM)'.format(family, t_cnt, t_cfm))
         rep['types'].append([family, str(t_cnt), '{:,.0f}'.format(float(t_cfm))])
-    if all_zero_terms:
-        _msg = '{} diffuser(s) with Flow = 0 (missing CFM data)'.format(len(all_zero_terms))
-        summary_lines.append('WARNING: ' + _msg)
-        rep['warnings'].append(_msg)
-    if all_missing_flow:
-        _msg = '{} diffuser(s) missing a Flow parameter entirely'.format(len(all_missing_flow))
-        summary_lines.append('WARNING: ' + _msg)
-        rep['warnings'].append(_msg)
+    # Flow = 0 and missing Flow terminals are not repeated here: each unit's
+    # traversal warning already says it, per unit, in System Corrections
+    # (all_zero_terms and all_missing_flow are the union of those).
     # Oval ducts are read as rectangles, W x H (Colin, 2026-11-02): kept, and
-    # said once for the run, naming the ducts.
+    # said once for the run, naming the ducts, in System Corrections.
     oval_ids = sorted(dr.element_id for dr in all_duct_results.values()
                       if _duct_is_oval(dr.elem, dr.element_id))
     if oval_ids:
@@ -5075,8 +5122,7 @@ def main():
         _msg = ('NOTE: oval duct {} read as rectangular W x H for area, velocity and '
                 'friction; oval sizing is not supported.'.format(_ids))
         hvac_graph.log.info('Duct Performance: %d oval duct(s): %s', len(oval_ids), oval_ids)
-        summary_lines.append(_msg)
-        rep['notes'].append(_msg)
+        _correct('note', _msg)
 
     # Terminal ids of the most-restrictive diffuser per equipment/system class
     # — the one the index run (_critical_path_loss) ends at, i.e. the one that
@@ -5102,7 +5148,7 @@ def main():
             fan_effect=fan_effect)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
-        esp_rec = {'units': [], 'combined': [], 'warnings': [],
+        esp_rec = {'units': [], 'combined': [],
                    'method': None, 'not_included': None}
         esp_by_root = {}
 
@@ -5117,9 +5163,8 @@ def main():
             unit_label = root_labels.get(root_id, 'id {}'.format(root_id))
             summary_lines.append('')
             summary_lines.append('  === {} ==='.format(unit_label))
-            unit_rec = {'label': unit_label, 'classes': [], 'untraced': [],
-                        'esp': None, 'one_sided': None, 'checks': [],
-                        'warnings': []}
+            unit_rec = {'label': unit_label, 'classes': [],
+                        'esp': None, 'one_sided': None, 'checks': []}
             esp_rec['units'].append(unit_rec)
             esp_by_root[root_id] = unit_rec
 
@@ -5172,12 +5217,12 @@ def main():
                                      'unit connection, 2001 Fundamentals Eq. 38'))
                 for _item, _val, _det in esp_rows:
                     summary_lines.append(_esp_text_line(_item, _val, _det))
-                notes = []
+                # Every line said about this run goes to System Corrections
+                # (Colin, 2026-11-02), not under the take-off.
                 if c.get('unit_side_fittings', 0) > 0:
-                    _msg = ('(Includes {} fitting(s) between the picked duct and '
-                            'the unit connection.)'.format(c['unit_side_fittings']))
-                    summary_lines.append('      ' + _msg)
-                    notes.append(_msg)
+                    _correct('note', '{}: (Includes {} fitting(s) between the picked '
+                             'duct and the unit connection.)'.format(
+                                 sys_class, c['unit_side_fittings']), unit_label)
                 safety_inwc = c['total_inwc'] - c['subtotal_inwc']
                 safety_det = '+{:.0f}%'.format(safety_pct)
                 total_det = 'worst run ends at {}'.format(
@@ -5185,13 +5230,13 @@ def main():
                 summary_lines.append(_esp_text_line('Subtotal', c['subtotal_inwc']))
                 summary_lines.append(_esp_text_line('Safety factor', safety_inwc, safety_det))
                 summary_lines.append(_esp_text_line('TOTAL', c['total_inwc'], total_det))
-                cls_warnings = []
                 for u in c['unpriced']:
                     # A FALLBACK note is priced (RJA worksheet C), not missing.
+                    # A NOTE (a lookup read at a table edge, tap order
+                    # unreadable) lands in Notes, the rest in Action required.
                     _u = (u if (u.startswith('FALLBACK') or u.startswith('NOTE'))
                           else 'UNPRICED: ' + u)
-                    summary_lines.append('      ' + _u)
-                    cls_warnings.append(_u)
+                    _correct('warn', _u, unit_label)
                 # The take-off: every item on the index run grouped by kind,
                 # table and C, the way the WSFU take-off lists fixtures (Colin,
                 # 2026-10-23). Its rows add up to the subtotal less the filter.
@@ -5203,14 +5248,14 @@ def main():
                             'check the index run detail.'.format(_to_sum, _expect))
                     hvac_graph.log.warning('ESP take-off mismatch %s %s: %s',
                                            unit_label, sys_class, _msg)
-                    cls_warnings.append(_msg[0].upper() + _msg[1:])
+                    _correct('warn', '{}: {}{}'.format(sys_class, _msg[0].upper(), _msg[1:]),
+                             unit_label)
                 _filt = c['filter_inwc'] if c.get('filter_inwc', 0.0) > 0.0 else None
                 if c.get('truncated'):
                     _msg = ('path search hit its step limit, so this '
                             'may not be the true worst run.')
-                    summary_lines.append('      WARNING: ' + _msg)
-                    cls_warnings.append('{}: {}{}'.format(
-                        sys_class, _msg[0].upper(), _msg[1:]))
+                    _correct('warn', '{}: {}{}'.format(sys_class, _msg[0].upper(), _msg[1:]),
+                             unit_label)
                 unit_rec['classes'].append({
                     'sys_class': sys_class,
                     'airflow': '{:,.0f} CFM, {} terminals'.format(float(a_cfm), a_cnt),
@@ -5218,14 +5263,18 @@ def main():
                     'takeoff': _to_rows, 'filter': _filt,
                     'safety': safety_inwc, 'safety_detail': safety_det,
                     'total': c['total_inwc'], 'total_detail': total_det,
-                    'notes': notes, 'warnings': cls_warnings})
+                    'notes': [], 'warnings': []})
 
             # Fan system effect notes belong to the unit, not to a class:
-            # every class leaf carries the same list, so print it once.
+            # every class leaf carries the same list, so say it once, in
+            # System Corrections. An ASSUMPTION stays with the ESP basis.
             _fse_leaf = per_class[sorted(per_class.keys())[0]]
-            unit_rec['fse'] = list(_fse_leaf.get('fse_notes', ()))
-            for _kind, _text in unit_rec['fse']:
-                summary_lines.append('    ' + _text)
+            for _kind, _text in _fse_leaf.get('fse_notes', ()):
+                if _kind == 'assume':
+                    if _text not in fse_extra_assume:
+                        fse_extra_assume.append(_text)
+                else:
+                    _correct(_kind, _text, unit_label)
             fse_gray_ids.update(_fse_leaf.get('fse_gray_ids', ()))
             for _a in _fse_leaf.get('fse_assumptions', ()):
                 if _a not in fse_extra_assume:
@@ -5244,8 +5293,7 @@ def main():
                 _msg = ('{}:  {:,.0f} CFM ({} terminals), but no index run was '
                         'traced - no static pressure for it.'.format(
                             sys_class, a_cfm, a_cnt))
-                summary_lines.append('    ' + _msg)
-                unit_rec['untraced'].append(_msg.replace(':  ', ': ', 1))
+                _correct('warn', _msg.replace(':  ', ': ', 1), unit_label)
 
             unit_total = 0.0
             sides = []
@@ -5274,12 +5322,14 @@ def main():
                 _msg = ('Unit max external static {:.3f} in. wc: computed {:.3f} in. wc '
                         '({}), {}.'.format(_umax, unit_total, ' + '.join(sides),
                                            'within it' if _ok else 'EXCEEDS IT'))
-                summary_lines.append('    ' + _msg)
-                unit_rec['checks'].append((_ok, _msg))
-            if root_id in parallel_roots:
-                _msg = 'Parallel units on one main. This external static is unreliable.'
-                summary_lines.append('    WARNING: ' + _msg)
-                unit_rec['warnings'].append(_msg)
+                if _ok:
+                    # A pass is a result of the take-off and stays with it.
+                    summary_lines.append('    ' + _msg)
+                    unit_rec['checks'].append((_ok, _msg))
+                else:
+                    _correct('error', _msg, unit_label)
+            # Parallel units on one main: said once per unit in System
+            # Corrections (step 4-VAV above), not repeated here.
 
         # One-sided roots. A picked supply duct and return duct that reach a
         # unit both re-root at it and are complete above. With NO unit
@@ -5321,9 +5371,7 @@ def main():
             _msg = ('more than one system was selected, so these one-sided '
                     'runs cannot be paired into a single external static. Pick one '
                     'supply duct and one return duct per system.')
-            summary_lines.append('')
-            summary_lines.append('  WARNING: ' + _msg)
-            esp_rec['warnings'].append(_msg[0].upper() + _msg[1:])
+            _correct('warn', _msg[0].upper() + _msg[1:])
 
         _method = ('METHOD: Darcy-Weisbach + Altshul-Tsal, eps {:g} ft rigid / '
                    '{:g} ft flex, air density {:g} lb/ft3. Fittings C x Pv, C looked '
@@ -5362,6 +5410,7 @@ def main():
         vav_rep = _vav_box_report(
             all_root_ids, vav_by_root, root_labels, critical, vav_set)
         summary_lines.extend(_vav_summary_lines(vav_rep))
+        corrections.extend(duct_perf_console.vav_corrections(vav_rep))
 
     # The plain text is only the console fallback below, folded per section
     # (folding is per line, so a slice folds the same as the whole). The
@@ -5471,7 +5520,8 @@ def main():
         downstream_heights = {}
         # One NOTE per clearance failure, naming both elements (Colin,
         # 2026-11-02: a main stepping down too little and a branch too tall for
-        # its main shall read differently).
+        # its main shall read differently). (duct id, NOTE) pairs; each is an
+        # Action required line in System Corrections, under its unit.
         clearance_notes = []
         branch_duct_ids = set(eid_int(k) for k, v in branch_ctx.items() if v is not None)
 
@@ -5496,12 +5546,24 @@ def main():
             branch_results[eid] = branch_res
             if reason == 'Diffuser/Duct Clearance':
                 clearance_count += 1
+                _cn = []
                 reason = _clearance_reason(dr, downstream_h, downstream_elem,
                                            eid_int(eid) in branch_duct_ids,
-                                           branch_duct_ids, clearance_notes)
+                                           branch_duct_ids, _cn)
+                clearance_notes.extend((dr.element_id, _n) for _n in _cn)
                 duct_labels[eid] = (label, green_cap, reason)
             counts[label] = counts.get(label, 0) + 1
             elem_labels[eid] = label
+
+        # A clearance NOTE asks for a resize: Action required, named by the
+        # first picked unit whose ductwork holds the duct.
+        def _unit_of(nid):
+            for _rid in all_root_ids:
+                if nid in nodes_by_root.get(_rid, ()):
+                    return root_labels.get(_rid)
+            return None
+        for _did, _n in sorted(clearance_notes, key=lambda dn: dn[1]):
+            _correct('warn', _n, _unit_of(_did), duct_perf_console.ACTION)
 
         # Color fittings, accessories and diffusers by worst nearby duct color
         adj = {}
@@ -5745,7 +5807,8 @@ def main():
                 sched_view, content_h, total_w = _build_summary_view(
                     doc, rep, esp_rec, vav_rep, [item[2] for item in flagged_items],
                     selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
-                    show_r_marker_note=bool(restrictive_terminal_ids))
+                    show_r_marker_note=bool(restrictive_terminal_ids),
+                    corrections=corrections)
                 if sched_view is not None:
                     # X fixed by hand in Revit (see diagram note above) and read
                     # back via Revit MCP. Y keeps the original bottom-anchored,
@@ -5776,7 +5839,8 @@ def main():
         output.print_md('```\n{}\n```'.format(traceback.format_exc()))
         return
 
-    # 9. Console report: flagged ducts, design limits and legend, sheets.
+    # 9. Console report: System Corrections (flagged ducts and every
+    # correction line), design limits and legend, sheets.
     #
     # Flagged duct list — RED first, then YELLOW, then PURPLE.
     # RED/YELLOW sorted by velocity descending (worst overrun first);
@@ -5804,36 +5868,37 @@ def main():
         rank = _FLAG_RANK.get(label, 3)
         return (rank, fpm if label == 'PURPLE' else -fpm)
 
-    if flagged:
-        flagged.sort(key=_flag_sort_key)
+    flagged.sort(key=_flag_sort_key)
 
-        # Same shared column definitions and same user selection as the
-        # schedule view.
-        cols = _selected_columns(selected_cols)
-        duct_rows = []
-        for idx, (label, fpm, cells) in enumerate(flagged, 1):
-            duct_rows.append([
-                str(idx) if col[0] == 'num' else cells.get(col[0], '')
-                for col in cols])
-        duct_title = 'All Ducts' if full_diag else 'Flagged Ducts'
-        keys = [col[0] for col in cols]
+    # Same shared column definitions and same user selection as the
+    # schedule view. Always printed (Colin, 2026-11-02): with nothing
+    # flagged and nothing to say it reads 'No corrections'.
+    cols = _selected_columns(selected_cols)
+    duct_rows = []
+    for idx, (label, fpm, cells) in enumerate(flagged, 1):
+        duct_rows.append([
+            str(idx) if col[0] == 'num' else cells.get(col[0], '')
+            for col in cols])
+    keys = [col[0] for col in cols]
 
-        def _ducts_text():
-            # Padded monospace text, console widths from _COLUMN_DEFS.
-            def _fmt_row(cells):
-                return '  '.join(str(c).ljust(col[3]) for c, col in zip(cells, cols))
-            rows = [_fmt_row([col[1] for col in cols]),
-                    _fmt_row(['-' * col[3] for col in cols])]
-            rows.extend(_fmt_row(r) for r in duct_rows)
-            output.print_md('### ' + duct_title)
-            output.print_code('\n'.join(rows))
+    def _fmt_row(cells):
+        # Padded monospace text, console widths from _COLUMN_DEFS.
+        return '  '.join(str(c).ljust(col[3]) for c, col in zip(cells, cols))
+    duct_text = None
+    if duct_rows:
+        duct_text = [_fmt_row([col[1] for col in cols]),
+                     _fmt_row(['-' * col[3] for col in cols])]
+        duct_text.extend(_fmt_row(r) for r in duct_rows)
 
-        _emit_html(duct_perf_console.duct_table(
-            duct_title, [col[1] for col in cols], duct_rows,
-            status_col=keys.index('status') if 'status' in keys else None,
-            align=['r' if k in ('num', 'cfm', 'fpm', 'fric', 'length') else 'l'
-                   for k in keys],
-            widths=[col[3] for col in cols]), _ducts_text)
+    _emit_corrections(
+        corrections, [col[1] for col in cols], duct_rows,
+        status_col=keys.index('status') if 'status' in keys else None,
+        align=['r' if k in ('num', 'cfm', 'fpm', 'fric', 'length') else 'l'
+               for k in keys],
+        widths=[col[3] for col in cols],
+        subtitle=('{} duct(s), every duct listed'.format(len(duct_rows)) if full_diag
+                  else '{} duct(s)'.format(len(duct_rows))),
+        rows_text=duct_text)
 
     # Design limits and legend. One set of rows feeds the themed tables and
     # the markdown fallback.
@@ -5894,7 +5959,6 @@ def main():
         'clearance': (clearance_count > 0,
                       'Diffuser/duct height clearance issues (flagged Red): {}'.format(
                           clearance_count)),
-        'clearance_notes': sorted(clearance_notes),
     }
 
     def _legend_text():
@@ -5912,8 +5976,6 @@ def main():
             ['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
             legend_rows))
         output.print_md('**{}**'.format(legend_rec['clearance'][1]))
-        for _n in legend_rec['clearance_notes']:
-            output.print_md(_n)
 
     _emit_html(duct_perf_console.limits_and_legend(legend_rec), _legend_text)
 
