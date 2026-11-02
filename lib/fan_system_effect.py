@@ -46,7 +46,16 @@ RJA DECISIONS (Colin, 2026-10-29):
     used as a stated ASSUMPTION (method_lines). Inlet swirl, FSE1,sw, has no
     coefficient in the book (p. 34.13: inlet spin changes the fan curve
     itself); it is ignored and not reported (Colin, 2026-11-02).
-  - A transition or tap inside the window is flagged, never priced (no table).
+  - L counts from the unit through the curb, straight duct and any
+    transitions, each transition's own length included, to the FIRST elbow
+    (Colin, 2026-11-02: the system effect checks that the straight duct at
+    the connection is long enough, and a curb adapter is part of it).
+    Transitions are priced as ordinary fittings by the walk. A tap, split
+    or other fitting inside the window is flagged, never priced (no table).
+  - A rect mitered inlet elbow is read on the ER7-1 r/H 1.0 row (Colin,
+    2026-11-02), not the conservative unreadable radius row.
+  - A duct pick with no unit takes the picked duct's unit side end as the
+    unit outlet or inlet (Colin, 2026-11-02).
   - C at or above HIGH_C is GRAY (Colin, 2026-10-29, was RED): "System
     Effect Pressure Loss too high, increase length of duct to X ft", X the
     straight length from the unit connection at which C first drops BELOW
@@ -67,11 +76,7 @@ log = logging.getLogger(__name__)
 
 HIGH_C = 1.0                 # a fan system effect C at or above this is GRAY
 LENGTH_STEP_FT = 0.1         # the "increase length of duct to" figure, rounded up
-# A transition starting within this distance of the unit is its connection
-# adapter (curb or flange to duct size), part of the connection: the walk
-# passes it and judges the next disruption, measured from the unit (Colin,
-# 2026-10-30, after OLMC hid an elbow behind a 0.4 ft adapter).
-ADAPTER_TRANSITION_FT = 1.0
+MITERED_R_OVER_H = 1.0       # ER7-1 row a rect mitered inlet elbow is read on
 ER7_1_SQUARE_ASSUMPTION = ('ASSUMPTION: ER7-1 is printed for square elbows; the '
                            'rectangular elbow is read with H = the side in the plane '
                            'of the turn.')
@@ -370,9 +375,11 @@ def basis_text(rec):
         rec['table'], dim, rec['r_ratio'], rec['l_ft'], dim, rec['size_in'])
 
 
-def high_text(rec, where):
+def high_text(rec, where, eid):
     """The GRAY line for the engineer (Colin, 2026-10-29), in the Duct
-    Performance reason style. where: 'supply outlet', 'return inlet'."""
+    Performance reason style. where: 'supply outlet', 'return inlet'. eid:
+    the elbow's element id, named with its distance from the unit (Colin,
+    2026-11-02: every note names its element and where it sits)."""
     if rec.get('fix_ft') is None:
         fix = 'no straight length in the table brings C under %.1f' % HIGH_C
     else:
@@ -382,30 +389,18 @@ def high_text(rec, where):
     else:
         basis = '%s r/%s %.2f' % (rec['table'], 'D' if rec['table'] == INLET_ROUND
                                   else 'H', rec['r_ratio'])
-    return ('GRAY: System Effect Pressure Loss too high at the %s, %s (C %.2f at '
-            'L %.1f ft, %s; C %.1f or more).' % (
-                where, fix, rec['c'], rec['l_ft'], basis, HIGH_C))
+    return ('GRAY: System Effect Pressure Loss too high at elbow %s, %.1f ft from '
+            'the %s, %s (C %.2f, %s; C %.1f or more).' % (
+                eid, rec['l_ft'], where, fix, rec['c'], basis, HIGH_C))
 
 
-def disruption_text(kind, where, l_ft, limit_ft, limit_name):
-    """A transition, tap or other fitting inside the window: flagged, not
-    priced. limit_name: 'Le' (outlet) or 'the inlet window'."""
-    return ('WARNING: %s %.1f ft from the %s, inside %s (%.1f ft). A fan system '
+def disruption_text(kind, eid, where, l_ft, limit_ft, limit_name):
+    """A tap, split or other fitting inside the window: flagged, not priced.
+    eid: the tap, split node or fitting id. limit_name: 'Le' (outlet) or
+    'the inlet window'."""
+    return ('WARNING: %s %s, %.1f ft from the %s, inside %s (%.1f ft). A fan system '
             'effect disruption with no 2001 table, not priced.' % (
-                kind, float(l_ft), where, limit_name, float(limit_ft)))
-
-
-def is_adapter(role, l_ft, adapters_passed):
-    """True when a fitting of role at l_ft from the unit is the connection
-    adapter: a transition within ADAPTER_TRANSITION_FT, and only the first."""
-    return (role == 'transition' and adapters_passed == 0
-            and float(l_ft) <= ADAPTER_TRANSITION_FT)
-
-
-def adapter_text(fid, l_ft, where):
-    return ('NOTE: transition %s %.1f ft from the %s taken as the unit connection '
-            'adapter; fan system effect judged at the next disruption.'
-            % (fid, float(l_ft), where))
+                kind, eid, float(l_ft), where, limit_name, float(limit_ft)))
 
 
 def method_lines(settings):
@@ -424,12 +419,14 @@ def method_lines(settings):
               '(round) or ER7-1 (rect), whose C includes the elbow, so it is not '
               'priced again. Added before the safety factor. C %.1f or more is GRAY, '
               'with the straight length that brings it under. '
-              'A transition within %.1f ft of the unit is taken as its connection '
-              'adapter, priced as a fitting only, and the next disruption is judged. '
-              'Transitions and taps flagged, not priced.' % (
+              'L runs from the unit through straight duct and any transitions, '
+              'their length counted, to the first elbow; transitions are priced '
+              'as fittings. Taps and splits inside the window are flagged, not '
+              'priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
+              'row. On a duct pick, L starts at the unit end of the picked duct.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_C,
-                  ADAPTER_TRANSITION_FT))
+                  MITERED_R_OVER_H))
     assumptions = []
     if fan != 'SWSI':
         assumptions.append(

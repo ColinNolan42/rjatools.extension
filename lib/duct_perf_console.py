@@ -13,7 +13,8 @@ Kept out of script.py so the layout can be exercised under CPython
 Record shapes (all text already formatted unless noted):
 
   system summary  {'grand': [(label, value)], 'equipment': [[unit, cfm,
-                  diffusers, other]], 'warnings': [text]} (by_class and types
+                  diffusers, other]], 'warnings': [text], 'notes': [text]}
+                  (by_class and types
                   may be present; the console no longer shows them)
 
   external static {'units': [unit], 'combined': [{'title', 'text'}],
@@ -66,6 +67,8 @@ def system_summary(rec):
             rec['equipment'], align=['l', 'r', 'r', 'l'], widths=W_EQUIPMENT))
     for w in rec.get('warnings') or []:
         out.append(cr.callout(w, 'warn'))
+    for n in rec.get('notes') or []:
+        out.append(cr.callout(n, 'info'))
     return ''.join(out)
 
 

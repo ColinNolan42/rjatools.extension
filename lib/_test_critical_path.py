@@ -128,6 +128,7 @@ def _connector_areas_ft2(elem):
 
 
 def _tap_positions_ft(duct, from_id):
+    duct.tap_from = from_id        # the end the taps were measured from
     return dict(duct.tap_pos)
 
 
@@ -1220,21 +1221,60 @@ check("case33 elbow at L/Le 0.25: C 2.20 (SR7-11) x Pv(1000)",
       abs(sa33b.get('fse_inwc', -1) - 2.20 * pv(1000.0)) < 1e-9,
       "got %r" % sa33b.get('fse_inwc'))
 
-# 34: a transition 2 ft out, inside Le: flagged, not priced; the elbow after
-#     it is not the first disruption.
+# 34: a transition 2 ft out, inside Le, is passed and its own length counted
+#     (Colin, 2026-11-02: the curb adapter is part of the straight length).
+#     2 ft duct + 0.5 ft transition + 1 ft duct: the elbow is at L 3.5 ft.
+class P(object):
+    """A connector origin: a point on a line, feet."""
+    def __init__(self, x):
+        self.x = x
+
+    def DistanceTo(self, other):
+        return abs(self.x - other.x)
+
+
 n34 = {960: _unit({961: SQ24}),
        962: Elem(kind='transition', family_name='Rectangular Transition - Length',
-                 is_round=False),
+                 is_round=False,
+                 tgeom=([(4.0, 'rect', 24.0, 24.0, P(0.0)),
+                         (4.0, 'rect', 24.0, 24.0, P(0.5))], 0.0)),
        964: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
 c34 = {960: [961], 961: [962], 962: [963], 963: [964], 964: [965], 965: [970]}
 d34 = build([(961, 0.0, 2.0, 1000.0, 4.0, 'Supply Air'),
              (963, 0.0, 1.0, 1000.0, 4.0, 'Supply Air'),
              (965, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
 sa34 = _fse_run(n34, c34, d34, {970: (4000.0, 'Supply Air', 'SD-34')}, 960)
-check("case34 transition inside Le: flagged, fse 0, the elbow after it ignored",
-      sa34.get('fse_inwc') == 0.0 and not _fse_items(sa34)
-      and any(k == 'warn' and 'transition 2.0 ft' in t and 'not priced' in t
-              for k, t in sa34.get('fse_notes', ())), "notes %r" % (sa34.get('fse_notes'),))
+_r34 = FSE.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 3.5)
+check("case34 transition inside Le is passed, its 0.5 ft counted: elbow at L 3.5 ft",
+      abs(sa34.get('fse_inwc', -1) - _r34['c'] * pv(1000.0)) < 1e-9
+      and _fse_items(sa34) and 'L 3.5' in _fse_items(sa34)[0][4][1]
+      and not any(k == 'warn' for k, _t in sa34.get('fse_notes', ())),
+      "fse %r items %r notes %r" % (sa34.get('fse_inwc'), _fse_items(sa34),
+                                    sa34.get('fse_notes')))
+check("case34 the transition is still priced as an ordinary fitting",
+      any(i[0] == 'Fitting 962' for i in sa34.get('items', ()))
+      and abs(_items_sum(sa34) - sa34['subtotal_inwc']) < 1e-9)
+# an unreadable transition length adds 0 (logged): elbow at L 3.0 ft
+n34u = dict(n34)
+n34u[962] = Elem(kind='transition', family_name='Rectangular Transition - Length',
+                 is_round=False)
+sa34u = _fse_run(n34u, c34, d34, {970: (4000.0, 'Supply Air', 'SD-34')}, 960)
+check("case34 unreadable transition length counts 0: elbow at L 3.0 ft",
+      abs(sa34u.get('fse_inwc', -1) -
+          FSE.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 3.0)['c'] * pv(1000.0)) < 1e-9,
+      "got %r" % sa34u.get('fse_inwc'))
+# two transitions back to back (curb adapter then a reducer): both passed
+n34t = dict(n34)
+n34t[963] = Elem(kind='transition', family_name='Rectangular Transition - Length',
+                 is_round=False,
+                 tgeom=([(4.0, 'rect', 24.0, 24.0, P(0.0)),
+                         (4.0, 'rect', 24.0, 24.0, P(1.0))], 0.0))
+d34t = build([(961, 0.0, 2.0, 1000.0, 4.0, 'Supply Air'),
+              (965, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
+sa34t = _fse_run(n34t, c34, d34t, {970: (4000.0, 'Supply Air', 'SD-34')}, 960)
+check("case34 two transitions in a row are both passed: elbow at L 2 + 0.5 + 1.0 = 3.5 ft",
+      abs(sa34t.get('fse_inwc', -1) - _r34['c'] * pv(1000.0)) < 1e-9,
+      "got %r notes %r" % (sa34t.get('fse_inwc'), sa34t.get('fse_notes')))
 # a tap 3 ft along the first duct is a disruption too
 n34b = {980: _unit({981: SQ24}), 981: Elem(kind='duct', tap_pos={982: 3.0}),
         982: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
@@ -1246,7 +1286,7 @@ t34b = {990: (1000.0, 'Supply Air', 'SD-a'), 991: (3000.0, 'Supply Air', 'SD-b')
 sa34b = _fse_run(n34b, c34b, d34b, t34b, 980)
 check("case34 tap 3 ft along the outlet duct: flagged as a tap, not priced",
       sa34b.get('fse_inwc') == 0.0
-      and any(k == 'warn' and t.startswith('WARNING: tap 3.0 ft')
+      and any(k == 'warn' and t.startswith('WARNING: tap 982, 3.0 ft from the supply outlet')
               for k, t in sa34b.get('fse_notes', ())),
       "notes %r" % (sa34b.get('fse_notes'),))
 
@@ -1313,12 +1353,86 @@ check("case37 unreadable inlet elbow: larger inlet side, smallest r/H row -> 2.5
       and any('conservative' in t for _k, t in ra37.get('fse_notes', ())),
       "got %r notes %r" % (ra37.get('fse_inwc'), ra37.get('fse_notes')))
 
-# 38: duct-rooted pick: no fan connection, skipped with a note.
-sa38 = _fse_run(n32, c32, d32, t32, 920, duct_rooted_ids={920})
-check("case38 duct-rooted pick: fse 0 and the skip is noted",
-      sa38.get('fse_inwc') == 0.0
-      and any('rooted at a picked duct' in t for _k, t in sa38.get('fse_notes', ())),
+# 38: duct pick (Colin, 2026-11-02): the picked duct's unit side end is the
+#     unit outlet. Root duct 2000 (2 ft, 24 x 24, 4000 cfm); behind it the unit
+#     side stretch (elbow 2001, stub 2002) is not walked; elbow 2003 past the
+#     root sits at L 2.0 ft, the root's own length.
+n38 = {2000: Elem(kind='duct'),
+       2001: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False),
+       2003: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c38 = {2000: [2001, 2003], 2001: [2002], 2003: [2004], 2004: [2010]}
+d38 = build([(2000, 0.0, 2.0, 1000.0, 4.0, 'Supply Air'),
+             (2002, 0.0, 0.5, 0.0, 4.0, 'Supply Air'),
+             (2004, 0.0, 10.0, 1000.0, 4.0, 'Supply Air')])
+for _dr in d38.values():
+    _dr.size = '24x24"'
+    _dr.d_h_in = 24.0
+sa38 = _fse_run(n38, c38, d38, {2010: (4000.0, 'Supply Air', 'SD-38')}, 2000,
+                duct_rooted_ids={2000})
+_r38 = FSE.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 2.0)
+check("case38 duct pick: elbow 2003 priced at L 2.0 ft from the unit end of duct 2000",
+      abs(sa38.get('fse_inwc', -1) - _r38['c'] * pv(1000.0)) < 1e-9
+      and [i[0] for i in _fse_items(sa38)] == ['Fan system effect 2003'],
+      "fse %r items %r notes %r" % (sa38.get('fse_inwc'), _fse_items(sa38),
+                                    sa38.get('fse_notes')))
+check("case38 duct pick NOTE names the duct and the outlet",
+      ('note', 'NOTE: duct pick, fan system effect measured from the unit end of '
+               'duct 2000, taken as the unit outlet.') in sa38.get('fse_notes', ()),
       "notes %r" % (sa38.get('fse_notes'),))
+check("case38 the unit side elbow is priced in the unit side stretch, not the system effect",
+      sa38.get('unit_side_fittings') == 1
+      and abs(_items_sum(sa38) - sa38['subtotal_inwc']) < 1e-9,
+      "unit side %r" % (sa38.get('unit_side_fittings'),))
+check("case38 a GRAY elbow on a duct pick reaches the gray id set",
+      _r38['high'] and sa38.get('fse_gray_ids') == {2003},
+      "gray %r high %r" % (sa38.get('fse_gray_ids'), _r38['high']))
+
+# 38b: duct pick on a return with a mitered inlet elbow 1 ft along: ER7-1 on
+#      the r/H 1.0 row (Colin, 2026-11-02), and the elbow is not priced again.
+n38b = {2100: Elem(kind='duct'),
+        2101: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered', is_round=False,
+                   geom={'round': False, 'd_in': None, 'r_in': None, 'w_in': 24.0,
+                         'h_in': 24.0, 'angle': 90.0})}
+c38b = {2100: [2101], 2101: [2102], 2102: [2110]}
+d38b = build([(2100, 0.0, 1.0, 1000.0, 4.0, 'Return Air'),
+              (2102, 0.0, 10.0, 1000.0, 4.0, 'Return Air')])
+for _dr in d38b.values():
+    _dr.size = '24x24"'
+ra38b = _fse_run(n38b, c38b, d38b, {2110: (4000.0, 'Return Air', 'RG-38')}, 2100,
+                 cls='Return Air', duct_rooted_ids={2100})
+_c38b = FSE.inlet_c(False, 1.0, 0.5)[0]
+check("case38b mitered inlet elbow on a duct pick: ER7-1 r/H 1.0, L/H 0.5, not repriced",
+      abs(ra38b.get('fse_inwc', -1) - _c38b * pv(1000.0)) < 1e-9
+      and abs(ra38b.get('fitting_inwc', -1)) < 1e-12,
+      "fse %r fit %r expected %r" % (ra38b.get('fse_inwc'), ra38b.get('fitting_inwc'),
+                                     _c38b * pv(1000.0)))
+check("case38b the mitered NOTE names the elbow and its distance",
+      ('note', 'NOTE: elbow 2101, 1.0 ft from the return inlet, is mitered: ER7-1 read '
+               'on the r/H 1.0 row (Colin, 2026-11-02).') in ra38b.get('fse_notes', ())
+      and any('duct 2100, taken as the unit inlet' in t
+              for _k, t in ra38b.get('fse_notes', ())),
+      "notes %r" % (ra38b.get('fse_notes'),))
+
+# 38c: duct pick with a tap on the picked duct: the tap is measured from the
+#      unit side neighbor (elbow 2201) and flagged by id and distance.
+n38c = {2200: Elem(kind='duct', tap_pos={2205: 1.5}),
+        2201: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False),
+        2205: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+        2203: Elem(kind='duct')}
+c38c = {2200: [2201, 2205, 2203], 2201: [2202], 2205: [2210], 2203: [2211]}
+d38c = build([(2200, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
+              (2202, 0.0, 0.5, 0.0, 4.0, 'Supply Air'),
+              (2203, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
+for _dr in d38c.values():
+    _dr.size = '24x24"'
+sa38c = _fse_run(n38c, c38c, d38c, {2210: (1000.0, 'Supply Air', 'SD-a'),
+                                    2211: (3000.0, 'Supply Air', 'SD-b')}, 2200,
+                 duct_rooted_ids={2200})
+check("case38c tap on the picked duct measured from its unit side neighbor, flagged by id",
+      getattr(n38c[2200], 'tap_from', None) == 2201
+      and any(k == 'warn' and t.startswith('WARNING: tap 2205, 1.5 ft from the supply outlet')
+              for k, t in sa38c.get('fse_notes', ())),
+      "from %r notes %r" % (getattr(n38c[2200], 'tap_from', None), sa38c.get('fse_notes')))
 
 # 39: SWSI switches the outlet tables (Ab/Ao 0.5, L 0: SR7-7 3.80); off = none.
 sa39 = _fse_run(n32, c32, d32, t32, 920,
@@ -1495,14 +1609,22 @@ check("case48 connection feeding equipment directly: noted as not checked",
           for k, t in sa48.get('fse_notes', ())) and sa48.get('fse_inwc') == 0.0,
       "notes %r" % (sa48.get('fse_notes'),))
 
-# 49: walk-level duct-rooted pick: the root IS a duct (no unit on the run).
-c49 = {1800: [1810]}
-d49 = build([(1800, 0.1, 10.0, 800.0, 1.0, 'Supply Air')])
-sa49 = _fse_run({}, c49, d49, {1810: (800.0, 'Supply Air', 'SD-49')}, 1800,
+# 49: duct pick with nothing on its unit side and a tap on it: the taps
+#     cannot be put in order from the unit end, and the report says so.
+n49 = {1800: Elem(kind='duct', tap_pos={1805: 4.0}),
+       1805: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False)}
+c49 = {1800: [1805, 1801], 1805: [1810], 1801: [1811]}
+d49 = build([(1800, 0.1, 10.0, 800.0, 1.0, 'Supply Air'),
+             (1801, 0.0, 10.0, 600.0, 1.0, 'Supply Air')])
+for _dr in d49.values():
+    _dr.size = '12x12"'
+sa49 = _fse_run(n49, c49, d49, {1810: (200.0, 'Supply Air', 'SD-49'),
+                                1811: (600.0, 'Supply Air', 'SD-49b')}, 1800,
                 duct_rooted_ids={1800})
-check("case49 duct root: fse 0 and 'rooted at a picked duct' noted",
-      sa49.get('fse_inwc') == 0.0
-      and any('rooted at a picked duct' in t for _k, t in sa49.get('fse_notes', ())),
+check("case49 duct pick, no unit side: taps unordered, NOTE names the duct",
+      any(k == 'note' and t.startswith('NOTE: duct pick, nothing found on the unit side '
+                                       'of duct 1800')
+          for k, t in sa49.get('fse_notes', ())),
       "notes %r" % (sa49.get('fse_notes'),))
 
 # 50: a VAV box picked as a root: no system effect on boxes (Colin), noted.
@@ -1565,6 +1687,43 @@ check("case51 the take-off line for the main shows 5.0 of 10.0 ft and the steppe
       "items %r" % (_it51,))
 check("case51 the index run items still add up to the subtotal",
       abs(sum(i[3] or 0.0 for i in far51.get('items', ())) - far51['subtotal_inwc']) < 1e-9)
+
+# 52: a damper on a MAIN does not cancel a branch's assumed balancing damper
+#     (Colin, 2026-11-02: dampers on mains are fire/smoke dampers). Unit 3000
+#     -> main 3001 -> balancing damper 3002 -> main 3003 with tap 3004 -> branch
+#     3006 -> T3010 (the index run, 0.5 in. wc on the branch); the main carries
+#     on as 3005 -> T3011.
+def _d52(branch_damper, main_damper=True):
+    n = {3000: Elem(kind='equipment'), 3003: Elem(kind='duct', tap_pos={3004: 2.0}),
+         3004: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+         3005: Elem(kind='duct'), 3006: Elem(kind='duct'),
+         3002: Elem(kind='accessory', family_name='Balancing Damper - Rectangular'),
+         3007: Elem(kind='accessory', family_name='Balancing Damper - Rectangular')}
+    ch = {3000: [3001], 3001: [3002] if main_damper else [3003], 3002: [3003],
+          3003: [3004, 3005], 3005: [3011],
+          3004: [3007] if branch_damper else [3006], 3007: [3006], 3006: [3010]}
+    d = build([(3001, 0.0, 5.0, 800.0, 1.0, 'Supply Air'),
+               (3003, 0.0, 10.0, 800.0, 1.0, 'Supply Air'),
+               (3005, 0.0, 10.0, 600.0, 1.0, 'Supply Air'),
+               (3006, 0.5, 10.0, 400.0, 0.5, 'Supply Air')])
+    t = {3010: (200.0, 'Supply Air', 'SD-52'), 3011: (600.0, 'Supply Air', 'SD-52b')}
+    return crit([3000], ch, d, t, n)[3000]['Supply Air']
+sa52 = _d52(branch_damper=False)
+check("case52 main damper only: the branch still pays the assumed damper (2 dampers)",
+      sa52['terminal_id'] == 3010
+      and list(sa52['component_keys']).count('damper') == 2
+      and any(i[0] == 'Accessory (assumed)' for i in sa52['items']),
+      "term %r keys %r" % (sa52['terminal_id'], sa52['component_keys']))
+sa52b = _d52(branch_damper=True)
+check("case52 a damper drawn on the branch replaces the assumed one (main + branch = 2)",
+      list(sa52b['component_keys']).count('damper') == 2
+      and not any(i[0] == 'Accessory (assumed)' for i in sa52b['items']),
+      "keys %r" % (sa52b['component_keys'],))
+sa52c = _d52(branch_damper=True, main_damper=False)
+check("case52 branch damper alone: charged once, nothing assumed, items trace the total",
+      list(sa52c['component_keys']).count('damper') == 1
+      and abs(_items_sum(sa52c) - sa52c['subtotal_inwc']) < 1e-9,
+      "keys %r" % (sa52c['component_keys'],))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

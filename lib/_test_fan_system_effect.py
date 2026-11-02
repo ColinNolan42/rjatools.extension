@@ -89,8 +89,10 @@ class OutletTest(unittest.TestCase):
         # reads 1.00 there; B and D cross at 0.47 and 0.46): 0.5 x 5.714 =
         # 2.857 ft, rounded up to 2.9 ft.
         self.assertAlmostEqual(r['fix_ft'], 2.9)
-        txt = F.high_text(r, 'supply outlet')
+        txt = F.high_text(r, 'supply outlet', 921)
         self.assertTrue(txt.startswith('GRAY: System Effect Pressure Loss too high'))
+        # names the elbow and its distance from the unit (Colin, 2026-11-02)
+        self.assertIn('at elbow 921, 0.0 ft from the supply outlet', txt)
         self.assertIn('increase length of duct to 2.9 ft', txt)
         self.assertIn('SR7-11', txt)
         # at 2.9 ft C is under 1.0, at 2.8 ft it is not
@@ -154,7 +156,8 @@ class InletTest(unittest.TestCase):
         self.assertAlmostEqual(r['v_fpm'], 1000.0)
         # C under 1.0 from L/D 2 x 0.20 / 0.53 = 0.755: 1.51 ft, up to 1.6 ft
         self.assertAlmostEqual(r['fix_ft'], 1.6)
-        txt = F.high_text(r, 'return inlet')
+        txt = F.high_text(r, 'return inlet', 1002)
+        self.assertIn('elbow 1002, 0.0 ft from the return inlet', txt)
         self.assertIn('increase length of duct to 1.6 ft', txt)
         self.assertIn('ED7-2', txt)
         self.assertEqual(F.basis_text(r), 'ED7-2 r/D 1.00, L 0.0 ft, D 24 in')
@@ -207,19 +210,22 @@ class SettingsTest(unittest.TestCase):
         self.assertIn('SR7-5 to SR7-8', m2)
         self.assertIn('0.70', m2)
         self.assertEqual(a2, [])
-        self.assertIn('connection adapter', m)
+        self.assertNotIn('adapter', m)
+        self.assertIn('their length counted', m)
+        self.assertIn('r/H 1.0', m)
         m3, a3 = F.method_lines({'on': False})
         self.assertIn('not included', m3)
         self.assertEqual(a3, [])
 
-    def test_connection_adapter(self):
-        # OLMC: a 0.4 ft transition at the unit is the adapter, passed once
-        self.assertTrue(F.is_adapter('transition', 0.4, 0))
-        self.assertTrue(F.is_adapter('transition', 1.0, 0))
-        self.assertFalse(F.is_adapter('transition', 1.1, 0))
-        self.assertFalse(F.is_adapter('transition', 0.4, 1))
-        self.assertFalse(F.is_adapter('elbow', 0.4, 0))
-        self.assertIn('adapter', F.adapter_text(5, 0.4, 'supply outlet'))
+    def test_no_adapter_rule(self):
+        # Colin, 2026-11-02: every transition in the window is passed, its
+        # length counted, so the 1.0 ft adapter rule is gone.
+        for name in ('is_adapter', 'adapter_text', 'ADAPTER_TRANSITION_FT'):
+            self.assertFalse(hasattr(F, name), name)
+        self.assertEqual(F.MITERED_R_OVER_H, 1.0)
+        # the r/H 1.0 row of ER7-1 at L 0 is below the unreadable row (r/H 0.5)
+        self.assertLess(F.inlet_c(False, F.MITERED_R_OVER_H, 0.0)[0],
+                        F.inlet_c(False, None, 0.0)[0])
 
     def test_blast_ratio_validation(self):
         self.assertEqual(F.parse_blast_ratio('0.5'), (0.5, None))
@@ -243,7 +249,8 @@ class SettingsTest(unittest.TestCase):
         self.assertTrue(F.ER7_1_SQUARE_ASSUMPTION.startswith('ASSUMPTION: ER7-1'))
 
     def test_text_builders(self):
-        t = F.disruption_text('transition', 'supply outlet', 1.0, 5.7, 'Le')
+        t = F.disruption_text('tap', 982, 'supply outlet', 1.0, 5.7, 'Le')
+        self.assertTrue(t.startswith('WARNING: tap 982, 1.0 ft from the supply outlet'))
         self.assertIn('not priced', t)
         self.assertIn('inside Le (5.7 ft)', t)
 
@@ -255,7 +262,8 @@ class ReportTest(unittest.TestCase):
     def test_gray_once_per_unit_console_and_sheet(self):
         import console_report as cr
         import duct_perf_console as dpc
-        gray = F.high_text(F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 0.0), 'supply outlet')
+        gray = F.high_text(F.outlet_effect('DWDI', 0.5, 4.0, 4000.0, 0.0), 'supply outlet',
+                           921)
         unit = {'label': 'RTU-1', 'classes': [
             {'sys_class': 'Supply Air', 'rows': [], 'subtotal': 0.1, 'safety': 0.01,
              'total': 0.11, 'notes': [], 'warnings': []},
@@ -295,6 +303,13 @@ class DialogTest(unittest.TestCase):
         pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
         inner = set(e.get(xn) for e in pnl.iter() if e.get(xn))
         self.assertTrue({'cb_fse', 'pnl_fse', 'tb_blast'} <= inner)
+
+    def test_return_filter_starts_checked(self):
+        # Colin, 2026-11-02: Include return filter is on by default, in the
+        # themed dialog and the legacy fallback alike.
+        self.assertEqual(len(re.findall(r'^\s*cb_filter\.IsChecked = True', self.src,
+                                        re.M)), 2)
+        self.assertNotIn('cb_filter.IsChecked = False', self.src)
 
     def test_settings_result_defaults_for_legacy_dialog(self):
         m = re.search(r"^def _settings_result\(.*?\n    }\n", self.src, re.S | re.M)
