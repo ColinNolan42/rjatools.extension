@@ -2532,6 +2532,16 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         qc, qb, ab, _ft = flows.get(t, (dr.cfm, None, None, None))
         elem = all_nodes.get(t)
         res = None
+        # Why the table could not be read, for the FALLBACK line (Colin,
+        # 2026-11-02: say why, not just "unreadable").
+        if not qb:
+            why = 'the branch carries no airflow, see the Flow = 0 warning'
+        elif not qc:
+            why = 'main airflow unreadable'
+        elif not dr.area_ft2 or elem is None:
+            why = 'main size or tap unreadable'
+        else:
+            why = 'outside the table'
         if qc and qb and dr.area_ft2 and elem is not None:
             fam = hvac_graph.fitting_family_name(elem)
             qs = max(qc - qb, 0.0)
@@ -2552,7 +2562,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             one = c_ws * hvac_graph.velocity_pressure_inwg(dr.fpm)
             res = (one, 'RJA worksheet', c_ws, [],
                    'FALLBACK: tap %s passed on duct %s, RJA worksheet C %.2f '
-                   '(flows or branch area unreadable)' % (t, duct_id, c_ws))
+                   '(%s)' % (t, duct_id, c_ws, why))
         passprice_cache[key] = res
         return res
 
@@ -5087,6 +5097,8 @@ def main():
             name, aid, discharge_cfm, term_count))
         others = []
         for cls in sorted(other_class_cfm.keys()):
+            if not other_class_cfm[cls] or other_class_cfm[cls] <= 0:
+                continue   # '0 CFM Unknown' says nothing (Colin, 2026-11-02)
             summary_lines.append('    + {:.0f} CFM {} feeding this equipment (not counted in discharge total)'.format(
                 other_class_cfm[cls], cls))
             others.append('{:,.0f} CFM {}'.format(float(other_class_cfm[cls]), cls))

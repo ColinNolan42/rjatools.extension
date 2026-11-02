@@ -370,7 +370,8 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertLess(a, n)
         joined = ' '.join(vals)
         self.assertEqual(joined.count('UNPRICED: Fitting 777'), 1)       # deduped
-        self.assertIn('RTU-1 (id 123456): WARNING: Parallel units', joined)
+        self.assertIn('WARNING: Parallel units', joined)
+        self.assertNotIn('RTU-1 (id 123456):', joined)   # one unit, no prefix
         self.assertIn('NOTE: oval duct 8', ' '.join(vals[n:]))
         self.assertLess(y, 0.0)
 

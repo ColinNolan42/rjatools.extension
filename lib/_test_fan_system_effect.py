@@ -299,10 +299,16 @@ class ReportTest(unittest.TestCase):
         # the walker hands every class leaf the same list: gathered twice
         entries = [dpc.correction(k, t, 'RTU-1') for k, t in fse + fse]
         groups = dpc.correction_lines(entries)
-        self.assertEqual(groups[dpc.ACTION], [('gray', 'RTU-1: ' + gray)])
-        self.assertEqual(groups[dpc.NOTES], [('note', 'RTU-1: NOTE: x')])
+        # one unit in the run: no unit prefix (Colin, 2026-11-02)
+        self.assertEqual(groups[dpc.ACTION], [('gray', gray)])
+        self.assertEqual(groups[dpc.NOTES], [('note', 'NOTE: x')])
+        # two units: each line names its unit
+        two = entries + [dpc.correction('note', 'NOTE: y', 'RTU-2')]
+        g2 = dpc.correction_lines(two)
+        self.assertEqual(g2[dpc.ACTION], [('gray', 'RTU-1: ' + gray)])
+        self.assertIn(('note', 'RTU-2: NOTE: y'), g2[dpc.NOTES])
         sheet = dpc.corrections_sheet(entries)
-        self.assertEqual(sheet[0], ('ACTION REQUIRED', ['RTU-1: ' + gray]))  # no 'WARNING:'
+        self.assertEqual(sheet[0], ('ACTION REQUIRED', [gray]))  # no 'WARNING:'
         html = dpc.system_corrections(['#'], [], entries)
         self.assertEqual(html.count('System Effect Pressure Loss too high'), 1)
         self.assertIn(cr.CALLOUT_STYLES['gray'][1], html)

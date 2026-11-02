@@ -249,7 +249,8 @@ NO_FLAGGED = 'No flagged ducts.'
 
 # A line that asks the engineer to change something.
 _ACTION_KINDS = ('warn', 'gray', 'error')
-_ACTION_LEADS = ('WARNING', 'FALLBACK', 'UNPRICED', 'GRAY', 'LOW', 'CHECK FAILED')
+_ACTION_LEADS = ('WARNING', 'FALLBACK', 'UNPRICED', 'GRAY', 'LOW', 'CHECK FAILED',
+                 'CLEARANCE')
 
 
 def correction_group(kind, text):
@@ -282,14 +283,16 @@ def correction_lines(entries):
 
     Each line carries the sheet lead (sheet_lines: 'WARNING: ' on a warning
     without its own lead, 'CHECK FAILED: ' on a failed check) and then its
-    unit, 'RTU-1 (id 5): WARNING: ...'. A line already said for the same unit
-    is dropped. Run wide lines (no unit) come first, then each unit in the
+    unit, 'RTU-1 (id 5): WARNING: ...', only when the run has more than one
+    unit (Colin, 2026-11-02: one unit is named in its ESP block already). A
+    line already said for the same unit is dropped. Run wide lines (no unit) come first, then each unit in the
     order it first appears; within that, the order they were found."""
     units = []
     for _g, unit, _k, _t in entries:
         if unit not in units:
             units.append(unit)
     rank = dict((u, (0 if u is None else 1, i)) for i, u in enumerate(units))
+    prefix = len([u for u in units if u]) > 1
     out = {ACTION: [], NOTES: []}
     seen = set()
     ordered = sorted(enumerate(entries), key=lambda it: (rank[it[1][1]], it[0]))
@@ -302,7 +305,7 @@ def correction_lines(entries):
             continue
         seen.add(key)
         line = sheet_lines([(kind, text)])[0] if group == ACTION else text
-        if unit:
+        if unit and prefix:
             line = '{}: {}'.format(unit, line)
         out[group if group in out else NOTES].append((kind, line))
     return out

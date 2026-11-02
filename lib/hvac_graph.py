@@ -257,17 +257,17 @@ def clearance_texts(kind, role, duct_h, down_h, up_label, down_label,
     m = _fmt_in(margin_in)
     if kind == 'branch':
         reason = 'Branch {}" too tall for {}" main'.format(d, h)
-        note = ('NOTE: branch duct {} leaves main {} with only {}" of height, '
+        note = ('CLEARANCE: branch duct {} leaves main {} with only {}" of height, '
                 '{}" min. Raise the main to {}" tall, or make the branch {}" '
                 'tall or less.').format(down_label, up_label, step, m, need, max_ok)
     elif kind == 'neck':
         reason = 'Neck {}" too tall for {}" {}'.format(d, h, role.lower())
-        note = ('NOTE: diffuser {} neck is within {}" of the height of duct {}, '
+        note = ('CLEARANCE: diffuser {} neck is within {}" of the height of duct {}, '
                 '{}" min. Raise the duct to {}" tall, or reduce the neck to {}" '
                 'or less.').format(down_label, step, up_label, m, need, max_ok)
     else:
         reason = '{} step {}" to {}", {}" min'.format(role, h, d, m)
-        note = ('NOTE: {} duct {} steps down to duct {} by only {}" of height, '
+        note = ('CLEARANCE: {} duct {} steps down to duct {} by only {}" of height, '
                 '{}" min. Make duct {} {}" tall or less, or keep it {}" tall.'
                 ).format(role.lower(), up_label, down_label, step, m,
                          down_label.split(' ')[0], max_ok, h)
@@ -513,6 +513,25 @@ def max_downstream_height_in(node_id, nodes, children):
     equal or larger (a continuous run needs no transition clearance).
     """
     return downstream_height_elem(node_id, nodes, children)[0]
+
+
+def _terminal_names(net, ids, limit=12):
+    """'D-5 (id 3650180), id 3650181' for a warning line: each terminal's
+    Mark and id (Colin, 2026-11-02: every note names its element), at most
+    limit of them."""
+    names = []
+    for nid in ids[:limit]:
+        mark = None
+        elem = net.nodes.get(nid)
+        try:
+            p = elem.LookupParameter('Mark') if elem is not None else None
+            mark = p.AsString() if p is not None else None
+        except Exception:
+            mark = None
+        names.append('{} (id {})'.format(mark, nid) if mark else 'id {}'.format(nid))
+    if len(ids) > limit:
+        names.append('and {} more'.format(len(ids) - limit))
+    return ', '.join(names)
 
 
 def downstream_height_elem(node_id, nodes, children):
@@ -2369,12 +2388,13 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
             'Check that diffusers are physically connected to the duct system.')
     if len(net.zero_terminals) > 0:
         net.warnings.append(
-            '{} terminal(s) have Flow = 0. Assign CFM values in the model '
-            'before running Duct Performance.'.format(len(net.zero_terminals)))
+            '{} terminal(s) have Flow = 0: {}. Assign CFM values in the model '
+            'before running Duct Performance.'.format(
+                len(net.zero_terminals), _terminal_names(net, net.zero_terminals)))
     if len(net.missing_flow) > 0:
         net.warnings.append(
-            '{} terminal(s) are missing the "Flow" parameter entirely.'.format(
-                len(net.missing_flow)))
+            '{} terminal(s) are missing the "Flow" parameter entirely: {}.'.format(
+                len(net.missing_flow), _terminal_names(net, net.missing_flow)))
     if len(net.no_area_ducts) > 0:
         net.warnings.append(
             '{} duct(s) have no dimension data — will show gray.'.format(
