@@ -373,6 +373,23 @@ class DialogTest(unittest.TestCase):
         pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
         inner = set(e.get(xn) for e in pnl.iter() if e.get(xn))
         self.assertTrue({'cb_fse', 'pnl_fse', 'tb_blast'} <= inner)
+        # Exhaust fans section under VAV boxes, inside the external static
+        # group; the VAV dropdown and the Scope exhaust panel are gone
+        # (Colin, 2026-11-02).
+        self.assertTrue({'pnl_vav_static', 'pnl_exh_static', 'cb_exh_backdraft',
+                         'tb_backdraft', 'cb_exh_cap', 'tb_exh_cap', 'tb_exh_sp'} <= inner)
+        exh = [e for e in root.iter() if e.get(xn) == 'pnl_exh_static'][0]
+        exh_inner = set(e.get(xn) for e in exh.iter() if e.get(xn))
+        self.assertTrue({'cb_exh_backdraft', 'cb_exh_cap', 'tb_exh_sp'} <= exh_inner)
+        for gone in ('exp_vav', 'grid_vav', 'pnl_exhaust'):
+            self.assertNotIn(gone, names)
+        order = [e.get(xn) for e in pnl.iter() if e.get(xn)]
+        self.assertLess(order.index('pnl_vav_static'), order.index('pnl_exh_static'))
+
+    def test_exhaust_defaults_and_mp_row(self):
+        self.assertIn('cb_exh_backdraft.IsChecked = True', self.src)
+        self.assertIn('cb_exh_cap.IsChecked = False', self.src)
+        self.assertIn("lb.Text = 'Supply Air (medium pressure)'", self.src)
 
     def test_return_filter_starts_checked(self):
         # Colin, 2026-11-02: Include return filter is on by default, in the

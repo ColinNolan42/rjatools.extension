@@ -1961,6 +1961,43 @@ ea56o = _fse_run(_swirl_nodes((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)), c56,
 check("case56 fan system effect unticked: no swirl check",
       not ea56o.get('fse_red_ids'), "red %r" % (ea56o.get('fse_red_ids'),))
 
+# ── case 57: Include backdraft damper (Colin, 2026-11-02) ─────────────────────
+# An exhaust fan run with no backdraft damper modeled pays one 'backdraft'
+# drop; one drawn on the run is not charged twice; a root outside
+# backdraft_roots (a ceiling fan, built in) and a supply run never pay it.
+COMP57 = {'diffuser': 0.05, 'backdraft': 0.07, 'damper': 0.25}
+n57 = {2400: _unit({}), 2401: Elem('duct')}
+c57 = {2400: [2401, 2402], 2401: [2410], 2402: [2420]}
+d57 = build([(2401, 0.02, 10.0, 600.0, 1.0, 'Exhaust Air'),
+             (2402, 0.02, 10.0, 600.0, 1.0, 'Supply Air')])
+t57 = {2410: (600.0, 'Exhaust Air', 'EG-57'), 2420: (600.0, 'Supply Air', 'SD-57')}
+off57 = crit([2400], c57, d57, t57, n57, 0.0, comp_values=COMP57)[2400]
+on57 = crit([2400], c57, d57, t57, n57, 0.0, comp_values=COMP57,
+            backdraft_roots={2400})[2400]
+check("case57 ticked: the exhaust run pays one backdraft drop (0.07 here)",
+      abs(on57['Exhaust Air']['component_inwc'] - off57['Exhaust Air']['component_inwc'] - 0.07) < 1e-12
+      and list(on57['Exhaust Air']['component_keys']).count('backdraft') == 1,
+      "keys %r" % (on57['Exhaust Air']['component_keys'],))
+check("case57 ticked: a take-off line names it as assumed",
+      any(i[0] == 'Accessory (assumed)' and i[1] == 'Backdraft damper at the fan'
+          for i in on57['Exhaust Air']['items'])
+      and abs(_items_sum(on57['Exhaust Air']) - on57['Exhaust Air']['subtotal_inwc']) < 1e-9)
+check("case57 ticked: the supply run from the same unit is unchanged",
+      abs(on57['Supply Air']['total_inwc'] - off57['Supply Air']['total_inwc']) < 1e-12)
+check("case57 a root outside backdraft_roots (a ceiling fan) pays none",
+      'backdraft' not in crit([2400], c57, d57, t57, n57, 0.0, comp_values=COMP57,
+                              backdraft_roots=set())[2400]['Exhaust Air']['component_keys'])
+n57m = {2400: _unit({}), 2401: Elem('duct'),
+        2403: Elem('accessory', family_name='RJA - Backdraft Damper - Automatic - Round')}
+c57m = {2400: [2401], 2401: [2403], 2403: [2410]}
+m57 = crit([2400], c57m, build([(2401, 0.02, 10.0, 600.0, 1.0, 'Exhaust Air')]),
+           {2410: (600.0, 'Exhaust Air', 'EG-57')}, n57m, 0.0, comp_values=COMP57,
+           backdraft_roots={2400})[2400]['Exhaust Air']
+check("case57 a backdraft damper modeled on the run: priced once, none assumed",
+      list(m57['component_keys']).count('backdraft') == 1
+      and not any(i[0] == 'Accessory (assumed)' for i in m57['items']),
+      "keys %r" % (m57['component_keys'],))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

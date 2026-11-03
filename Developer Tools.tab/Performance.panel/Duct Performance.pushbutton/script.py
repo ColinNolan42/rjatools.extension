@@ -218,42 +218,11 @@ _SETTINGS_XAML = '''
                 <CheckBox x:Name="cb_vav" Content="VAV System"
                           ToolTip="Supply mains between the unit and the VAV box inlets are checked as medium pressure (MP). Single duct and fan powered boxes alike."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Boxes are found by position: supply equipment entered through its inlet. Ductwork after a box is checked as usual."/>
-                <Expander x:Name="exp_vav" IsExpanded="False" Margin="20,4,0,0"
-                          ToolTip="VAV limits and checks. Greyed out until VAV System is ticked.">
-                    <Expander.Header>
-                        <TextBlock FontWeight="SemiBold" Text="VAV"/>
-                    </Expander.Header>
-                    <Border Style="{DynamicResource RjaGroupBorder}" Margin="0,6,0,0">
-                        <Grid x:Name="grid_vav">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                        </Grid>
-                    </Border>
-                </Expander>
+                           Text="Boxes are found by position: supply equipment entered through its inlet. Ductwork after a box is checked as usual. Medium pressure limits are under Main duct limits."/>
                 <CheckBox x:Name="cb_exhaust" Content="Exhaust System" Margin="0,8,0,0"
                           ToolTip="Lists exhaust fans in the equipment list and reads a ceiling exhaust fan (its only duct connection is Exhaust Air, out). Unticked, exhaust fans are hidden from the list."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Unticked, exhaust fans are hidden from the equipment list, as VAV boxes are with VAV System unticked."/>
-                <Border x:Name="pnl_exhaust" Style="{DynamicResource RjaGroupBorder}" Margin="20,4,0,0">
-                    <StackPanel>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Backdraft damper" Width="170" VerticalAlignment="Center"/>
-                            <TextBox x:Name="tb_backdraft" Width="56" Margin="0,0,6,0"
-                                     ToolTip="Known drop of each backdraft damper on the index run, in. wc. Cannot be negative."/>
-                            <TextBlock Text="in. wc known drop, each" VerticalAlignment="Center"/>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                            <TextBlock Text="Exhaust fan rated static" Width="170" VerticalAlignment="Center"/>
-                            <TextBox x:Name="tb_exh_sp" Width="56" Margin="0,0,6,0"
-                                     ToolTip="The static the exhaust fan is selected at. The exhaust external static is checked against it. A ceiling exhaust fan's prompt starts at this value."/>
-                            <TextBlock Text="in. wc, the exhaust ESP is checked against it" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
+                           Text="Unticked, exhaust fans are hidden from the equipment list, as VAV boxes are with VAV System unticked. Exhaust fan inputs are under the external static option."/>
 
                 <!-- Main duct limits -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
@@ -310,8 +279,6 @@ _SETTINGS_XAML = '''
                                      ToolTip="Known filter drop in in. wc. Cannot be negative."/>
                             <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <CheckBox x:Name="cb_exh_cap" Content="Include exhaust roof cap" Margin="0,8,0,0"
-                                  ToolTip="Adds the Wall / roof cap drop (Advanced settings, component drops) once to every exhaust index run, for an inline fan discharging through a roof or wall cap. Leave off for an upblast roof fan. A ceiling exhaust fan always pays its cap."/>
                         <CheckBox x:Name="cb_fse" Content="Include fan system effect" Margin="0,10,0,0"
                                   ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. Transitions and taps there are flagged, not priced."/>
                         <StackPanel x:Name="pnl_fse" Margin="20,4,0,0">
@@ -341,6 +308,33 @@ _SETTINGS_XAML = '''
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                             </Grid>
+                        </StackPanel>
+                        <StackPanel x:Name="pnl_exh_static" Margin="0,10,0,0" Visibility="Collapsed">
+                            <TextBlock FontWeight="SemiBold" Text="Exhaust fans"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <CheckBox x:Name="cb_exh_backdraft" Content="Include backdraft damper" Width="190" VerticalAlignment="Center"
+                                          ToolTip="Adds one backdraft damper drop to an exhaust fan's run when none is modeled on it. A ceiling exhaust fan has one built in and is never charged."/>
+                                <TextBox x:Name="tb_backdraft" Width="56" Margin="0,0,6,0"
+                                         ToolTip="Known drop of each backdraft damper, in. wc. Also prices a backdraft damper modeled on the run. Cannot be negative."/>
+                                <TextBlock Text="in. wc, added once where none is modeled" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                                       Text="Inline and roof exhaust fans. A ceiling exhaust fan has one built in. A modeled backdraft damper is priced at this drop, never twice."/>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <CheckBox x:Name="cb_exh_cap" Content="Include roof / wall cap" Width="190" VerticalAlignment="Center"
+                                          ToolTip="Adds the roof / wall cap drop once to every exhaust index run, for an inline fan discharging through a roof or wall cap. Leave off for an upblast roof fan, which discharges itself."/>
+                                <TextBox x:Name="tb_exh_cap" Width="56" Margin="0,0,6,0"
+                                         ToolTip="Known drop of a roof or wall cap, in. wc. Also prices a ceiling exhaust fan's own cap. Cannot be negative."/>
+                                <TextBlock Text="in. wc, added once to every exhaust run" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                                       Text="For an inline fan. Leave off for an upblast roof fan, which pulls the air and discharges itself. A ceiling exhaust fan always pays its cap."/>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <TextBlock Text="Exhaust fan rated static" Width="190" VerticalAlignment="Center"/>
+                                <TextBox x:Name="tb_exh_sp" Width="56" Margin="0,0,6,0"
+                                         ToolTip="The static the exhaust fan is selected at. The exhaust external static is checked against it. A ceiling exhaust fan's prompt starts at this value."/>
+                                <TextBlock Text="in. wc, the exhaust ESP is checked against it" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -468,6 +462,8 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
 
     fan_effect: {'on', 'fan_type', 'blast_ratio'}; None (the legacy dialog,
     which has no fields for it) takes fan_system_effect.default_settings().
+    exhaust_settings: {'rated_sp', 'backdraft' (Include backdraft damper)};
+    a missing 'backdraft' is taken as on in main().
     """
     limits = dict(limits)
     if vav:
@@ -515,11 +511,11 @@ def _show_velocity_settings_xaml(use_theme):
     cb_full_diag = N('cb_full_diag')
     cb_vav = N('cb_vav')
     cb_exhaust = N('cb_exhaust')
-    pnl_exhaust = N('pnl_exhaust')
+    pnl_exh_static = N('pnl_exh_static')
+    cb_exh_backdraft = N('cb_exh_backdraft')
     tb_backdraft = N('tb_backdraft')
+    tb_exh_cap = N('tb_exh_cap')
     tb_exh_sp = N('tb_exh_sp')
-    exp_vav = N('exp_vav')
-    grid_vav = N('grid_vav')
     pnl_vav_static = N('pnl_vav_static')
     grid_vav_static = N('grid_vav_static')
     grid_limits = N('grid_limits')
@@ -598,8 +594,9 @@ def _show_velocity_settings_xaml(use_theme):
         'the straight length that brings it under. The inlet tables are printed for '
         'SWSI fans.' % fan_system_effect.HIGH_LOSS_INWC)
     tb_backdraft.Text = '%.2f' % fitting_tables.component_of('backdraft')
+    tb_exh_cap.Text = '%.2f' % fitting_tables.component_of('cap')
     tb_exh_sp.Text = '%.2f' % EXHAUST_FAN_RATED_SP_DEFAULT
-    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_backdraft, tb_exh_sp):
+    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_backdraft, tb_exh_cap, tb_exh_sp):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
@@ -607,6 +604,8 @@ def _show_velocity_settings_xaml(use_theme):
     cb_exhaust.IsChecked = False     # default off (Colin, 2026-11-02)
     cb_static.IsChecked = False
     cb_filter.IsChecked = True       # default on (Colin, 2026-11-02)
+    cb_exh_backdraft.IsChecked = True   # default on (Colin, 2026-11-02)
+    cb_exh_cap.IsChecked = False     # off: an upblast roof fan has no cap
 
     # ── main duct limits grid ───────────────────────────────────────────────
     _add_row_def(grid_limits)
@@ -635,6 +634,24 @@ def _show_velocity_settings_xaml(use_theme):
                       ' main ducts, in in. wc per 100 ft. Must be greater than 0.')
         _put(grid_limits, fb, 2, r)
         fric_boxes[i] = fb
+    # The VAV medium pressure supply row, shown only with VAV System ticked
+    # (Colin, 2026-11-02: replaces the VAV dropdown under Scope).
+    vav_boxes = {}
+    mp_row = []
+    r = len(_DV_ROWS) + 1
+    _add_row_def(grid_limits)
+    lb = TextBlock()
+    lb.Text = 'Supply Air (medium pressure)'
+    lb.VerticalAlignment = VerticalAlignment.Center
+    lb.ToolTip = 'VAV supply mains from the unit to the box inlets.'
+    _put(grid_limits, lb, 0, r)
+    mp_row.append(lb)
+    for col, (key, label, _unit, default, _kind) in zip((1, 2), vav_checks.VAV_LIMIT_FIELDS):
+        tb = _box(vav_checks.format_default(default), 80, Thickness(0, 2, 24, 2))
+        tb.ToolTip = label + ', ' + _unit + '. Must be greater than 0.'
+        _put(grid_limits, tb, col, r)
+        vav_boxes[key] = tb
+        mp_row.append(tb)
 
     # ── outputs: optional column checkboxes, two columns ────────────────────
     _optional = _optional_columns()
@@ -798,7 +815,7 @@ def _show_velocity_settings_xaml(use_theme):
     _fill_value_grid(
         grid_comp,
         [(k, lbl, 'in. wc', v) for k, lbl, v in fitting_tables.COMPONENT_TABLE
-         if k != 'backdraft'],    # in the Exhaust System panel
+         if k not in ('backdraft', 'cap')],    # in the Exhaust fans section
         comp_boxes, comp_order, '%.3f')
     basis_boxes = {}
     basis_order = []
@@ -815,24 +832,21 @@ def _show_velocity_settings_xaml(use_theme):
           hvac_graph.STANDARD_AIR_DENSITY_LB_FT3)],
         basis_boxes, basis_order, '%g')
 
-    # ── VAV rows: limits in the VAV section, box and static fields under the
-    #    external static option (unit max ESP may be blank) ─────────────────
-    vav_boxes = {}
-    for grid, fields in ((grid_vav, vav_checks.VAV_LIMIT_FIELDS),
-                         (grid_vav_static, vav_checks.VAV_STATIC_FIELDS)):
-        for r, (key, label, unit, default, _kind) in enumerate(fields):
-            _add_row_def(grid)
-            lb = TextBlock()
-            lb.Text = label
-            lb.Margin = Thickness(0, 2, 12, 2)
-            lb.VerticalAlignment = VerticalAlignment.Center
-            _put(grid, lb, 0, r)
-            tb = _box(vav_checks.format_default(default), 64, Thickness(0, 2, 8, 2))
-            _put(grid, tb, 1, r)
-            vav_boxes[key] = tb
-            ex = ui_helpers.rja_hint_block(win, unit)
-            ex.VerticalAlignment = VerticalAlignment.Center
-            _put(grid, ex, 2, r)
+    # ── VAV box and static fields under the external static option (unit
+    #    max ESP may be blank); the MP limits are the Main duct limits row ───
+    for r, (key, label, unit, default, _kind) in enumerate(vav_checks.VAV_STATIC_FIELDS):
+        _add_row_def(grid_vav_static)
+        lb = TextBlock()
+        lb.Text = label
+        lb.Margin = Thickness(0, 2, 12, 2)
+        lb.VerticalAlignment = VerticalAlignment.Center
+        _put(grid_vav_static, lb, 0, r)
+        tb = _box(vav_checks.format_default(default), 64, Thickness(0, 2, 8, 2))
+        _put(grid_vav_static, tb, 1, r)
+        vav_boxes[key] = tb
+        ex = ui_helpers.rja_hint_block(win, unit)
+        ex.VerticalAlignment = VerticalAlignment.Center
+        _put(grid_vav_static, ex, 2, r)
 
     # ── calculation basis reference (condensed) ─────────────────────────────
     ref_rows = [
@@ -861,10 +875,13 @@ def _show_velocity_settings_xaml(use_theme):
                             'a terminal, supply path plus return path. Includes duct '
                             'friction, fittings, balancing dampers, the diffuser and '
                             'the safety factor. Fire / smoke and backdraft dampers are '
-                            'known drops. Excludes the coil and cabinet (already in the '
-                            'published ESP), the filter unless Include return filter is '
-                            'ticked, and an exhaust roof cap unless Include exhaust '
-                            'roof cap is ticked.'),
+                            'known drops. An exhaust fan run with no backdraft damper '
+                            'modeled pays one when Include backdraft damper is ticked '
+                            '(never a ceiling exhaust fan, which has one built in). '
+                            'Excludes the coil and cabinet (already in the published '
+                            'ESP), the filter unless Include return filter is ticked, '
+                            'and an exhaust roof / wall cap unless Include roof / wall '
+                            'cap is ticked (an inline fan; an upblast roof fan has none).'),
         ('Fan system effect', '2001 ASHRAE Fundamentals Eq. 38 (p. 34.14). The first '
                               'disruption past each unit connection: within Le '
                               '(Eq. 36 or 37) of an outlet, within the table floor '
@@ -901,34 +918,18 @@ def _show_velocity_settings_xaml(use_theme):
         # both ticked (Colin, 2026-10-22).
         both = master and bool(cb_vav.IsChecked)
         pnl_vav_static.Visibility = Visibility.Visible if both else Visibility.Collapsed
-    cb_static.Checked += sync_enable
-    cb_static.Unchecked += sync_enable
-    cb_filter.Checked += sync_enable
-    cb_filter.Unchecked += sync_enable
-    cb_fse.Checked += sync_enable
-    cb_fse.Unchecked += sync_enable
-
-    # The VAV section stays greyed out until VAV System is ticked.
-    def sync_vav(s=None, e=None):
-        on = bool(cb_vav.IsChecked)
-        exp_vav.IsEnabled = on
-        exp_vav.Opacity = 1.0 if on else 0.55
-        if not on:
-            exp_vav.IsExpanded = False
-        sync_enable()
-    cb_vav.Checked += sync_vav
-    cb_vav.Unchecked += sync_vav
-
-    # The Exhaust panel stays greyed out until Exhaust System is ticked.
-    def sync_exhaust(s=None, e=None):
-        on = bool(cb_exhaust.IsChecked)
-        pnl_exhaust.IsEnabled = on
-        pnl_exhaust.Opacity = 1.0 if on else 0.55
-    cb_exhaust.Checked += sync_exhaust
-    cb_exhaust.Unchecked += sync_exhaust
+        # Exhaust fans, the same way: Exhaust System and external static
+        # both ticked (Colin, 2026-11-02).
+        exh = master and bool(cb_exhaust.IsChecked)
+        pnl_exh_static.Visibility = Visibility.Visible if exh else Visibility.Collapsed
+        # The medium pressure supply row shows with VAV System alone.
+        vis = Visibility.Visible if bool(cb_vav.IsChecked) else Visibility.Collapsed
+        for el in mp_row:
+            el.Visibility = vis
+    for cb in (cb_static, cb_filter, cb_fse, cb_vav, cb_exhaust):
+        cb.Checked += sync_enable
+        cb.Unchecked += sync_enable
     sync_enable()
-    sync_vav()
-    sync_exhaust()
 
     # ── OK: validate every field, report inline, window stays open ──────────
     def _collect():
@@ -1001,11 +1002,17 @@ def _show_velocity_settings_xaml(use_theme):
                 filter_inwc = f
 
         exhaust = bool(cb_exhaust.IsChecked)
-        exhaust_settings = {'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT}
-        if exhaust:
+        exhaust_settings = {'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT,
+                            'backdraft': bool(cb_exh_backdraft.IsChecked)}
+        if exhaust and ext_static:
+            # The two drops price modeled dampers and a ceiling fan's own cap
+            # too, so they are read whether or not their box is ticked.
             bd = num(tb_backdraft, 'Backdraft damper drop', 'nonneg')
             if bd is not None:
                 comp_values['backdraft'] = bd
+            cap = num(tb_exh_cap, 'Roof / wall cap drop', 'nonneg')
+            if cap is not None:
+                comp_values['cap'] = cap
             sp = num(tb_exh_sp, 'Exhaust fan rated static', 'pos')
             if sp is not None:
                 exhaust_settings['rated_sp'] = sp
@@ -1023,7 +1030,7 @@ def _show_velocity_settings_xaml(use_theme):
         vav = bool(cb_vav.IsChecked)
         vav_settings = vav_checks.default_settings()
         if vav:
-            fields = [(f, (exp_vav,)) for f in vav_checks.VAV_LIMIT_FIELDS]
+            fields = [(f, ()) for f in vav_checks.VAV_LIMIT_FIELDS]
             if ext_static:
                 fields += [(f, ()) for f in vav_checks.VAV_STATIC_FIELDS]
             for (key, label, _unit, _default, kind), exps in fields:
@@ -1039,7 +1046,7 @@ def _show_velocity_settings_xaml(use_theme):
                                   ext_static, safety_pct, c_values, comp_values,
                                   calc_basis, filter_inwc, vav, vav_settings,
                                   fan_effect,
-                                  ext_static and bool(cb_exh_cap.IsChecked),
+                                  ext_static and exhaust and bool(cb_exh_cap.IsChecked),
                                   exhaust, exhaust_settings)
         return errors, values
 
@@ -2277,7 +2284,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         c_values=None, comp_values=None,
                         duct_rooted_ids=None, return_filter_inwc=0.0,
                         vav_box_ids=None, vav_box_drop_inwc=None,
-                        fan_effect=None, discharge_roots=None, exhaust_cap=False):
+                        fan_effect=None, discharge_roots=None, exhaust_cap=False,
+                        backdraft_roots=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -2324,6 +2332,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     the balancing damper figure; any other accessory on the run is reported as
     uncounted. exhaust_cap: every Exhaust Air index run not from a ceiling
     exhaust fan also pays the 'cap' drop once (an inline fan's roof cap).
+    backdraft_roots: exhaust fan roots whose Exhaust Air run pays one
+    'backdraft' drop when no backdraft damper is modeled on it (Include
+    backdraft damper; a ceiling fan's root is left out, its damper is built in).
 
     all_children / all_terminals / all_nodes are keyed by int element id.
     all_duct_results is keyed by the real Revit ElementId, so it is re-keyed by
@@ -3675,6 +3686,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         and not br_damper)
                 if _assumed_damper:
                     keys_here = keys_here + ('damper',)
+                # Include backdraft damper: an exhaust fan's run with none
+                # modeled pays one (Colin, 2026-11-02); one drawn on the run
+                # is already in comp_keys and is never charged twice.
+                _assumed_backdraft = (
+                        backdraft_roots is not None and root_id in backdraft_roots
+                        and (term[1] or sys_class) == 'Exhaust Air'
+                        and 'backdraft' not in comp_keys)
+                if _assumed_backdraft:
+                    keys_here = keys_here + ('backdraft',)
                 comp_here = 0.0
                 for _k in keys_here:
                     comp_here += _comp(_k)
@@ -3725,7 +3745,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             'Accessory (assumed)', 'Balancing damper at ' + (_family or '-'),
                             None, fitting_tables.component_of('damper', comp_values),
                             ('Balancing damper', 'known drop', None, None)),)
-                            if _assumed_damper else ()) + ((
+                            if _assumed_damper else ()) + (((
+                            'Accessory (assumed)', 'Backdraft damper at the fan',
+                            None, fitting_tables.component_of('backdraft', comp_values),
+                            ('Backdraft damper', 'known drop', None, None)),)
+                            if _assumed_backdraft else ()) + ((
                             'Terminal {}'.format(nid), _family or '-', None,
                             fitting_tables.component_of(
                                 'cap' if is_cap else 'diffuser', comp_values),
@@ -4953,6 +4977,9 @@ def main():
     exhaust_on    = dialog_result.get('exhaust', False)
     exh_set       = dialog_result.get('exhaust_settings') or {
         'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT}
+    # Include backdraft damper, default on (Colin, 2026-11-02); the legacy
+    # dialog has no box for it.
+    exh_backdraft = bool(exh_set.get('backdraft', True))
     vav_on        = dialog_result['vav']
     vav_set       = dialog_result['vav_settings']
     fan_effect    = dialog_result.get('fan_effect') or fan_system_effect.default_settings()
@@ -5375,7 +5402,10 @@ def main():
             vav_box_ids=vav_box_ids,
             vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None,
             fan_effect=fan_effect, discharge_roots=discharge_roots,
-            exhaust_cap=exhaust_cap)
+            exhaust_cap=exhaust_cap,
+            # Every exhaust fan but a ceiling one, whose damper is built in.
+            backdraft_roots=(set(exhaust_fan_roots) - set(discharge_roots or ())
+                             if exh_backdraft else None))
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
         esp_rec = {'units': [], 'combined': [],
@@ -5649,8 +5679,13 @@ def main():
         else:
             _not_inc = ('NOT INCLUDED: filter, coil and cabinet, already in the published '
                         'ESP.')
-        _not_inc += (' Exhaust roof cap IS included on every exhaust run.' if exhaust_cap
-                     else ' Exhaust roof cap not included (inline fan discharge).')
+        _not_inc += (' Exhaust roof / wall cap IS included on every exhaust run.' if exhaust_cap
+                     else ' Exhaust roof / wall cap not included (upblast roof fan, or '
+                          'Include roof / wall cap unticked).')
+        if exhaust_on:
+            _not_inc += (' A backdraft damper IS added to an exhaust fan run with none '
+                         'modeled (not a ceiling exhaust fan, built in).' if exh_backdraft
+                         else ' No backdraft damper is added where none is modeled.')
         summary_lines.append('')
         summary_lines.append('  ' + _method)
         for _a in _fse_assume:
