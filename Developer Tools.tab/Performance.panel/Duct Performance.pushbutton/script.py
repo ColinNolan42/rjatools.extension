@@ -3022,7 +3022,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return length
 
     def _fse_first_disruption(root_id, first, win, where='unit connection',
-                              prev=None, seen=None):
+                              prev=None, seen=None, collect=None):
         """(role or None, L ft, node id, notes): the first disruption within
         win feet of the unit connection at node first.
 
@@ -3039,7 +3039,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         prev, seen: a duct pick starts at the picked duct itself (first ==
         root_id), prev its unit side neighbor (None when there is none) and
         seen the unit side nodes, which are not walked. A unit root leaves
-        both None: prev and seen are the unit."""
+        both None: prev and seen are the unit.
+
+        collect: a list for the swirl check. Each elbow inside win is
+        appended as (id, L ft) and the walk goes on past it, to the end of
+        the window or the first disruption that is not an elbow."""
         notes = []
         if seen is None:
             prev, seen = root_id, set([root_id])
@@ -3087,6 +3091,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     fan_system_effect.log.info('fan system effect: transition %s at '
                                                '%.2f ft passed', nid, l_ft)
                     l_ft += _transition_length_ft(elem, nid)
+                elif collect is not None and role == 'elbow':
+                    collect.append((nid, l_ft))
                 elif role not in fitting_tables.ZERO_LOSS_ROLES:
                     fan_system_effect.log.info('fan system effect: %s %s at %.2f ft',
                                                role, nid, l_ft)
@@ -3196,9 +3202,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         Returns {'loss', 'item' (index run item or None), 'where', 'notes',
         'skip': node ids whose own fitting price the system effect replaces
         (an inlet elbow: ED7-2 / ER7-1 include it), 'gray': elbow ids whose
-        loss is HIGH_LOSS_INWC or more, 'assumptions': report ASSUMPTION lines}."""
+        loss is HIGH_LOSS_INWC or more, 'red': the two elbow ids that turn
+        in different planes within 6 Dh (swirl, not priced),
+        'assumptions': report ASSUMPTION lines}."""
         rec = {'loss': 0.0, 'item': None, 'where': 'unit connection', 'notes': [],
-               'skip': set(), 'gray': set(), 'assumptions': []}
+               'skip': set(), 'gray': set(), 'red': set(), 'assumptions': []}
         if _kind(first) == 'equipment':
             rec['notes'].append(('note', 'NOTE: unit connection to element %s not '
                                  'checked for fan system effect: it feeds equipment '
@@ -3249,6 +3257,29 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 return rec
             win = fan_system_effect.inlet_window_ft(is_round_c, size_c)
             win_name = 'the inlet window, 5 %s' % ('D' if is_round_c else 'H')
+        # Two elbows turning in different planes within 6 Dh of the
+        # connection: RED, never priced (Colin, 2026-11-02; supply, return
+        # and exhaust alike). Walked on its own window, past the first elbow.
+        d_h = getattr(flow, 'd_h_in', None)
+        if d_h:
+            swin = fan_system_effect.swirl_window_ft(d_h)
+            elbows = []
+            if pick is not None:
+                _fse_first_disruption(root_id, first, swin, where, prev=pick[0],
+                                      seen=set(pick[1]), collect=elbows)
+            else:
+                _fse_first_disruption(root_id, first, swin, where, collect=elbows)
+            pair = fan_system_effect.swirl_pair(
+                [(e, l, hvac_graph.elbow_turn_normal(all_nodes.get(e))) for e, l in elbows])
+            fan_system_effect.log.info('swirl check: %s, %d elbows within %.2f ft, pair %r',
+                                       where, len(elbows), swin, pair)
+            if pair is not None:
+                notes.append(('red', fan_system_effect.swirl_text(
+                    role_here, where, pair, swin, d_h)))
+                rec['red'].update((pair[0][0], pair[1][0]))
+        else:
+            fan_system_effect.log.info('swirl check: %s first duct Dh NOT FOUND, '
+                                       'not checked', where)
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
                 root_id, first, win, where, prev=pick[0], seen=set(pick[1]))
@@ -3386,6 +3417,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                       if c in fse_recs]
         fse_skip = set()
         fse_gray = set()
+        fse_red = set()
         fse_unit_notes = list(fse_root_notes)
         fse_unit_assume = []
         # Every connection's notes, not only the one the worst path leaves
@@ -3394,6 +3426,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             _r = fse_recs[_f]
             fse_skip |= _r['skip']
             fse_gray |= _r['gray']
+            fse_red |= _r['red']
             fse_unit_notes.extend(_r['notes'])
             for _a in _r['assumptions']:
                 if _a not in fse_unit_assume:
@@ -3607,6 +3640,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         # every class of this root: print them once per unit.
                         'fse_notes':        fse_unit_notes,
                         'fse_gray_ids':     fse_gray,
+                        'fse_red_ids':      fse_red,
                         'fse_assumptions':  fse_unit_assume,
                         'unit_side_fittings': pre[2],
                         'component_keys':   keys_here,
@@ -5236,6 +5270,7 @@ def main():
     esp_start = len(summary_lines)
     critical = None
     fse_gray_ids = set()      # elbows drawn GRAY: fan system effect too high
+    fse_red_ids = set()       # elbows drawn RED: two turn planes within 6 Dh of a unit
     fse_extra_assume = []     # ASSUMPTION lines from the priced fittings
     if ext_static:
         critical = _critical_path_loss(
@@ -5376,6 +5411,7 @@ def main():
                 else:
                     _correct(_kind, _text, unit_label)
             fse_gray_ids.update(_fse_leaf.get('fse_gray_ids', ()))
+            fse_red_ids.update(_fse_leaf.get('fse_red_ids', ()))
             for _a in _fse_leaf.get('fse_assumptions', ()):
                 if _a not in fse_extra_assume:
                     fse_extra_assume.append(_a)
@@ -5743,6 +5779,10 @@ def main():
             # fails outright (RED keeps priority, as everywhere else).
             if nid in fse_gray_ids and worst != 'RED':
                 worst = 'GRAY'
+            # An elbow of a pair turning in different planes within 6 Dh of
+            # a unit is RED (Colin, 2026-11-02), whatever the ducts beside it.
+            if nid in fse_red_ids:
+                worst = 'RED'
             elem_labels[elem.Id] = worst
             fitting_counts[worst] = fitting_counts.get(worst, 0) + 1
 

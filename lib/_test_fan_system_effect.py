@@ -187,6 +187,38 @@ class InletTest(unittest.TestCase):
         self.assertFalse(r['high'])
 
 
+class SwirlTest(unittest.TestCase):
+    """Elbows turning in different planes within 6 Dh (Colin, 2026-11-02)."""
+
+    def test_window_is_six_hydraulic_diameters(self):
+        self.assertEqual(F.SWIRL_DH, 6.0)
+        self.assertAlmostEqual(F.swirl_window_ft(6.0), 3.0)
+
+    def test_planes(self):
+        self.assertTrue(F.planes_differ((0, 1, 0), (1, 0, 0)))
+        self.assertFalse(F.planes_differ((1, 0, 0), (1, 0, 0)))
+        self.assertFalse(F.planes_differ((1, 0, 0), (-1, 0, 0)))   # same plane, other way round
+        self.assertFalse(F.planes_differ((1, 0, 0), (0.999, 0.045, 0)))
+
+    def test_pair_is_the_first_two_in_different_planes(self):
+        elbows = [(1, 0.4, (0, 1, 0)), (2, 0.9, (1, 0, 0)), (3, 2.0, (1, 0, 0))]
+        a, b = F.swirl_pair(elbows)
+        self.assertEqual((a[0], b[0]), (1, 2))
+        self.assertIsNone(F.swirl_pair([(1, 0.4, (1, 0, 0)), (2, 0.9, (1, 0, 0))]))
+        self.assertIsNone(F.swirl_pair([(1, 0.4, None), (2, 0.9, (1, 0, 0))]))
+        self.assertIsNone(F.swirl_pair([(1, 0.4, (0, 1, 0))]))
+
+    def test_text_inlet_and_outlet(self):
+        pair = ((5731293, 0.394, (0, 1, 0)), (5731211, 0.867, (1, 0, 0)))
+        inlet = F.swirl_text(F.INLET, 'exhaust inlet', pair, 3.0, 6.0)
+        self.assertTrue(inlet.startswith('RED: Inlet swirl at the exhaust inlet: elbows '
+                                         '5731293 (0.4 ft) and 5731211 (0.9 ft)'))
+        self.assertIn('Fig. 12', inlet)
+        outlet = F.swirl_text(F.OUTLET, 'supply outlet', pair, 3.0, 6.0)
+        self.assertTrue(outlet.startswith('RED: Close-coupled elbows at the supply outlet'))
+        self.assertNotIn('swirl', outlet.lower())
+
+
 class SettingsTest(unittest.TestCase):
     def test_defaults(self):
         d = F.default_settings()

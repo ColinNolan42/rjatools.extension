@@ -214,7 +214,7 @@ def esp_unit_notes(unit, sheet=False):
 
 # Text that already names what it is keeps its own lead on the sheet.
 _OWN_LEADS = ('WARNING', 'UNPRICED', 'FALLBACK', 'NOTE', 'EXTERNAL STATIC', 'LOW',
-              'GRAY')
+              'GRAY', 'RED')
 
 
 def sheet_lines(notes):
@@ -248,16 +248,16 @@ NO_CORRECTIONS = 'No corrections. Every judged duct is within its limits.'
 NO_FLAGGED = 'No flagged ducts.'
 
 # A line that asks the engineer to change something.
-_ACTION_KINDS = ('warn', 'gray', 'error')
-_ACTION_LEADS = ('WARNING', 'FALLBACK', 'UNPRICED', 'GRAY', 'LOW', 'CHECK FAILED',
+_ACTION_KINDS = ('warn', 'gray', 'red', 'error')
+_ACTION_LEADS = ('WARNING', 'FALLBACK', 'UNPRICED', 'GRAY', 'RED', 'LOW', 'CHECK FAILED',
                  'CLEARANCE')
 
 
 def correction_group(kind, text):
     """ACTION or NOTES for one line. Its own lead decides first: NOTE is
     informational whatever its kind (a lookup read on a table edge, a duct
-    pick), WARNING / FALLBACK / UNPRICED / GRAY / LOW ask for a change. With
-    no lead, kind 'warn', 'gray' or 'error' is an action."""
+    pick), WARNING / FALLBACK / UNPRICED / GRAY / RED / LOW ask for a change.
+    With no lead, kind 'warn', 'gray', 'red' or 'error' is an action."""
     lead = (text or '').lstrip().upper()
     if lead.startswith('NOTE'):
         return NOTES
@@ -268,7 +268,8 @@ def correction_group(kind, text):
 
 def correction(kind, text, unit=None, group=None):
     """One System Corrections entry, (group, unit label or None, kind, text).
-    kind: 'note', 'warn', 'gray' or 'error' (a failed check). group None
+    kind: 'note', 'warn', 'gray', 'red' (a RED plan item) or 'error' (a
+    failed check). group None
     classifies it (correction_group); pass ACTION to force a line whose text
     reads NOTE but asks for a change (a clearance failure)."""
     if group is None:
@@ -312,7 +313,7 @@ def correction_lines(entries):
 
 
 def _callout_kind(kind):
-    return kind if kind in ('gray', 'error') else 'warn'
+    return kind if kind in ('gray', 'red', 'error') else 'warn'
 
 
 def system_corrections(headers, rows, entries, status_col=None, align=None,

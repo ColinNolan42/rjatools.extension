@@ -36,6 +36,7 @@ import fitting_tables  # noqa: E402  (real module, pure Python)
 import vav_checks      # noqa: E402  (real module, pure Python)
 import ashrae_fittings # noqa: E402  (real module, pure Python, reads the JSON tables)
 import fan_system_effect  # noqa: E402  (real module, pure Python)
+import duct_perf_console  # noqa: E402  (real module, pure Python)
 import math            # noqa: E402
 
 src = io.open(SCRIPT_PATH, encoding="utf-8").read()
@@ -119,6 +120,11 @@ def _elbow_geometry(elem):
     return elem.geom
 
 
+def _elbow_turn_normal(elem):
+    """The swirl cases set Elem.normal (a unit (x, y, z)); None = unreadable."""
+    return getattr(elem, 'normal', None) if elem is not None else None
+
+
 def _transition_geometry(elem):
     return elem.tgeom if elem.tgeom else (None, None)
 
@@ -165,6 +171,7 @@ hvac_graph.fitting_family_name     = _fitting_family_name
 hvac_graph.fitting_is_round        = _fitting_is_round
 hvac_graph.fitting_angle_deg       = _fitting_angle_deg
 hvac_graph.elbow_geometry          = _elbow_geometry
+hvac_graph.elbow_turn_normal       = _elbow_turn_normal
 hvac_graph.transition_geometry     = _transition_geometry
 hvac_graph.tap_positions_ft        = _tap_positions_ft
 hvac_graph.connector_areas_ft2     = _connector_areas_ft2
@@ -1874,6 +1881,85 @@ check("case55 a ceiling fan run is not charged a second cap when ticked",
                 {2003: (80.0, 'Exhaust Air', 'Wall / roof cap')},
                 {2000: _unit({2001: RD4}), 2002: Elem(kind='elbow', family_name='Round Elbow', is_round=True)},
                 0.0, discharge_roots={2000: 2003}, exhaust_cap=True)[2000]['Exhaust Air']['component_keys']).count('cap') == 1)
+
+# ── case 56: elbows turning in different planes within 6 Dh (Colin, 2026-11-02)
+# EA 61 at The Hub Boulder: CUE-060 6x6 inlet, 0.394 ft of duct, a mitered 90
+# turning out of the vertical (normal +Y), 0.473 ft, then the riser top
+# offset, two 45s turning in the other plane (normal +X), 1.157 ft apart.
+# 6 Dh = 3.0 ft: the 90 (0.39 ft) and the first 45 (0.87 ft) are the pair.
+SQ6 = {'round': False, 'area_ft2': 0.25, 'd_in': None, 'w_in': 6.0, 'h_in': 6.0}
+_G6 = {'round': False, 'd_in': None, 'r_in': None, 'w_in': 6.0, 'h_in': 6.0}
+
+
+def _swirl_nodes(n90, n45, fam='Rectangular Elbow - Mitered'):
+    nodes = {2200: _unit({2201: SQ6})}
+    for nid, nrm, ang in ((2202, n90, 90.0), (2204, n45, 45.0), (2206, n45, 45.0)):
+        e = Elem(kind='elbow', family_name=fam, is_round=False, geom=dict(_G6, angle=ang))
+        e.normal = nrm
+        nodes[nid] = e
+    return nodes
+
+
+def _swirl_ducts(cls, d_h=6.0):
+    d = build([(2201, 0.0, 0.394, 400.0, 0.25, cls), (2203, 0.0, 0.473, 400.0, 0.25, cls),
+               (2205, 0.0, 1.157, 400.0, 0.25, cls), (2207, 0.0, 21.5, 400.0, 0.25, cls)])
+    for _r in d.values():
+        _r.d_h_in = d_h
+    return d
+
+
+c56 = {2200: [2201], 2201: [2202], 2202: [2203], 2203: [2204], 2204: [2205],
+       2205: [2206], 2206: [2207], 2207: [2210]}
+t56e = {2210: (100.0, 'Exhaust Air', 'EG-56')}
+ea56 = _fse_run(_swirl_nodes((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                _swirl_ducts('Exhaust Air'), t56e, 2200, cls='Exhaust Air')
+_r56 = [t for k, t in ea56.get('fse_notes', ()) if k == 'red']
+check("case56 EA 61: the 90 and the first 45 turn in different planes within 6 Dh: RED, both drawn red",
+      ea56.get('fse_red_ids') == {2202, 2204} and len(_r56) == 1
+      and _r56[0].startswith('RED: Inlet swirl at the exhaust inlet: elbows 2202 (0.4 ft) '
+                             'and 2204 (0.9 ft) turn in different planes within 6 Dh '
+                             '(3.0 ft, Dh 6 in.)')
+      and 'Fig. 12' in _r56[0],
+      "red %r notes %r" % (ea56.get('fse_red_ids'), _r56))
+check("case56 swirl is not priced: the system effect is the ER7-1 elbow alone",
+      abs(ea56.get('fse_inwc', -1) -
+          FSE.inlet_effect(False, 6.0, 6.0, 0.25, 100.0, 0.394, pv_of=pv)['loss']) < 1e-12,
+      "fse %r" % ea56.get('fse_inwc'))
+check("case56 a RED line is an Action required correction",
+      duct_perf_console.correction('red', _r56[0] if _r56 else '')[0] == duct_perf_console.ACTION)
+ea56s = _fse_run(_swirl_nodes((1.0, 0.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                 _swirl_ducts('Exhaust Air'), t56e, 2200, cls='Exhaust Air')
+check("case56 three elbows turning in one plane: not RED",
+      not ea56s.get('fse_red_ids') and not any(k == 'red' for k, _t in ea56s.get('fse_notes', ())),
+      "red %r" % (ea56s.get('fse_red_ids'),))
+ea56n = _fse_run(_swirl_nodes(None, (1.0, 0.0, 0.0)), c56,
+                 _swirl_ducts('Exhaust Air'), t56e, 2200, cls='Exhaust Air')
+check("case56 the 90's plane unreadable: only the two 45s compared, same plane, not RED",
+      not ea56n.get('fse_red_ids'), "red %r" % (ea56n.get('fse_red_ids'),))
+ea56w = _fse_run(_swirl_nodes((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                 _swirl_ducts('Exhaust Air', d_h=1.0), t56e, 2200, cls='Exhaust Air')
+check("case56 Dh 1 in. (6 Dh 0.5 ft): only the 90 is inside, not RED",
+      not ea56w.get('fse_red_ids'), "red %r" % (ea56w.get('fse_red_ids'),))
+ra56 = _fse_run(_swirl_nodes((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                _swirl_ducts('Return Air'), {2210: (100.0, 'Return Air', 'RG-56')}, 2200,
+                cls='Return Air')
+check("case56 return inlet: the same RED inlet swirl line",
+      ra56.get('fse_red_ids') == {2202, 2204}
+      and any(k == 'red' and t.startswith('RED: Inlet swirl at the return inlet')
+              for k, t in ra56.get('fse_notes', ())),
+      "notes %r" % (ra56.get('fse_notes'),))
+sa56 = _fse_run(_swirl_nodes((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                _swirl_ducts('Supply Air'), {2210: (100.0, 'Supply Air', 'SD-56')}, 2200)
+check("case56 supply outlet: RED as close-coupled elbows, not called swirl",
+      sa56.get('fse_red_ids') == {2202, 2204}
+      and any(k == 'red' and t.startswith('RED: Close-coupled elbows at the supply outlet')
+              and 'swirl' not in t.lower() and 'p. 34.11' in t
+              for k, t in sa56.get('fse_notes', ())),
+      "notes %r" % (sa56.get('fse_notes'),))
+ea56o = _fse_run(_swirl_nodes((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                 _swirl_ducts('Exhaust Air'), t56e, 2200, fan=None, cls='Exhaust Air')
+check("case56 fan system effect unticked: no swirl check",
+      not ea56o.get('fse_red_ids'), "red %r" % (ea56o.get('fse_red_ids'),))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

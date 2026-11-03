@@ -45,7 +45,11 @@ RJA DECISIONS (Colin, 2026-10-29):
   - ED7-2 and ER7-1 are printed for SWSI fans. With DWDI selected they are
     used as a stated ASSUMPTION (method_lines). Inlet swirl, FSE1,sw, has no
     coefficient in the book (p. 34.13: inlet spin changes the fan curve
-    itself); it is ignored and not reported (Colin, 2026-11-02).
+    itself), so it is never priced. Two elbows turning in different planes
+    within SWIRL_DH hydraulic diameters of a unit connection (the
+    close-coupled limit, p. 34.11; the Fig. 12 spin connections at an inlet)
+    are reported RED and both elbows drawn red, supply, return and exhaust
+    alike (Colin, 2026-11-02, replaces "not reported").
   - L counts from the unit through the curb, straight duct and any
     transitions, each transition's own length included, to the FIRST elbow
     (Colin, 2026-11-02: the system effect checks that the straight duct at
@@ -88,6 +92,8 @@ DEFAULT_BLAST_RATIO = 0.5
 BLAST_RATIO_MIN = 0.4        # the SR7 tables' printed Ab/Ao range
 BLAST_RATIO_MAX = 1.0
 LE_SPLIT_MPS = 13.0          # Eq. 36 above this outlet velocity, Eq. 37 at or below
+SWIRL_DH = 6.0               # inlet swirl window, hydraulic diameters (p. 34.11)
+SWIRL_SAME_PLANE = 0.1       # |n1 x n2| under this: two turn planes are the same
 
 # Positions A to D, one table each, per fan type (p. 34.66 to 34.68).
 OUTLET_TABLES = {
@@ -379,6 +385,57 @@ def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None):
              'C %.2f at %.0f fpm', key, 'D' if is_round else 'H', r_used,
              float(l_ft), l_over, size_in, c, v)
     return rec
+
+
+# ── inlet swirl ──────────────────────────────────────────────────────────────
+
+def swirl_window_ft(d_h_in):
+    """How far ahead of an inlet two elbows are checked for swirl:
+    SWIRL_DH x the first duct's hydraulic diameter, ft."""
+    return SWIRL_DH * float(d_h_in) / 12.0
+
+
+def planes_differ(n1, n2):
+    """True when two elbows' turn plane normals (unit (x, y, z), the cross
+    product of each elbow's connector axes) are not parallel."""
+    cx = n1[1] * n2[2] - n1[2] * n2[1]
+    cy = n1[2] * n2[0] - n1[0] * n2[2]
+    cz = n1[0] * n2[1] - n1[1] * n2[0]
+    return math.sqrt(cx * cx + cy * cy + cz * cz) > SWIRL_SAME_PLANE
+
+
+def swirl_pair(elbows):
+    """The first two elbows that turn in different planes, or None.
+
+    elbows: [(element id, L ft from the inlet, normal or None)] in order
+    from the inlet. An elbow whose normal is unreadable is skipped."""
+    known = [e for e in elbows if e[2] is not None]
+    for i, a in enumerate(known):
+        for b in known[i + 1:]:
+            if planes_differ(a[2], b[2]):
+                return a, b
+    return None
+
+
+def swirl_text(role, where, pair, window_ft, d_h_in):
+    """The RED line for an elbow pair turning in different planes near a fan,
+    in the Duct Performance reason style: each elbow named with its distance
+    from the unit. INLET: inlet swirl (p. 34.13, Fig. 12). OUTLET: the book
+    describes spin at the inlet only, so a supply outlet pair is reported as
+    close-coupled elbows (p. 34.11), not as swirl (Colin, 2026-11-02: same
+    6 Dh check on supply, return and exhaust)."""
+    (a, la, _na), (b, lb, _nb) = pair
+    head = ('RED: Inlet swirl at the %s' if role == INLET else
+            'RED: Close-coupled elbows at the %s') % where
+    tail = ('Swirl is not priced (no 2001 coefficient for FSE1,sw); provide straight '
+            'duct or turning vanes (2001 Fundamentals p. 34.13, Fig. 12).'
+            if role == INLET else
+            'The loss is not priced past the first elbow (no 2001 data for '
+            'close-coupled fittings, p. 34.11); provide straight duct or turning vanes.')
+    return ('%s: elbows %s (%.1f ft) and %s (%.1f ft) turn in different planes within '
+            '%.0f Dh (%.1f ft, Dh %.0f in.) of the fan. %s'
+            % (head, a, float(la), b, float(lb), SWIRL_DH, float(window_ft),
+               float(d_h_in), tail))
 
 
 # ── report text ──────────────────────────────────────────────────────────────

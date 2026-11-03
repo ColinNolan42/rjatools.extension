@@ -1022,6 +1022,34 @@ def elbow_geometry(elem):
     return out
 
 
+def elbow_turn_normal(elem):
+    """The normal of an elbow's turn plane, a unit (x, y, z), or None.
+
+    The cross product of its two connectors' BasisZ, as elbow_geometry
+    reads the plane of the turn. Two elbows whose normals are not parallel
+    turn in different planes (fan_system_effect.swirl_pair)."""
+    eid = None
+    try:
+        eid = eid_int(elem.Id)
+    except Exception:
+        pass
+    conns = _fitting_connectors(elem)
+    if len(conns) != 2:
+        log.info('elbow_turn_normal: %s has %d connectors, NOT FOUND', eid, len(conns))
+        return None
+    try:
+        n = conns[0].CoordinateSystem.BasisZ.CrossProduct(conns[1].CoordinateSystem.BasisZ)
+        if n.IsZeroLength():
+            log.info('elbow_turn_normal: %s connectors parallel, NOT FOUND', eid)
+            return None
+        n = n.Normalize()
+    except Exception as ex:
+        log.info('elbow_turn_normal: %s connectors unreadable: %s', eid, ex)
+        return None
+    log.info('elbow_turn_normal: %s (%.2f, %.2f, %.2f)', eid, n.X, n.Y, n.Z)
+    return (n.X, n.Y, n.Z)
+
+
 def transition_geometry(elem):
     """Both ends of a transition and its included angle, or None.
 
