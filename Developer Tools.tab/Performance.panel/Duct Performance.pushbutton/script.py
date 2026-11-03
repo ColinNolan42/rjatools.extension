@@ -302,6 +302,8 @@ _SETTINGS_XAML = '''
                                 <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center"
                                              ToolTip="Single width, single inlet centrifugal fan: outlet tables SR7-5 to SR7-8."/>
                             </StackPanel>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       Text="DWDI, double width double inlet: the wheel is about twice as wide and draws air in on both sides of the scroll housing, as in most air handler and packaged unit supply blowers. SWSI, single width single inlet: air enters one side of the wheel only, as in utility sets, cabinet fans and most exhaust fans. The fan type sets the outlet tables; take it from the fan cut sheet."/>
                             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                 <TextBlock Text="Blast area ratio Ab/Ao" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_blast" Width="56" Margin="8,0,6,0"
