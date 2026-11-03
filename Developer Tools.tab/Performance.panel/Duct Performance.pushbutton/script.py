@@ -64,6 +64,7 @@ from Autodesk.Revit.DB import (
     FilledRegion, FilledRegionType, CurveLoop,
     ConnectorProfileType, ConnectorType
 )
+from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 
 from System.Windows import (
     Window, WindowStartupLocation, Thickness,
@@ -293,11 +294,13 @@ _SETTINGS_XAML = '''
                         <StackPanel x:Name="pnl_fse" Margin="20,4,0,0">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Fan type" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <RadioButton x:Name="rb_fan_dwdi" GroupName="fan_type" Content="DWDI" VerticalAlignment="Center" Margin="0,0,14,0"
-                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the Scope: RTU and VAV System."/>
-                                <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center"
+                                <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center" Margin="0,0,14,0"
                                              ToolTip="Outlet tables SR7-5 to SR7-8. Set by the Scope: Exhaust System."/>
+                                <RadioButton x:Name="rb_fan_dwdi" GroupName="fan_type" Content="DWDI" VerticalAlignment="Center"
+                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the Scope: RTU and VAV System."/>
                             </StackPanel>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="SWSI, single width single inlet: air enters one side of the wheel (exhaust fans, utility sets). DWDI, double width double inlet: air enters both sides (most RTU and AHU blowers)."/>
                             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                 <TextBlock Text="Blast area ratio Ab/Ao" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_blast" Width="56" Margin="8,0,6,0"
@@ -306,19 +309,14 @@ _SETTINGS_XAML = '''
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
                                        Text="Ab = blast area, the discharge opening at the scroll cutoff. Ao = outlet area, H x W at the fan discharge. Both at the fan outlet, from the fan cut sheet, 0.4 to 1.0."/>
-                            <TextBlock Text="Fan velocity" Margin="0,8,0,2"/>
-                            <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
-                                <RadioButton x:Name="rb_vel_default" GroupName="fse_velocity" Content="Default fan velocity" VerticalAlignment="Center"
-                                             ToolTip="The larger of this velocity and the unit connection velocity. Conservative: a unit's opening is often smaller than the duct it feeds."/>
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Default fan velocity, fpm. Must be greater than 0."/>
-                                <TextBlock Text="fpm, or the connection velocity if higher" VerticalAlignment="Center"/>
+                                         ToolTip="Fan velocity, fpm. Must be greater than 0."/>
+                                <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
-                            <RadioButton x:Name="rb_vel_conn" GroupName="fse_velocity" Content="Unit connection (family): cfm over the unit connector area" Margin="10,4,0,0"
-                                         ToolTip="Use when the unit family's connector is modeled at the real opening. The first duct is used when the connector size cannot be read."/>
-                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="10,4,0,0"
-                                       Text="The velocity sets the velocity pressure for the fan system effect, the outlet Le and the transitions between the unit and the first disruption."/>
-                            <TextBlock x:Name="tb_fse_hint" Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
@@ -560,10 +558,7 @@ def _show_velocity_settings_xaml(use_theme):
     rb_fan_dwdi = N('rb_fan_dwdi')
     rb_fan_swsi = N('rb_fan_swsi')
     tb_blast = N('tb_blast')
-    rb_vel_default = N('rb_vel_default')
-    rb_vel_conn = N('rb_vel_conn')
     tb_fan_fpm = N('tb_fan_fpm')
-    tb_fse_hint = N('tb_fse_hint')
     exp_adv = N('exp_adv')
     exp_c = N('exp_c')
     exp_comp = N('exp_comp')
@@ -618,16 +613,7 @@ def _show_velocity_settings_xaml(use_theme):
     cb_fse.IsChecked = bool(_fse_def['on'])
     rb_fan_swsi.IsChecked = _fse_def['fan_type'] == 'SWSI'
     rb_fan_dwdi.IsChecked = _fse_def['fan_type'] != 'SWSI'
-    rb_vel_default.IsChecked = _fse_def['velocity_basis'] == 'default'
-    rb_vel_conn.IsChecked = _fse_def['velocity_basis'] != 'default'
     tb_fan_fpm.Text = '%g' % _fse_def['fan_fpm']
-    tb_fse_hint.Text = (
-        'The first elbow within Le of each unit outlet, or 5 diameters of each inlet, '
-        'is priced from the 2001 ASHRAE Fundamentals (outlet SR7, worst of positions '
-        'A to D; inlet ED7-2 or ER7-1). A loss of %.1f in. wc or more is gray, with '
-        'the straight length that brings it under. An elbow under 0.5 Le of an '
-        'outlet, or under 2 D of an inlet, is red with the straight duct before it.'
-        % fan_system_effect.HIGH_LOSS_INWC)
     tb_backdraft.Text = '%.2f' % fitting_tables.component_of('backdraft')
     tb_exh_cap.Text = '%.2f' % fitting_tables.component_of('cap')
     for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_fan_fpm, tb_backdraft, tb_exh_cap):
@@ -957,7 +943,6 @@ def _show_velocity_settings_xaml(use_theme):
         fse_on = master and bool(cb_fse.IsChecked)
         pnl_fse.IsEnabled = fse_on
         pnl_fse.Opacity = 1.0 if fse_on else 0.55
-        tb_fan_fpm.IsEnabled = bool(rb_vel_default.IsChecked)
         # VAV box and static fields appear only with VAV and external static
         # both ticked (Colin, 2026-10-22).
         both = master and bool(rb_scope_vav.IsChecked)
@@ -971,8 +956,7 @@ def _show_velocity_settings_xaml(use_theme):
         for el in mp_row:
             el.Visibility = vis
     for cb in (cb_static, cb_filter, cb_fse, rb_scope_rtu, rb_scope_vav, rb_scope_vavbox,
-               rb_scope_exhaust,
-               rb_vel_default, rb_vel_conn):
+               rb_scope_exhaust):
         cb.Checked += sync_enable
         cb.Unchecked += sync_enable
     sync_enable()
@@ -1072,8 +1056,9 @@ def _show_velocity_settings_xaml(use_theme):
         fan_effect = fan_system_effect.default_settings()
         fan_effect['on'] = bool(cb_fse.IsChecked)
         fan_effect['fan_type'] = 'SWSI' if bool(rb_fan_swsi.IsChecked) else 'DWDI'
-        fan_effect['velocity_basis'] = ('default' if bool(rb_vel_default.IsChecked)
-                                        else 'connection')
+        # The fan velocity, the connection's when higher; no other choice in
+        # the dialog (Colin, 2026-11-03).
+        fan_effect['velocity_basis'] = 'default'
         if ext_static and fan_effect['on']:
             v, err = fan_system_effect.parse_blast_ratio(tb_blast.Text)
             if err:
@@ -1083,7 +1068,7 @@ def _show_velocity_settings_xaml(use_theme):
             if fan_effect['velocity_basis'] == 'default':
                 v, err = fan_system_effect.parse_fan_fpm(tb_fan_fpm.Text)
                 if err:
-                    errors.append((tb_fan_fpm, 'Default fan velocity ' + err + '.', ()))
+                    errors.append((tb_fan_fpm, 'Fan velocity ' + err + '.', ()))
                 else:
                     fan_effect['fan_fpm'] = v
 
@@ -1879,13 +1864,18 @@ _PICKER_XAML = '''
 '''
 
 
+_PICKER_PICK_TAG = '__select_unit_in_model__'
+
+
 def _show_system_picker_xaml(display_names, scope_label, use_theme):
     """Themed picker: one list of the scope's equipment, ONE pick (Colin,
-    2026-11-03: one unit per run, no duct pick). Returns ('equipment',
-    [name]) or None. Raises if the window cannot be built (caller falls
-    back)."""
+    2026-11-03: one unit per run, no duct pick). The first entry, "Select
+    unit in model", closes the list so the unit is clicked in the view.
+    Returns ('equipment', [name]), ('pick', None) or None. Raises if the
+    window cannot be built (caller falls back)."""
     import ui_helpers
     from System.Windows.Controls import ListBoxItem
+    from System.Windows import FontWeights as _FW
 
     xaml = (_PICKER_XAML
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
@@ -1906,8 +1896,24 @@ def _show_system_picker_xaml(display_names, scope_label, use_theme):
         win.MaxHeight = 800.0
 
     result = [None]
-    tb_hint.Text = ('Scope: {}. Select one unit found in this view. One unit per '
-                    'run.'.format(scope_label))
+    tb_hint.Text = ('Scope: {}. Select one unit found in this view, or Select unit '
+                    'in model to click it. One unit per run.'.format(scope_label))
+
+    # First entry: click the unit in the view (Colin, 2026-11-03).
+    pick_item = ListBoxItem()
+    pick_item.Tag = _PICKER_PICK_TAG
+    pick_panel = StackPanel()
+    pick_title = TextBlock()
+    pick_title.Text = 'Select unit in model'
+    pick_title.FontWeight = _FW.SemiBold
+    pick_panel.Children.Add(pick_title)
+    pick_hint = ui_helpers.rja_hint_block(
+        win, 'Click the unit in the view. Only {} equipment can be picked.'.format(
+            scope_label))
+    pick_hint.Margin = Thickness(0, 2, 0, 0)
+    pick_panel.Children.Add(pick_hint)
+    pick_item.Content = pick_panel
+    lst.Items.Add(pick_item)
 
     items = []
     for n in display_names:
@@ -1929,7 +1935,10 @@ def _show_system_picker_xaml(display_names, scope_label, use_theme):
             if not sel:
                 tb_error.Text = 'Select a unit.'
                 return
-            result[0] = ('equipment', [str(sel[0].Tag)])
+            if sel[0].Tag == _PICKER_PICK_TAG:
+                result[0] = ('pick', None)
+            else:
+                result[0] = ('equipment', [str(sel[0].Tag)])
             win.Close()
         except Exception as ex:
             try:
@@ -1955,7 +1964,8 @@ def _show_system_picker_xaml(display_names, scope_label, use_theme):
 
 
 def show_system_picker(display_names, scope_label):
-    """Second screen. Returns ('equipment', [name]) or None.
+    """Second screen. Returns ('equipment', [name]), ('pick', None) (click
+    the unit in the view) or None.
 
     display_names is the sorted list of the scope's equipment labels found
     in the active view, never empty (main() stops first when it is).
@@ -1973,9 +1983,10 @@ def show_system_picker(display_names, scope_label):
 
 
 def _show_system_picker_legacy(display_names, scope_label):
-    """FALLBACK ONLY. Original picker, one selection.
+    """FALLBACK ONLY. Original picker, one selection, plus a Select unit in
+    model button.
 
-    Returns ('equipment', [name]) or None.
+    Returns ('equipment', [name]), ('pick', None) or None.
     """
     result = [None]
 
@@ -2028,8 +2039,19 @@ def _show_system_picker_legacy(display_names, scope_label):
     def on_cancel(s, e):
         win.Close()
 
+    pick_btn = Button()
+    pick_btn.Content = 'Select unit in model'
+    pick_btn.Width   = 140
+    pick_btn.Margin  = Thickness(0, 0, 8, 0)
+
+    def on_pick(s, e):
+        result[0] = ('pick', None)
+        win.Close()
+
     run_btn.Click    += on_run
+    pick_btn.Click   += on_pick
     cancel_btn.Click += on_cancel
+    btn_panel.Children.Add(pick_btn)
     btn_panel.Children.Add(run_btn)
     btn_panel.Children.Add(cancel_btn)
     outer.Children.Add(btn_panel)
@@ -2059,6 +2081,61 @@ _SCOPE_LISTS = {'rtu': ('unit',), 'vav': ('unit',), 'vavbox': ('VAV box',),
                 'exhaust': ('exhaust fan',)}
 _KIND_SCOPE = {'unit': 'RTU or VAV System', 'VAV box': 'VAV Box',
                'exhaust fan': 'Exhaust System'}
+
+
+def _equip_kind(eq):
+    """'exhaust fan', 'VAV box' or 'unit': how the Scope lists equipment."""
+    if hvac_graph.is_exhaust_fan(eq):
+        return 'exhaust fan'
+    if hvac_graph.is_fed_from_upstream_supply(eq):
+        return 'VAV box'
+    return 'unit'
+
+
+class _UnitPickFilter(ISelectionFilter):
+    """Only mechanical equipment the Scope lists can be clicked."""
+
+    def __init__(self, scope):
+        self.kinds = _SCOPE_LISTS.get(scope, ('unit',))
+
+    def AllowElement(self, elem):
+        try:
+            return (hvac_graph.is_equipment(elem)
+                    and _equip_kind(elem) in self.kinds)
+        except Exception:
+            return False
+
+    def AllowReference(self, ref, point):
+        return False
+
+
+def _pick_unit(scope, scope_label):
+    """Click one unit in the view (Colin, 2026-11-03). Returns the element,
+    or None when Esc is pressed. The filter keeps it to the Scope's
+    equipment; unavailable, the pick is unfiltered and checked after."""
+    try:
+        filt = _UnitPickFilter(scope)
+    except Exception:
+        filt = None
+    prompt = 'Select the {} unit to analyze'.format(scope_label)
+    try:
+        if filt is not None:
+            ref = uidoc.Selection.PickObject(ObjectType.Element, filt, prompt)
+        else:
+            ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
+    except Exception:
+        return None
+    elem = doc.GetElement(ref.ElementId)
+    if elem is None or not hvac_graph.is_equipment(elem):
+        output.print_md('The picked element is not mechanical equipment.')
+        return None
+    if _equip_kind(elem) not in _SCOPE_LISTS.get(scope, ('unit',)):
+        output.print_md('{} is a {}, not listed under the {} Scope.'.format(
+            _elem_name(elem), _equip_kind(elem), scope_label))
+        return None
+    output.print_md('Unit picked: **{}** (id {})'.format(_elem_name(elem),
+                                                        eid_int(elem.Id)))
+    return elem
 
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
@@ -5290,12 +5367,7 @@ def main():
     hidden = {'VAV box': 0, 'exhaust fan': 0, 'unit': 0}
     listed = []
     for eq in equip_in_view:
-        if hvac_graph.is_exhaust_fan(eq):
-            kind = 'exhaust fan'
-        elif hvac_graph.is_fed_from_upstream_supply(eq):
-            kind = 'VAV box'
-        else:
-            kind = 'unit'
+        kind = _equip_kind(eq)
         if kind in _SCOPE_LISTS[scope]:
             listed.append(eq)
         else:
@@ -5339,12 +5411,19 @@ def main():
     def _correct(kind, text, unit=None, group=None):
         corrections.append(duct_perf_console.correction(kind, text, unit, group))
 
-    _mode, names = choice
+    mode, names = choice
     # A ceiling exhaust fan picked from the list: {fan id: {'cfm'}}. The fan
     # carries no airflow in the model, so it is entered here. No rated static
     # check (Colin, 2026-11-03): the engineer checks the fan selection.
     fan_inputs = {}
-    sel_elems = [name_to_elem[n] for n in names]
+    if mode == 'pick':
+        _picked = _pick_unit(scope, scope_label)
+        if _picked is None:
+            output.print_md('**Cancelled.**')
+            return
+        sel_elems = [_picked]
+    else:
+        sel_elems = [name_to_elem[n] for n in names]
     for eq in sel_elems:
         if not exhaust_on or not hvac_graph.is_ceiling_exhaust_fan(eq):
             continue

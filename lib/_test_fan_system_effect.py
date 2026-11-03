@@ -507,7 +507,7 @@ class DialogTest(unittest.TestCase):
         xn = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
         names = set(e.get(xn) for e in root.iter() if e.get(xn))
         for n in ('cb_fse', 'pnl_fse', 'rb_fan_dwdi', 'rb_fan_swsi', 'tb_blast',
-                  'tb_fse_hint', 'pnl_static', 'cb_static'):
+                  'pnl_static', 'cb_static'):
             self.assertIn(n, names)
         # the fan fields sit inside the external static group, greyed with it
         pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
@@ -531,7 +531,13 @@ class DialogTest(unittest.TestCase):
         # Colin, 2026-11-03: the fan velocity basis sits in the fan panel
         fse = [e for e in root.iter() if e.get(xn) == 'pnl_fse'][0]
         fse_inner = set(e.get(xn) for e in fse.iter() if e.get(xn))
-        self.assertTrue({'rb_vel_default', 'rb_vel_conn', 'tb_fan_fpm'} <= fse_inner)
+        self.assertIn('tb_fan_fpm', fse_inner)
+        # Colin, 2026-11-03: no velocity choice, no long hints; SWSI first
+        for gone in ('rb_vel_default', 'rb_vel_conn', 'tb_fse_hint'):
+            self.assertNotIn(gone, names)
+        order = [e.get(xn) for e in fse.iter() if e.get(xn)]
+        self.assertLess(order.index('rb_fan_swsi'), order.index('rb_fan_dwdi'))
+        self.assertIn("fan_effect['velocity_basis'] = 'default'", self.src)
 
     def test_scope_is_one_choice(self):
         # Colin, 2026-11-03: Scope is RTU, VAV System or Exhaust System, one
@@ -556,6 +562,13 @@ class DialogTest(unittest.TestCase):
                      'Select Duct System', 'SelectionMode.Extended'):
             self.assertNotIn(gone, self.src)
         self.assertIn('SelectionMode.Single', self.src)
+        # Colin, 2026-11-03: a Select unit in model entry, clicking only the
+        # Scope's equipment
+        self.assertIn("pick_title.Text = 'Select unit in model'", self.src)
+        self.assertIn("result[0] = ('pick', None)", self.src)
+        self.assertEqual(self.src.count("result[0] = ('pick', None)"), 2)  # themed, legacy
+        self.assertIn('class _UnitPickFilter(ISelectionFilter):', self.src)
+        self.assertIn("if mode == 'pick':", self.src)
 
     def test_fan_panel_text(self):
         # Colin, 2026-11-03: short fan type tooltips, no DWDI/SWSI paragraph,
@@ -563,7 +576,13 @@ class DialogTest(unittest.TestCase):
         # an ASSUMPTION line in the report).
         m = re.search(r"^_SETTINGS_XAML = '''(.*?)'''", self.src, re.S | re.M)
         x = m.group(1)
-        self.assertNotIn('double width double inlet', x)
+        # the long paragraph is gone; one short line on each type stays
+        self.assertNotIn('as in most air handler', x)
+        self.assertIn('SWSI, single width single inlet: air enters one side of the wheel', x)
+        self.assertIn('DWDI, double width double inlet: air enters both sides', x)
+        self.assertIn('The unit connection velocity (cfm over the connector area) is used '
+                      'when it is higher.', x)
+        self.assertNotIn('the outlet Le and the transitions', x)
         self.assertIn('ToolTip="Outlet tables SR7-9 to SR7-12.', x)
         self.assertIn('ToolTip="Outlet tables SR7-5 to SR7-8.', x)
         self.assertIn('Ab = blast area, the discharge opening at the scroll cutoff. '
