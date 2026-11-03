@@ -130,6 +130,13 @@ COMPONENT_TABLE = (
     ('diffuser',    'Diffuser / grille',   0.05),
     ('damper',      'Balancing damper',    0.25),
     ('fire_damper', 'Fire / smoke damper', 0.05),
+    # The end of a ceiling exhaust fan discharge (Colin, 2026-11-02). Greenheck
+    # WC-6 hooded damper wall cap and RJ-6x9 roof cap read 0.015 at 100 cfm
+    # (SP/CSP catalog 00.F&V.1013 R24, p.19), about 1 Pv; 4 in. caps are not
+    # plotted (1 Pv is about 0.08 at 100 cfm). Seiho SFX 6 louvered reads 0.14
+    # at 80 cfm (vent caps catalog p.44). 0.10 covers a 4 or 6 in. hooded
+    # cap with margin; a louvered cap takes its cut sheet value.
+    ('cap',         'Wall / roof cap',     0.10),
 )
 
 DEFAULT_COMPONENTS = {}

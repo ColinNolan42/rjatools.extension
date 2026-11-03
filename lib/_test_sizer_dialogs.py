@@ -55,6 +55,7 @@ BODIES = {
     "performance": sizer_dialogs._PERF_BODY,
     "start": sizer_dialogs._START_BODY,
     "duct": sizer_dialogs._DUCT_BODY,
+    "fan": sizer_dialogs._FAN_BODY,
 }
 
 # The start point picker is a choice, not a calculation, so it carries no
@@ -74,6 +75,7 @@ FUNCTIONS = {
     # cannot see; TestSizeDuctLimitsGrid covers those. This catches the VAV
     # names.
     "duct": ["show_size_duct_dialog"],
+    "fan": ["show_exhaust_fan_dialog"],
 }
 
 

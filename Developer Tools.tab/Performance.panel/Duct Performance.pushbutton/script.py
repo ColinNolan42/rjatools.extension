@@ -101,6 +101,7 @@ import rja_drafting
 import vav_checks
 import console_report
 import duct_perf_console
+import ui_helpers
 from revit_helpers import eid_int
 
 # ── SMACNA colors ─────────────────────────────────────────────────────────────
@@ -2050,6 +2051,10 @@ def _show_system_picker_legacy(display_names):
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+# A ceiling exhaust fan's rated static when none is entered, in. wc (Colin,
+# 2026-11-02: 0.5 for now). Its computed ESP is checked against it.
+CEILING_FAN_RATED_SP_DEFAULT = 0.50
+
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
@@ -2186,7 +2191,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         c_values=None, comp_values=None,
                         duct_rooted_ids=None, return_filter_inwc=0.0,
                         vav_box_ids=None, vav_box_drop_inwc=None,
-                        fan_effect=None):
+                        fan_effect=None, discharge_roots=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -2281,6 +2286,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     dr_by_int_id = {}
     for dr in all_duct_results.values():
         dr_by_int_id[dr.element_id] = dr
+
+    # Ceiling exhaust fans (Colin, 2026-11-02): {fan root id: cap node id}.
+    # The run ends at the wall or roof cap, priced as the 'cap' component in
+    # place of a diffuser, and the fan system effect is at the fan OUTLET.
+    discharge_roots = discharge_roots or {}
+    cap_ids = set(discharge_roots.values())
 
     box_ids  = vav_box_ids or set()
     box_drop = (vav_box_drop_inwc if vav_box_drop_inwc is not None
@@ -2968,7 +2979,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         area = conn['area_ft2'] if conn is not None and conn.get('area_ft2') else flow.area_ft2
         if not area:
             return None
-        return cfm / area, area, flow.sys_class
+        return cfm / area, area, getattr(flow, 'flow_class', None) or flow.sys_class
 
     # ── fan system effect (Colin, 2026-10-29) ───────────────────────────────
     # The 2001 Fundamentals Eq. 38 (p. 34.14) adds FSE2 at the fan outlet and
@@ -3184,7 +3195,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # The role hook (Colin, 2026-10-29): a known connector direction would
         # go in here for exhaust fans, where both sides are Exhaust Air. A
         # unit's role is its classification today, so None is passed.
-        role_here = fan_system_effect.connection_role(side, None)
+        role_here = fan_system_effect.connection_role(
+            side, 'out' if root_id in discharge_roots else None)
         if role_here is None:
             fan_system_effect.log.info('fan system effect: connection %s of %s is %r, '
                                        'not checked', first, root_id, side)
@@ -3413,7 +3425,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 dcount    = dcount + 1
                 up_fpm    = dr.fpm
                 up_area   = dr.area_ft2
-                sys_class = dr.sys_class
+                sys_class = getattr(dr, 'flow_class', None) or dr.sys_class
                 items     = items + ((
                     'Duct {}'.format(nid),
                     '{}, {:.1f} ft'.format(getattr(dr, 'size', '?'),
@@ -3522,8 +3534,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
             term = all_terminals.get(nid)
             if term is not None:
-                # The diffuser the run ends at is itself a component drop.
-                keys_here = comp_keys + ('diffuser',)
+                # The diffuser the run ends at is itself a component drop; a
+                # ceiling exhaust fan run ends at its wall or roof cap.
+                is_cap = nid in cap_ids
+                keys_here = comp_keys + ('cap' if is_cap else 'diffuser',)
                 # Every supply diffuser is assumed to have a balancing damper
                 # whether or not one is drawn (Colin, 2026-10-26), so a branch
                 # with no damper accessory (a w_Damper take-off, or none shown)
@@ -3586,8 +3600,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             ('Balancing damper', 'known drop', None, None)),)
                             if _assumed_damper else ()) + ((
                             'Terminal {}'.format(nid), _family or '-', None,
-                            fitting_tables.component_of('diffuser', comp_values),
-                            ('Diffuser / grille', 'known drop', None, None)),),
+                            fitting_tables.component_of(
+                                'cap' if is_cap else 'diffuser', comp_values),
+                            (hvac_graph.CAP_LABEL if is_cap else 'Diffuser / grille',
+                             'known drop', None, None)),),
                     }
 
             for child_id in all_children.get(nid, []):
@@ -4858,8 +4874,23 @@ def main():
         corrections.append(duct_perf_console.correction(kind, text, unit, group))
 
     mode, names = choice
+    # Ceiling exhaust fans picked from the list: {fan id: {'cfm', 'rated_sp'}}.
+    # The fan carries no airflow in the model, so it is entered here, with
+    # the rated static the computed ESP is checked against (Colin,
+    # 2026-11-02: default 0.50 in. wc).
+    fan_inputs = {}
     if mode == 'equipment':
         sel_elems = [name_to_elem[n] for n in names]
+        for eq in sel_elems:
+            if not hvac_graph.is_ceiling_exhaust_fan(eq):
+                continue
+            vals = ui_helpers.show_exhaust_fan_inputs(
+                'Duct Performance', '{} (id {})'.format(_elem_name(eq), eid_int(eq.Id)),
+                hvac_graph.fan_rated_cfm(eq), CEILING_FAN_RATED_SP_DEFAULT)
+            if vals is None:
+                output.print_md('**Cancelled.**')
+                return
+            fan_inputs[eid_int(eq.Id)] = vals
     else:
         sel_elems = _pick_duct_system()
         if not sel_elems:
@@ -4883,8 +4914,12 @@ def main():
     nodes_by_root    = {}   # root int_id -> set of node ids (parallel unit check)
     vav_by_root      = {}   # root int_id -> vav_checks.VavSystem (VAV on only)
 
+    discharge_roots  = {}   # ceiling exhaust fan root int_id -> cap node int_id
     for sel_elem in sel_elems:
-        net = hvac_graph.build_network(sel_elem, doc, equipment_level=True)
+        _fan = fan_inputs.get(eid_int(sel_elem.Id))
+        net = hvac_graph.build_network(
+            sel_elem, doc, equipment_level=True,
+            discharge_cfm=_fan['cfm'] if _fan else None)
 
         if net.errors:
             # The unit is skipped: an action for the engineer, in System
@@ -4933,10 +4968,18 @@ def main():
         root_id = eid_int(net.root.Id)
         all_root_ids.append(root_id)
         root_labels[root_id] = unit_label_here
+        if net.discharge_end is not None:
+            discharge_roots[root_id] = net.discharge_end
+            _correct('note', 'NOTE: read as a ceiling exhaust fan (its only duct '
+                     'connection is Exhaust Air, out): {:,.0f} CFM entered, the '
+                     'discharge ends at element {}, priced as a {}.'.format(
+                         float(_fan['cfm']), net.discharge_end,
+                         hvac_graph.CAP_LABEL.lower()), unit_label_here)
         ahu_totals.append((
             _elem_name(net.root), root_id,
             net.equipment_discharge_cfm(root_id), len(net.terminal_cfms),
-            net.equipment_other_class_cfm(root_id)))
+            {} if net.discharge_end is not None
+            else net.equipment_other_class_cfm(root_id)))
 
         all_nodes.update(net.nodes)
         all_children.update(net.children)
@@ -4948,6 +4991,9 @@ def main():
                 continue
             term_elem = net.nodes.get(nid)
             if term_elem is None:
+                continue
+            if nid == net.discharge_end:
+                all_terminals[nid] = (cfm, 'Exhaust Air', hvac_graph.CAP_LABEL)
                 continue
             all_terminals[nid] = (
                 cfm,
@@ -5029,6 +5075,8 @@ def main():
                 downstream_terms[nid] = downstream_terms[nid] | tset
             else:
                 downstream_terms[nid] = tset
+        if rid in discharge_roots:
+            continue      # a fan discharge is a main, never a diffuser branch
         for first, run in hvac_graph.single_terminal_runs(
                 rid, all_children, partial, equip_ids).items():
             single_runs[(rid, first)] = run
@@ -5053,6 +5101,13 @@ def main():
                                else vav_checks.ROLE_MP)
             continue
         tset = downstream_terms.get(eid_int(eid), set())
+        _caps = set(discharge_roots.values())
+        if (tset and tset <= _caps) or eid_int(eid) in _caps:
+            # Ceiling exhaust fan discharge: judged against the Exhaust Air
+            # main limits, 600 fpm / 0.05 (Colin, 2026-11-02).
+            branch_ctx[eid] = None
+            duct_roles[eid] = 'Main (fan discharge)'
+            continue
         term_elem = None
         if len(tset) == 1:
             term_elem = all_nodes.get(list(tset)[0])
@@ -5157,7 +5212,7 @@ def main():
             duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc,
             vav_box_ids=vav_box_ids,
             vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None,
-            fan_effect=fan_effect)
+            fan_effect=fan_effect, discharge_roots=discharge_roots)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
         esp_rec = {'units': [], 'combined': [],
@@ -5316,7 +5371,28 @@ def main():
                 worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
                 unit_total += worst_c['total_inwc']
                 sides.append(worst_k)
-            if supply is not None and returns:
+            if root_id in discharge_roots and sides:
+                # A ceiling exhaust fan has one side, its discharge, and that
+                # is the whole system: checked against the entered rating.
+                _sides = ' + '.join(sides)
+                summary_lines.append(
+                    '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
+                        unit_total, _sides))
+                unit_rec['esp'] = _esp_console_text(unit_total, _sides)
+                unit_rec['esp_total'] = unit_total
+                unit_rec['esp_sides'] = list(sides)
+                _rated = fan_inputs.get(root_id, {}).get('rated_sp')
+                if _rated is not None:
+                    _ok = unit_total <= float(_rated) + 1e-9
+                    _msg = ('Fan rated static {:.3f} in. wc: computed {:.3f} in. wc, '
+                            '{}.'.format(float(_rated), unit_total,
+                                         'within it' if _ok else 'EXCEEDS IT'))
+                    if _ok:
+                        summary_lines.append('    ' + _msg)
+                        unit_rec['checks'].append((_ok, _msg))
+                    else:
+                        _correct('error', _msg, unit_label)
+            elif supply is not None and returns:
                 summary_lines.append(
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
                         unit_total, ' + '.join(sides)))
@@ -5763,7 +5839,12 @@ def main():
                 if term_elem is None or not _on_level(term_elem, lvl_eid):
                     continue
                 try:
-                    r_pt = term_elem.Location.Point
+                    _loc = term_elem.Location
+                    if hasattr(_loc, 'Curve'):
+                        # A ceiling exhaust fan's cap is the open end duct.
+                        r_pt = _loc.Curve.Evaluate(0.5, True)
+                    else:
+                        r_pt = _loc.Point
                 except Exception:
                     continue
                 if r_pt is None:

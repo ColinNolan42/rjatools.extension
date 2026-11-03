@@ -170,6 +170,7 @@ hvac_graph.tap_positions_ft        = _tap_positions_ft
 hvac_graph.connector_areas_ft2     = _connector_areas_ft2
 hvac_graph.transition_areas        = _transition_areas
 hvac_graph.velocity_pressure_inwg  = _velocity_pressure_inwg
+hvac_graph.CAP_LABEL              = 'Wall / roof cap'
 
 ns = {'hvac_graph': hvac_graph, 'fitting_tables': fitting_tables,
       'vav_checks': vav_checks, 'ashrae_fittings': ashrae_fittings,
@@ -1791,6 +1792,59 @@ check("case53 unreadable tap positions: one NOTE on the run, elbow at the unit e
       len(_note53) == 1
       and [i[2] for i in u53.get('items', ()) if i[0] == 'Fitting 330'] == [1000.0],
       "unpriced %r" % (u53.get('unpriced'),))
+
+# ── case 54: ceiling exhaust fan (Colin, 2026-11-02) ─────────────────────────
+# A fan whose only duct connection is Exhaust Air, out: 4 in. discharge,
+# 0.5 ft to an elbow, 20 ft to the open end, which is the wall or roof cap
+# carrying the entered 80 cfm (917 fpm). Its ducts are Exhaust Air but move
+# like supply (flow_class), so the system effect is at the fan OUTLET (SR7,
+# Le 2.5 D = 0.83 ft at under 2500 fpm, the elbow inside it) and the run
+# ends in the cap drop, not a diffuser, with no assumed balancing damper.
+RD4 = {'round': True, 'area_ft2': math.pi * (2.0 / 12.0) ** 2, 'd_in': 4.0,
+       'w_in': None, 'h_in': None}
+_v54 = 80.0 / RD4['area_ft2']
+
+
+def _fan54(discharge):
+    n = {2000: _unit({2001: RD4}),
+         2002: Elem(kind='elbow', family_name='Round Elbow', is_round=True)}
+    c = {2000: [2001], 2001: [2002], 2002: [2003], 2003: []}
+    d = build([(2001, 0.002, 0.5, _v54, RD4['area_ft2'], 'Exhaust Air'),
+               (2003, 0.080, 20.0, _v54, RD4['area_ft2'], 'Exhaust Air')])
+    if discharge:
+        for dr in d.values():
+            dr.flow_class = 'Supply Air'
+    t = {2003: (80.0, 'Exhaust Air', 'Wall / roof cap')}
+    r = crit([2000], c, d, t, n, 10.0, fan_effect=FSE_ON,
+             discharge_roots={2000: 2003} if discharge else None)
+    return r.get(2000, {}).get('Exhaust Air', {})
+
+
+ea54 = _fan54(True)
+_it54 = [i[4][0] for i in ea54.get('items', ()) if i[4]]
+check("case54 ceiling fan: one Exhaust Air index run ending at the cap",
+      ea54.get('terminal_id') == 2003, "leaf %r" % (ea54,))
+check("case54 the run pays the cap drop, no diffuser and no assumed damper",
+      'cap' in ea54.get('component_keys', ())
+      and 'diffuser' not in ea54.get('component_keys', ())
+      and 'damper' not in ea54.get('component_keys', ())
+      and 'Wall / roof cap' in _it54, "keys %r rows %r" % (
+          ea54.get('component_keys'), _it54))
+check("case54 component drop is the cap value",
+      abs(ea54.get('component_inwc', -1) - fitting_tables.component_of('cap')) < 1e-12)
+check("case54 fan system effect at the fan OUTLET (SR7), not the inlet tables",
+      'Fan system effect, exhaust outlet' in _it54
+      and any(i[4][1].startswith('SR7-') for i in _fse_items(ea54)),
+      "rows %r" % (_it54,))
+check("case54 the outlet elbow is also priced as a fitting (SR7 rule)",
+      ea54.get('fitting_inwc', 0.0) > 0.0)
+check("case54 items add up to the subtotal",
+      abs(_items_sum(ea54) - ea54['subtotal_inwc']) < 1e-9)
+inl54 = _fan54(False)
+check("case54 the same run as an ordinary exhaust reads the INLET tables (ED7-2)",
+      any(i[4][0] == 'Fan system effect, exhaust inlet' for i in _fse_items(inl54))
+      and 'Wall / roof cap' not in [i[4][0] for i in inl54.get('items', ()) if i[4]],
+      "rows %r" % ([i[4][0] for i in inl54.get('items', ()) if i[4]],))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

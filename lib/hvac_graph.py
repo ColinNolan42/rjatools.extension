@@ -1997,6 +1997,73 @@ def _direction_word(conn):
     return None
 
 
+def is_ceiling_exhaust_fan(equip):
+    """True when every CONNECTED air connector on equip is Exhaust Air,
+    direction Out: a ceiling exhaust fan, whose grille is part of the family
+    and whose only duct is its discharge (Colin, 2026-11-02). An inline fan
+    has an In connector with grilles upstream and is judged the normal way.
+    An unconnected connector (the grille face on Ceiling-Exhaust-SP-A, which
+    carries no flow) is ignored. Connector.DuctSystemType and Direction read
+    ExhaustAir / Out on Ceiling-Exhaust-SP-A, checked live 2026-11-02."""
+    eid = eid_int(equip.Id)
+    found = 0
+    for c in _hvac_connectors(equip):
+        try:
+            if not c.IsConnected:
+                continue
+            system = str(c.DuctSystemType)
+        except Exception:
+            log.info('is_ceiling_exhaust_fan: id=%s connector unreadable', eid)
+            return False
+        if system != 'ExhaustAir' or _direction_word(c) != 'out':
+            log.info('is_ceiling_exhaust_fan: id=%s no (%s, %s)', eid, system,
+                     _direction_word(c))
+            return False
+        found += 1
+    log.info('is_ceiling_exhaust_fan: id=%s %s (%d connected)', eid,
+             'yes' if found else 'no', found)
+    return found > 0
+
+
+# Instance parameters a fan family may carry its airflow in, first match wins.
+_FAN_FLOW_PARAM_NAMES = ('Air Flow Rate', 'Airflow', 'Flow', 'CFM')
+
+
+def fan_rated_cfm(equip):
+    """The fan's own airflow in cfm when its family carries one above 0,
+    else None (Ceiling-Exhaust-SP-A reads 0, so the CFM is entered)."""
+    for name in _FAN_FLOW_PARAM_NAMES:
+        try:
+            p = equip.LookupParameter(name)
+            if p is not None and p.AsDouble() > 0:
+                cfm = to_cfm(p.AsDouble())
+                log.info('fan_rated_cfm: id=%s %s = %.1f cfm', eid_int(equip.Id), name, cfm)
+                return cfm
+        except Exception:
+            continue
+    log.info('fan_rated_cfm: id=%s NOT FOUND', eid_int(equip.Id))
+    return None
+
+
+CAP_LABEL = 'Wall / roof cap'
+
+
+def discharge_ends(root_id, nodes, children):
+    """Node ids at the end of every run leaving root_id: the ductwork nodes
+    with no children. A ceiling exhaust fan discharge has exactly one, its
+    cap. The unit connector's logical Duct System element is also a node
+    with no children; it is not ductwork and is left out."""
+    out = []
+    for nid, kids in children.items():
+        if nid == root_id or kids:
+            continue
+        e = nodes.get(nid)
+        if e is not None and (is_duct(e) or is_fitting_or_accessory(e)
+                              or is_terminal(e)):
+            out.append(nid)
+    return sorted(out)
+
+
 def equipment_entry_direction(equip, parent_id):
     """Direction of the equipment connector the walk entered it through.
 
@@ -2143,6 +2210,7 @@ class HvacNetwork(object):
         self.equip_class_cfm = {}        # int_id -> {sys_class: cfm} (equipment nodes only)
         self.duct_results    = {}        # ElementId -> DuctResult
         self.no_area_ducts   = []        # int_ids
+        self.discharge_end   = None      # ceiling exhaust fan: the cap node id
         self.errors          = []
         self.warnings        = []
 
@@ -2229,9 +2297,14 @@ class DuctResult(object):
         # Set by the caller from analyze_vav(), never from the System Type
         # name: MP and LP supply usually share one System Type.
         self.is_mp              = False
+        # The class the air moves like, for fitting tables and the fan
+        # system effect: None is sys_class. A ceiling exhaust fan discharge
+        # is Exhaust Air (its limits) but leaves the fan, like supply.
+        self.flow_class         = None
 
 
-def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False):
+def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False,
+                  discharge_cfm=None):
     """Full traversal from selection → AHU → network.
 
     equipment_level: Supply + Return Air only, no Outside Air and no
@@ -2239,6 +2312,13 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
     applied to the final, rooted-at-equipment traversal; the PASS-2
     undirected discovery pass (used only to locate the equipment itself)
     always runs unpruned so equipment-finding isn't affected by it.
+
+    discharge_cfm: a ceiling exhaust fan picked as equipment (the caller
+    checks is_ceiling_exhaust_fan and asks for the cfm). The one end of its
+    discharge run is taken as the wall or roof cap and carries this cfm in
+    place of a terminal's Flow (Colin, 2026-11-02); every duct on the run is
+    Supply-like for its fittings (DuctResult.flow_class). More or fewer than
+    one end is an error.
 
     Returns HvacNetwork populated with all traversal data.
     """
@@ -2365,6 +2445,26 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
             if cfm <= 0:
                 net.zero_terminals.append(nid)
 
+    if discharge_cfm is not None:
+        root_id = eid_int(net.root.Id)
+        ends = discharge_ends(root_id, net.nodes, net.children)
+        if len(ends) != 1:
+            net.errors.append(
+                'Ceiling exhaust fan discharge has {} ductwork ends ({}); one run '
+                'to one wall or roof cap is needed. Check that the discharge does '
+                'not join other ductwork and ends in duct, a fitting or a '
+                'terminal.'.format(
+                    len(ends), ', '.join(str(e) for e in ends[:6]) or 'none'))
+            return net
+        net.discharge_end = ends[0]
+        if ends[0] in net.zero_terminals:
+            net.zero_terminals.remove(ends[0])
+        if ends[0] in net.missing_flow:
+            net.missing_flow.remove(ends[0])
+        net.terminal_cfms[ends[0]] = float(discharge_cfm)
+        log.info('build_network: ceiling exhaust fan %s, cap at %s, %.1f cfm',
+                 root_id, ends[0], float(discharge_cfm))
+
     # Post-order CFM sum
     net.cfm_map, net.equip_class_cfm = compute_cfm(
         eid_int(net.root.Id), net.nodes, net.children, net.terminal_cfms)
@@ -2379,13 +2479,18 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
         if area <= 0:
             net.no_area_ducts.append(nid)
         dr = DuctResult(elem, cfm, area, sys_class)
+        if net.discharge_end is not None:
+            dr.flow_class = 'Supply Air'
         net.duct_results[elem.Id] = dr
 
     # Errors and warnings
     if len(net.terminal_cfms) == 0:
         net.errors.append(
             'No air terminals (OST_DuctTerminal) found in traversal. '
-            'Check that diffusers are physically connected to the duct system.')
+            'Check that diffusers are physically connected to the duct system.'
+            + (' If this is a ceiling exhaust fan, its family\'s duct connector '
+               'shall be Exhaust Air, direction Out, to be read as one.'
+               if is_equipment(net.root) else ''))
     if len(net.zero_terminals) > 0:
         net.warnings.append(
             '{} terminal(s) have Flow = 0: {}. Assign CFM values in the model '
