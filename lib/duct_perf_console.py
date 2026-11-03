@@ -207,6 +207,8 @@ def esp_unit_notes(unit, sheet=False):
                                                      cls['total_detail'])))
     if unit.get('one_sided'):
         out.append(('warn', unit['one_sided']))
+    if unit.get('fan_type'):
+        out.append(('note', unit['fan_type']))      # exhaust fans (2026-11-03)
     for ok, text in unit.get('checks') or []:
         out.append(('ok' if ok else 'error', text))
     return out

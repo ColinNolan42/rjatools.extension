@@ -64,7 +64,6 @@ from Autodesk.Revit.DB import (
     FilledRegion, FilledRegionType, CurveLoop,
     ConnectorProfileType, ConnectorType
 )
-from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 
 from System.Windows import (
     Window, WindowStartupLocation, Thickness,
@@ -74,7 +73,7 @@ from System.Windows import (
 from System.Windows.Controls import (
     Grid, Label, TextBox, Button, StackPanel,
     ColumnDefinition, RowDefinition, Orientation,
-    Separator, TextBlock, CheckBox, Expander, ScrollViewer,
+    Separator, TextBlock, CheckBox, RadioButton, Expander, ScrollViewer,
     ScrollBarVisibility, ListBox, SelectionMode
 )
 from System.Windows.Media import SolidColorBrush, Colors
@@ -215,14 +214,24 @@ _SETTINGS_XAML = '''
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,10,0,6">
                     <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Scope"/>
                 </Border>
-                <CheckBox x:Name="cb_vav" Content="VAV System"
-                          ToolTip="Supply mains between the unit and the VAV box inlets are checked as medium pressure (MP). Single duct and fan powered boxes alike."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"
+                           Text="One unit per run. The scope sets which equipment the next list shows."/>
+                <RadioButton x:Name="rb_scope_rtu" GroupName="scope" Content="RTU"
+                             ToolTip="A constant volume unit with supply and return: RTU, AHU, furnace or fan coil. VAV boxes and exhaust fans are not listed."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Boxes are found by position: supply equipment entered through its inlet. Ductwork after a box is checked as usual. Medium pressure limits are under Main duct limits."/>
-                <CheckBox x:Name="cb_exhaust" Content="Exhaust System" Margin="0,8,0,0"
-                          ToolTip="Lists exhaust fans in the equipment list and reads a ceiling exhaust fan (its only duct connection is Exhaust Air, out). Unticked, exhaust fans are hidden from the list."/>
+                           Text="Lists units only, no VAV boxes or exhaust fans."/>
+                <RadioButton x:Name="rb_scope_vav" GroupName="scope" Content="VAV System" Margin="0,8,0,0"
+                             ToolTip="The full system from the unit: supply mains to the VAV box inlets checked as medium pressure (MP), the boxes, low pressure after them and the return, with external static."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Unticked, exhaust fans are hidden from the equipment list, as VAV boxes are with VAV System unticked. Exhaust fan inputs are under the external static option."/>
+                           Text="Lists units only (RTU, AHU). Boxes are found by position: supply equipment entered through its inlet. Medium pressure limits are under Main duct limits."/>
+                <RadioButton x:Name="rb_scope_vavbox" GroupName="scope" Content="VAV Box" Margin="0,8,0,0"
+                             ToolTip="One VAV box: the low pressure supply after the box, checked like an RTU's supply side. No medium pressure, box or external static checks."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                           Text="Lists VAV boxes only. The box slows the air, so only the low pressure ductwork after it is checked. External static is off."/>
+                <RadioButton x:Name="rb_scope_exhaust" GroupName="scope" Content="Exhaust System" Margin="0,8,0,0"
+                             ToolTip="Lists exhaust fans only, and reads a ceiling exhaust fan (its only duct connection is Exhaust Air, out)."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                           Text="Lists exhaust fans only."/>
 
                 <!-- Main duct limits -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
@@ -285,18 +294,30 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Fan type" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <RadioButton x:Name="rb_fan_dwdi" GroupName="fan_type" Content="DWDI" VerticalAlignment="Center" Margin="0,0,14,0"
-                                             ToolTip="Double width, double inlet centrifugal fan: outlet tables SR7-9 to SR7-12."/>
+                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the Scope: RTU and VAV System."/>
                                 <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center"
-                                             ToolTip="Single width, single inlet centrifugal fan: outlet tables SR7-5 to SR7-8."/>
+                                             ToolTip="Outlet tables SR7-5 to SR7-8. Set by the Scope: Exhaust System."/>
                             </StackPanel>
-                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
-                                       Text="DWDI, double width double inlet: the wheel is about twice as wide and draws air in on both sides of the scroll housing, as in most air handler and packaged unit supply blowers. SWSI, single width single inlet: air enters one side of the wheel only, as in utility sets, cabinet fans and most exhaust fans. The fan type sets the outlet tables; take it from the fan cut sheet."/>
                             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                 <TextBlock Text="Blast area ratio Ab/Ao" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_blast" Width="56" Margin="8,0,6,0"
                                          ToolTip="Fan blast area over outlet area, from the fan data when known. Range 0.4 to 1.0."/>
                                 <TextBlock Text="0.4 to 1.0" VerticalAlignment="Center"/>
                             </StackPanel>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Ab = blast area, the discharge opening at the scroll cutoff. Ao = outlet area, H x W at the fan discharge. Both at the fan outlet, from the fan cut sheet, 0.4 to 1.0."/>
+                            <TextBlock Text="Fan velocity" Margin="0,8,0,2"/>
+                            <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
+                                <RadioButton x:Name="rb_vel_default" GroupName="fse_velocity" Content="Default fan velocity" VerticalAlignment="Center"
+                                             ToolTip="The larger of this velocity and the unit connection velocity. Conservative: a unit's opening is often smaller than the duct it feeds."/>
+                                <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
+                                         ToolTip="Default fan velocity, fpm. Must be greater than 0."/>
+                                <TextBlock Text="fpm, or the connection velocity if higher" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <RadioButton x:Name="rb_vel_conn" GroupName="fse_velocity" Content="Unit connection (family): cfm over the unit connector area" Margin="10,4,0,0"
+                                         ToolTip="Use when the unit family's connector is modeled at the real opening. The first duct is used when the connector size cannot be read."/>
+                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="10,4,0,0"
+                                       Text="The velocity sets the velocity pressure for the fan system effect, the outlet Le and the transitions between the unit and the first disruption."/>
                             <TextBlock x:Name="tb_fse_hint" Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
@@ -313,27 +334,17 @@ _SETTINGS_XAML = '''
                             <TextBlock FontWeight="SemiBold" Text="Exhaust fans"/>
                             <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                 <CheckBox x:Name="cb_exh_backdraft" Content="Include backdraft damper" Width="190" VerticalAlignment="Center"
-                                          ToolTip="Adds one backdraft damper drop to an exhaust fan's run when none is modeled on it. A ceiling exhaust fan has one built in and is never charged."/>
+                                          ToolTip="Adds the backdraft damper drop once to an exhaust fan's run."/>
                                 <TextBox x:Name="tb_backdraft" Width="56" Margin="0,0,6,0"
-                                         ToolTip="Known drop of each backdraft damper, in. wc. Also prices a backdraft damper modeled on the run. Cannot be negative."/>
+                                         ToolTip="Backdraft damper drop, in. wc. Cannot be negative."/>
                                 <TextBlock Text="in. wc, added once where none is modeled" VerticalAlignment="Center"/>
                             </StackPanel>
-                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                                       Text="Inline and roof exhaust fans. A ceiling exhaust fan has one built in. A modeled backdraft damper is priced at this drop, never twice."/>
                             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                 <CheckBox x:Name="cb_exh_cap" Content="Include roof / wall cap" Width="190" VerticalAlignment="Center"
-                                          ToolTip="Adds the roof / wall cap drop once to every exhaust index run, for an inline fan discharging through a roof or wall cap. Leave off for an upblast roof fan, which discharges itself."/>
+                                          ToolTip="Adds the roof / wall cap drop once to every exhaust run."/>
                                 <TextBox x:Name="tb_exh_cap" Width="56" Margin="0,0,6,0"
-                                         ToolTip="Known drop of a roof or wall cap, in. wc. Also prices a ceiling exhaust fan's own cap. Cannot be negative."/>
+                                         ToolTip="Roof / wall cap drop, in. wc. Cannot be negative."/>
                                 <TextBlock Text="in. wc, added once to every exhaust run" VerticalAlignment="Center"/>
-                            </StackPanel>
-                            <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                                       Text="For an inline fan. Leave off for an upblast roof fan, which pulls the air and discharges itself. A ceiling exhaust fan always pays its cap."/>
-                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                <TextBlock Text="Exhaust fan rated static" Width="190" VerticalAlignment="Center"/>
-                                <TextBox x:Name="tb_exh_sp" Width="56" Margin="0,0,6,0"
-                                         ToolTip="The static the exhaust fan is selected at. The exhaust external static is checked against it. A ceiling exhaust fan's prompt starts at this value."/>
-                                <TextBlock Text="in. wc, the exhaust ESP is checked against it" VerticalAlignment="Center"/>
                             </StackPanel>
                         </StackPanel>
                     </StackPanel>
@@ -450,10 +461,17 @@ def _wpf_named(win, name):
     return el
 
 
+def _scope_of(vav, vavbox, exhaust):
+    """The Scope key from the dialog's choice."""
+    if vavbox:
+        return 'vavbox'
+    return 'vav' if vav else 'exhaust' if exhaust else 'rtu'
+
+
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
                      vav, vav_settings, fan_effect=None, exhaust_cap=False,
-                     exhaust=False, exhaust_settings=None):
+                     exhaust=False, exhaust_settings=None, scope=None):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
@@ -462,8 +480,10 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
 
     fan_effect: {'on', 'fan_type', 'blast_ratio'}; None (the legacy dialog,
     which has no fields for it) takes fan_system_effect.default_settings().
-    exhaust_settings: {'rated_sp', 'backdraft' (Include backdraft damper)};
-    a missing 'backdraft' is taken as on in main().
+    exhaust_settings: {'backdraft' (Include backdraft damper)}; a missing
+    'backdraft' is taken as off in main() (Colin, 2026-11-03).
+    'scope': 'rtu', 'vav', 'vavbox' or 'exhaust' (Colin, 2026-11-03: one
+    Scope choice). None derives it from vav / exhaust (no VAV Box).
     """
     limits = dict(limits)
     if vav:
@@ -481,12 +501,19 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'filter_inwc':   filter_inwc,
         'exhaust_cap':   bool(exhaust_cap),
         'exhaust':       bool(exhaust),
-        # Empty: main() takes EXHAUST_FAN_RATED_SP_DEFAULT.
+        # Empty: no backdraft damper added.
         'exhaust_settings': dict(exhaust_settings or {}),
         'vav':           bool(vav),
+        'scope':         scope or _scope_of(vav, False, exhaust),
         'vav_settings':  vav_settings,
         'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
     }
+
+
+def _dialog_vav_rows():
+    """The VAV rows of the dialog's Calculation basis: VAV static only
+    (Colin, 2026-11-03). The sheet legend and console keep every row."""
+    return [r for r in vav_checks.basis_rows() if r[0] == 'VAV, static']
 
 
 def _show_velocity_settings_xaml(use_theme):
@@ -509,13 +536,14 @@ def _show_velocity_settings_xaml(use_theme):
     N = lambda name: _wpf_named(win, name)
     img_logo = N('img_logo')
     cb_full_diag = N('cb_full_diag')
-    cb_vav = N('cb_vav')
-    cb_exhaust = N('cb_exhaust')
+    rb_scope_rtu = N('rb_scope_rtu')
+    rb_scope_vav = N('rb_scope_vav')
+    rb_scope_vavbox = N('rb_scope_vavbox')
+    rb_scope_exhaust = N('rb_scope_exhaust')
     pnl_exh_static = N('pnl_exh_static')
     cb_exh_backdraft = N('cb_exh_backdraft')
     tb_backdraft = N('tb_backdraft')
     tb_exh_cap = N('tb_exh_cap')
-    tb_exh_sp = N('tb_exh_sp')
     pnl_vav_static = N('pnl_vav_static')
     grid_vav_static = N('grid_vav_static')
     grid_limits = N('grid_limits')
@@ -532,6 +560,9 @@ def _show_velocity_settings_xaml(use_theme):
     rb_fan_dwdi = N('rb_fan_dwdi')
     rb_fan_swsi = N('rb_fan_swsi')
     tb_blast = N('tb_blast')
+    rb_vel_default = N('rb_vel_default')
+    rb_vel_conn = N('rb_vel_conn')
+    tb_fan_fpm = N('tb_fan_fpm')
     tb_fse_hint = N('tb_fse_hint')
     exp_adv = N('exp_adv')
     exp_c = N('exp_c')
@@ -587,24 +618,26 @@ def _show_velocity_settings_xaml(use_theme):
     cb_fse.IsChecked = bool(_fse_def['on'])
     rb_fan_swsi.IsChecked = _fse_def['fan_type'] == 'SWSI'
     rb_fan_dwdi.IsChecked = _fse_def['fan_type'] != 'SWSI'
+    rb_vel_default.IsChecked = _fse_def['velocity_basis'] == 'default'
+    rb_vel_conn.IsChecked = _fse_def['velocity_basis'] != 'default'
+    tb_fan_fpm.Text = '%g' % _fse_def['fan_fpm']
     tb_fse_hint.Text = (
         'The first elbow within Le of each unit outlet, or 5 diameters of each inlet, '
         'is priced from the 2001 ASHRAE Fundamentals (outlet SR7, worst of positions '
         'A to D; inlet ED7-2 or ER7-1). A loss of %.1f in. wc or more is gray, with '
-        'the straight length that brings it under. The inlet tables are printed for '
-        'SWSI fans.' % fan_system_effect.HIGH_LOSS_INWC)
+        'the straight length that brings it under. An elbow under 0.5 Le of an '
+        'outlet, or under 2 D of an inlet, is red with the straight duct before it.'
+        % fan_system_effect.HIGH_LOSS_INWC)
     tb_backdraft.Text = '%.2f' % fitting_tables.component_of('backdraft')
     tb_exh_cap.Text = '%.2f' % fitting_tables.component_of('cap')
-    tb_exh_sp.Text = '%.2f' % EXHAUST_FAN_RATED_SP_DEFAULT
-    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_backdraft, tb_exh_cap, tb_exh_sp):
+    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_fan_fpm, tb_backdraft, tb_exh_cap):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
-    cb_vav.IsChecked = False
-    cb_exhaust.IsChecked = False     # default off (Colin, 2026-11-02)
+    rb_scope_rtu.IsChecked = True    # one unit per run (Colin, 2026-11-03)
     cb_static.IsChecked = False
     cb_filter.IsChecked = True       # default on (Colin, 2026-11-02)
-    cb_exh_backdraft.IsChecked = True   # default on (Colin, 2026-11-02)
+    cb_exh_backdraft.IsChecked = False  # default off (Colin, 2026-11-03)
     cb_exh_cap.IsChecked = False     # off: an upblast roof fan has no cap
 
     # ── main duct limits grid ───────────────────────────────────────────────
@@ -889,10 +922,14 @@ def _show_velocity_settings_xaml(use_theme):
                               'tables for the fan type, worst of positions A to D, at '
                               'Ab/Ao and L/Le, elbow priced separately. Inlet elbow: '
                               'ED7-2 round, ER7-1 rect (SWSI tables, an assumption for '
-                              'DWDI), at r/D and L/D, elbow included. Added before the '
-                              'safety factor. Transitions and taps are flagged, '
-                              'not priced.'),
-    ] + vav_checks.basis_rows()
+                              'DWDI), at r/D and L/D, elbow included. Velocity: the '
+                              'larger of the default fan velocity and the connection '
+                              'velocity, or the connection alone. Added before the '
+                              'safety factor. Transitions are priced as fittings, '
+                              'taps flagged, not priced. An elbow under 0.5 Le of an '
+                              'outlet, or under 2 D of an inlet, is red with the '
+                              'straight duct before it.'),
+    ] + _dialog_vav_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
         a = TextBlock()
@@ -908,28 +945,47 @@ def _show_velocity_settings_xaml(use_theme):
     # ── grey out the external static group until its checkbox is ticked ─────
     def sync_enable(s=None, e=None):
         master = bool(cb_static.IsChecked)
+        # VAV Box: no external static (Colin, 2026-11-03), greyed out.
+        box = bool(rb_scope_vavbox.IsChecked)
+        if box and bool(cb_static.IsChecked):
+            cb_static.IsChecked = False
+        cb_static.IsEnabled = not box
+        master = master and not box
         pnl_static.IsEnabled = master
         pnl_static.Opacity = 1.0 if master else 0.55
         tb_filter.IsEnabled = bool(cb_filter.IsChecked)
         fse_on = master and bool(cb_fse.IsChecked)
         pnl_fse.IsEnabled = fse_on
         pnl_fse.Opacity = 1.0 if fse_on else 0.55
+        tb_fan_fpm.IsEnabled = bool(rb_vel_default.IsChecked)
         # VAV box and static fields appear only with VAV and external static
         # both ticked (Colin, 2026-10-22).
-        both = master and bool(cb_vav.IsChecked)
+        both = master and bool(rb_scope_vav.IsChecked)
         pnl_vav_static.Visibility = Visibility.Visible if both else Visibility.Collapsed
         # Exhaust fans, the same way: Exhaust System and external static
         # both ticked (Colin, 2026-11-02).
-        exh = master and bool(cb_exhaust.IsChecked)
+        exh = master and bool(rb_scope_exhaust.IsChecked)
         pnl_exh_static.Visibility = Visibility.Visible if exh else Visibility.Collapsed
         # The medium pressure supply row shows with VAV System alone.
-        vis = Visibility.Visible if bool(cb_vav.IsChecked) else Visibility.Collapsed
+        vis = Visibility.Visible if bool(rb_scope_vav.IsChecked) else Visibility.Collapsed
         for el in mp_row:
             el.Visibility = vis
-    for cb in (cb_static, cb_filter, cb_fse, cb_vav, cb_exhaust):
+    for cb in (cb_static, cb_filter, cb_fse, rb_scope_rtu, rb_scope_vav, rb_scope_vavbox,
+               rb_scope_exhaust,
+               rb_vel_default, rb_vel_conn):
         cb.Checked += sync_enable
         cb.Unchecked += sync_enable
     sync_enable()
+
+    # Fan type follows the Scope (Colin, 2026-11-03): RTU and VAV System
+    # DWDI, Exhaust System SWSI. Set only when the Scope changes, so a manual
+    # pick holds until the Scope changes again.
+    def _scope_fan_type(s=None, e=None):
+        swsi = bool(rb_scope_exhaust.IsChecked)
+        rb_fan_swsi.IsChecked = swsi
+        rb_fan_dwdi.IsChecked = not swsi
+    for rb in (rb_scope_rtu, rb_scope_vav, rb_scope_vavbox, rb_scope_exhaust):
+        rb.Checked += _scope_fan_type
 
     # ── OK: validate every field, report inline, window stays open ──────────
     def _collect():
@@ -966,7 +1022,7 @@ def _show_velocity_settings_xaml(use_theme):
             if max_fpm is not None and max_fric is not None:
                 out[sys_class] = (max_fpm, max_fric)
 
-        ext_static = bool(cb_static.IsChecked)
+        ext_static = bool(cb_static.IsChecked) and not bool(rb_scope_vavbox.IsChecked)
         if ext_static:
             safety_pct = num(tb_sf, 'Safety factor', 'pct')
         else:
@@ -1001,9 +1057,8 @@ def _show_velocity_settings_xaml(use_theme):
             if f is not None:
                 filter_inwc = f
 
-        exhaust = bool(cb_exhaust.IsChecked)
-        exhaust_settings = {'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT,
-                            'backdraft': bool(cb_exh_backdraft.IsChecked)}
+        exhaust = bool(rb_scope_exhaust.IsChecked)
+        exhaust_settings = {'backdraft': bool(cb_exh_backdraft.IsChecked)}
         if exhaust and ext_static:
             # The two drops price modeled dampers and a ceiling fan's own cap
             # too, so they are read whether or not their box is ticked.
@@ -1013,21 +1068,26 @@ def _show_velocity_settings_xaml(use_theme):
             cap = num(tb_exh_cap, 'Roof / wall cap drop', 'nonneg')
             if cap is not None:
                 comp_values['cap'] = cap
-            sp = num(tb_exh_sp, 'Exhaust fan rated static', 'pos')
-            if sp is not None:
-                exhaust_settings['rated_sp'] = sp
 
         fan_effect = fan_system_effect.default_settings()
         fan_effect['on'] = bool(cb_fse.IsChecked)
         fan_effect['fan_type'] = 'SWSI' if bool(rb_fan_swsi.IsChecked) else 'DWDI'
+        fan_effect['velocity_basis'] = ('default' if bool(rb_vel_default.IsChecked)
+                                        else 'connection')
         if ext_static and fan_effect['on']:
             v, err = fan_system_effect.parse_blast_ratio(tb_blast.Text)
             if err:
                 errors.append((tb_blast, 'Blast area ratio Ab/Ao ' + err + '.', ()))
             else:
                 fan_effect['blast_ratio'] = v
+            if fan_effect['velocity_basis'] == 'default':
+                v, err = fan_system_effect.parse_fan_fpm(tb_fan_fpm.Text)
+                if err:
+                    errors.append((tb_fan_fpm, 'Default fan velocity ' + err + '.', ()))
+                else:
+                    fan_effect['fan_fpm'] = v
 
-        vav = bool(cb_vav.IsChecked)
+        vav = bool(rb_scope_vav.IsChecked)
         vav_settings = vav_checks.default_settings()
         if vav:
             fields = [(f, ()) for f in vav_checks.VAV_LIMIT_FIELDS]
@@ -1047,7 +1107,10 @@ def _show_velocity_settings_xaml(use_theme):
                                   calc_basis, filter_inwc, vav, vav_settings,
                                   fan_effect,
                                   ext_static and exhaust and bool(cb_exh_cap.IsChecked),
-                                  exhaust, exhaust_settings)
+                                  exhaust, exhaust_settings,
+                                  scope=_scope_of(bool(rb_scope_vav.IsChecked),
+                                                  bool(rb_scope_vavbox.IsChecked),
+                                                  exhaust))
         return errors, values
 
     def on_ok(s, e):
@@ -1208,30 +1271,30 @@ def _show_velocity_settings_dialog_legacy():
     full_diag_sep.Margin = Thickness(0, 8, 0, 10)
     outer.Children.Add(full_diag_sep)
 
-    # ── 2. VAV System, with its fields greyed out until ticked ─────────────
-    cb_vav = CheckBox()
-    cb_vav_text = TextBlock()
-    cb_vav_text.Text = ('VAV System.  Supply mains between the unit and the box '
-                        'inlets are checked as medium pressure (MP).')
-    cb_vav_text.TextWrapping = TextWrapping.Wrap
-    cb_vav_text.Width = CONTENT_W - 20
-    cb_vav.Content = cb_vav_text
-    cb_vav.IsChecked = False
-    cb_vav.Margin  = Thickness(2, 0, 0, 2)
-    outer.Children.Add(cb_vav)
+    # ── 2. Scope, one unit per run (Colin, 2026-11-03): RTU, VAV System
+    # (its fields greyed out until chosen) or Exhaust System ───────────────
+    def _scope_radio(text, checked=False):
+        rb = RadioButton()
+        rb.GroupName = 'scope'
+        tb = TextBlock()
+        tb.Text = text
+        tb.TextWrapping = TextWrapping.Wrap
+        tb.Width = CONTENT_W - 20
+        rb.Content = tb
+        rb.IsChecked = checked
+        rb.Margin = Thickness(2, 0, 0, 2)
+        outer.Children.Add(rb)
+        return rb
 
+    rb_rtu = _scope_radio('RTU.  Lists units only, no VAV boxes or exhaust fans.', True)
+    rb_vav = _scope_radio('VAV System.  Lists units only. The full system: supply mains '
+                          'between the unit and the box inlets are checked as medium '
+                          'pressure (MP).')
+    rb_vavbox = _scope_radio('VAV Box.  Lists VAV boxes only. The low pressure ductwork '
+                             'after the box; no external static.')
     # Exhaust System (Colin, 2026-11-02): lists exhaust fans; the backdraft
-    # drop is in the component drops below and the rated static is the default.
-    cb_exhaust = CheckBox()
-    cb_exhaust_text = TextBlock()
-    cb_exhaust_text.Text = ('Exhaust System.  Lists exhaust fans; their ESP is '
-                            'checked against %.2f in. wc.' % EXHAUST_FAN_RATED_SP_DEFAULT)
-    cb_exhaust_text.TextWrapping = TextWrapping.Wrap
-    cb_exhaust_text.Width = CONTENT_W - 20
-    cb_exhaust.Content = cb_exhaust_text
-    cb_exhaust.IsChecked = False
-    cb_exhaust.Margin = Thickness(2, 0, 0, 2)
-    outer.Children.Add(cb_exhaust)
+    # drop is in the component drops below.
+    rb_exhaust = _scope_radio('Exhaust System.  Lists exhaust fans only.')
 
     vav_boxes = {}
 
@@ -1271,7 +1334,7 @@ def _show_velocity_settings_dialog_legacy():
     _vav_rows(vav_static_panel, vav_checks.VAV_STATIC_FIELDS)
 
     def _sync_vav(s=None, e=None):
-        on = bool(cb_vav.IsChecked)
+        on = bool(rb_vav.IsChecked)
         vav_panel.IsEnabled = on
         vav_panel.Opacity = 1.0 if on else 0.55
         both = on and bool(cb_static.IsChecked)
@@ -1461,8 +1524,8 @@ def _show_velocity_settings_dialog_legacy():
     outer.Children.Add(cb_exh_cap)
 
     outer.Children.Add(vav_static_panel)
-    cb_vav.Checked += _sync_vav
-    cb_vav.Unchecked += _sync_vav
+    rb_vav.Checked += _sync_vav
+    rb_vav.Unchecked += _sync_vav
     cb_static.Checked += _sync_vav
     cb_static.Unchecked += _sync_vav
     _sync_vav()
@@ -1633,7 +1696,7 @@ def _show_velocity_settings_dialog_legacy():
     _info_row('  excludes:',      'filter (unless Include return filter is ticked), coil '
                                   'and cabinet (already in the published ESP), exhaust '
                                   'roof cap (unless Include exhaust roof cap is ticked).')
-    for _lab, _val in vav_checks.basis_rows():
+    for _lab, _val in _dialog_vav_rows():
         _info_row(_lab + ':', _val)
 
     # OK / Cancel
@@ -1665,7 +1728,7 @@ def _show_velocity_settings_dialog_legacy():
                     forms.alert('All values must be greater than 0.', title='Invalid Input')
                     return
                 out[sys_class] = (max_fpm, max_fric)
-            vav = bool(cb_vav.IsChecked)
+            vav = bool(rb_vav.IsChecked)
             vav_settings = vav_checks.default_settings()
             if vav:
                 fields = vav_checks.VAV_LIMIT_FIELDS
@@ -1679,7 +1742,7 @@ def _show_velocity_settings_dialog_legacy():
                     vav_settings[key] = v
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
-            ext_static = bool(cb_static.IsChecked)
+            ext_static = bool(cb_static.IsChecked) and not bool(rb_vavbox.IsChecked)
             safety_pct = float(tb_sf.Text)
             if safety_pct < 0 or safety_pct > 100:
                 forms.alert('Safety factor must be between 0 and 100.',
@@ -1720,8 +1783,17 @@ def _show_velocity_settings_dialog_legacy():
                                          ext_static, safety_pct, c_values,
                                          comp_values, calc_basis, filter_inwc,
                                          vav, vav_settings,
+                                         # no fan fields here: the fan type
+                                         # follows the Scope (Colin, 2026-11-03)
+                                         fan_effect=dict(
+                                             fan_system_effect.default_settings(),
+                                             fan_type='SWSI' if bool(rb_exhaust.IsChecked)
+                                             else 'DWDI'),
                                          exhaust_cap=ext_static and bool(cb_exh_cap.IsChecked),
-                                         exhaust=bool(cb_exhaust.IsChecked))
+                                         exhaust=bool(rb_exhaust.IsChecked),
+                                         scope=_scope_of(bool(rb_vav.IsChecked),
+                                                         bool(rb_vavbox.IsChecked),
+                                                         bool(rb_exhaust.IsChecked)))
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -1756,116 +1828,11 @@ def _show_velocity_settings_dialog_legacy():
 
 # ── system picker (second screen) ────────────────────────────────────
 #
-# Replaces forms.SelectFromList so the screen can carry a SECOND action button.
-# The equipment list only ever holds equipment found in the ACTIVE VIEW, so a
-# system whose AHU sits on another floor, in a mechanical room that is not on
-# this plan, or outside the view crop used to be unreachable. "Select a Duct
-# System" lets the user point at the ductwork instead (Colin 2026-09-25): two
-# clicks, either order, supply or return, no roles to declare.
-#
-# Picking a duct does NOT change how the run is rooted: build_network still
-# walks to that duct's base equipment and roots there, so CFM direction and
-# every downstream sum stay correct. It only changes how the system is NAMED
-# to the tool.
-class _DuctPickFilter(ISelectionFilter):
-    """Restricts picking to rigid and flex duct, so nothing else is clickable."""
-
-    def AllowElement(self, elem):
-        # hvac_graph.is_duct() already covers rigid AND flex duct, and is the
-        # same test the traversal uses, so the filter can never allow something
-        # the traversal would then refuse to walk.
-        try:
-            return hvac_graph.is_duct(elem)
-        except Exception:
-            return False
-
-    def AllowReference(self, ref, point):
-        return False
-
-
-def _pick_duct_system():
-    """Pick two ducts, in any order, supply or return - no roles assigned.
-
-    Colin 2026-09-25: "it should just be click two ducts no particular order it
-    can be return or supply". Nothing downstream needs to know which is which:
-    each pick is rooted at its own base equipment and the system class is read
-    off the ductwork itself, so making the user label them would be busywork
-    that could only be got wrong.
-
-    Returns a list of picked duct elements (1 or 2), or [] if cancelled on the
-    first pick. Esc on the SECOND pick is not a cancel, it means "just the one",
-    which is a real case (a single ducted system, or a return air plenum with no
-    ducted return to click).
-    """
-    try:
-        filt = _DuctPickFilter()
-    except Exception:
-        filt = None
-        output.print_md(':warning: Duct selection filter unavailable, picking '
-                        'is unfiltered; click a duct, not a fitting.')
-
-    picked = []
-    prompts = [
-        'Select a duct in the system to analyze (supply or return, either one)',
-        'Select a second duct on the other system, or press Esc to run just the first',
-    ]
-    for i, prompt in enumerate(prompts):
-        try:
-            if filt is not None:
-                ref = uidoc.Selection.PickObject(ObjectType.Element, filt, prompt)
-            else:
-                ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
-        except Exception:
-            break
-        elem = doc.GetElement(ref.ElementId)
-        if elem is None:
-            break
-        picked.append(elem)
-        output.print_md('Duct {} picked: **{}** (id {})'.format(
-            i + 1, _elem_name(elem), eid_int(elem.Id)))
-    return picked
-
-
-def _pick_side(duct):
-    """'supply', 'return' or None, from the duct's System Type name.
-
-    Exhaust counts as the return side, matching how the external static adds
-    the worst of Return/Exhaust to Supply. None when the name says neither, so
-    an unusual System Type name never produces a false warning.
-    """
-    try:
-        name = (hvac_graph.duct_sys_class(duct) or '').lower()
-    except Exception:
-        return None
-    if vav_checks.is_supply_class(name):
-        return 'supply'
-    if 'return' in name or 'exhaust' in name:
-        return 'return'
-    return None
-
-
-def _warn_if_same_side(picked):
-    """Fail-safe for the single-system route: one supply duct and one return
-    duct make one system. Two of the same side cannot, so say so (Colin,
-    2026-10-08). A warning, not a stop: the run still goes ahead. Returns the
-    warning text for System Corrections, or None."""
-    if len(picked) != 2:
-        return None
-    a, b = _pick_side(picked[0]), _pick_side(picked[1])
-    if a is not None and a == b:
-        return ('Both picked ducts are {} ducts. A single system needs one supply '
-                'duct and one return duct, so the external static is not a '
-                'complete supply + return total. Run again and pick one of '
-                'each.'.format(a))
-    return None
-
-
-_PICKER_DUCT_TAG = '__select_duct_system__'
-
+# Replaces forms.SelectFromList: one list of the Scope's equipment, one pick.
 _PICKER_XAML = '''
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Select Systems to Visualize"
+        Title="Select Equipment"
         Width="520" MinWidth="420" MaxWidth="760"
         SizeToContent="Height" ResizeMode="CanResizeWithGrip"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
@@ -1885,7 +1852,7 @@ _PICKER_XAML = '''
         <StackPanel Grid.Row="1" Margin="16,12,16,12">
             <TextBlock x:Name="tb_picker_hint" Style="{DynamicResource RjaHint}" FontSize="11"
                        TextWrapping="Wrap" Margin="0,0,0,8"/>
-            <ListBox x:Name="lst" SelectionMode="Extended" MaxHeight="300"
+            <ListBox x:Name="lst" SelectionMode="Single" MaxHeight="300"
                      BorderBrush="#D0D0D0" BorderThickness="1"/>
         </StackPanel>
 
@@ -1912,18 +1879,18 @@ _PICKER_XAML = '''
 '''
 
 
-def _show_system_picker_xaml(display_names, use_theme):
-    """Themed picker: ONE list, duct system entry first, equipment below it.
-    Returns ('equipment', [names]), ('ducts', None) or None. Raises if the
-    window cannot be built (caller falls back)."""
+def _show_system_picker_xaml(display_names, scope_label, use_theme):
+    """Themed picker: one list of the scope's equipment, ONE pick (Colin,
+    2026-11-03: one unit per run, no duct pick). Returns ('equipment',
+    [name]) or None. Raises if the window cannot be built (caller falls
+    back)."""
     import ui_helpers
     from System.Windows.Controls import ListBoxItem
-    from System.Windows import FontWeights as _FW
 
     xaml = (_PICKER_XAML
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
             .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
-                'Duct Performance', 'Select the system to analyze.')))
+                'Duct Performance', 'Select the unit to analyze.')))
     win = forms.WPFWindow(xaml, literal_string=True)
 
     N = lambda name: _wpf_named(win, name)
@@ -1939,78 +1906,30 @@ def _show_system_picker_xaml(display_names, use_theme):
         win.MaxHeight = 800.0
 
     result = [None]
+    tb_hint.Text = ('Scope: {}. Select one unit found in this view. One unit per '
+                    'run.'.format(scope_label))
 
-    if display_names:
-        tb_hint.Text = ('Select one or more units found in this view, or choose '
-                        'Select Duct System if the unit is not on this plan.')
-    else:
-        tb_hint.Text = ('No mechanical equipment found in this view. Use Select '
-                        'Duct System.')
-
-    # First entry: the duct system route, with a one line hint under it.
-    duct_item = ListBoxItem()
-    duct_item.Tag = _PICKER_DUCT_TAG
-    duct_panel = StackPanel()
-    duct_title = TextBlock()
-    duct_title.Text = 'Select Duct System (SA/RA)'
-    duct_title.FontWeight = _FW.SemiBold
-    duct_panel.Children.Add(duct_title)
-    duct_hint = ui_helpers.rja_hint_block(
-        win, 'Pick one supply duct and one return duct. Use when the unit is not '
-             'on this plan.')
-    duct_hint.Margin = Thickness(0, 2, 0, 0)
-    duct_panel.Children.Add(duct_hint)
-    duct_item.Content = duct_panel
-    lst.Items.Add(duct_item)
-
-    equip_items = []
+    items = []
     for n in display_names:
         it = ListBoxItem()
         it.Content = n
         it.Tag = n
         lst.Items.Add(it)
-        equip_items.append(it)
-
-    # Preselect: first unit if there are any (as before), else the duct entry.
-    first = equip_items[0] if equip_items else duct_item
-    first.IsSelected = True
-
-    # The duct system entry and unit entries exclude each other: selecting one
-    # kind clears the other.
-    busy = [False]
-
-    def _is_duct(item):
-        return item.Tag == _PICKER_DUCT_TAG
+        items.append(it)
+    if items:
+        items[0].IsSelected = True
 
     def on_selection_changed(s, e):
-        if busy[0]:
-            return
-        busy[0] = True
-        try:
-            added = list(e.AddedItems)
-            if any(_is_duct(i) for i in added):
-                for i in list(lst.SelectedItems):
-                    if not _is_duct(i):
-                        lst.SelectedItems.Remove(i)
-            elif added:
-                for i in list(lst.SelectedItems):
-                    if _is_duct(i):
-                        lst.SelectedItems.Remove(i)
-            tb_error.Text = ''
-        finally:
-            busy[0] = False
+        tb_error.Text = ''
     lst.SelectionChanged += on_selection_changed
 
     def on_ok(s, e):
         try:
             sel = list(lst.SelectedItems)
             if not sel:
-                tb_error.Text = 'Select at least one entry.'
+                tb_error.Text = 'Select a unit.'
                 return
-            if any(_is_duct(i) for i in sel):
-                result[0] = ('ducts', None)
-            else:
-                result[0] = ('equipment', [str(i.Tag) for i in sel])
+            result[0] = ('equipment', [str(sel[0].Tag)])
             win.Close()
         except Exception as ex:
             try:
@@ -2023,7 +1942,8 @@ def _show_system_picker_xaml(display_names, use_theme):
 
     def on_loaded(s, e):
         try:
-            first.Focus()
+            if items:
+                items[0].Focus()
         except Exception:
             pass
 
@@ -2034,33 +1954,33 @@ def _show_system_picker_xaml(display_names, use_theme):
     return result[0]
 
 
-def show_system_picker(display_names):
-    """Second screen. Returns ('equipment', [names]), ('ducts', None) or None.
+def show_system_picker(display_names, scope_label):
+    """Second screen. Returns ('equipment', [name]) or None.
 
-    display_names is the sorted list of equipment labels found in the active
-    view; it may be empty, in which case only the duct system entry is shown.
-    Falls back to the original two button picker if the themed one cannot be
-    built.
+    display_names is the sorted list of the scope's equipment labels found
+    in the active view, never empty (main() stops first when it is).
+    scope_label names the Scope choice in the hint. Falls back to the
+    original picker if the themed one cannot be built.
     """
     log = script.get_logger()
     for use_theme in (True, False):
         try:
-            return _show_system_picker_xaml(display_names, use_theme)
+            return _show_system_picker_xaml(display_names, scope_label, use_theme)
         except Exception:
             log.warning('Themed system picker failed (theme=%s), falling back:\n%s'
                         % (use_theme, traceback.format_exc()))
-    return _show_system_picker_legacy(display_names)
+    return _show_system_picker_legacy(display_names, scope_label)
 
 
-def _show_system_picker_legacy(display_names):
-    """FALLBACK ONLY. Original two button picker.
+def _show_system_picker_legacy(display_names, scope_label):
+    """FALLBACK ONLY. Original picker, one selection.
 
-    Returns ('equipment', [names]), ('ducts', None) or None.
+    Returns ('equipment', [name]) or None.
     """
     result = [None]
 
     win = Window()
-    win.Title = 'Select Systems to Visualize'
+    win.Title = 'Select Equipment'
     win.Width = 520
     win.SizeToContent = SizeToContent.Height
     win.WindowStartupLocation = WindowStartupLocation.CenterScreen
@@ -2069,28 +1989,19 @@ def _show_system_picker_legacy(display_names):
     outer.Margin = Thickness(14)
 
     head = TextBlock()
-    head.Text = ('Equipment found in the active view. Select one or more, or '
-                 'select a duct system instead if the equipment is not on this '
-                 'plan.')
+    head.Text = ('Scope: {}. Equipment found in the active view. Select one unit; '
+                 'one unit per run.'.format(scope_label))
     head.TextWrapping = TextWrapping.Wrap
     head.Margin = Thickness(0, 0, 0, 10)
     outer.Children.Add(head)
 
     lst = ListBox()
-    lst.SelectionMode = SelectionMode.Extended
+    lst.SelectionMode = SelectionMode.Single
     lst.MaxHeight = 300
     for n in display_names:
         lst.Items.Add(n)
     if display_names:
         lst.SelectedIndex = 0
-    else:
-        lst.IsEnabled = False
-        empty = TextBlock()
-        empty.Text = ('No mechanical equipment in this view. Use Select a Duct '
-                      'System.')
-        empty.TextWrapping = TextWrapping.Wrap
-        empty.Margin = Thickness(0, 0, 0, 8)
-        outer.Children.Add(empty)
     outer.Children.Add(lst)
 
     btn_panel = StackPanel()
@@ -2098,41 +2009,27 @@ def _show_system_picker_legacy(display_names):
     btn_panel.HorizontalAlignment = HorizontalAlignment.Right
     btn_panel.Margin = Thickness(0, 14, 0, 0)
 
-    duct_btn = Button()
-    duct_btn.Content = 'Select a Duct System'
-    duct_btn.Width   = 150
-    duct_btn.Margin  = Thickness(0, 0, 8, 0)
-
     run_btn = Button()
     run_btn.Content = 'Run Duct Performance'
     run_btn.Width   = 128
     run_btn.Margin  = Thickness(0, 0, 8, 0)
-    run_btn.IsEnabled = bool(display_names)
 
     cancel_btn = Button()
     cancel_btn.Content = 'Cancel'
     cancel_btn.Width   = 72
 
     def on_run(s, e):
-        names = [str(i) for i in lst.SelectedItems]
-        if not names:
-            forms.alert('Select at least one system, or use Select a Duct '
-                        'System.', title='Nothing Selected')
+        if lst.SelectedItem is None:
+            forms.alert('Select a unit.', title='Nothing Selected')
             return
-        result[0] = ('equipment', names)
-        win.Close()
-
-    def on_ducts(s, e):
-        result[0] = ('ducts', None)
+        result[0] = ('equipment', [str(lst.SelectedItem)])
         win.Close()
 
     def on_cancel(s, e):
         win.Close()
 
     run_btn.Click    += on_run
-    duct_btn.Click   += on_ducts
     cancel_btn.Click += on_cancel
-    btn_panel.Children.Add(duct_btn)
     btn_panel.Children.Add(run_btn)
     btn_panel.Children.Add(cancel_btn)
     outer.Children.Add(btn_panel)
@@ -2143,10 +2040,25 @@ def _show_system_picker_legacy(display_names):
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-# An exhaust fan's rated static when none is entered, in. wc (Colin,
-# 2026-11-02: 0.5 for now). Its computed ESP is checked against it; the
-# Exhaust System panel and a ceiling fan's prompt start at this value.
-EXHAUST_FAN_RATED_SP_DEFAULT = 0.50
+# Scope (Colin, 2026-11-03): one choice, one unit per run. Each lists only
+# its kinds of equipment; a VAV box can still be picked alone under VAV System.
+_SCOPE_LABEL = {'rtu': 'RTU', 'vav': 'VAV System', 'vavbox': 'VAV Box',
+                'exhaust': 'Exhaust System'}
+# Exhaust fan type as read from its connections (Colin, 2026-11-03).
+_EXHAUST_FAN_KIND_TEXT = {
+    'ceiling': 'Exhaust fan type: ceiling (outlet only): discharge run to its cap, '
+               'outlet fan system effect.',
+    'inline': 'Exhaust fan type: inline (inlet and outlet): worst intake path plus the '
+              'whole discharge once, inlet and outlet fan system effect.',
+    'roof': 'Exhaust fan type: upblast or downblast roof fan (inlet only): worst intake '
+            'path, inlet fan system effect, no discharge walked.',
+}
+# VAV System is the full system from the unit, VAV Box one box's low pressure
+# supply (Colin, 2026-11-03).
+_SCOPE_LISTS = {'rtu': ('unit',), 'vav': ('unit',), 'vavbox': ('VAV box',),
+                'exhaust': ('exhaust fan',)}
+_KIND_SCOPE = {'unit': 'RTU or VAV System', 'VAV box': 'VAV Box',
+               'exhaust fan': 'Exhaust System'}
 
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
@@ -2285,7 +2197,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         duct_rooted_ids=None, return_filter_inwc=0.0,
                         vav_box_ids=None, vav_box_drop_inwc=None,
                         fan_effect=None, discharge_roots=None, exhaust_cap=False,
-                        backdraft_roots=None):
+                        backdraft_roots=None, inline_fan_roots=None):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -2328,10 +2240,16 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     duct_rooted_ids: roots that are a picked duct because no unit was found. For
     those, the duct and fittings between the picked duct and the unit connection
     are priced and added to every path (see _unit_side_chain).
+    Duct Performance no longer offers a duct pick (Colin, 2026-11-03), so main()
+    passes an empty set; the case is kept for the walker and its tests.
     Fire / smoke and backdraft dampers are priced at their OWN known drops, never
     the balancing damper figure; any other accessory on the run is reported as
     uncounted. exhaust_cap: every Exhaust Air index run not from a ceiling
     exhaust fan also pays the 'cap' drop once (an inline fan's roof cap).
+    inline_fan_roots: inline exhaust fan roots (Colin, 2026-11-03). The
+    connection reaching the grilles is the inlet, the other the discharge; the
+    discharge's friction, fittings, accessories and outlet fan system effect,
+    at the intake cfm, are added to every Exhaust Air run of the fan.
     backdraft_roots: exhaust fan roots whose Exhaust Air run pays one
     'backdraft' drop when no backdraft damper is modeled on it (Include
     backdraft damper; a ceiling fan's root is left out, its damper is built in).
@@ -2389,6 +2307,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     # The run ends at the wall or roof cap, priced as the 'cap' component in
     # place of a diffuser, and the fan system effect is at the fan OUTLET.
     discharge_roots = discharge_roots or {}
+    inline_fan_roots = set(inline_fan_roots or ())
+    inline_cache = {}       # root id -> _inline_sides(root id)
+    fan_kinds = {}          # root id -> 'inline', 'roof' or None (exhaust fans)
     cap_ids = set(discharge_roots.values())
 
     box_ids  = vav_box_ids or set()
@@ -3083,7 +3004,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     # The 2001 Fundamentals Eq. 38 (p. 34.14) adds FSE2 at the fan outlet and
     # FSE1 at the inlet. Priced from the first disruption inside each unit
     # connection's window; the math is fan_system_effect's.
-    fse_set = fan_effect if (fan_effect and fan_effect.get('on')) else None
+    # The straight duct and swirl checks run every time; the fan system
+    # effect is priced only when ticked (Colin, 2026-11-03, Q4). Unticked,
+    # each connection keeps its RED lines and drops the rest (_checks_only).
+    fse_price = bool(fan_effect and fan_effect.get('on'))
+    fse_set = dict(fan_effect) if fan_effect else fan_system_effect.default_settings()
     _FSE_KIND_TEXT = {'takeoff': 'tap', 'split': 'branch', 'unknown': 'unrecognised fitting'}
 
     def _transition_length_ft(elem, nid):
@@ -3102,7 +3027,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return length
 
     def _fse_first_disruption(root_id, first, win, where='unit connection',
-                              prev=None, seen=None, collect=None):
+                              prev=None, seen=None, collect=None, passed=None,
+                              through_taps=False, ducts=None):
         """(role or None, L ft, node id, notes): the first disruption within
         win feet of the unit connection at node first.
 
@@ -3123,7 +3049,16 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
         collect: a list for the swirl check. Each elbow inside win is
         appended as (id, L ft) and the walk goes on past it, to the end of
-        the window or the first disruption that is not an elbow."""
+        the window or the first disruption that is not an elbow.
+
+        passed: a dict filled with {transition id: L ft} for every
+        transition passed, for the fan velocity basis (Colin, 2026-11-03).
+
+        through_taps: walk past taps on the main instead of stopping at
+        them, for the straight duct check.
+
+        ducts: a list filled with (duct id, L ft at its unit end) for every
+        duct passed, so the straight duct before a RED elbow is RED too."""
         notes = []
         if seen is None:
             prev, seen = root_id, set([root_id])
@@ -3158,9 +3093,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                       % nid))
                     fan_system_effect.log.info('fan system effect: tap %s on duct %s '
                                                'at %.2f ft', tid, nid, l_ft + at)
-                    if l_ft + at < win:
+                    if through_taps:
+                        pass                # the main goes on past the tap
+                    elif l_ft + at < win:
                         return 'takeoff', l_ft + at, tid, notes
-                    return None, l_ft + at, None, notes
+                    else:
+                        return None, l_ft + at, None, notes
+                if ducts is not None:
+                    ducts.append((nid, l_ft))
                 l_ft += float(dr.length_ft or 0.0)
                 nxt = [c for c in kids if c not in taps]
             elif elem is not None and hvac_graph.is_fitting(elem):
@@ -3170,6 +3110,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     # prices it as an ordinary fitting.
                     fan_system_effect.log.info('fan system effect: transition %s at '
                                                '%.2f ft passed', nid, l_ft)
+                    if passed is not None:
+                        passed[nid] = l_ft
                     l_ft += _transition_length_ft(elem, nid)
                 elif collect is not None and role == 'elbow':
                     collect.append((nid, l_ft))
@@ -3212,6 +3154,28 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                           'of a square of the first duct\'s area (%.0f in.)' % (what, side)))
             return False, side
         return None, None
+
+    def _fse_window_size(conn, flow, notes):
+        """(is_round, D in.) for the 5 D check and the inlet window: the
+        LARGER of the unit opening (_fse_conn_size) and the first duct, each
+        a round D or a rect larger side (Colin, 2026-11-03). is_round is the
+        opening's. (None, None) if nothing is readable."""
+        is_round, size = _fse_conn_size(conn, flow, notes, 'window')
+        if size is None:
+            return None, None
+        dc = _duct_conn(flow)
+        d_duct = None
+        if dc is not None:
+            if dc.get('d_in'):
+                d_duct = dc['d_in']
+            elif dc.get('w_in') and dc.get('h_in'):
+                d_duct = max(dc['w_in'], dc['h_in'])
+        fan_system_effect.log.info('fan system effect: 5 D size, opening %.1f in., '
+                                   'first duct %s in.', size,
+                                   '%.1f' % d_duct if d_duct else 'NOT FOUND')
+        if d_duct and d_duct > size:
+            return bool(dc.get('d_in')), d_duct
+        return is_round, size
 
     def _fse_inlet_size(elem, conn, flow, notes, did=None, l_ft=0.0, where='inlet'):
         """(is_round, D or H in., r in. or None) for the inlet elbow. H is
@@ -3269,7 +3233,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return {'round': False, 'area_ft2': dr.area_ft2, 'd_in': None,
                 'w_in': float(wh.group(1)), 'h_in': float(wh.group(2))}
 
-    def _fse_connection(root_id, first, tag=False, pick=None):
+    def _fse_connection(root_id, first, tag=False, pick=None, direction=None,
+                        cfm_in=None):
         """The fan system effect at one unit connection, or None when it is
         not a fan connection this prices (outside air, transfer).
 
@@ -3279,14 +3244,22 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         itself and its unit side end is taken as the unit connection: its
         own size and cfm are Ao and the flow, and the window walk starts at
         that end (_fse_first_disruption).
+        direction: 'in' or 'out' for an inline exhaust fan connection, from
+        its terminals (_inline_sides); cfm_in: the airflow for a discharge,
+        which carries no terminal of its own.
         Returns {'loss', 'item' (index run item or None), 'where', 'notes',
         'skip': node ids whose own fitting price the system effect replaces
         (an inlet elbow: ED7-2 / ER7-1 include it), 'gray': elbow ids whose
         loss is HIGH_LOSS_INWC or more, 'red': the two elbow ids that turn
-        in different planes within 6 Dh (swirl, not priced),
-        'assumptions': report ASSUMPTION lines}."""
+        in different planes within 6 Dh (swirl, not priced) and an elbow
+        and the straight duct before an elbow under the straight duct line,
+        'red_ducts': {duct id: (table reason, required)} for those ducts,
+        'boost': {transition id: velocity factor} for the
+        transitions priced at the fan velocity, 'assumptions': report
+        ASSUMPTION lines}."""
         rec = {'loss': 0.0, 'item': None, 'where': 'unit connection', 'notes': [],
-               'skip': set(), 'gray': set(), 'red': set(), 'assumptions': []}
+               'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
+               'red_ducts': {}, 'assumptions': []}
         if _kind(first) == 'equipment':
             rec['notes'].append(('note', 'NOTE: unit connection to element %s not '
                                  'checked for fan system effect: it feeds equipment '
@@ -3302,7 +3275,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # go in here for exhaust fans, where both sides are Exhaust Air. A
         # unit's role is its classification today, so None is passed.
         role_here = fan_system_effect.connection_role(
-            side, 'out' if root_id in discharge_roots else None)
+            side, 'out' if root_id in discharge_roots else direction)
         if role_here is None:
             fan_system_effect.log.info('fan system effect: connection %s of %s is %r, '
                                        'not checked', first, root_id, side)
@@ -3312,7 +3285,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['where'] = where
         notes = rec['notes']
         flow = _first_duct(first)
-        cfm = _connection_cfm(first)
+        cfm = cfm_in if cfm_in else _connection_cfm(first)
         if flow is None or cfm <= 0 or not flow.area_ft2:
             notes.append(('note', 'NOTE: fan system effect at the %s not checked, no '
                           'airflow on its first duct' % where))
@@ -3325,18 +3298,66 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             notes.append(('note', 'NOTE: unit %s connection size unreadable; the first '
                           'duct (%s) is used for Ao and the velocity pressure'
                           % (where, getattr(flow, 'size', '?'))))
-        v = cfm / area
+        # Velocity basis (Colin, 2026-11-03): the larger of the default fan
+        # velocity and the connection's, or the connection's alone. It sets
+        # Pv, the outlet Le and the transitions passed below.
+        v_conn = cfm / area
+        v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
+        if fan_gov:
+            notes.append(('note', fan_system_effect.velocity_text(where, v, v_conn)))
+        # D for the 5 D check and the inlet window: the larger of the unit
+        # opening and the first duct. An outlet already has its fallback NOTE
+        # above, so its size notes are not repeated.
+        is_round_c, size_c = _fse_window_size(
+            conn, flow, notes if role_here == fan_system_effect.INLET else [])
         if role_here == fan_system_effect.OUTLET:
             win, _eq = fan_system_effect.effective_duct_length_ft(area, v)
             win_name = 'Le'
         else:
-            is_round_c, size_c = _fse_conn_size(conn, flow, notes, 'window')
             if size_c is None:
                 notes.append(('warn', 'WARNING: %s size unreadable; fan system effect '
                               'not checked' % where))
                 return rec
             win = fan_system_effect.inlet_window_ft(is_round_c, size_c)
             win_name = 'the inlet window, 5 %s' % ('D' if is_round_c else 'H')
+        # The straight duct check (Colin, 2026-11-03, FAN_SYSTEM_EFFECT_PLAN.md
+        # section C): an elbow under 0.5 Le of an outlet, or under 2 D of an
+        # inlet, is RED with the straight duct before it, still priced below.
+        # Elbows only, every one inside the line, walked past taps on the
+        # main and past the other elbows, up to a split or another fitting.
+        if role_here == fan_system_effect.OUTLET or size_c is not None:
+            if role_here == fan_system_effect.OUTLET:
+                red_ft = fan_system_effect.outlet_red_ft(win)
+            else:
+                red_ft = fan_system_effect.inlet_red_ft(size_c)
+            elbows_r, ducts_r = [], []
+            if pick is not None:
+                _fse_first_disruption(root_id, first, red_ft, where, prev=pick[0],
+                                      seen=set(pick[1]), collect=elbows_r,
+                                      through_taps=True, ducts=ducts_r)
+            else:
+                _fse_first_disruption(root_id, first, red_ft, where, collect=elbows_r,
+                                      through_taps=True, ducts=ducts_r)
+            fan_system_effect.log.info('straight duct check: %s, RED line %.2f ft, '
+                                       'elbows %r, ducts %r', where, red_ft, elbows_r,
+                                       ducts_r)
+            for e_r, l_r in elbows_r:
+                if role_here == fan_system_effect.OUTLET:
+                    notes.append(('red', fan_system_effect.le_text(where, e_r, l_r, win,
+                                                                   _eq)))
+                    need = fan_system_effect.outlet_red_ft(win)
+                else:
+                    notes.append(('red', fan_system_effect.inlet_red_text(
+                        where, e_r, l_r, size_c, is_round_c)))
+                    need = fan_system_effect.inlet_red_ft(size_c)
+                rec['red'].add(e_r)
+                for d_r, at in ducts_r:
+                    if at < l_r - 1e-9 and d_r not in rec['red_ducts']:
+                        rec['red'].add(d_r)
+                        rec['red_ducts'][d_r] = (
+                            fan_system_effect.straight_duct_reason(e_r, l_r, role_here),
+                            'Straight duct %.1f ft' % fan_system_effect._ceil_step(need))
+        passed = {}     # transitions inside the pricing window (win)
         # Two elbows turning in different planes within 6 Dh of the
         # connection: RED, never priced (Colin, 2026-11-02; supply, return
         # and exhaust alike). Walked on its own window, past the first elbow.
@@ -3362,10 +3383,20 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                        'not checked', where)
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
-                root_id, first, win, where, prev=pick[0], seen=set(pick[1]))
+                root_id, first, win, where, prev=pick[0], seen=set(pick[1]),
+                passed=passed)
         else:
-            role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where)
+            role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where,
+                                                            passed=passed)
         notes.extend(wnotes)
+        # The transitions between the unit and the first disruption are priced
+        # at the fan velocity too (Colin, 2026-11-03): the walk scales the
+        # air speed through each by v / v_conn.
+        if fan_gov and v_conn > 0:
+            for tid in sorted(passed, key=lambda t: passed[t]):
+                rec['boost'][tid] = v / v_conn
+                notes.append(('note', fan_system_effect.transition_text(
+                    tid, passed[tid], where, v)))
         if role is None:
             return rec
         if role != 'elbow':
@@ -3375,7 +3406,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if role_here == fan_system_effect.OUTLET:
             r = fan_system_effect.outlet_effect(
                 fse_set.get('fan_type'), fse_set.get('blast_ratio'), area, cfm, l_ft,
-                pv_of=hvac_graph.velocity_pressure_inwg)
+                pv_of=hvac_graph.velocity_pressure_inwg, v_fpm=v)
         else:
             enotes = []
             is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow, enotes,
@@ -3386,7 +3417,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                               % (did, l_ft, where)))
                 return rec
             r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft,
-                                               pv_of=hvac_graph.velocity_pressure_inwg)
+                                               pv_of=hvac_graph.velocity_pressure_inwg,
+                                               v_fpm=v)
             if not r['within']:
                 # Past the table's floor distance for its own size: an
                 # ordinary elbow, priced by the walk like any other.
@@ -3421,11 +3453,30 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                        (name, basis, r['c'], None))
         return rec
 
+    def _checks_only(rec):
+        """A connection record with the fan system effect pricing taken out,
+        the straight duct and swirl RED kept (fan system effect unticked)."""
+        rec['loss'] = 0.0
+        rec['item'] = None
+        rec['skip'] = set()
+        rec['gray'] = set()
+        rec['boost'] = {}
+        rec['assumptions'] = []
+        rec['notes'] = [n for n in rec['notes'] if n[0] == 'red']
+        return rec
+
     def _fse_root(root_id):
-        """({unit connection node: record}, notes about the root itself)."""
+        """({unit connection node: record}, notes about the root itself).
+        Unticked fan system effect: the RED checks only (_checks_only)."""
+        recs, rnotes = _fse_root_all(root_id)
+        if not fse_price:
+            for _r in recs.values():
+                _checks_only(_r)
+            rnotes = []
+        return recs, rnotes
+
+    def _fse_root_all(root_id):
         recs, rnotes = {}, []
-        if fse_set is None:
-            return recs, rnotes
         root_elem = all_nodes.get(root_id)
         if (duct_rooted_ids and root_id in duct_rooted_ids
                 and root_id not in dr_by_int_id):
@@ -3468,12 +3519,180 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     firsts.append(f)
             classes = [_side_below(f) if _kind(f) != 'equipment' else None
                        for f in firsts]
+            dirs, dis_cfm, _n, _kind_fan = inline_cache.get(root_id, ({}, 0.0, [], None))
+            # Only the discharge that is priced gets a fan system effect
+            # record, so a second one never shows a loss in no total (review,
+            # 2026-11-03).
+            outs = [f for f in all_children.get(root_id, []) if dirs.get(f) == 'out']
             for first, cls in zip(firsts, classes):
                 tag = cls is not None and classes.count(cls) > 1
-                rec = _fse_connection(root_id, first, tag)
+                d = dirs.get(first)
+                if d == 'out' and first != outs[0]:
+                    fan_system_effect.log.info('fan system effect: discharge %s of %s not '
+                                               'priced (second discharge)', first, root_id)
+                    continue
+                rec = _fse_connection(root_id, first, tag, direction=d,
+                                      cfm_in=dis_cfm if d == 'out' else None)
                 if rec is not None:
                     recs[first] = rec
         return recs, rnotes
+
+    # ── inline exhaust fans (Colin, 2026-11-03) ──────────────────────────────
+    # Both connections are Exhaust Air. The one whose ductwork reaches the
+    # grilles is the INLET, the other, with no terminals, the OUTLET
+    # (discharge). No FlowDirectionType: the terminals decide.
+    def _reaches_terminal(first):
+        """[terminal ids] below node first (its subtree), walked once."""
+        found, todo, seen = [], [first], set()
+        while todo:
+            n = todo.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            if n in all_terminals:
+                found.append(n)
+            todo.extend(all_children.get(n, []))
+        return found
+
+    def _inline_sides(root_id):
+        """({first: 'in' or 'out'}, discharge cfm, notes, kind) for an
+        exhaust fan that is not a ceiling fan, from its connections, read
+        every run (Colin, 2026-11-03):
+          'inline': an inlet (reaches the grilles) and an outlet (no
+            grilles). The discharge is priced at the total grille cfm.
+          'roof': inlet only, an upblast or downblast roof fan that
+            discharges itself: the intake alone, no discharge walked. The
+            fan type sets only the fan system effect and the discharge walk;
+            the cap and backdraft boxes are charged as ticked (Colin,
+            2026-11-03).
+          None: no connection reaches the grilles; read on the
+            classification, with a NOTE."""
+        firsts = [f for f in all_children.get(root_id, []) if _kind(f) is not None]
+        terms = dict((f, _reaches_terminal(f)) for f in firsts)
+        intake = [f for f in firsts if terms[f]]
+        # A connection straight into other equipment is no discharge (review,
+        # 2026-11-03).
+        equip = [f for f in firsts if not terms[f] and _kind(f) == 'equipment']
+        dis = [f for f in firsts if not terms[f] and _kind(f) != 'equipment']
+        for f in firsts:
+            fan_system_effect.log.info('inline exhaust fan %s: connection %s (%s) reaches '
+                                       '%d terminal(s)', root_id, f, _kind(f), len(terms[f]))
+        if intake and not dis and equip:
+            return {}, 0.0, [('note', 'NOTE: exhaust fan %s, connection %s feeds other '
+                              'equipment; fan type not read, no discharge priced.'
+                              % (root_id, ', '.join(str(f) for f in equip)))], None
+        if not intake:
+            # Colin, 2026-11-03: an error, not computed. build_network stops a
+            # fan with no terminal at all first (main() reports it as an
+            # error for an exhaust fan); this covers the rest.
+            return {}, 0.0, [('error', 'ERROR: exhaust fan %s, no connection reaches a '
+                              'grille or diffuser; the fan is not computed. Connect '
+                              'its intake ductwork to the grilles.' % root_id)], 'error'
+        if not dis:
+            return (dict((f, 'in') for f in intake), 0.0,
+                    [('note', 'NOTE: exhaust fan read as an upblast or downblast roof '
+                      'fan (inlet only, at element %s): the worst intake path is priced, '
+                      'no discharge walked.' % ', '.join(str(f) for f in intake))],
+                    'roof')
+        # The air picked up walking back from every grille to the fan, the
+        # same post-order sum as every duct (Colin, 2026-11-03).
+        cfm = sum([_connection_cfm(f) for f in intake], 0.0)
+        dirs = dict((f, 'in') for f in intake)
+        dirs.update((f, 'out') for f in dis)
+        return dirs, cfm, [('note', 'NOTE: exhaust fan read as an inline fan: intake at '
+                            'element %s, discharge at element %s (no grilles), carrying '
+                            '%.0f cfm picked up from the grilles, added to every exhaust '
+                            'run.' % (
+                                ', '.join(str(f) for f in intake),
+                                ', '.join(str(f) for f in dis), cfm))], 'inline'
+
+    def _discharge_chain(first, cfm, boost=None):
+        """The discharge duct and fittings from the fan out, priced at the
+        intake cfm: no path ends down there, so they are added to every
+        exhaust run of the fan, like the roof cap (Colin, 2026-11-03). The air
+        moves with the walk, away from the fan, so fittings are priced on the
+        supply tables in walk order. boost: the discharge connection's
+        {transition id: velocity factor} (fan velocity basis), as the main
+        walk applies it. A flex discharge duct is flagged: exhaust shall be
+        rigid (Colin, 2026-11-03).
+        Returns {'fric', 'fit', 'n_duct', 'n_fit', 'feet', 'comp_keys',
+        'items', 'unpriced'}."""
+        out = {'fric': 0.0, 'fit': 0.0, 'n_duct': 0, 'n_fit': 0, 'feet': 0.0,
+               'comp_keys': (), 'items': (), 'unpriced': ()}
+        boost = boost or {}
+        nid, seen = first, set()
+        up_fpm, up_area = 0.0, None
+        while nid is not None and nid not in seen:
+            seen.add(nid)
+            elem = all_nodes.get(nid)
+            dr = dr_by_int_id.get(nid)
+            if dr is not None:
+                fpm = cfm / dr.area_ft2 if dr.area_ft2 else 0.0
+                d_h = getattr(dr, 'd_h_in', 0.0)
+                fr = 0.0
+                if d_h > 0 and fpm > 0:
+                    fr = (hvac_graph.duct_friction_loss_per_100ft(
+                        fpm, d_h, getattr(dr, 'roughness_ft', None))
+                          * float(dr.length_ft) / 100.0)
+                out['fric'] += fr
+                out['n_duct'] += 1
+                out['feet'] += float(dr.length_ft)
+                up_fpm, up_area = fpm, dr.area_ft2
+                out['items'] += (('Discharge duct {}'.format(nid), '{}, {:.1f} ft'.format(
+                    getattr(dr, 'size', '?'), float(dr.length_ft)), fpm, fr,
+                    ('Discharge duct', 'Darcy-Weisbach', None, float(dr.length_ft))),)
+                # Exhaust is never flex: the low pressure collapses it
+                # (Colin, 2026-11-03). Flagged, not priced as a flex run.
+                if getattr(dr, 'is_flex', False):
+                    out['unpriced'] += ('WARNING: flex duct %s on the exhaust discharge; '
+                                        'exhaust ductwork shall be rigid' % nid,)
+            elif elem is not None and hvac_graph.is_fitting(elem):
+                if up_area is None:
+                    flow = _first_duct(nid)
+                    if flow is not None and flow.area_ft2:
+                        up_area = flow.area_ft2
+                        up_fpm = cfm / up_area
+                _k = boost.get(nid)
+                price_fpm = up_fpm * _k if (_k and up_fpm) else up_fpm
+                loss, counted, note, down_a, detail = _price_fitting(
+                    elem, 'Supply Air', price_fpm, up_area, against_flow=False, loc_id=nid)
+                if _k and up_fpm:
+                    detail = '{}, at fan velocity'.format(detail)
+                fam = hvac_graph.fitting_family_name(elem) or '?'
+                k = _takeoff_key(elem, fam, detail, counted, note)
+                out['fit'] += loss
+                out['n_fit'] += counted
+                if note:
+                    out['unpriced'] += (note,)
+                out['items'] += (('Discharge fitting {}'.format(nid),
+                                  '{}, {}'.format(fam, detail), up_fpm, loss,
+                                  ('Discharge ' + k[0][:1].lower() + k[0][1:],) + k[1:]),)
+                if down_a and up_area and up_fpm:
+                    up_fpm, up_area = up_fpm * up_area / down_a, down_a
+            elif elem is not None and hvac_graph.is_accessory(elem):
+                fam = hvac_graph.fitting_family_name(elem)
+                akey = fitting_tables.classify_accessory(fam)
+                if akey is not None:
+                    out['comp_keys'] += (akey,)
+                    out['items'] += (('Discharge accessory {}'.format(nid), fam or '?', None,
+                                      fitting_tables.component_of(akey, comp_values),
+                                      (_COMP_LABEL.get(akey, akey), 'known drop', None,
+                                       None)),)
+                else:
+                    out['unpriced'] += ((fam or '?') + ': accessory on the discharge, '
+                                        'not priced',)
+            else:
+                break
+            kids = [c for c in all_children.get(nid, []) if c not in seen]
+            if len(kids) > 1:
+                out['unpriced'] += ('discharge splits at element %s: priced along '
+                                    'its first leg only' % nid,)
+            nid = kids[0] if kids else None
+        fan_system_effect.log.info('inline exhaust fan discharge from %s: %d ducts, %d '
+                                   'fittings, %.1f ft, friction %.4f, fittings %.4f at '
+                                   '%.0f cfm', first, out['n_duct'], out['n_fit'],
+                                   out['feet'], out['fric'], out['fit'], cfm)
+        return out
 
     best = {}              # root_id -> {sys_class: {...}}
     box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
@@ -3491,13 +3710,36 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         boxes_here = {}    # box id -> worst MP loss reaching its inlet
         # Fan system effect per unit connection, charged to the paths that
         # leave the unit through that connection.
+        # An inline exhaust fan: its sides from the terminals, and the
+        # discharge priced once, added to each of its exhaust runs below.
+        dis_rec = None
+        inline_notes = []
+        if root_id in inline_fan_roots:
+            inline_cache[root_id] = _inline_sides(root_id)
+            dirs_here, dis_cfm_here, inline_notes, fan_kind = inline_cache[root_id]
+            fan_kinds[root_id] = fan_kind
         fse_recs, fse_root_notes = _fse_root(root_id)
+        if root_id in inline_fan_roots:
+            # After the fan system effect, so the discharge transitions take
+            # the fan velocity its record sets.
+            outs = [f for f in all_children.get(root_id, []) if dirs_here.get(f) == 'out']
+            if outs and dis_cfm_here > 0:
+                dis_rec = _discharge_chain(outs[0], dis_cfm_here,
+                                           (fse_recs.get(outs[0]) or {}).get('boost'))
+                dis_rec['first'] = outs[0]
+                if len(outs) > 1:
+                    inline_notes = inline_notes + [(
+                        'note', 'NOTE: inline exhaust fan with %d discharge connections; '
+                        'the one at element %s is priced.' % (len(outs), outs[0]))]
+        fse_root_notes = list(inline_notes) + list(fse_root_notes)
         # A duct pick's record is keyed by the picked duct itself, on every path.
         fse_firsts = [c for c in list(all_children.get(root_id, [])) + [root_id]
                       if c in fse_recs]
         fse_skip = set()
         fse_gray = set()
         fse_red = set()
+        fse_boost = {}     # transition id -> velocity factor (fan velocity basis)
+        fse_red_ducts = {}  # straight duct id -> (reason, required), RED with its elbow
         fse_unit_notes = list(fse_root_notes)
         fse_unit_assume = []
         # Every connection's notes, not only the one the worst path leaves
@@ -3507,6 +3749,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             fse_skip |= _r['skip']
             fse_gray |= _r['gray']
             fse_red |= _r['red']
+            fse_boost.update(_r.get('boost') or {})
+            for _d, _v in (_r.get('red_ducts') or {}).items():
+                fse_red_ducts.setdefault(_d, _v)
             fse_unit_notes.extend(_r['notes'])
             for _a in _r['assumptions']:
                 if _a not in fse_unit_assume:
@@ -3589,10 +3834,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 pass
 
             elif elem is not None and hvac_graph.is_fitting(elem):
+                # A transition between the unit and the first disruption,
+                # under the fan velocity basis: priced with the air at the fan
+                # velocity (Colin, 2026-11-03). The walk carries on at the
+                # model's own velocity past it.
+                _k = fse_boost.get(nid)
+                price_fpm = up_fpm * _k if (_k and up_fpm) else up_fpm
                 loss, counted, note, _down_a, detail = _price_fitting(
-                    elem, sys_class, up_fpm, up_area,
+                    elem, sys_class, price_fpm, up_area,
                     against_flow=fitting_tables.flows_toward_unit(sys_class),
                     nid=nid)
+                if _k and up_fpm:
+                    detail = '{}, at fan velocity'.format(detail)
                 fit    = fit + loss
                 fcount = fcount + counted
                 if note:
@@ -3689,10 +3942,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # Include backdraft damper: an exhaust fan's run with none
                 # modeled pays one (Colin, 2026-11-02); one drawn on the run
                 # is already in comp_keys and is never charged twice.
+                # The discharge of an inline exhaust fan: on every exhaust
+                # run of the fan (Colin, 2026-11-03), like the roof cap.
+                dis_here = (dis_rec if dis_rec is not None
+                            and (term[1] or sys_class) == 'Exhaust Air' else None)
+                if dis_here is not None:
+                    keys_here = keys_here + dis_here['comp_keys']
                 _assumed_backdraft = (
                         backdraft_roots is not None and root_id in backdraft_roots
                         and (term[1] or sys_class) == 'Exhaust Air'
-                        and 'backdraft' not in comp_keys)
+                        and 'backdraft' not in comp_keys
+                        and not (dis_here and 'backdraft' in dis_here['comp_keys']))
                 if _assumed_backdraft:
                     keys_here = keys_here + ('backdraft',)
                 comp_here = 0.0
@@ -3714,14 +3974,29 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 fse_loss = fse_rec['loss'] if fse_rec is not None else 0.0
                 fse_items = ((fse_rec['item'],) if fse_rec is not None
                              and fse_rec['item'] is not None else ())
+                fric_l, fit_l, dis_items = fric, fit, ()
+                n_d, n_f, len_l, unpriced_l = dcount, fcount, dlen, unpriced
+                if dis_here is not None:
+                    fric_l += dis_here['fric']
+                    fit_l += dis_here['fit']
+                    n_d += dis_here['n_duct']
+                    n_f += dis_here['n_fit']
+                    len_l += dis_here['feet']
+                    unpriced_l = unpriced_l + dis_here['unpriced']
+                    dis_items = dis_here['items']
+                    _drec = fse_recs.get(dis_here['first'])
+                    if _drec is not None and _drec['loss']:
+                        fse_loss += _drec['loss']
+                        if _drec['item'] is not None:
+                            fse_items = fse_items + (_drec['item'],)
                 current = best_here.get(key)
-                if current is None or (fric + fit + comp_here + filt + fse_loss) > (
+                if current is None or (fric_l + fit_l + comp_here + filt + fse_loss) > (
                         current['friction_inwc'] + current['fitting_inwc'] +
                         current['component_inwc'] + current['filter_inwc'] +
                         current['fse_inwc']):
                     best_here[key] = {
-                        'friction_inwc':    fric,
-                        'fitting_inwc':     fit,
+                        'friction_inwc':    fric_l,
+                        'fitting_inwc':     fit_l,
                         'component_inwc':   comp_here,
                         'filter_inwc':      filt,
                         'fse_inwc':         fse_loss,
@@ -3730,18 +4005,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'fse_notes':        fse_unit_notes,
                         'fse_gray_ids':     fse_gray,
                         'fse_red_ids':      fse_red,
+                        'fse_red_ducts':    fse_red_ducts,
                         'fse_assumptions':  fse_unit_assume,
                         'unit_side_fittings': pre[2],
+                        'exhaust_fan_kind': ('ceiling' if root_id in discharge_roots
+                                             else fan_kinds.get(root_id)),
                         'component_keys':   keys_here,
-                        'duct_count':       dcount,
-                        'fitting_count':    fcount,
+                        'duct_count':       n_d,
+                        'fitting_count':    n_f,
                         'tap_bypass_count': tcount,
-                        'length_ft':        dlen,
+                        'length_ft':        len_l,
                         'terminal_id':      nid,
                         'terminal_name':    _family or '-',
                         'terminal_label':   _terminal_label(nid),
-                        'unpriced':         unpriced,
-                        'items':            fse_items + items + (((
+                        'unpriced':         unpriced_l,
+                        'items':            fse_items + items + dis_items + (((
                             'Accessory (assumed)', 'Balancing damper at ' + (_family or '-'),
                             None, fitting_tables.component_of('damper', comp_values),
                             ('Balancing damper', 'known drop', None, None)),)
@@ -4967,7 +5245,9 @@ def main():
     tol_pct       = dialog_result['tol_pct']
     selected_cols = dialog_result['selected_cols']
     full_diag     = dialog_result['full_diag']
-    ext_static    = dialog_result['ext_static']
+    # VAV Box: no external static (Colin, 2026-11-03), whatever the box says.
+    ext_static    = (dialog_result['ext_static']
+                     and dialog_result.get('scope') != 'vavbox')
     safety_pct    = dialog_result['safety_pct']
     c_values      = dialog_result['c_values']
     comp_values   = dialog_result['comp_values']
@@ -4975,11 +5255,10 @@ def main():
     filter_inwc   = dialog_result['filter_inwc']
     exhaust_cap   = dialog_result.get('exhaust_cap', False)
     exhaust_on    = dialog_result.get('exhaust', False)
-    exh_set       = dialog_result.get('exhaust_settings') or {
-        'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT}
-    # Include backdraft damper, default on (Colin, 2026-11-02); the legacy
+    exh_set       = dialog_result.get('exhaust_settings') or {}
+    # Include backdraft damper, default off (Colin, 2026-11-03); the legacy
     # dialog has no box for it.
-    exh_backdraft = bool(exh_set.get('backdraft', True))
+    exh_backdraft = bool(exh_set.get('backdraft', False))
     vav_on        = dialog_result['vav']
     vav_set       = dialog_result['vav_settings']
     fan_effect    = dialog_result.get('fan_effect') or fan_system_effect.default_settings()
@@ -4999,53 +5278,55 @@ def main():
                 calc_basis['air_density']))
 
 
-    # 3. Find AHUs in active view and let user pick systems
+    # 3. List the Scope's equipment in the active view, and take ONE pick
+    # (Colin, 2026-11-03: one unit per run, the Scope choice sets the list,
+    # no duct pick).
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
                          .OfCategory(BuiltInCategory.OST_MechanicalEquipment)
                          .WhereElementIsNotElementType())
 
-    # VAV boxes and exhaust fans are listed only when their Scope box is
-    # ticked (Colin, 2026-11-02), so the list says up front what kind of
-    # system the run is for.
-    hidden = {'VAV box': 0, 'exhaust fan': 0}
+    scope = dialog_result.get('scope', 'rtu')
+    scope_label = _SCOPE_LABEL.get(scope, 'RTU')
+    hidden = {'VAV box': 0, 'exhaust fan': 0, 'unit': 0}
     listed = []
     for eq in equip_in_view:
-        if not vav_on and hvac_graph.is_fed_from_upstream_supply(eq):
-            hidden['VAV box'] += 1
-        elif not exhaust_on and hvac_graph.is_exhaust_fan(eq):
-            hidden['exhaust fan'] += 1
+        if hvac_graph.is_exhaust_fan(eq):
+            kind = 'exhaust fan'
+        elif hvac_graph.is_fed_from_upstream_supply(eq):
+            kind = 'VAV box'
         else:
+            kind = 'unit'
+        if kind in _SCOPE_LISTS[scope]:
             listed.append(eq)
-    _hid = ['{} {}{} (tick {} in Scope)'.format(
-        n, k, '' if n == 1 else 'es' if k.endswith('x') else 's',
-        'VAV System' if k == 'VAV box' else 'Exhaust System')
+        else:
+            hidden[kind] += 1
+    _hid = ['{} {}{} (choose {} in Scope)'.format(
+        n, k, '' if n == 1 else 'es' if k.endswith('x') else 's', _KIND_SCOPE[k])
         for k, n in sorted(hidden.items()) if n]
     if _hid:
         output.print_md('Hidden from the equipment list: {}.'.format(', '.join(_hid)))
     equip_in_view = listed
 
+    if not equip_in_view:
+        output.print_md('No {} equipment found in the active view. Open a plan that '
+                        'shows the unit, or choose another Scope.'.format(scope_label))
+        return
+
+    # Build display name → element map (deduplicate names)
     name_to_elem = {}
-    if equip_in_view:
-        # Build display name → element map (deduplicate names)
-        for eq in equip_in_view:
-            try:
-                name = eq.Symbol.Family.Name + ' : ' + eq.Name
-            except Exception:
-                name = _elem_name(eq)
-            key = name
-            suffix = 2
-            while key in name_to_elem:
-                key = '{} ({})'.format(name, suffix)
-                suffix += 1
-            name_to_elem[key] = eq
+    for eq in equip_in_view:
+        try:
+            name = eq.Symbol.Family.Name + ' : ' + eq.Name
+        except Exception:
+            name = _elem_name(eq)
+        key = name
+        suffix = 2
+        while key in name_to_elem:
+            key = '{} ({})'.format(name, suffix)
+            suffix += 1
+        name_to_elem[key] = eq
 
-        choice = show_system_picker(sorted(name_to_elem.keys()))
-    else:
-        # Nothing in this view to list. The picker still opens, with the list
-        # empty and only the duct route live, so the run is not dead-ended.
-        output.print_md('No mechanical equipment found in active view.')
-        choice = show_system_picker([])
-
+    choice = show_system_picker(sorted(name_to_elem.keys()), scope_label)
     if choice is None:
         output.print_md('**Cancelled.**')
         return
@@ -5058,32 +5339,22 @@ def main():
     def _correct(kind, text, unit=None, group=None):
         corrections.append(duct_perf_console.correction(kind, text, unit, group))
 
-    mode, names = choice
-    # Ceiling exhaust fans picked from the list: {fan id: {'cfm', 'rated_sp'}}.
-    # The fan carries no airflow in the model, so it is entered here, with
-    # the rated static the computed ESP is checked against (Colin,
-    # 2026-11-02: default 0.50 in. wc).
+    _mode, names = choice
+    # A ceiling exhaust fan picked from the list: {fan id: {'cfm'}}. The fan
+    # carries no airflow in the model, so it is entered here. No rated static
+    # check (Colin, 2026-11-03): the engineer checks the fan selection.
     fan_inputs = {}
-    if mode == 'equipment':
-        sel_elems = [name_to_elem[n] for n in names]
-        for eq in sel_elems:
-            if not exhaust_on or not hvac_graph.is_ceiling_exhaust_fan(eq):
-                continue
-            vals = ui_helpers.show_exhaust_fan_inputs(
-                'Duct Performance', '{} (id {})'.format(_elem_name(eq), eid_int(eq.Id)),
-                hvac_graph.fan_rated_cfm(eq), exh_set['rated_sp'])
-            if vals is None:
-                output.print_md('**Cancelled.**')
-                return
-            fan_inputs[eid_int(eq.Id)] = vals
-    else:
-        sel_elems = _pick_duct_system()
-        if not sel_elems:
+    sel_elems = [name_to_elem[n] for n in names]
+    for eq in sel_elems:
+        if not exhaust_on or not hvac_graph.is_ceiling_exhaust_fan(eq):
+            continue
+        vals = ui_helpers.show_exhaust_fan_inputs(
+            'Duct Performance', '{} (id {})'.format(_elem_name(eq), eid_int(eq.Id)),
+            hvac_graph.fan_rated_cfm(eq))
+        if vals is None:
             output.print_md('**Cancelled.**')
             return
-        _same_side = _warn_if_same_side(sel_elems)
-        if _same_side:
-            _correct('warn', _same_side)
+        fan_inputs[eid_int(eq.Id)] = vals
 
     # 4. Traverse each system and merge results
     all_duct_results = {}   # ElementId -> DuctResult  (worst-wins on overlap)
@@ -5109,9 +5380,13 @@ def main():
 
         if net.errors:
             # The unit is skipped: an action for the engineer, in System
-            # Corrections (printed even when no unit traced, see below).
+            # Corrections (printed even when no unit traced, see below). An
+            # exhaust fan with no grille on either side is an ERROR, not
+            # computed (Colin, 2026-11-03).
+            _kind_err = ('error' if exhaust_on and hvac_graph.is_exhaust_fan(sel_elem)
+                         else 'warn')
             for e in net.errors:
-                _correct('warn', e, '{} (id {})'.format(
+                _correct(_kind_err, e, '{} (id {})'.format(
                     _elem_name(sel_elem), eid_int(sel_elem.Id)))
             continue
 
@@ -5124,9 +5399,9 @@ def main():
             continue
 
 
-        # No unit anywhere on the picked ductwork: build_network rooted at the
-        # duct itself. Remembered so a supply duct and a return duct picked this
-        # way can be added into ONE system's external static further down.
+        # build_network fell back to rooting at a duct. Only a duct pick did
+        # that, and there is none now (Colin, 2026-11-03); kept so such a root
+        # is still reported as duct rooted, not as a unit.
         if str(net.ahu_method).startswith('fallback'):
             duct_rooted_ids.add(eid_int(net.root.Id))
 
@@ -5393,7 +5668,30 @@ def main():
     critical = None
     fse_gray_ids = set()      # elbows drawn GRAY: fan system effect too high
     fse_red_ids = set()       # elbows drawn RED: two turn planes within 6 Dh of a unit
+    fse_red_ducts = {}        # straight duct id -> (reason, required): RED with its elbow
     fse_extra_assume = []     # ASSUMPTION lines from the priced fittings
+    if not ext_static:
+        # External static off: the straight duct and swirl checks still run
+        # (Colin, 2026-11-03, Q4). The walk runs with the fan system effect
+        # unticked and only its RED lines and red ids are used.
+        _chk = _critical_path_loss(
+            all_root_ids, all_children, all_duct_results, all_terminals,
+            all_nodes, 0.0, c_values, comp_values,
+            duct_rooted_ids=duct_rooted_ids, vav_box_ids=vav_box_ids,
+            fan_effect=dict(fan_effect or fan_system_effect.default_settings(), on=False),
+            discharge_roots=discharge_roots,
+            inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()))
+        for root_id in all_root_ids:
+            per_class = _chk.get(root_id)
+            if not per_class:
+                continue
+            _leaf = per_class[sorted(per_class.keys())[0]]
+            for _kind, _text in _leaf.get('fse_notes', ()):
+                if _kind == 'red':
+                    _correct('red', _text, root_labels.get(root_id, 'id {}'.format(root_id)))
+            fse_red_ids.update(_leaf.get('fse_red_ids', ()))
+            for _d, _v in (_leaf.get('fse_red_ducts') or {}).items():
+                fse_red_ducts.setdefault(_d, _v)
     if ext_static:
         critical = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
@@ -5405,7 +5703,9 @@ def main():
             exhaust_cap=exhaust_cap,
             # Every exhaust fan but a ceiling one, whose damper is built in.
             backdraft_roots=(set(exhaust_fan_roots) - set(discharge_roots or ())
-                             if exh_backdraft else None))
+                             if exh_backdraft else None),
+            # Inline exhaust fans: every exhaust fan but a ceiling one.
+            inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()))
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
         esp_rec = {'units': [], 'combined': [],
@@ -5537,6 +5837,8 @@ def main():
                     _correct(_kind, _text, unit_label)
             fse_gray_ids.update(_fse_leaf.get('fse_gray_ids', ()))
             fse_red_ids.update(_fse_leaf.get('fse_red_ids', ()))
+            for _d, _v in (_fse_leaf.get('fse_red_ducts') or {}).items():
+                fse_red_ducts.setdefault(_d, _v)
             for _a in _fse_leaf.get('fse_assumptions', ()):
                 if _a not in fse_extra_assume:
                     fse_extra_assume.append(_a)
@@ -5566,9 +5868,8 @@ def main():
                 unit_total += worst_c['total_inwc']
                 sides.append(worst_k)
             if (root_id in discharge_roots or root_id in exhaust_fan_roots) and sides:
-                # An exhaust fan has one side and that is the whole system,
-                # checked against its rated static: a ceiling fan's entered
-                # value, else the Exhaust System panel's.
+                # An exhaust fan has one side and that is the whole system.
+                # No rated static check (Colin, 2026-11-03).
                 _sides = ' + '.join(sides)
                 summary_lines.append(
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
@@ -5576,17 +5877,13 @@ def main():
                 unit_rec['esp'] = _esp_console_text(unit_total, _sides)
                 unit_rec['esp_total'] = unit_total
                 unit_rec['esp_sides'] = list(sides)
-                _rated = fan_inputs.get(root_id, {}).get('rated_sp', exh_set['rated_sp'])
-                if _rated is not None:
-                    _ok = unit_total <= float(_rated) + 1e-9
-                    _msg = ('Fan rated static {:.3f} in. wc: computed {:.3f} in. wc, '
-                            '{}.'.format(float(_rated), unit_total,
-                                         'within it' if _ok else 'EXCEEDS IT'))
-                    if _ok:
-                        summary_lines.append('    ' + _msg)
-                        unit_rec['checks'].append((_ok, _msg))
-                    else:
-                        _correct('error', _msg, unit_label)
+                # The fan type read from its connections (Colin, 2026-11-03).
+                _fk = None
+                for _leaf in per_class.values():
+                    _fk = _fk or _leaf.get('exhaust_fan_kind')
+                unit_rec['fan_type'] = _EXHAUST_FAN_KIND_TEXT.get(_fk)
+                if unit_rec['fan_type']:
+                    summary_lines.append('    ' + unit_rec['fan_type'])
             elif supply is not None and returns:
                 summary_lines.append(
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
@@ -5832,6 +6129,10 @@ def main():
                     dr, custom_limits, tol_pct, downstream_h, branch_ctx.get(eid))
             if dr.element_id in vav_red:
                 label, reason = 'RED', vav_red[dr.element_id]
+            # The straight duct before an elbow under the straight duct line
+            # at a unit connection (Colin, 2026-11-03).
+            if dr.element_id in fse_red_ducts and reason != 'Diffuser/Duct Clearance':
+                label, reason = 'RED', fse_red_ducts[dr.element_id][0]
             duct_labels[eid]    = (label, green_cap, reason)
             branch_results[eid] = branch_res
             if reason == 'Diffuser/Duct Clearance':
@@ -5939,6 +6240,8 @@ def main():
                                downstream_heights.get(eid))
             if dr.element_id in inlet_runout_ids:
                 cells['required'] = '-'   # sized to the box, no MP suggestion
+            if dr.element_id in fse_red_ducts and reason == fse_red_ducts[dr.element_id][0]:
+                cells['required'] = fse_red_ducts[dr.element_id][1]
             row_cells_by_eid[eid] = cells
             flagged_items.append((lbl, dr, cells))
 

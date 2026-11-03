@@ -663,12 +663,6 @@ _FAN_BODY = (
     '<TextBox x:Name="tb_cfm" Width="72" Margin="0,0,6,0"'
     ' ToolTip="The fan schedule airflow. Shall be greater than 0."/>'
     '<TextBlock Text="CFM" VerticalAlignment="Center"/>'
-    '</StackPanel>'
-    '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
-    '<TextBlock Text="Fan rated static" Width="150" VerticalAlignment="Center"/>'
-    '<TextBox x:Name="tb_sp" Width="72" Margin="0,0,6,0"'
-    ' ToolTip="The static the fan is selected at. The computed external static is checked against it."/>'
-    '<TextBlock Text="in. wc" VerticalAlignment="Center"/>'
     '</StackPanel>' +
 
     _BASIS_XAML
@@ -681,33 +675,30 @@ _FAN_BASIS_ROWS = [
      "component drops)."),
     ("External static",
      "Duct friction, fittings at the discharge velocity, the fan system "
-     "effect at the fan outlet, the cap, plus the safety factor. Checked "
-     "against the rated static: OK or EXCEEDS IT."),
+     "effect at the fan outlet, the cap, plus the safety factor. The engineer "
+     "checks it against the fan selection."),
 ]
 
 
-def show_exhaust_fan_dialog(title, fan_label, cfm_default, sp_default,
-                            use_theme=True):
-    """Themed ceiling exhaust fan inputs. Returns {'cfm', 'rated_sp'} or None."""
+def show_exhaust_fan_dialog(title, fan_label, cfm_default, use_theme=True):
+    """Themed ceiling exhaust fan airflow (Colin, 2026-11-03: no rated
+    static; the engineer checks the fan selection). Returns {'cfm'} or None."""
     win = _build_window(title, 'Ceiling Exhaust Fan',
-                        'Enter the fan airflow and rated static.',
+                        'Enter the fan airflow.',
                         _FAN_BODY, use_theme, width=480)
     tb_cfm = _named(win, 'tb_cfm')
-    tb_sp = _named(win, 'tb_sp')
     _named(win, 'tb_fan').Text = fan_label
     if cfm_default:
         tb_cfm.Text = '{:g}'.format(round(float(cfm_default), 1))
-    tb_sp.Text = '{:.2f}'.format(float(sp_default))
     _fill_basis(win, _FAN_BASIS_ROWS)
 
     def collect(errors):
         cfm = _number(tb_cfm, 'Fan airflow', errors)
-        sp = _number(tb_sp, 'Fan rated static', errors)
         if errors:
             return None
-        return {'cfm': cfm, 'rated_sp': sp}
+        return {'cfm': cfm}
 
-    return _run(win, [tb_cfm, tb_sp], collect)
+    return _run(win, [tb_cfm], collect)
 
 
 # ---------------------------------------------------------------------------

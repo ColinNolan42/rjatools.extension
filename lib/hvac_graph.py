@@ -2055,10 +2055,9 @@ def is_ceiling_exhaust_fan(equip):
 
 def is_exhaust_fan(equip):
     """True when equip has connected air connectors and every one is
-    Exhaust Air, any direction: a ceiling or inline exhaust fan. Used to hide
-    exhaust fans from the Duct Performance list until Exhaust System is
-    ticked (Colin, 2026-11-02), and to check an exhaust fan's ESP against its
-    rated static."""
+    Exhaust Air, any direction: a ceiling or inline exhaust fan. Used to
+    list exhaust fans only under the Exhaust System Scope, and to hide them
+    under the others (Colin, 2026-11-03)."""
     eid = eid_int(equip.Id)
     found = 0
     for c in _hvac_connectors(equip):
@@ -2111,6 +2110,41 @@ def discharge_ends(root_id, nodes, children):
                               or is_terminal(e)):
             out.append(nid)
     return sorted(out)
+
+
+def inline_discharge(root_id, nodes, children, terminal_cfms, cfm_map):
+    """(discharge node ids, cfm) for an inline exhaust fan root (Colin,
+    2026-11-03), or (set(), 0.0) when it has no discharge (a roof fan, inlet
+    only) or no intake.
+
+    The connection whose ductwork reaches a terminal is the inlet; one with
+    none is the discharge. Its airflow is the cfm picked up walking back
+    from every grille to the fan, the post-order sum at each intake
+    connection (cfm_map), the same way every duct's airflow is found. Only
+    the first discharge connection is given it, the one Duct Performance
+    prices. Equipment and the unit connector's logical Duct System element
+    are not ductwork and are skipped."""
+    intake, dis = [], []
+    for f in children.get(root_id, []):
+        e = nodes.get(f)
+        if e is None or not (is_duct(e) or is_fitting_or_accessory(e)):
+            continue
+        sub, todo = set(), [f]
+        while todo:
+            n = todo.pop()
+            if n in sub:
+                continue
+            sub.add(n)
+            todo.extend(children.get(n, []))
+        if any(n in terminal_cfms for n in sub):
+            intake.append(f)
+        else:
+            dis.append(sub)
+    log.info('inline_discharge: root %s, intake %r, %d discharge connection(s)',
+             root_id, intake, len(dis))
+    if not intake or not dis:
+        return set(), 0.0
+    return dis[0], sum([float(cfm_map.get(f, 0.0) or 0.0) for f in intake], 0.0)
 
 
 def equipment_entry_direction(equip, parent_id):
@@ -2518,6 +2552,20 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
     net.cfm_map, net.equip_class_cfm = compute_cfm(
         eid_int(net.root.Id), net.nodes, net.children, net.terminal_cfms)
 
+    # An inline exhaust fan's discharge carries the air picked up on the
+    # intake, so it is colored and sized like any duct (Colin, 2026-11-03).
+    inline_ids = set()
+    net.inline_discharge_cfm = 0.0
+    if (discharge_cfm is None and is_equipment(net.root)
+            and is_exhaust_fan(net.root)):
+        inline_ids, net.inline_discharge_cfm = inline_discharge(
+            eid_int(net.root.Id), net.nodes, net.children, net.terminal_cfms,
+            net.cfm_map)
+        for n in inline_ids:
+            net.cfm_map[n] = net.inline_discharge_cfm
+        log.info('build_network: inline exhaust fan %s, %d discharge nodes at %.1f cfm',
+                 eid_int(net.root.Id), len(inline_ids), net.inline_discharge_cfm)
+
     # Duct results
     for nid, elem in net.nodes.items():
         if not is_duct(elem):
@@ -2528,7 +2576,7 @@ def build_network(selected_elem, doc, cfm_is_direct=False, equipment_level=False
         if area <= 0:
             net.no_area_ducts.append(nid)
         dr = DuctResult(elem, cfm, area, sys_class)
-        if net.discharge_end is not None:
+        if net.discharge_end is not None or nid in inline_ids:
             dr.flow_class = 'Supply Air'
         net.duct_results[elem.Id] = dr
 

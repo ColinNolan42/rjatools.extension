@@ -243,11 +243,11 @@ def show_size_duct_dialog(title):
         legacy)
 
 
-def show_exhaust_fan_inputs(title, fan_label, cfm_default, sp_default):
-    """Ceiling exhaust fan airflow and rated static (RJA themed). Returns
-    {'cfm', 'rated_sp'} or None when cancelled.
+def show_exhaust_fan_inputs(title, fan_label, cfm_default):
+    """Ceiling exhaust fan airflow (RJA themed). Returns {'cfm'} or None
+    when cancelled. No rated static (Colin, 2026-11-03).
 
-    Fallback: two plain pyRevit text prompts.
+    Fallback: a plain pyRevit text prompt.
     """
     import sizer_dialogs
     from pyrevit import forms
@@ -255,8 +255,7 @@ def show_exhaust_fan_inputs(title, fan_label, cfm_default, sp_default):
     def legacy():
         out = {}
         for key, prompt, default in (
-                ('cfm', 'Fan airflow, CFM', cfm_default),
-                ('rated_sp', 'Fan rated static, in. wc', sp_default)):
+                ('cfm', 'Fan airflow, CFM', cfm_default),):
             while True:
                 text = forms.ask_for_string(
                     default='' if default is None else '{:g}'.format(float(default)),
@@ -274,7 +273,7 @@ def show_exhaust_fan_inputs(title, fan_label, cfm_default, sp_default):
 
     return sizer_dialogs.themed_or(
         lambda use_theme: sizer_dialogs.show_exhaust_fan_dialog(
-            title, fan_label, cfm_default, sp_default, use_theme),
+            title, fan_label, cfm_default, use_theme),
         legacy)
 
 

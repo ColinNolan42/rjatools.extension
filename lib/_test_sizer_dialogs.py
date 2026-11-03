@@ -205,6 +205,16 @@ class TestSizeDuctVav(unittest.TestCase):
         self.assertIn("'VAV, inlet'", source)
 
 
+class TestExhaustFanDialog(unittest.TestCase):
+    """Ceiling exhaust fan prompt: airflow only (Colin, 2026-11-03)."""
+
+    def test_airflow_only(self):
+        names = _names_in(sizer_dialogs._FAN_BODY)
+        self.assertIn("tb_cfm", names)
+        self.assertNotIn("tb_sp", names)
+        self.assertNotIn("rated static", sizer_dialogs._FAN_BODY.lower())
+
+
 class TestGasCalculationBasis(unittest.TestCase):
 
     def test_rows_are_ascii_label_value_pairs(self):

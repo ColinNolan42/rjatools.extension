@@ -222,7 +222,8 @@ class SwirlTest(unittest.TestCase):
 class SettingsTest(unittest.TestCase):
     def test_defaults(self):
         d = F.default_settings()
-        self.assertEqual(d, {'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5})
+        self.assertEqual(d, {'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5,
+                             'velocity_basis': 'default', 'fan_fpm': 2000.0})
         self.assertEqual(F.HIGH_LOSS_INWC, 0.5)
         self.assertFalse(hasattr(F, 'HIGH_C'))
         self.assertFalse(hasattr(F, 'RED_C'))
@@ -268,6 +269,105 @@ class SettingsTest(unittest.TestCase):
         m3, a3 = F.method_lines({'on': False})
         self.assertIn('not included', m3)
         self.assertEqual(a3, [])
+        # Colin, 2026-11-03: no duct pick; 5 D RED and the velocity basis named
+        self.assertNotIn('duct pick', m.lower())
+        self.assertIn('under 2 D', m)
+        self.assertIn('default fan velocity, 2000 fpm', m)   # basis missing: default
+        m4, _a4 = F.method_lines(dict(F.default_settings(), velocity_basis='connection'))
+        self.assertIn('the connection velocity, cfm over the unit connector', m4)
+        self.assertNotIn('default fan velocity', m4)
+
+
+class VelocityBasisTest(unittest.TestCase):
+    """Colin, 2026-11-03: the larger of a default fan velocity and the
+    connection velocity, or the connection alone."""
+
+    def test_design_velocity(self):
+        d = F.default_settings()
+        self.assertEqual(F.design_velocity(d, 1031.0), (2000.0, True))
+        self.assertEqual(F.design_velocity(d, 2400.0), (2400.0, False))
+        self.assertEqual(F.design_velocity(d, 3000.0), (3000.0, False))
+        self.assertEqual(F.design_velocity(dict(d, fan_fpm=800.0), 1031.0), (1031.0, False))
+        conn = dict(d, velocity_basis='connection')
+        self.assertEqual(F.design_velocity(conn, 1031.0), (1031.0, False))
+        self.assertEqual(F.design_velocity(None, 1031.0), (1031.0, False))
+
+    def test_parse_fan_fpm(self):
+        self.assertEqual(F.parse_fan_fpm('2500'), (2500.0, None))
+        for bad in ('0', '-1', 'abc', '', 'nan'):
+            v, err = F.parse_fan_fpm(bad)
+            self.assertIsNone(v, bad)
+            self.assertTrue(err, bad)
+
+    def test_outlet_at_fan_velocity(self):
+        # 2000 cfm through a 20x14 connection (1.944 ft2, 1029 fpm), elbow at 0.
+        # At 2500 fpm Pv = (2500/4005)^2 = 0.3897; DWDI Ab/Ao 0.5 L 0 C 3.80.
+        a = 20.0 * 14.0 / 144.0
+        base = F.outlet_effect('DWDI', 0.5, a, 2000.0, 0.0)
+        fan = F.outlet_effect('DWDI', 0.5, a, 2000.0, 0.0, v_fpm=2500.0)
+        self.assertAlmostEqual(base['v_fpm'], 2000.0 / a)
+        self.assertAlmostEqual(fan['v_fpm'], 2500.0)
+        self.assertAlmostEqual(fan['loss'], 3.80 * (2500.0 / 4005.0) ** 2, places=6)
+        self.assertGreater(fan['loss'], base['loss'])
+        self.assertTrue(fan['high'])
+        # 12.7 m/s is Eq. 37: Le depends on the area only
+        self.assertEqual(fan['eq'], 'Eq. 37')
+        self.assertAlmostEqual(fan['le_ft'], base['le_ft'])
+        # above 13 m/s Eq. 36 lengthens Le with the velocity
+        fast = F.outlet_effect('DWDI', 0.5, a, 2000.0, 0.0, v_fpm=3000.0)
+        self.assertEqual(fast['eq'], 'Eq. 36')
+        self.assertGreater(fast['le_ft'], base['le_ft'])
+
+    def test_inlet_at_fan_velocity(self):
+        a = 24.0 * 24.0 / 144.0
+        base = F.inlet_effect(False, 24.0, None, a, 4000.0, 1.0)
+        fan = F.inlet_effect(False, 24.0, None, a, 4000.0, 1.0, v_fpm=2500.0)
+        self.assertAlmostEqual(base['v_fpm'], 1000.0)
+        self.assertAlmostEqual(fan['v_fpm'], 2500.0)
+        self.assertAlmostEqual(fan['c'], base['c'])
+        self.assertAlmostEqual(fan['loss'] / base['loss'], 6.25, places=6)
+
+
+class FiveDTest(unittest.TestCase):
+    """Colin, 2026-11-03: an elbow under 5 D of a unit connection is RED."""
+
+    def test_length_and_text(self):
+        # Colin, 2026-11-03 (plan section C): outlet 0.5 Le, inlet 2 D, 5 D floor
+        self.assertEqual((F.OUTLET_RED_RATIO, F.INLET_RED_D, F.INLET_FLOOR_D), (0.5, 2.0, 5.0))
+        self.assertFalse(hasattr(F, 'FIVE_D'))
+        self.assertAlmostEqual(F.outlet_red_ft(3.9), 1.95)
+        self.assertAlmostEqual(F.inlet_red_ft(20.0), 40.0 / 12.0)
+        self.assertAlmostEqual(F.inlet_floor_ft(20.0), 100.0 / 12.0)
+        # the plan's section D wording; lengths rounded UP (3.33 to 3.4 ft,
+        # 8.33 to 8.4 ft), so the figure given is past the edge
+        t = F.inlet_red_text('return inlet', 456, 0.8, 20.0)
+        self.assertEqual(t, 'RED: Elbow 456, 0.8 ft from the return inlet, 0.5 D (D 20 in.). '
+                            'Provide at least 3.4 ft of straight duct (2 D); 8.4 ft (5 D) is '
+                            'where the loss stops falling.')
+        self.assertIn('(H 20 in.)', F.inlet_red_text('return inlet', 456, 0.8, 20.0, False))
+        o = F.le_text('supply outlet', 123, 1.2, 3.9, 'Eq. 37')
+        self.assertEqual(o, 'RED: Elbow 123, 1.2 ft from the supply outlet, L/Le 0.31 (Le 3.9 '
+                            'ft, Eq. 37). Provide at least 2.0 ft of straight duct; 3.9 ft '
+                            '(1.0 Le) removes the system effect.')
+        self.assertEqual(F.straight_duct_reason(941, 3.0, F.INLET),
+                         'Straight duct: elbow 941 at 3.0 ft, under 2 D')
+        self.assertEqual(F.straight_duct_reason(941, 1.0, F.OUTLET),
+                         'Straight duct: elbow 941 at 1.0 ft, under 0.5 Le')
+
+    def test_le_text_and_method(self):
+        m, _a = F.method_lines(F.default_settings())
+        self.assertIn('under 0.5 Le of a unit outlet, or under 2 D of an inlet', m)
+        # Eq. 37 is the 2.5 D rule: a 24 x 24 outlet's Le over its round
+        # equivalent diameter (27.08 in.)
+        le, _eq = F.effective_duct_length_ft(4.0, 1000.0)
+        self.assertAlmostEqual(le * 12.0 / (2.0 * (4.0 * 144.0 / 3.14159265) ** 0.5), 2.53, 2)
+
+    def test_note_builders(self):
+        v = F.velocity_text('supply outlet', 2500.0, 1031.0)
+        self.assertTrue(v.startswith('NOTE: '))
+        self.assertIn('2500 fpm, greater than the connection velocity of 1031 fpm', v)
+        tr = F.transition_text(950, 1.5, 'supply outlet', 2500.0)
+        self.assertTrue(tr.startswith('NOTE: transition 950, 1.5 ft from the supply outlet'))
 
     def test_no_adapter_rule(self):
         # Colin, 2026-11-02: every transition in the window is passed, its
@@ -348,6 +448,46 @@ class ReportTest(unittest.TestCase):
         esp = dpc.external_static({'units': [unit]})
         self.assertNotIn('System Effect Pressure Loss', esp)
         self.assertEqual(dpc.esp_unit_notes(unit), [])
+        # Colin, 2026-11-03: an exhaust fan's detected type under its table
+        fan = dict(unit, fan_type='Exhaust fan type: inline (inlet and outlet): x')
+        self.assertEqual(dpc.esp_unit_notes(fan),
+                         [('note', 'Exhaust fan type: inline (inlet and outlet): x')])
+
+
+class InlineDischargeTest(unittest.TestCase):
+    """hvac_graph.inline_discharge (Colin, 2026-11-03): the discharge of an
+    inline exhaust fan carries the cfm picked up walking back from the
+    grilles, so it is colored and sized like any duct. hvac_graph needs
+    Revit, so the function is read out of its source and run on stubs."""
+
+    @classmethod
+    def setUpClass(cls):
+        with io.open(os.path.join(HERE, 'hvac_graph.py'), encoding='utf-8') as fh:
+            src = fh.read()
+        m = re.search(r"^def inline_discharge\(.*?(?=^def )", src, re.S | re.M)
+        import logging
+        cls.ns = {'is_duct': lambda e: e == 'duct',
+                  'is_fitting_or_accessory': lambda e: e in ('fitting', 'accessory'),
+                  'log': logging.getLogger('test')}
+        exec(m.group(0), cls.ns)
+
+    def test_inline(self):
+        # fan 1: intake 2 -> 3 -> grilles 4 (200), 5 (300); discharge 6 -> 7 -> 8
+        nodes = {2: 'duct', 3: 'fitting', 4: 'term', 5: 'term', 6: 'duct', 7: 'fitting',
+                 8: 'duct', 9: 'system'}
+        children = {1: [2, 6, 9], 2: [3], 3: [4, 5], 6: [7], 7: [8]}
+        cfm_map = {2: 500.0, 3: 500.0, 4: 200.0, 5: 300.0}
+        ids, cfm = self.ns['inline_discharge'](1, nodes, children, {4: 200.0, 5: 300.0},
+                                               cfm_map)
+        self.assertEqual(ids, {6, 7, 8})
+        self.assertEqual(cfm, 500.0)
+
+    def test_roof_fan_and_no_intake(self):
+        nodes = {2: 'duct', 4: 'term'}
+        f = self.ns['inline_discharge']
+        self.assertEqual(f(1, nodes, {1: [2], 2: [4]}, {4: 200.0}, {2: 200.0}), (set(), 0.0))
+        nodes2 = {6: 'duct', 7: 'duct'}
+        self.assertEqual(f(1, nodes2, {1: [6], 6: [7]}, {}, {}), (set(), 0.0))
 
 
 class DialogTest(unittest.TestCase):
@@ -377,17 +517,97 @@ class DialogTest(unittest.TestCase):
         # group; the VAV dropdown and the Scope exhaust panel are gone
         # (Colin, 2026-11-02).
         self.assertTrue({'pnl_vav_static', 'pnl_exh_static', 'cb_exh_backdraft',
-                         'tb_backdraft', 'cb_exh_cap', 'tb_exh_cap', 'tb_exh_sp'} <= inner)
+                         'tb_backdraft', 'cb_exh_cap', 'tb_exh_cap'} <= inner)
         exh = [e for e in root.iter() if e.get(xn) == 'pnl_exh_static'][0]
         exh_inner = set(e.get(xn) for e in exh.iter() if e.get(xn))
-        self.assertTrue({'cb_exh_backdraft', 'cb_exh_cap', 'tb_exh_sp'} <= exh_inner)
+        self.assertTrue({'cb_exh_backdraft', 'cb_exh_cap'} <= exh_inner)
+        # Colin, 2026-11-03: no rated static, no explanatory hints
+        self.assertNotIn('tb_exh_sp', names)
+        self.assertFalse([e for e in exh.iter() if e.get('Style') and 'RjaHint' in e.get('Style')])
         for gone in ('exp_vav', 'grid_vav', 'pnl_exhaust'):
             self.assertNotIn(gone, names)
         order = [e.get(xn) for e in pnl.iter() if e.get(xn)]
         self.assertLess(order.index('pnl_vav_static'), order.index('pnl_exh_static'))
+        # Colin, 2026-11-03: the fan velocity basis sits in the fan panel
+        fse = [e for e in root.iter() if e.get(xn) == 'pnl_fse'][0]
+        fse_inner = set(e.get(xn) for e in fse.iter() if e.get(xn))
+        self.assertTrue({'rb_vel_default', 'rb_vel_conn', 'tb_fan_fpm'} <= fse_inner)
+
+    def test_scope_is_one_choice(self):
+        # Colin, 2026-11-03: Scope is RTU, VAV System or Exhaust System, one
+        # radio group; the old check boxes are gone.
+        m = re.search(r"^_SETTINGS_XAML = '''(.*?)'''", self.src, re.S | re.M)
+        root = ET.fromstring(m.group(1).replace('@@RESOURCES@@', '').replace('@@HEADER@@', ''))
+        xn = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
+        radios = dict((e.get(xn), e) for e in root.iter()
+                      if e.tag.endswith('RadioButton') and e.get('GroupName') == 'scope')
+        self.assertEqual(sorted(radios), ['rb_scope_exhaust', 'rb_scope_rtu', 'rb_scope_vav',
+                                          'rb_scope_vavbox'])
+        self.assertEqual(radios['rb_scope_vavbox'].get('Content'), 'VAV Box')
+        self.assertEqual(radios['rb_scope_rtu'].get('Content'), 'RTU')
+        names = set(e.get(xn) for e in root.iter() if e.get(xn))
+        self.assertFalse({'cb_vav', 'cb_exhaust'} & names)
+        self.assertIn('rb_scope_rtu.IsChecked = True', self.src)
+
+    def test_picker_is_one_pick_no_duct_route(self):
+        m = re.search(r"^_PICKER_XAML = '''(.*?)'''", self.src, re.S | re.M)
+        self.assertIn('SelectionMode="Single"', m.group(1))
+        for gone in ('_pick_duct_system', '_PICKER_DUCT_TAG', '_warn_if_same_side',
+                     'Select Duct System', 'SelectionMode.Extended'):
+            self.assertNotIn(gone, self.src)
+        self.assertIn('SelectionMode.Single', self.src)
+
+    def test_fan_panel_text(self):
+        # Colin, 2026-11-03: short fan type tooltips, no DWDI/SWSI paragraph,
+        # a plain Ab/Ao hint, no SWSI inlet sentence in the dialog (it stays
+        # an ASSUMPTION line in the report).
+        m = re.search(r"^_SETTINGS_XAML = '''(.*?)'''", self.src, re.S | re.M)
+        x = m.group(1)
+        self.assertNotIn('double width double inlet', x)
+        self.assertIn('ToolTip="Outlet tables SR7-9 to SR7-12.', x)
+        self.assertIn('ToolTip="Outlet tables SR7-5 to SR7-8.', x)
+        self.assertIn('Ab = blast area, the discharge opening at the scroll cutoff. '
+                      'Ao = outlet area, H x W at the fan discharge.', x)
+        self.assertNotIn('The inlet tables are printed for SWSI fans', self.src)
+        self.assertNotIn('Exhaust fan inputs are under', x)
+
+    def test_fan_type_follows_scope(self):
+        # set only on a Scope change: wired to Checked of the three Scope radios
+        m = re.search(r"    def _scope_fan_type\(.*?\n    for rb in \((.*?)\):\n"
+                      r"        rb\.Checked \+= _scope_fan_type", self.src, re.S)
+        self.assertIsNotNone(m)
+        self.assertEqual([n.strip() for n in m.group(1).split(',')],
+                         ['rb_scope_rtu', 'rb_scope_vav', 'rb_scope_vavbox',
+                          'rb_scope_exhaust'])
+        body = m.group(0)
+        self.assertIn('swsi = bool(rb_scope_exhaust.IsChecked)', body)
+        self.assertIn("fan_type='SWSI' if bool(rb_exhaust.IsChecked)", self.src)  # legacy
+
+    def test_dialog_basis_vav_static_only(self):
+        # Colin, 2026-11-03: the dialog's Calculation basis keeps VAV static only
+        m = re.search(r"^def _dialog_vav_rows\(\):.*?\n\n\n", self.src, re.S | re.M)
+        ns = {'vav_checks': vav_checks}
+        exec(m.group(0), ns)
+        self.assertEqual([r[0] for r in ns['_dialog_vav_rows']()], ['VAV, static'])
+        self.assertEqual(self.src.count('_dialog_vav_rows()'), 3)   # def, themed, legacy
+        self.assertNotIn('+ vav_checks.basis_rows()', self.src)
+
+    def test_scope_lists(self):
+        m = re.search(r"^_SCOPE_LISTS = (\{.*?\})\n", self.src, re.M | re.S)
+        lists = eval(m.group(1))
+        self.assertEqual(lists['rtu'], ('unit',))
+        # Colin, 2026-11-03: VAV System is the unit's full system, VAV Box one box
+        self.assertEqual(lists['vav'], ('unit',))
+        self.assertEqual(lists['vavbox'], ('VAV box',))
+        self.assertEqual(lists['exhaust'], ('exhaust fan',))
 
     def test_exhaust_defaults_and_mp_row(self):
-        self.assertIn('cb_exh_backdraft.IsChecked = True', self.src)
+        # Colin, 2026-11-03: backdraft damper off by default, in main() too;
+        # rated static removed everywhere.
+        self.assertIn('cb_exh_backdraft.IsChecked = False', self.src)
+        self.assertIn("exh_set.get('backdraft', False)", self.src)
+        for gone in ('EXHAUST_FAN_RATED_SP_DEFAULT', 'rated_sp', 'tb_exh_sp'):
+            self.assertNotIn(gone, self.src)
         self.assertIn('cb_exh_cap.IsChecked = False', self.src)
         self.assertIn("lb.Text = 'Supply Air (medium pressure)'", self.src)
 
@@ -402,6 +622,7 @@ class DialogTest(unittest.TestCase):
         m = re.search(r"^def _settings_result\(.*?\n    }\n", self.src, re.S | re.M)
         self.assertIsNotNone(m)
         ns = {'vav_checks': vav_checks, 'fan_system_effect': F}
+        exec(re.search(r"^def _scope_of\(.*?\n\n\n", self.src, re.S | re.M).group(0), ns)
         exec(m.group(0), ns)
         r = ns['_settings_result']({}, 10, set(), False, True, 10, {}, {}, {}, 0.0,
                                    False, vav_checks.default_settings())
@@ -411,6 +632,27 @@ class DialogTest(unittest.TestCase):
                                     {'on': False, 'fan_type': 'SWSI', 'blast_ratio': 0.7})
         self.assertEqual(r2['fan_effect']['fan_type'], 'SWSI')
         self.assertFalse(r2['fan_effect']['on'])
+        # Colin, 2026-11-03: the Scope choice comes back as one key
+        self.assertEqual(r['scope'], 'rtu')
+        r3 = ns['_settings_result']({}, 10, set(), False, True, 10, {}, {}, {}, 0.0,
+                                    True, vav_checks.default_settings())
+        self.assertEqual(r3['scope'], 'vav')
+        r4 = ns['_settings_result']({}, 10, set(), False, True, 10, {}, {}, {}, 0.0,
+                                    False, vav_checks.default_settings(), exhaust=True)
+        self.assertEqual(r4['scope'], 'exhaust')
+        r5 = ns['_settings_result']({}, 10, set(), False, False, 10, {}, {}, {}, 0.0,
+                                    False, vav_checks.default_settings(), scope='vavbox')
+        self.assertEqual(r5['scope'], 'vavbox')
+
+    def test_vav_box_has_no_external_static(self):
+        # Colin, 2026-11-03: greyed out in the dialog, forced off in both
+        # dialogs and in main()
+        self.assertIn('cb_static.IsEnabled = not box', self.src)
+        self.assertIn('ext_static = bool(cb_static.IsChecked) and not '
+                      'bool(rb_scope_vavbox.IsChecked)', self.src)
+        self.assertIn('ext_static = bool(cb_static.IsChecked) and not '
+                      'bool(rb_vavbox.IsChecked)', self.src)
+        self.assertIn("and dialog_result.get('scope') != 'vavbox')", self.src)
 
 
 if __name__ == '__main__':

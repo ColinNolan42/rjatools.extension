@@ -59,7 +59,8 @@ RJA DECISIONS (Colin, 2026-10-29):
   - A rect mitered inlet elbow is read on the ER7-1 r/H 1.0 row (Colin,
     2026-11-02), not the conservative unreadable radius row.
   - A duct pick with no unit takes the picked duct's unit side end as the
-    unit outlet or inlet (Colin, 2026-11-02).
+    unit outlet or inlet (Colin, 2026-11-02). Duct Performance no longer
+    offers a duct pick (Colin, 2026-11-03); the walker keeps the case.
   - A loss (C x Pv) at or above HIGH_LOSS_INWC is GRAY: "System Effect
     Pressure Loss too high, increase length of duct to X ft", X the straight
     length from the unit connection at which the loss first drops BELOW it.
@@ -69,6 +70,27 @@ RJA DECISIONS (Colin, 2026-10-29):
   - ER7-1 is printed for SQUARE elbows (figure, p. 34.60). A non-square
     rectangular inlet elbow is read with H = the side in the plane of the
     turn, stated as an ASSUMPTION (ER7_1_SQUARE_ASSUMPTION).
+
+RJA DECISIONS (Colin, 2026-11-03):
+  - Velocity basis, a dialog choice. 'default' (the default, conservative):
+    the velocity is the LARGER of a default fan velocity (DEFAULT_FAN_FPM)
+    and the connection velocity, cfm / the unit connector area. A unit's
+    opening is often smaller than the duct it feeds, and the fan discharge
+    faster than the duct. Default 2000 fpm (Colin, 2026-11-03; Greenheck's
+    simulator is fixed at 2500 fpm).
+    'connection': the connection velocity alone. The velocity sets Pv, the
+    loss, the GRAY check and the outlet Le. The transitions passed between
+    the unit and the first disruption are priced at the same velocity.
+  - Straight duct check, RED for the engineer, still priced as above
+    (Colin, 2026-11-03, .claude/docs/Duct Velocity/FAN_SYSTEM_EFFECT_PLAN.md
+    section C): an elbow under OUTLET_RED_RATIO x Le of a unit OUTLET (Le
+    Eq. 36 / 37; Eq. 37 is the 2.5 D rule up to about 2500 fpm), or under
+    INLET_RED_D x D of a unit INLET, where the loss is steep. D is the larger
+    of the unit opening and the first duct (round D, else the larger side,
+    H). The straight duct between the unit and the elbow is RED with it. The
+    note gives the RED line length and the no loss length: 1.0 Le at an
+    outlet, INLET_FLOOR_D x D at an inlet (where the tables stop falling).
+    Elbows past the RED line are still priced. Replaces 5 D at both sides.
 
 IronPython 2.7 / pyRevit -- no f-strings, no nonlocal.
 """
@@ -91,6 +113,12 @@ DEFAULT_FAN_TYPE = 'DWDI'
 DEFAULT_BLAST_RATIO = 0.5
 BLAST_RATIO_MIN = 0.4        # the SR7 tables' printed Ab/Ao range
 BLAST_RATIO_MAX = 1.0
+VELOCITY_BASES = ('default', 'connection')
+DEFAULT_VELOCITY_BASIS = 'default'
+DEFAULT_FAN_FPM = 2000.0     # default fan velocity, firm value (Colin, 2026-11-03)
+OUTLET_RED_RATIO = 0.5       # an elbow under 0.5 Le of a unit outlet is RED
+INLET_RED_D = 2.0            # an elbow under 2 D of a unit inlet is RED
+INLET_FLOOR_D = 5.0          # where the inlet tables stop falling (the note)
 LE_SPLIT_MPS = 13.0          # Eq. 36 above this outlet velocity, Eq. 37 at or below
 SWIRL_DH = 6.0               # inlet swirl window, hydraulic diameters (p. 34.11)
 SWIRL_SAME_PLANE = 0.1       # |n1 x n2| under this: two turn planes are the same
@@ -143,9 +171,37 @@ def where_text(sys_class, role):
 
 
 def default_settings():
-    """The dialog defaults: on, DWDI, blast area ratio 0.5."""
+    """The dialog defaults: on, DWDI, blast area ratio 0.5, the default fan
+    velocity basis at DEFAULT_FAN_FPM."""
     return {'on': True, 'fan_type': DEFAULT_FAN_TYPE,
-            'blast_ratio': DEFAULT_BLAST_RATIO}
+            'blast_ratio': DEFAULT_BLAST_RATIO,
+            'velocity_basis': DEFAULT_VELOCITY_BASIS, 'fan_fpm': DEFAULT_FAN_FPM}
+
+
+def parse_fan_fpm(text):
+    """(value, None) or (None, error text) for the dialog's fan velocity box."""
+    try:
+        v = float(text)
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError('not finite')
+    except (ValueError, TypeError):
+        return None, 'must be a number'
+    if v <= 0:
+        return None, 'must be greater than 0'
+    return v, None
+
+
+def design_velocity(settings, v_conn_fpm):
+    """(fpm used, True when the default fan velocity governs).
+
+    'default' basis: the larger of the settings' fan_fpm and the connection
+    velocity. 'connection' basis, or no settings: the connection velocity."""
+    v = float(v_conn_fpm)
+    if settings and settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
+        f = float(settings.get('fan_fpm', DEFAULT_FAN_FPM))
+        if f > v:
+            return f, True
+    return v, False
 
 
 def parse_blast_ratio(text):
@@ -325,15 +381,16 @@ def inlet_c(is_round, r_over, l_over):
 
 # ── one connection ───────────────────────────────────────────────────────────
 
-def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft, pv_of=None):
+def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft, pv_of=None, v_fpm=None):
     """The fan outlet record for an elbow l_ft from the outlet of area_ft2.
 
     Returns {'side': 'outlet', 'c', 'table', 'position', 'v_fpm', 'pv',
     'loss', 'le_ft', 'eq', 'l_ft', 'ratio' (L/Le), 'blast_ratio', 'high',
     'fix_ft', 'notes'}. pv_of(v_fpm) gives the velocity pressure (standard
     air when None); loss = c x pv. fix_ft: the straight length from the
-    outlet at which the loss first drops below HIGH_LOSS_INWC."""
-    v = float(cfm) / float(area_ft2)
+    outlet at which the loss first drops below HIGH_LOSS_INWC.
+    v_fpm: the velocity used (design_velocity), None for cfm / area_ft2."""
+    v = float(v_fpm) if v_fpm else float(cfm) / float(area_ft2)
     pv = (pv_of or std_pv_inwc)(v)
     le, eq = effective_duct_length_ft(area_ft2, v)
     ratio = float(l_ft) / le if le > 0 else 0.0
@@ -351,7 +408,7 @@ def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft, pv_of=None):
     return rec
 
 
-def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None):
+def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None, v_fpm=None):
     """The fan inlet record for an elbow l_ft from the inlet.
 
     size_in: the elbow's D (round) or H (rect, the side in the plane of the
@@ -363,15 +420,15 @@ def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None):
     C reaches the table's floor, floor_c that floor (never 0 on these
     tables). within False: the elbow is at or past floor_ft, outside the
     inlet window, and is an ordinary fitting; the caller does not price it
-    here. fix_ft: where the loss first drops below HIGH_LOSS_INWC. pv_of, pv
-    and loss as outlet_effect."""
+    here. fix_ft: where the loss first drops below HIGH_LOSS_INWC. pv_of, pv,
+    loss and v_fpm as outlet_effect."""
     size_in = float(size_in)
     r_over = (float(r_in) / size_in) if r_in else None
     l_over = float(l_ft) * 12.0 / size_in
     c, key, r_used, notes = inlet_c(is_round, r_over, l_over)
     fr = floor_ratio(key, r_used)
     floor_c, _n = ashrae_fittings.lookup(key, r_used, fr)
-    v = float(cfm) / float(area_ft2)
+    v = float(v_fpm) if v_fpm else float(cfm) / float(area_ft2)
     pv = (pv_of or std_pv_inwc)(v)
     high = is_high(c * pv)
     floor_ft = fr * size_in / 12.0
@@ -438,6 +495,66 @@ def swirl_text(role, where, pair, window_ft, d_h_in):
                float(d_h_in), tail))
 
 
+# ── straight duct RED (Colin, 2026-11-03) ────────────────────────────────────
+
+def outlet_red_ft(le_ft):
+    """OUTLET_RED_RATIO x Le, ft: an outlet elbow closer than this is RED."""
+    return OUTLET_RED_RATIO * float(le_ft)
+
+
+def inlet_red_ft(size_in):
+    """INLET_RED_D x D, ft: an inlet elbow closer than this is RED."""
+    return INLET_RED_D * float(size_in) / 12.0
+
+
+def inlet_floor_ft(size_in):
+    """INLET_FLOOR_D x D, ft: where the inlet tables stop falling."""
+    return INLET_FLOOR_D * float(size_in) / 12.0
+
+
+def le_text(where, eid, l_ft, le_ft, eq):
+    """The RED line for an elbow under OUTLET_RED_RATIO x Le of a unit
+    outlet, in the Duct Performance reason style. The lengths given are
+    rounded UP to LENGTH_STEP_FT, so they are past the edge."""
+    ratio = float(l_ft) / float(le_ft) if le_ft else 0.0
+    return ('RED: Elbow %s, %.1f ft from the %s, L/Le %.2f (Le %.1f ft, %s). Provide at '
+            'least %.1f ft of straight duct; %.1f ft (1.0 Le) removes the system '
+            'effect.' % (eid, float(l_ft), where, ratio, float(le_ft), eq,
+                         _ceil_step(outlet_red_ft(le_ft)), _ceil_step(le_ft)))
+
+
+def inlet_red_text(where, eid, l_ft, size_in, is_round=True):
+    """The RED line for an elbow under INLET_RED_D x D of a unit inlet, in
+    the Duct Performance reason style. H for a rectangular inlet."""
+    dim = 'D' if is_round else 'H'
+    return ('RED: Elbow %s, %.1f ft from the %s, %.1f %s (%s %.0f in.). Provide at least '
+            '%.1f ft of straight duct (%.0f %s); %.1f ft (%.0f %s) is where the loss '
+            'stops falling.' % (
+                eid, float(l_ft), where, float(l_ft) * 12.0 / float(size_in), dim, dim,
+                float(size_in), _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim,
+                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim))
+
+
+def straight_duct_reason(eid, l_ft, role):
+    """The flagged table Reason for a straight duct RED with its elbow."""
+    return 'Straight duct: elbow %s at %.1f ft, under %s' % (
+        eid, float(l_ft), '%.1f Le' % OUTLET_RED_RATIO if role == OUTLET
+        else '%.0f D' % INLET_RED_D)
+
+
+def velocity_text(where, v_used, v_conn):
+    """The NOTE when the default fan velocity governs at a connection."""
+    return ('NOTE: fan system effect at the %s priced at the default fan velocity, '
+            '%.0f fpm, greater than the connection velocity of %.0f fpm.' % (
+                where, float(v_used), float(v_conn)))
+
+
+def transition_text(eid, l_ft, where, v_used):
+    """The NOTE for a transition priced at the fan velocity."""
+    return ('NOTE: transition %s, %.1f ft from the %s, priced at the default fan '
+            'velocity, %.0f fpm at the unit end.' % (eid, float(l_ft), where, float(v_used)))
+
+
 # ── report text ──────────────────────────────────────────────────────────────
 
 def basis_text(rec):
@@ -487,7 +604,8 @@ def method_lines(settings):
     console and drafting view alike. Off: a not-included sentence, no
     assumptions."""
     if not settings or not settings.get('on'):
-        return 'Fan system effect not included (unticked).', []
+        return ('Fan system effect not included (unticked); the straight duct and '
+                'swirl checks still run.', [])
     fan = settings.get('fan_type') or DEFAULT_FAN_TYPE
     tables = OUTLET_TABLES.get(fan, OUTLET_TABLES[DEFAULT_FAN_TYPE])
     method = ('Fan system effect (2001 Fundamentals Eq. 38): the first disruption '
@@ -502,10 +620,20 @@ def method_lines(settings):
               'their length counted, to the first elbow; transitions are priced '
               'as fittings. Taps and splits inside the window are flagged, not '
               'priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
-              'row. On a duct pick, L starts at the unit end of the picked duct.' % (
+              'row. An elbow under 0.5 Le of a unit outlet, or under 2 D of an inlet '
+              '(D the larger of the unit opening and the first duct), is RED with '
+              'the straight duct before it.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
                   MITERED_R_OVER_H))
+    if settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
+        method += (' Velocity: the larger of the default fan velocity, %.0f fpm, and '
+                   'the connection velocity (cfm over the unit connector area); the '
+                   'transitions between the unit and the first disruption are priced '
+                   'at it too.' % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
+    else:
+        method += (' Velocity: the connection velocity, cfm over the unit connector '
+                   'area (the first duct when unreadable).')
     assumptions = []
     if fan != 'SWSI':
         assumptions.append(
