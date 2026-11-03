@@ -290,6 +290,8 @@ _SETTINGS_XAML = '''
                                      ToolTip="Known filter drop in in. wc. Cannot be negative."/>
                             <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
                         </StackPanel>
+                        <CheckBox x:Name="cb_exh_cap" Content="Include exhaust roof cap" Margin="0,8,0,0"
+                                  ToolTip="Adds the Wall / roof cap drop (Advanced settings, component drops) once to every exhaust index run, for an inline fan discharging through a roof or wall cap. Leave off for an upblast roof fan. A ceiling exhaust fan always pays its cap."/>
                         <CheckBox x:Name="cb_fse" Content="Include fan system effect" Margin="0,10,0,0"
                                   ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. Transitions and taps there are flagged, not priced."/>
                         <StackPanel x:Name="pnl_fse" Margin="20,4,0,0">
@@ -434,7 +436,7 @@ def _wpf_named(win, name):
 
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
-                     vav, vav_settings, fan_effect=None):
+                     vav, vav_settings, fan_effect=None, exhaust_cap=False):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
@@ -458,6 +460,7 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'comp_values':   comp_values,
         'calc_basis':    calc_basis,
         'filter_inwc':   filter_inwc,
+        'exhaust_cap':   bool(exhaust_cap),
         'vav':           bool(vav),
         'vav_settings':  vav_settings,
         'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
@@ -496,6 +499,7 @@ def _show_velocity_settings_xaml(use_theme):
     pnl_static = N('pnl_static')
     tb_sf = N('tb_sf')
     cb_filter = N('cb_filter')
+    cb_exh_cap = N('cb_exh_cap')
     tb_filter = N('tb_filter')
     cb_fse = N('cb_fse')
     pnl_fse = N('pnl_fse')
@@ -822,9 +826,11 @@ def _show_velocity_settings_xaml(use_theme):
         ('External static', 'The most restrictive run (index run) from the unit to '
                             'a terminal, supply path plus return path. Includes duct '
                             'friction, fittings, balancing dampers, the diffuser and '
-                            'the safety factor. Excludes the coil and cabinet (already '
-                            'in the published ESP), fire and backdraft dampers, and the '
-                            'filter unless Include return filter is ticked.'),
+                            'the safety factor. Fire / smoke and backdraft dampers are '
+                            'known drops. Excludes the coil and cabinet (already in the '
+                            'published ESP), the filter unless Include return filter is '
+                            'ticked, and an exhaust roof cap unless Include exhaust '
+                            'roof cap is ticked.'),
         ('Fan system effect', '2001 ASHRAE Fundamentals Eq. 38 (p. 34.14). The first '
                               'disruption past each unit connection: within Le '
                               '(Eq. 36 or 37) of an outlet, within the table floor '
@@ -979,7 +985,8 @@ def _show_velocity_settings_xaml(use_theme):
         values = _settings_result(out, gpct, selected_cols, full_diag,
                                   ext_static, safety_pct, c_values, comp_values,
                                   calc_basis, filter_inwc, vav, vav_settings,
-                                  fan_effect)
+                                  fan_effect,
+                                  ext_static and bool(cb_exh_cap.IsChecked))
         return errors, values
 
     def on_ok(s, e):
@@ -1370,6 +1377,15 @@ def _show_velocity_settings_dialog_legacy():
     filt_panel.Children.Add(filt_suffix)
     outer.Children.Add(filt_panel)
 
+    # The roof or wall cap on an inline exhaust fan's discharge (Colin,
+    # 2026-11-02), priced at the Wall / roof cap component drop.
+    cb_exh_cap = CheckBox()
+    cb_exh_cap_text = TextBlock()
+    cb_exh_cap_text.Text = 'Include exhaust roof cap (Wall / roof cap drop on every exhaust run)'
+    cb_exh_cap.Content = cb_exh_cap_text
+    cb_exh_cap.Margin = Thickness(22, 0, 0, 6)
+    outer.Children.Add(cb_exh_cap)
+
     outer.Children.Add(vav_static_panel)
     cb_vav.Checked += _sync_vav
     cb_vav.Unchecked += _sync_vav
@@ -1541,8 +1557,8 @@ def _show_velocity_settings_dialog_legacy():
                                   'transitions), balancing dampers, the diffuser, '
                                   'and the safety factor')
     _info_row('  excludes:',      'filter (unless Include return filter is ticked), coil '
-                                  'and cabinet (already in the published ESP). Fire and '
-                                  'backdraft dampers.')
+                                  'and cabinet (already in the published ESP), exhaust '
+                                  'roof cap (unless Include exhaust roof cap is ticked).')
     for _lab, _val in vav_checks.basis_rows():
         _info_row(_lab + ':', _val)
 
@@ -1629,7 +1645,8 @@ def _show_velocity_settings_dialog_legacy():
             result[0] = _settings_result(out, gpct, selected_cols, full_diag,
                                          ext_static, safety_pct, c_values,
                                          comp_values, calc_basis, filter_inwc,
-                                         vav, vav_settings)
+                                         vav, vav_settings,
+                                         exhaust_cap=ext_static and bool(cb_exh_cap.IsChecked))
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -2191,7 +2208,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         c_values=None, comp_values=None,
                         duct_rooted_ids=None, return_filter_inwc=0.0,
                         vav_box_ids=None, vav_box_drop_inwc=None,
-                        fan_effect=None, discharge_roots=None):
+                        fan_effect=None, discharge_roots=None, exhaust_cap=False):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
@@ -2234,9 +2251,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     duct_rooted_ids: roots that are a picked duct because no unit was found. For
     those, the duct and fittings between the picked duct and the unit connection
     are priced and added to every path (see _unit_side_chain).
-    Fire, smoke and backdraft dampers are not priced either - they have their own
-    drops and must not inherit the balancing-damper figure - and any accessory on
-    the run that is not a balancing damper is reported as uncounted.
+    Fire / smoke and backdraft dampers are priced at their OWN known drops, never
+    the balancing damper figure; any other accessory on the run is reported as
+    uncounted. exhaust_cap: every Exhaust Air index run not from a ceiling
+    exhaust fan also pays the 'cap' drop once (an inline fan's roof cap).
 
     all_children / all_terminals / all_nodes are keyed by int element id.
     all_duct_results is keyed by the real Revit ElementId, so it is re-keyed by
@@ -3486,8 +3504,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # cutsheet number the engineer enters and the model supplies only
                 # the COUNT. Each kind gets its OWN value - a fire or smoke damper
                 # must never inherit the balancing damper's, and anything
-                # matching neither (a backdraft damper, say) is reported as
-                # uncounted rather than priced wrong.
+                # matching none of the kinds is reported as uncounted rather
+                # than priced wrong.
                 fam  = hvac_graph.fitting_family_name(elem)
                 akey = fitting_tables.classify_accessory(fam)
                 if akey is not None:
@@ -3538,6 +3556,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # ceiling exhaust fan run ends at its wall or roof cap.
                 is_cap = nid in cap_ids
                 keys_here = comp_keys + ('cap' if is_cap else 'diffuser',)
+                # Include exhaust roof cap: an inline fan's discharge cap,
+                # charged once on each exhaust run (Colin, 2026-11-02).
+                roof_cap = (exhaust_cap and not is_cap
+                            and (term[1] or sys_class) == 'Exhaust Air')
+                if roof_cap:
+                    keys_here = keys_here + ('cap',)
                 # Every supply diffuser is assumed to have a balancing damper
                 # whether or not one is drawn (Colin, 2026-10-26), so a branch
                 # with no damper accessory (a w_Damper take-off, or none shown)
@@ -3603,7 +3627,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             fitting_tables.component_of(
                                 'cap' if is_cap else 'diffuser', comp_values),
                             (hvac_graph.CAP_LABEL if is_cap else 'Diffuser / grille',
-                             'known drop', None, None)),),
+                             'known drop', None, None)),) + (((
+                            'Exhaust roof cap', 'Include exhaust roof cap', None,
+                            fitting_tables.component_of('cap', comp_values),
+                            (hvac_graph.CAP_LABEL, 'known drop', None, None)),)
+                            if roof_cap else ()),
                     }
 
             for child_id in all_children.get(nid, []):
@@ -4763,7 +4791,10 @@ def _open_view_range(view, base_lvl_id, low_lvl_id, top_z):
     vr = view.GetViewRange()
     vr.SetLevelId(PlanViewPlane.TopClipPlane, PlanViewRange.Unlimited)
     vr.SetLevelId(PlanViewPlane.CutPlane, base_lvl_id)
-    vr.SetOffset(PlanViewPlane.CutPlane, top_z - base_lvl.Elevation + 1.0)
+    # top_z is a bounding box Z (internal origin), so measure from the level's
+    # ProjectElevation, not Elevation: Elevation follows the level type's base
+    # (survey point) and put the cut plane 100 ft low on The Hub Boulder.
+    vr.SetOffset(PlanViewPlane.CutPlane, top_z - base_lvl.ProjectElevation + 1.0)
     vr.SetLevelId(PlanViewPlane.BottomClipPlane, low_lvl_id)
     vr.SetOffset(PlanViewPlane.BottomClipPlane, 0.0)
     vr.SetLevelId(PlanViewPlane.ViewDepthPlane, low_lvl_id)
@@ -4815,6 +4846,7 @@ def main():
     comp_values   = dialog_result['comp_values']
     calc_basis    = dialog_result['calc_basis']
     filter_inwc   = dialog_result['filter_inwc']
+    exhaust_cap   = dialog_result.get('exhaust_cap', False)
     vav_on        = dialog_result['vav']
     vav_set       = dialog_result['vav_settings']
     fan_effect    = dialog_result.get('fan_effect') or fan_system_effect.default_settings()
@@ -5212,7 +5244,8 @@ def main():
             duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc,
             vav_box_ids=vav_box_ids,
             vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None,
-            fan_effect=fan_effect, discharge_roots=discharge_roots)
+            fan_effect=fan_effect, discharge_roots=discharge_roots,
+            exhaust_cap=exhaust_cap)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
         esp_rec = {'units': [], 'combined': [],
@@ -5479,11 +5512,13 @@ def main():
         _method += ' ' + _fse_method
         if filter_inwc > 0.0:
             _not_inc = ('NOT INCLUDED: coil and cabinet, already in the published ESP. '
-                        'Return filter IS included as a {:.3f} in. wc known drop. Fire and '
-                        'backdraft dampers not priced.'.format(filter_inwc))
+                        'Return filter IS included as a {:.3f} in. wc known drop.'.format(
+                            filter_inwc))
         else:
             _not_inc = ('NOT INCLUDED: filter, coil and cabinet, already in the published '
-                        'ESP. Fire and backdraft dampers not priced.')
+                        'ESP.')
+        _not_inc += (' Exhaust roof cap IS included on every exhaust run.' if exhaust_cap
+                     else ' Exhaust roof cap not included (inline fan discharge).')
         summary_lines.append('')
         summary_lines.append('  ' + _method)
         for _a in _fse_assume:

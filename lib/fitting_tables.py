@@ -130,6 +130,9 @@ COMPONENT_TABLE = (
     ('diffuser',    'Diffuser / grille',   0.05),
     ('damper',      'Balancing damper',    0.25),
     ('fire_damper', 'Fire / smoke damper', 0.05),
+    # Colin, 2026-11-02: 0.05, the same as a fire / smoke damper (open or
+    # closed, so its wide open figure is its design figure).
+    ('backdraft',   'Backdraft damper',    0.05),
     # The end of a ceiling exhaust fan discharge (Colin, 2026-11-02). Greenheck
     # WC-6 hooded damper wall cap and RJ-6x9 roof cap read 0.015 at 100 cfm
     # (SP/CSP catalog 00.F&V.1013 R24, p.19), about 1 Pv; 4 in. caps are not
@@ -420,9 +423,9 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 # and the count comes from the model.
 # Accessory family name -> COMPONENT_TABLE key. First match wins. The keyword
 # sets are disjoint, so a fire or smoke damper can never inherit the balancing
-# damper's value and vice versa; anything matching neither (a backdraft damper,
-# say) comes back None and the caller reports it as an uncounted accessory
-# rather than pricing it wrong.
+# damper's value and vice versa; anything matching none of them comes back None
+# and the caller reports it as an uncounted accessory rather than pricing it
+# wrong. Backdraft dampers are their own key (Colin, 2026-11-02).
 #
 # fire_damper defaults to 0.05, NOT to the balancing damper's 0.25 (Colin
 # 2026-09-25, superseding the 2026-09-24 "default same as damper"). A balancing
@@ -441,6 +444,7 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 _ACCESSORY_ROLES = (
     ('damper',      ('balancing damper', 'balance damper', 'obd', 'opposed blade')),
     ('fire_damper', ('fire damper', 'smoke damper', 'fire/smoke', 'fire smoke')),
+    ('backdraft',   ('backdraft', 'back draft', 'gravity damper')),
 )
 
 

@@ -467,9 +467,8 @@ check("case8 diamond graph: the WORSE route through a shared downstream duct "
 #             -> duct 904 -> BACKDRAFT DAMPER 905 -> terminal 920
 #
 # Each accessory kind carries its OWN value out of comp_values. The backdraft
-# damper matches no component key, so it must be reported as not priced rather
-# than inheriting anyone else's number.
-COMP9 = {'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.10}
+# damper is its own key (Colin, 2026-11-02, 0.05), never anyone else's number.
+COMP9 = {'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.10, 'backdraft': 0.07}
 
 children9 = {900: [901], 901: [902], 902: [903], 903: [904], 904: [905],
              905: [920]}
@@ -487,25 +486,28 @@ terms9 = {920: (400.0, 'Supply Air', 'SD-9')}
 r9 = crit([900], children9, ducts9, terms9, nodes9,
           safety_pct=0.0, comp_values=COMP9)
 sa9 = r9[900]['Supply Air']
-expected_comp9 = 0.25 + 0.10 + 0.05     # balancing + fire/smoke + diffuser
-check("case9 components == balancing 0.25 + fire/smoke 0.10 + diffuser 0.05",
+expected_comp9 = 0.25 + 0.10 + 0.07 + 0.05   # balancing + fire/smoke + backdraft + diffuser
+check("case9 components == balancing 0.25 + fire/smoke 0.10 + backdraft 0.07 + diffuser 0.05",
       abs(sa9['component_inwc'] - expected_comp9) < 1e-9,
       "got %.4f expected %.4f" % (sa9['component_inwc'], expected_comp9))
 check("case9 the fire/smoke damper got its OWN value, not the balancing one",
-      abs(sa9['component_inwc'] - (0.25 * 2 + 0.05)) > 1e-6,
+      abs(sa9['component_inwc'] - (0.25 * 2 + 0.07 + 0.05)) > 1e-6,
       "component_inwc=%.4f would be %.4f if it inherited 0.25"
-      % (sa9['component_inwc'], 0.25 * 2 + 0.05))
-check("case9 the backdraft damper is REPORTED as not priced",
-      any('Backdraft' in u for u in sa9['unpriced']),
+      % (sa9['component_inwc'], 0.25 * 2 + 0.07 + 0.05))
+check("case9 the backdraft damper is priced, not reported as unpriced",
+      not any('Backdraft' in u for u in sa9['unpriced']),
       "unpriced=%r" % (sa9['unpriced'],))
+check("case9 the backdraft default is 0.05 (Colin, 2026-11-02)",
+      fitting_tables.component_of('backdraft') == 0.05)
 check("case9 component_keys names exactly what was counted",
-      sorted(sa9['component_keys']) == ['damper', 'diffuser', 'fire_damper'],
+      sorted(sa9['component_keys']) == ['backdraft', 'damper', 'diffuser', 'fire_damper'],
       "got %r" % (sa9['component_keys'],))
 
 # A component left at 0.00 contributes nothing but is still counted, so the
 # report shows it as a deliberate zero rather than a miss.
 r9b = crit([900], children9, ducts9, terms9, nodes9, safety_pct=0.0,
-           comp_values={'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.0})
+           comp_values={'diffuser': 0.05, 'damper': 0.25, 'fire_damper': 0.0,
+                        'backdraft': 0.0})
 check("case9 a 0.00 fire damper adds nothing but is still listed",
       abs(r9b[900]['Supply Air']['component_inwc'] - 0.30) < 1e-9
       and 'fire_damper' in r9b[900]['Supply Air']['component_keys'],
@@ -513,7 +515,8 @@ check("case9 a 0.00 fire damper adds nothing but is still listed",
                              r9b[900]['Supply Air']['component_keys']))
 
 r9c = crit([900], children9, ducts9, terms9, nodes9, safety_pct=0.0,
-           comp_values={'diffuser': 0.0, 'damper': 0.0, 'fire_damper': 0.0})
+           comp_values={'diffuser': 0.0, 'damper': 0.0, 'fire_damper': 0.0,
+                        'backdraft': 0.0})
 check("case9 zeroed component values contribute nothing",
       abs(r9c[900]['Supply Air']['component_inwc']) < 1e-12,
       "got %r" % r9c[900]['Supply Air']['component_inwc'])
@@ -1845,6 +1848,32 @@ check("case54 the same run as an ordinary exhaust reads the INLET tables (ED7-2)
       any(i[4][0] == 'Fan system effect, exhaust inlet' for i in _fse_items(inl54))
       and 'Wall / roof cap' not in [i[4][0] for i in inl54.get('items', ()) if i[4]],
       "rows %r" % ([i[4][0] for i in inl54.get('items', ()) if i[4]],))
+
+# ── case 55: Include exhaust roof cap (Colin, 2026-11-02) ──────────────────
+# An ordinary exhaust run (grille to fan) pays the cap drop once when ticked;
+# supply runs never do, and a ceiling fan's own cap is not charged twice.
+n55 = {2100: _unit({})}
+c55 = {2100: [2101, 2102], 2101: [2110], 2102: [2120]}
+d55 = build([(2101, 0.02, 10.0, 600.0, 1.0, 'Exhaust Air'),
+             (2102, 0.02, 10.0, 600.0, 1.0, 'Supply Air')])
+t55 = {2110: (600.0, 'Exhaust Air', 'EG-1'), 2120: (600.0, 'Supply Air', 'SD-1')}
+off55 = crit([2100], c55, d55, t55, n55, 0.0)[2100]
+on55 = crit([2100], c55, d55, t55, n55, 0.0, exhaust_cap=True)[2100]
+_cap = fitting_tables.component_of('cap')
+check("case55 ticked: the exhaust run pays the cap drop once",
+      abs(on55['Exhaust Air']['component_inwc'] - off55['Exhaust Air']['component_inwc'] - _cap) < 1e-12
+      and list(on55['Exhaust Air']['component_keys']).count('cap') == 1)
+check("case55 ticked: the supply run is unchanged",
+      abs(on55['Supply Air']['total_inwc'] - off55['Supply Air']['total_inwc']) < 1e-12)
+check("case55 ticked: the exhaust take-off still adds up",
+      abs(_items_sum(on55['Exhaust Air']) - on55['Exhaust Air']['subtotal_inwc']) < 1e-9)
+check("case55 a ceiling fan run is not charged a second cap when ticked",
+      list(crit([2000], {2000: [2001], 2001: [2002], 2002: [2003], 2003: []},
+                dict((k, v) for k, v in build([(2001, 0.002, 0.5, _v54, RD4['area_ft2'], 'Exhaust Air'),
+                                               (2003, 0.080, 20.0, _v54, RD4['area_ft2'], 'Exhaust Air')]).items()),
+                {2003: (80.0, 'Exhaust Air', 'Wall / roof cap')},
+                {2000: _unit({2001: RD4}), 2002: Elem(kind='elbow', family_name='Round Elbow', is_round=True)},
+                0.0, discharge_roots={2000: 2003}, exhaust_cap=True)[2000]['Exhaust Air']['component_keys']).count('cap') == 1)
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
