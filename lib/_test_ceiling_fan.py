@@ -101,6 +101,29 @@ class TestIsCeilingExhaustFan(unittest.TestCase):
         self.assertFalse(HG.is_ceiling_exhaust_fan(fan))
 
 
+class TestIsExhaustFan(unittest.TestCase):
+    """Hides exhaust fans from the list until Exhaust System is ticked."""
+
+    def setUp(self):
+        self._hc = HG._hvac_connectors
+        HG._hvac_connectors = lambda e: e.conns
+
+    def tearDown(self):
+        HG._hvac_connectors = self._hc
+
+    def test_ceiling_and_inline_fans_are_exhaust_fans(self):
+        self.assertTrue(HG.is_exhaust_fan(_Fan([_Conn('ExhaustAir', OUT)])))
+        self.assertTrue(HG.is_exhaust_fan(_Fan([_Conn('ExhaustAir', IN),
+                                                _Conn('ExhaustAir', OUT)])))
+
+    def test_an_rtu_is_not(self):
+        self.assertFalse(HG.is_exhaust_fan(_Fan([_Conn('SupplyAir', OUT),
+                                                 _Conn('ReturnAir', IN)])))
+
+    def test_nothing_connected_is_not(self):
+        self.assertFalse(HG.is_exhaust_fan(_Fan([_Conn('ExhaustAir', OUT, False)])))
+
+
 class TestDischargeEnds(unittest.TestCase):
 
     def setUp(self):

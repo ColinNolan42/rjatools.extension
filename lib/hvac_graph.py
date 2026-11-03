@@ -2053,6 +2053,27 @@ def is_ceiling_exhaust_fan(equip):
     return found > 0
 
 
+def is_exhaust_fan(equip):
+    """True when equip has connected air connectors and every one is
+    Exhaust Air, any direction: a ceiling or inline exhaust fan. Used to hide
+    exhaust fans from the Duct Performance list until Exhaust System is
+    ticked (Colin, 2026-11-02), and to check an exhaust fan's ESP against its
+    rated static."""
+    eid = eid_int(equip.Id)
+    found = 0
+    for c in _hvac_connectors(equip):
+        try:
+            if not c.IsConnected:
+                continue
+            if str(c.DuctSystemType) != 'ExhaustAir':
+                return False
+        except Exception:
+            log.info('is_exhaust_fan: id=%s connector unreadable', eid)
+            return False
+        found += 1
+    return found > 0
+
+
 # Instance parameters a fan family may carry its airflow in, first match wins.
 _FAN_FLOW_PARAM_NAMES = ('Air Flow Rate', 'Airflow', 'Flow', 'CFM')
 

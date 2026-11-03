@@ -215,10 +215,6 @@ _SETTINGS_XAML = '''
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,10,0,6">
                     <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Scope"/>
                 </Border>
-                <CheckBox x:Name="cb_full_diag" Content="Report all ducts"
-                          ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
-                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,4"
-                           Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
                 <CheckBox x:Name="cb_vav" Content="VAV System"
                           ToolTip="Supply mains between the unit and the VAV box inlets are checked as medium pressure (MP). Single duct and fan powered boxes alike."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -238,6 +234,26 @@ _SETTINGS_XAML = '''
                         </Grid>
                     </Border>
                 </Expander>
+                <CheckBox x:Name="cb_exhaust" Content="Exhaust System" Margin="0,8,0,0"
+                          ToolTip="Lists exhaust fans in the equipment list and reads a ceiling exhaust fan (its only duct connection is Exhaust Air, out). Unticked, exhaust fans are hidden from the list."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                           Text="Unticked, exhaust fans are hidden from the equipment list, as VAV boxes are with VAV System unticked."/>
+                <Border x:Name="pnl_exhaust" Style="{DynamicResource RjaGroupBorder}" Margin="20,4,0,0">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Backdraft damper" Width="170" VerticalAlignment="Center"/>
+                            <TextBox x:Name="tb_backdraft" Width="56" Margin="0,0,6,0"
+                                     ToolTip="Known drop of each backdraft damper on the index run, in. wc. Cannot be negative."/>
+                            <TextBlock Text="in. wc known drop, each" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <TextBlock Text="Exhaust fan rated static" Width="170" VerticalAlignment="Center"/>
+                            <TextBox x:Name="tb_exh_sp" Width="56" Margin="0,0,6,0"
+                                     ToolTip="The static the exhaust fan is selected at. The exhaust external static is checked against it. A ceiling exhaust fan's prompt starts at this value."/>
+                            <TextBlock Text="in. wc, the exhaust ESP is checked against it" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
 
                 <!-- Main duct limits -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
@@ -265,6 +281,10 @@ _SETTINGS_XAML = '''
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
                     <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Outputs"/>
                 </Border>
+                <CheckBox x:Name="cb_full_diag" Content="Report all ducts"
+                          ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,6"
+                           Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
                 <Grid x:Name="grid_cols">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -438,7 +458,8 @@ def _wpf_named(win, name):
 
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
-                     vav, vav_settings, fan_effect=None, exhaust_cap=False):
+                     vav, vav_settings, fan_effect=None, exhaust_cap=False,
+                     exhaust=False, exhaust_settings=None):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
@@ -463,6 +484,9 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'calc_basis':    calc_basis,
         'filter_inwc':   filter_inwc,
         'exhaust_cap':   bool(exhaust_cap),
+        'exhaust':       bool(exhaust),
+        # Empty: main() takes EXHAUST_FAN_RATED_SP_DEFAULT.
+        'exhaust_settings': dict(exhaust_settings or {}),
         'vav':           bool(vav),
         'vav_settings':  vav_settings,
         'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
@@ -490,6 +514,10 @@ def _show_velocity_settings_xaml(use_theme):
     img_logo = N('img_logo')
     cb_full_diag = N('cb_full_diag')
     cb_vav = N('cb_vav')
+    cb_exhaust = N('cb_exhaust')
+    pnl_exhaust = N('pnl_exhaust')
+    tb_backdraft = N('tb_backdraft')
+    tb_exh_sp = N('tb_exh_sp')
     exp_vav = N('exp_vav')
     grid_vav = N('grid_vav')
     pnl_vav_static = N('pnl_vav_static')
@@ -569,11 +597,14 @@ def _show_velocity_settings_xaml(use_theme):
         'A to D; inlet ED7-2 or ER7-1). A loss of %.1f in. wc or more is gray, with '
         'the straight length that brings it under. The inlet tables are printed for '
         'SWSI fans.' % fan_system_effect.HIGH_LOSS_INWC)
-    for b in (tb_tol, tb_sf, tb_filter, tb_blast):
+    tb_backdraft.Text = '%.2f' % fitting_tables.component_of('backdraft')
+    tb_exh_sp.Text = '%.2f' % EXHAUST_FAN_RATED_SP_DEFAULT
+    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_backdraft, tb_exh_sp):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
     cb_vav.IsChecked = False
+    cb_exhaust.IsChecked = False     # default off (Colin, 2026-11-02)
     cb_static.IsChecked = False
     cb_filter.IsChecked = True       # default on (Colin, 2026-11-02)
 
@@ -766,7 +797,8 @@ def _show_velocity_settings_xaml(use_theme):
     comp_order = []
     _fill_value_grid(
         grid_comp,
-        [(k, lbl, 'in. wc', v) for k, lbl, v in fitting_tables.COMPONENT_TABLE],
+        [(k, lbl, 'in. wc', v) for k, lbl, v in fitting_tables.COMPONENT_TABLE
+         if k != 'backdraft'],    # in the Exhaust System panel
         comp_boxes, comp_order, '%.3f')
     basis_boxes = {}
     basis_order = []
@@ -886,8 +918,17 @@ def _show_velocity_settings_xaml(use_theme):
         sync_enable()
     cb_vav.Checked += sync_vav
     cb_vav.Unchecked += sync_vav
+
+    # The Exhaust panel stays greyed out until Exhaust System is ticked.
+    def sync_exhaust(s=None, e=None):
+        on = bool(cb_exhaust.IsChecked)
+        pnl_exhaust.IsEnabled = on
+        pnl_exhaust.Opacity = 1.0 if on else 0.55
+    cb_exhaust.Checked += sync_exhaust
+    cb_exhaust.Unchecked += sync_exhaust
     sync_enable()
     sync_vav()
+    sync_exhaust()
 
     # ── OK: validate every field, report inline, window stays open ──────────
     def _collect():
@@ -959,6 +1000,16 @@ def _show_velocity_settings_xaml(use_theme):
             if f is not None:
                 filter_inwc = f
 
+        exhaust = bool(cb_exhaust.IsChecked)
+        exhaust_settings = {'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT}
+        if exhaust:
+            bd = num(tb_backdraft, 'Backdraft damper drop', 'nonneg')
+            if bd is not None:
+                comp_values['backdraft'] = bd
+            sp = num(tb_exh_sp, 'Exhaust fan rated static', 'pos')
+            if sp is not None:
+                exhaust_settings['rated_sp'] = sp
+
         fan_effect = fan_system_effect.default_settings()
         fan_effect['on'] = bool(cb_fse.IsChecked)
         fan_effect['fan_type'] = 'SWSI' if bool(rb_fan_swsi.IsChecked) else 'DWDI'
@@ -988,7 +1039,8 @@ def _show_velocity_settings_xaml(use_theme):
                                   ext_static, safety_pct, c_values, comp_values,
                                   calc_basis, filter_inwc, vav, vav_settings,
                                   fan_effect,
-                                  ext_static and bool(cb_exh_cap.IsChecked))
+                                  ext_static and bool(cb_exh_cap.IsChecked),
+                                  exhaust, exhaust_settings)
         return errors, values
 
     def on_ok(s, e):
@@ -1160,6 +1212,19 @@ def _show_velocity_settings_dialog_legacy():
     cb_vav.IsChecked = False
     cb_vav.Margin  = Thickness(2, 0, 0, 2)
     outer.Children.Add(cb_vav)
+
+    # Exhaust System (Colin, 2026-11-02): lists exhaust fans; the backdraft
+    # drop is in the component drops below and the rated static is the default.
+    cb_exhaust = CheckBox()
+    cb_exhaust_text = TextBlock()
+    cb_exhaust_text.Text = ('Exhaust System.  Lists exhaust fans; their ESP is '
+                            'checked against %.2f in. wc.' % EXHAUST_FAN_RATED_SP_DEFAULT)
+    cb_exhaust_text.TextWrapping = TextWrapping.Wrap
+    cb_exhaust_text.Width = CONTENT_W - 20
+    cb_exhaust.Content = cb_exhaust_text
+    cb_exhaust.IsChecked = False
+    cb_exhaust.Margin = Thickness(2, 0, 0, 2)
+    outer.Children.Add(cb_exhaust)
 
     vav_boxes = {}
 
@@ -1648,7 +1713,8 @@ def _show_velocity_settings_dialog_legacy():
                                          ext_static, safety_pct, c_values,
                                          comp_values, calc_basis, filter_inwc,
                                          vav, vav_settings,
-                                         exhaust_cap=ext_static and bool(cb_exh_cap.IsChecked))
+                                         exhaust_cap=ext_static and bool(cb_exh_cap.IsChecked),
+                                         exhaust=bool(cb_exhaust.IsChecked))
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -2070,9 +2136,10 @@ def _show_system_picker_legacy(display_names):
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-# A ceiling exhaust fan's rated static when none is entered, in. wc (Colin,
-# 2026-11-02: 0.5 for now). Its computed ESP is checked against it.
-CEILING_FAN_RATED_SP_DEFAULT = 0.50
+# An exhaust fan's rated static when none is entered, in. wc (Colin,
+# 2026-11-02: 0.5 for now). Its computed ESP is checked against it; the
+# Exhaust System panel and a ceiling fan's prompt start at this value.
+EXHAUST_FAN_RATED_SP_DEFAULT = 0.50
 
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
@@ -4883,6 +4950,9 @@ def main():
     calc_basis    = dialog_result['calc_basis']
     filter_inwc   = dialog_result['filter_inwc']
     exhaust_cap   = dialog_result.get('exhaust_cap', False)
+    exhaust_on    = dialog_result.get('exhaust', False)
+    exh_set       = dialog_result.get('exhaust_settings') or {
+        'rated_sp': EXHAUST_FAN_RATED_SP_DEFAULT}
     vav_on        = dialog_result['vav']
     vav_set       = dialog_result['vav_settings']
     fan_effect    = dialog_result.get('fan_effect') or fan_system_effect.default_settings()
@@ -4906,6 +4976,26 @@ def main():
     equip_in_view = list(FilteredElementCollector(doc, active_view.Id)
                          .OfCategory(BuiltInCategory.OST_MechanicalEquipment)
                          .WhereElementIsNotElementType())
+
+    # VAV boxes and exhaust fans are listed only when their Scope box is
+    # ticked (Colin, 2026-11-02), so the list says up front what kind of
+    # system the run is for.
+    hidden = {'VAV box': 0, 'exhaust fan': 0}
+    listed = []
+    for eq in equip_in_view:
+        if not vav_on and hvac_graph.is_fed_from_upstream_supply(eq):
+            hidden['VAV box'] += 1
+        elif not exhaust_on and hvac_graph.is_exhaust_fan(eq):
+            hidden['exhaust fan'] += 1
+        else:
+            listed.append(eq)
+    _hid = ['{} {}{} (tick {} in Scope)'.format(
+        n, k, '' if n == 1 else 'es' if k.endswith('x') else 's',
+        'VAV System' if k == 'VAV box' else 'Exhaust System')
+        for k, n in sorted(hidden.items()) if n]
+    if _hid:
+        output.print_md('Hidden from the equipment list: {}.'.format(', '.join(_hid)))
+    equip_in_view = listed
 
     name_to_elem = {}
     if equip_in_view:
@@ -4950,11 +5040,11 @@ def main():
     if mode == 'equipment':
         sel_elems = [name_to_elem[n] for n in names]
         for eq in sel_elems:
-            if not hvac_graph.is_ceiling_exhaust_fan(eq):
+            if not exhaust_on or not hvac_graph.is_ceiling_exhaust_fan(eq):
                 continue
             vals = ui_helpers.show_exhaust_fan_inputs(
                 'Duct Performance', '{} (id {})'.format(_elem_name(eq), eid_int(eq.Id)),
-                hvac_graph.fan_rated_cfm(eq), CEILING_FAN_RATED_SP_DEFAULT)
+                hvac_graph.fan_rated_cfm(eq), exh_set['rated_sp'])
             if vals is None:
                 output.print_md('**Cancelled.**')
                 return
@@ -4983,6 +5073,7 @@ def main():
     vav_by_root      = {}   # root int_id -> vav_checks.VavSystem (VAV on only)
 
     discharge_roots  = {}   # ceiling exhaust fan root int_id -> cap node int_id
+    exhaust_fan_roots = set()   # every exhaust fan root (Exhaust System ticked)
     for sel_elem in sel_elems:
         _fan = fan_inputs.get(eid_int(sel_elem.Id))
         net = hvac_graph.build_network(
@@ -5036,6 +5127,8 @@ def main():
         root_id = eid_int(net.root.Id)
         all_root_ids.append(root_id)
         root_labels[root_id] = unit_label_here
+        if exhaust_on and hvac_graph.is_exhaust_fan(net.root):
+            exhaust_fan_roots.add(root_id)
         if net.discharge_end is not None:
             discharge_roots[root_id] = net.discharge_end
             _correct('note', 'NOTE: read as a ceiling exhaust fan (its only duct '
@@ -5442,9 +5535,10 @@ def main():
                 worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
                 unit_total += worst_c['total_inwc']
                 sides.append(worst_k)
-            if root_id in discharge_roots and sides:
-                # A ceiling exhaust fan has one side, its discharge, and that
-                # is the whole system: checked against the entered rating.
+            if (root_id in discharge_roots or root_id in exhaust_fan_roots) and sides:
+                # An exhaust fan has one side and that is the whole system,
+                # checked against its rated static: a ceiling fan's entered
+                # value, else the Exhaust System panel's.
                 _sides = ' + '.join(sides)
                 summary_lines.append(
                     '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
@@ -5452,7 +5546,7 @@ def main():
                 unit_rec['esp'] = _esp_console_text(unit_total, _sides)
                 unit_rec['esp_total'] = unit_total
                 unit_rec['esp_sides'] = list(sides)
-                _rated = fan_inputs.get(root_id, {}).get('rated_sp')
+                _rated = fan_inputs.get(root_id, {}).get('rated_sp', exh_set['rated_sp'])
                 if _rated is not None:
                     _ok = unit_total <= float(_rated) + 1e-9
                     _msg = ('Fan rated static {:.3f} in. wc: computed {:.3f} in. wc, '
