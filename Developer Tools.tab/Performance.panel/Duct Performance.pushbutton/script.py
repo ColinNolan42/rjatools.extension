@@ -3254,6 +3254,25 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return bool(dc.get('d_in')), d_duct
         return is_round, size
 
+    def _fse_turn_plane_h(eid, conn):
+        """H in. for the 2 H straight duct check at a rect unit inlet, elbow
+        eid: its side in the plane of its turn (hvac_graph.elbow_geometry),
+        or its D when it is round (past a transition), and not less than the
+        unit opening's smaller side, since the opening's own side in that
+        plane is not read (Colin, 2026-11-04). None when the elbow is
+        unreadable (the caller keeps the larger side)."""
+        g = hvac_graph.elbow_geometry(all_nodes.get(eid))
+        h = None
+        if g is not None:
+            h = g.get('d_in') if g.get('round') else g.get('w_in')
+        if not h:
+            fan_system_effect.log.info('turn plane H: elbow %s NOT FOUND, larger side kept', eid)
+            return None
+        if conn is not None and conn.get('w_in') and conn.get('h_in'):
+            h = max(h, min(conn['w_in'], conn['h_in']))
+        fan_system_effect.log.info('turn plane H: elbow %s, %.1f in.', eid, h)
+        return h
+
     def _fse_inlet_size(elem, conn, flow, notes, did=None, l_ft=0.0, where='inlet'):
         """(is_round, D or H in., r in. or None) for the inlet elbow. H is
         the side in the plane of the turn (hvac_graph.elbow_geometry swaps
@@ -3331,12 +3350,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         in different planes within 6 Dh (swirl, not priced) and an elbow
         and the straight duct before an elbow under the straight duct line,
         'red_ducts': {duct id: (table reason, required)} for those ducts,
-        'boost': {transition id: velocity factor} for the
-        transitions priced at the fan velocity, 'assumptions': report
-        ASSUMPTION lines}."""
+        'boost': {} (the fan velocity transition boost, retired 2026-11-04),
+        'group': the straight duct, transition and first elbow ids charged
+        once with the fan system effect (_fse_group_max), 'assumptions':
+        report ASSUMPTION lines}."""
         rec = {'loss': 0.0, 'item': None, 'where': 'unit connection', 'notes': [],
                'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
-               'red_ducts': {}, 'assumptions': []}
+               'red_ducts': {}, 'assumptions': [], 'group': set()}
         if _kind(first) == 'equipment':
             rec['notes'].append(('note', 'NOTE: unit connection to element %s not '
                                  'checked for fan system effect: it feeds equipment '
@@ -3377,9 +3397,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                           % (where, getattr(flow, 'size', '?'))))
         # Velocity basis (Colin, 2026-11-03): the larger of the default fan
         # velocity and the connection's, or the connection's alone. It sets
-        # Pv, the outlet Le and the transitions passed below.
+        # Pv, the outlet Le and the transitions passed below. Outlets only
+        # (Colin, 2026-11-04): an inlet is priced at its own connection
+        # velocity, cfm over the connection area.
         v_conn = cfm / area
-        v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
+        if role_here == fan_system_effect.OUTLET:
+            v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
+        else:
+            v, fan_gov = v_conn, False
         if fan_gov:
             notes.append(('note', fan_system_effect.velocity_text(where, v, v_conn)))
         # D for the 5 D check and the inlet window: the larger of the unit
@@ -3424,9 +3449,19 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                                                    _eq)))
                     need = fan_system_effect.outlet_red_ft(win)
                 else:
+                    # The walk used the larger side (conservative); a rect
+                    # elbow is then judged on H, its side in the plane of its
+                    # turn (Colin, 2026-11-04).
+                    h_e = _fse_turn_plane_h(e_r, conn) if not is_round_c else None
+                    size_e = h_e if h_e else size_c
+                    if l_r >= fan_system_effect.inlet_red_ft(size_e) - 1e-9:
+                        fan_system_effect.log.info(
+                            'straight duct check: elbow %s at %.2f ft is past 2 H '
+                            '(H %.1f in., turn plane), not RED', e_r, l_r, size_e)
+                        continue
                     notes.append(('red', fan_system_effect.inlet_red_text(
-                        where, e_r, l_r, size_c, is_round_c)))
-                    need = fan_system_effect.inlet_red_ft(size_c)
+                        where, e_r, l_r, size_e, is_round_c)))
+                    need = fan_system_effect.inlet_red_ft(size_e)
                 rec['red'].add(e_r)
                 for d_r, at in ducts_r:
                     if at < l_r - 1e-9 and d_r not in rec['red_ducts']:
@@ -3458,22 +3493,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         else:
             fan_system_effect.log.info('swirl check: %s first duct Dh NOT FOUND, '
                                        'not checked', where)
+        grp_ducts = []
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
                 root_id, first, win, where, prev=pick[0], seen=set(pick[1]),
-                passed=passed)
+                passed=passed, ducts=grp_ducts)
         else:
             role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where,
-                                                            passed=passed)
+                                                            passed=passed, ducts=grp_ducts)
         notes.extend(wnotes)
-        # The transitions between the unit and the first disruption are priced
-        # at the fan velocity too (Colin, 2026-11-03): the walk scales the
-        # air speed through each by v / v_conn.
-        if fan_gov and v_conn > 0:
-            for tid in sorted(passed, key=lambda t: passed[t]):
-                rec['boost'][tid] = v / v_conn
-                notes.append(('note', fan_system_effect.transition_text(
-                    tid, passed[tid], where, v)))
         if role is None:
             return rec
         if role != 'elbow':
@@ -3508,12 +3536,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     rec['assumptions'].append(_t)
                 else:
                     notes.append((_k, _t))
-            notes.append(('note', 'NOTE: elbow %s, %.1f ft from the %s, is part of the fan '
-                          'system effect: the %s C tables include the elbow\'s own loss, '
-                          'so it is priced in the fan system effect line, not as a '
-                          'separate elbow' % (did, l_ft, where, r['table'])))
-            rec['skip'].add(did)
         loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
+        # The straight duct, any transition (a curb adapter) and the first
+        # elbow are one group, charged once as the larger of the fan system
+        # effect and their own losses (Colin, 2026-11-04), outlet and inlet.
+        # The walk prices them as usual; each path's end picks the larger.
+        rec['group'] = set(d for d, _at in grp_ducts) | set(passed) | set([did])
+        notes.append(('note', fan_system_effect.group_text(did, l_ft, where)))
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])
         if r['high']:
@@ -3535,6 +3564,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         the straight duct and swirl RED kept (fan system effect unticked)."""
         rec['loss'] = 0.0
         rec['item'] = None
+        rec['group'] = set()
         rec['skip'] = set()
         rec['gray'] = set()
         rec['boost'] = {}
@@ -3770,6 +3800,45 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                    '%.0f cfm', first, out['n_duct'], out['n_fit'],
                                    out['feet'], out['fric'], out['fit'], cfm)
         return out
+
+    _GROUP_ITEM = re.compile(r'^(?:Discharge )?(duct|fitting) (\d+)$', re.I)
+
+    def _fse_group_max(rec, its):
+        """One unit connection's group (rec['group']: the straight duct, any
+        transition and the first elbow) against its fan system effect line,
+        charged once as the larger (Colin, 2026-11-04).
+
+        its: the take-off items of the path, or of a discharge chain.
+        Returns (items, fse charged, friction removed, fittings removed,
+        fse item or None). The fan system effect wins a tie: its group
+        items stay listed at 0. The group wins: the fan system effect line
+        stays listed at 0."""
+        if rec is None or rec.get('item') is None or not rec.get('group'):
+            return its, (rec or {}).get('loss', 0.0) or 0.0, 0.0, 0.0, (rec or {}).get('item')
+        g_fric, g_fit, hits = 0.0, 0.0, []
+        for i, it in enumerate(its):
+            m = _GROUP_ITEM.match(it[0])
+            if m is None or int(m.group(2)) not in rec['group']:
+                continue
+            hits.append(i)
+            if m.group(1).lower() == 'duct':
+                g_fric += it[3] or 0.0
+            else:
+                g_fit += it[3] or 0.0
+        group = g_fric + g_fit
+        fse = rec['loss']
+        fan_system_effect.log.info('fan system effect group: %s, fse %.4f vs duct and '
+                                   'fittings %.4f (%d items)', rec.get('where'), fse,
+                                   group, len(hits))
+        item = rec['item']
+        if fse >= group:
+            its = tuple(
+                (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, it[4])
+                if i in hits else it for i, it in enumerate(its))
+            return its, fse, g_fric, g_fit, item
+        item = (item[0], '{}; not charged, the straight duct and elbow price higher '
+                '({:.4f} in. wc)'.format(item[1], group), item[2], 0.0, item[4])
+        return its, 0.0, 0.0, 0.0, item
 
     best = {}              # root_id -> {sys_class: {...}}
     box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
@@ -4048,24 +4117,26 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     if _first in path and (fse_rec is None or
                                            fse_recs[_first]['loss'] > fse_rec['loss']):
                         fse_rec = fse_recs[_first]
-                fse_loss = fse_rec['loss'] if fse_rec is not None else 0.0
-                fse_items = ((fse_rec['item'],) if fse_rec is not None
-                             and fse_rec['item'] is not None else ())
-                fric_l, fit_l, dis_items = fric, fit, ()
+                # The group at the connection (straight duct, transition, first
+                # elbow) is charged once with its fan system effect, the larger.
+                items_l, fse_loss, _gfr, _gft, _fitem = _fse_group_max(fse_rec, items)
+                fse_items = (_fitem,) if _fitem is not None else ()
+                fric_l, fit_l, dis_items = fric - _gfr, fit - _gft, ()
                 n_d, n_f, len_l, unpriced_l = dcount, fcount, dlen, unpriced
                 if dis_here is not None:
-                    fric_l += dis_here['fric']
-                    fit_l += dis_here['fit']
+                    _drec = fse_recs.get(dis_here['first'])
+                    dis_items, _dl, _dfr, _dft, _ditem = _fse_group_max(
+                        _drec, dis_here['items'])
+                    fric_l += dis_here['fric'] - _dfr
+                    fit_l += dis_here['fit'] - _dft
                     n_d += dis_here['n_duct']
                     n_f += dis_here['n_fit']
                     len_l += dis_here['feet']
                     unpriced_l = unpriced_l + dis_here['unpriced']
-                    dis_items = dis_here['items']
-                    _drec = fse_recs.get(dis_here['first'])
                     if _drec is not None and _drec['loss']:
-                        fse_loss += _drec['loss']
-                        if _drec['item'] is not None:
-                            fse_items = fse_items + (_drec['item'],)
+                        fse_loss += _dl
+                        if _ditem is not None:
+                            fse_items = fse_items + (_ditem,)
                 current = best_here.get(key)
                 if current is None or (fric_l + fit_l + comp_here + filt + fse_loss) > (
                         current['friction_inwc'] + current['fitting_inwc'] +
@@ -4096,7 +4167,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         'terminal_name':    _family or '-',
                         'terminal_label':   _terminal_label(nid),
                         'unpriced':         unpriced_l,
-                        'items':            fse_items + items + dis_items + (((
+                        'items':            fse_items + items_l + dis_items + (((
                             'Accessory (assumed)', 'Balancing damper at ' + (_family or '-'),
                             None, fitting_tables.component_of('damper', comp_values),
                             ('Balancing damper', 'known drop', None, None)),)

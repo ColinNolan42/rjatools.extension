@@ -1546,17 +1546,20 @@ check("case41 return elbow on the unit priced at Pv(1000) too",
 #     include the elbow): one take-off line, and the run still adds up.
 check("case42 inlet elbow: no fitting loss on top of ED7-2 (fitting_inwc 0)",
       abs(ra35.get('fitting_inwc', -1)) < 1e-12, "got %r" % ra35.get('fitting_inwc'))
-_rows42 = [i[4][0] for i in ra35.get('items', ()) if i[4]]
-check("case42 the take-off shows the elbow once, as the fan system effect line",
-      'Fan system effect, return inlet' in _rows42
-      and not any(r.startswith('Round elbow') for r in _rows42), "rows %r" % (_rows42,))
+# Since 2026-11-04 the elbow is one of the group charged once with the fan
+# system effect (the larger): listed, at 0 when the fan system effect wins.
+_el42 = [i for i in ra35.get('items', ()) if i[0] == 'Fitting 1002']
+check("case42 the take-off lists the elbow at 0, inside the fan system effect line",
+      any(i[4] and i[4][0] == 'Fan system effect, return inlet' for i in ra35.get('items', ()))
+      and len(_el42) == 1 and _el42[0][3] == 0.0
+      and _el42[0][1].endswith('in the fan system effect'), "elbow %r" % (_el42,))
 check("case42 items add up to the subtotal",
       abs(_items_sum(ra35) - ra35['subtotal_inwc']) < 1e-9)
-check("case42 the report says the elbow is part of the fan system effect",
-      any('elbow 1002' in t and 'part of the fan system effect' in t
-          and 'include the elbow' in t for _k, t in ra35.get('fse_notes', ())))
-check("case42 outlet SR7 stays system effect only: the outlet elbow is still a fitting",
-      sa32['fitting_inwc'] > 0.0)
+check("case42 the report says the group is charged once",
+      any('elbow 1002' in t and 'charged once' in t for _k, t in ra35.get('fse_notes', ())))
+check("case42 outlet: the elbow on the unit is in the group too (fitting 0, fan system effect wins)",
+      abs(sa32['fitting_inwc']) < 1e-12 and sa32.get('fse_inwc', 0) > 0.0,
+      "fit %r fse %r" % (sa32['fitting_inwc'], sa32.get('fse_inwc')))
 
 # 43: inlet window is the table floor distance, 5 D (10 ft on a 24 in. inlet).
 def _inlet_net(l_ft):
@@ -1595,9 +1598,17 @@ d44 = build([(1401, 0.0, 16.0, 3000.0, 25.0, 'Supply Air'),
 sa44 = _fse_run(n44, c44, d44, {1410: (75000.0, 'Supply Air', 'SD-44')}, 1400)
 _r44 = 16.0 / le44                # L/Le between the 0.50 and 1.00 columns
 c44v = 1.00 * (1.0 - (_r44 - 0.5) / 0.5)   # DWDI Ab/Ao 0.5: worst at 0.50 is C 1.00
-check("case44 outlet elbow 16 ft out, inside Le %.2f ft: priced (C %.3f x Pv(3000))" % (le44, c44v),
-      abs(sa44.get('fse_inwc', -1) - c44v * pv(3000.0)) < 1e-9,
-      "got %r" % sa44.get('fse_inwc'))
+# Inside Le the elbow is priced C 0.110 x Pv(3000), but as a fitting it
+# prices higher, so the group wins (Colin, 2026-11-04): the fan system effect
+# line stays listed at 0, the elbow is charged as a fitting.
+_f44 = [i for i in sa44.get('items', ()) if i[4] and i[4][0].startswith('Fan system effect')]
+_e44 = [i for i in sa44.get('items', ()) if i[0] == 'Fitting 1402']
+check("case44 outlet elbow 16 ft out, inside Le %.2f ft: C %.3f x Pv(3000) loses to the elbow, group charged" % (le44, c44v),
+      sa44.get('fse_inwc') == 0.0 and len(_f44) == 1 and _f44[0][3] == 0.0
+      and 'not charged' in _f44[0][1] and _e44 and _e44[0][3] > c44v * pv(3000.0)
+      and abs(sa44['fitting_inwc'] - _e44[0][3]) < 1e-12
+      and abs(_items_sum(sa44) - sa44['subtotal_inwc']) < 1e-9,
+      "fse %r items %r" % (sa44.get('fse_inwc'), _f44 + _e44))
 # a transition past Le is not a disruption at all (8 ft out, Le 5.71 ft)
 n44b = dict(n34)
 d44b = build([(961, 0.0, 8.0, 1000.0, 4.0, 'Supply Air'),
@@ -1854,8 +1865,11 @@ check("case54 fan system effect at the fan OUTLET (SR7), not the inlet tables",
       'Fan system effect, exhaust outlet' in _it54
       and any(i[4][1].startswith('SR7-') for i in _fse_items(ea54)),
       "rows %r" % (_it54,))
-check("case54 the outlet elbow is also priced as a fitting (SR7 rule)",
-      ea54.get('fitting_inwc', 0.0) > 0.0)
+check("case54 the outlet elbow is charged once with the fan system effect (the larger)",
+      (ea54.get('fse_inwc', 0.0) > 0.0) != any(
+          i[4] and i[4][0].startswith('Fan system effect') and 'not charged' in i[1]
+          for i in ea54.get('items', ())),
+      "fse %r items %r" % (ea54.get('fse_inwc'), ea54.get('items')))
 check("case54 items add up to the subtotal",
       abs(_items_sum(ea54) - ea54['subtotal_inwc']) < 1e-9)
 inl54 = _fan54(False)
@@ -2064,7 +2078,8 @@ d62b = build([(941, 0.0, 5.5, 1000.0, 4.0, 'Supply Air'),
               (943, 0.0, 5.0, 1000.0, 4.0, 'Supply Air')])
 sa62b = _fse_run(n33, c33, d62b, {950: (4000.0, 'Supply Air', 'SD-33')}, 940)
 check("case62 outlet elbow 5.5 ft out, inside Le but past 0.5 Le (2.86 ft): priced, not RED",
-      sa62b.get('fse_inwc') > 0.0 and not sa62b.get('fse_red_ids'),
+      any(i[4] and i[4][0].startswith('Fan system effect') for i in sa62b.get('items', ()))
+      and not sa62b.get('fse_red_ids'),
       "red %r" % (sa62b.get('fse_red_ids'),))
 for _l62, _red62 in ((2.8, True), (2.9, False)):
     _d62 = build([(941, 0.0, _l62, 1000.0, 4.0, 'Supply Air'),
@@ -2132,13 +2147,22 @@ _t64c = [i for i in c64.get('items', ()) if i[0] == 'Fitting 962']
 _t64f = [i for i in f64.get('items', ()) if i[0] == 'Fitting 962']
 check("case64 connection basis: the transition is priced at the model velocity",
       _t64c and 'at fan velocity' not in _t64c[0][1], "items %r" % (_t64c,))
-check("case64 default basis: the transition is priced at the fan velocity, Pv x 6.25",
-      _t64f and _t64c and 'at fan velocity' in _t64f[0][1]
-      and _t64c[0][3] > 0 and abs(_t64f[0][3] / _t64c[0][3] - 6.25) < 1e-6,
+# Since 2026-11-04 the transition is in the group (straight duct, transition,
+# first elbow) charged once with the fan system effect, never at the fan
+# velocity: here the fan system effect wins and the transition reads 0.
+check("case64 default basis: the transition is in the group, at the model velocity, not boosted",
+      _t64f and _t64c and 'at fan velocity' not in _t64f[0][1]
+      and _t64f[0][1].endswith('in the fan system effect') and _t64f[0][3] == 0.0
+      and 'at 667 fpm' in _t64f[0][1],
       "conn %r fan %r" % (_t64c, _t64f))
-check("case64 a NOTE names the transition",
-      any(k == 'note' and t.startswith('NOTE: transition 962, 2.0 ft from the supply outlet')
-          for k, t in f64.get('fse_notes', ())), "notes %r" % (f64.get('fse_notes'),))
+check("case64 a NOTE names the group, no fan velocity transition NOTE",
+      any(k == 'note' and 'charged once' in t and 'supply outlet' in t
+          for k, t in f64.get('fse_notes', ()))
+      and not any(t.startswith('NOTE: transition') for _k, t in f64.get('fse_notes', ())),
+      "notes %r" % (f64.get('fse_notes'),))
+check("case64 the group's own losses are left out of friction and fittings",
+      abs(f64['fitting_inwc']) < 1e-12 and f64.get('fse_inwc', 0) > 0.0,
+      "fit %r fse %r" % (f64['fitting_inwc'], f64.get('fse_inwc')))
 check("case64 the ducts past it keep their own velocity",
       abs(f64['friction_inwc'] - c64['friction_inwc']) < 1e-12
       and abs(_items_sum(f64) - f64['subtotal_inwc']) < 1e-9)
@@ -2212,14 +2236,16 @@ n66, c66, d66, t66 = _inline66()
 in66 = crit([4000], c66, d66, t66, n66, 10.0, fan_effect=FSE_SWSI,
             inline_fan_roots={4000})[4000]['Exhaust Air']
 base66 = crit([4000], c66, d66, t66, n66, 10.0, fan_effect=FSE_SWSI)[4000]['Exhaust Air']
-_fr66 = hvac_graph.duct_friction_loss_per_100ft(500.0, 12.0) * 7.0 / 100.0
+# The 1 ft duct before the discharge elbow is in the outlet group (charged
+# once with the fan system effect, which wins here): only 4004's 6 ft adds.
+_fr66 = hvac_graph.duct_friction_loss_per_100ft(500.0, 12.0) * 6.0 / 100.0
 check("case66 inline fan: read as inline, with a NOTE naming intake and discharge",
       in66.get('exhaust_fan_kind') == 'inline'
       and any(t.startswith('NOTE: exhaust fan read as an inline fan: intake at element 4001, '
                            'discharge at element 4002') and '500 cfm' in t
               for _k, t in in66.get('fse_notes', ())),
       "kind %r notes %r" % (in66.get('exhaust_fan_kind'), in66.get('fse_notes')))
-check("case66 the discharge ducts are priced at the grille cfm (7 ft at 500 fpm)",
+check("case66 the discharge ducts are priced at the grille cfm (6 ft past the group at 500 fpm)",
       abs(in66['friction_inwc'] - base66['friction_inwc'] - _fr66) < 1e-9
       and in66['length_ft'] - base66['length_ft'] == 7.0,
       "in %r base %r expected +%r" % (in66['friction_inwc'], base66['friction_inwc'], _fr66))
@@ -2228,7 +2254,8 @@ check("case66 the take-off shows the discharge as its own lines",
       [i[0] for i in _dis66] == ['Discharge duct 4002', 'Discharge fitting 4003',
                                  'Discharge duct 4004']
       and _dis66[1][4][0].startswith('Discharge rect radius elbow')
-      and in66['fitting_inwc'] > base66['fitting_inwc'], "items %r" % (_dis66,))
+      and _dis66[0][3] == 0.0 and _dis66[1][3] == 0.0 and _dis66[2][3] > 0.0
+      and _dis66[1][1].endswith('in the fan system effect'), "items %r" % (_dis66,))
 _out66 = FSE.outlet_effect('SWSI', 0.5, 1.0, 500.0, 1.0, pv_of=pv)
 check("case66 outlet fan system effect at the discharge elbow (SWSI, L 1 ft of Le 2.9) added",
       any(i[4] and i[4][0] == 'Fan system effect, exhaust outlet' for i in in66['items'])
@@ -2286,13 +2313,14 @@ f67r = crit([4100], c67, d67, t67, n67, 10.0,
             inline_fan_roots={4100})[4100]['Exhaust Air']
 _t67c = [i for i in c67r['items'] if i[0] == 'Discharge fitting 4103']
 _t67f = [i for i in f67r['items'] if i[0] == 'Discharge fitting 4103']
-check("case67 discharge transition at the default basis: priced at the fan velocity, Pv x 25",
-      _t67c and _t67f and 'at fan velocity' in _t67f[0][1]
+check("case67 discharge transition at the default basis: in the outlet group, never at fan velocity",
+      _t67c and _t67f and 'at fan velocity' not in _t67f[0][1]
       and 'at fan velocity' not in _t67c[0][1]
-      and _t67c[0][3] > 0 and abs(_t67f[0][3] / _t67c[0][3] - 25.0) < 1e-6,
+      and _t67f[0][1].endswith('in the fan system effect') and _t67f[0][3] == 0.0,
       "conn %r fan %r" % (_t67c, _t67f))
-check("case67 its NOTE and its price agree",
-      any(t.startswith('NOTE: transition 4103') for _k, t in f67r.get('fse_notes', ())))
+check("case67 the group NOTE names the discharge elbow, no transition NOTE",
+      any('elbow 4105' in t and 'charged once' in t for _k, t in f67r.get('fse_notes', ()))
+      and not any(t.startswith('NOTE: transition 4103') for _k, t in f67r.get('fse_notes', ())))
 
 # a second discharge: no fan system effect record, a NOTE that the first is priced
 n67b = dict(n67)
@@ -2337,6 +2365,87 @@ check("case67 flex discharge: flagged (exhaust shall be rigid), no flex bend pri
       and any('flex duct 4004 on the exhaust discharge' in u for u in fx66['unpriced'])
       and abs(_items_sum(fx66) - fx66['subtotal_inwc']) < 1e-9,
       "unpriced %r" % (fx66['unpriced'],))
+
+# ── case 68 to 69: inlet velocity and the turn plane H (Colin, 2026-11-04) ───
+# 68: the fan velocity basis is for outlets only. A 24 x 24 return inlet at
+#     1000 fpm, elbow 3 ft in: the default basis (2500 fpm) prices it the
+#     same as the connection basis, with no fan velocity NOTE.
+n68 = dict(n33)
+n68[940] = _unit({941: SQ24})
+d68 = build([(941, 0.0, 3.0, 1000.0, 4.0, 'Return Air'),
+             (943, 0.0, 5.0, 1000.0, 4.0, 'Return Air')])
+_t68 = {950: (4000.0, 'Return Air', 'RG-68')}
+c68 = _fse_run(n68, c33, d68, _t68, 940, cls='Return Air')
+f68 = _fse_run(n68, c33, d68, _t68, 940, fan=FSE_DEF, cls='Return Air')
+check("case68 inlet on the default basis: priced at the connection velocity, as the connection basis",
+      c68.get('fse_inwc', 0) > 0
+      and abs(f68.get('fse_inwc', -1) - c68.get('fse_inwc', -2)) < 1e-12
+      and not any('default fan velocity' in t for _k, t in f68.get('fse_notes', ())),
+      "conn %r default %r notes %r" % (c68.get('fse_inwc'), f68.get('fse_inwc'),
+                                       f68.get('fse_notes')))
+
+# 69: a 24 x 12 return inlet, 2 H on the elbow's side in the plane of its
+#     turn. Turning on the 12 in. side: 2 H 2.0 ft, so 3.0 ft is not RED and
+#     1.9 ft is RED "(H 12 in.)". Turning on the 24 in. side: 2 H 4.0 ft,
+#     3.0 ft is RED "(H 24 in.)".
+for _w69, _l69, _red69 in ((12.0, 3.0, False), (12.0, 1.9, True), (24.0, 3.0, True)):
+    _n = {940: _unit({941: RC2412}),
+          942: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
+                    geom={'round': False, 'd_in': None, 'r_in': 1.5 * _w69, 'w_in': _w69,
+                          'h_in': 36.0 - _w69, 'angle': 90.0})}
+    _d = build([(941, 0.0, _l69, 1000.0, 2.0, 'Return Air'),
+                (943, 0.0, 5.0, 1000.0, 2.0, 'Return Air')])
+    _d[EID(941)].size = '24x12"'
+    _r = _fse_run(_n, c33, _d, {950: (2000.0, 'Return Air', 'RG-69')}, 940, cls='Return Air')
+    _txt = [t for k, t in _r.get('fse_notes', ()) if k == 'red']
+    _h = '%.0f' % _w69
+    check("case69 24x12 inlet, elbow turning on its %s in. side at %.1f ft: %s" % (
+              _h, _l69, 'RED (H %s in.)' % _h if _red69 else 'not RED'),
+          ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1
+            and '(H %s in.)' % _h in _txt[0]
+            and '%.1f ft of straight duct (2 H)' % (2 * _w69 / 12.0) in _txt[0])
+           if _red69 else not _r.get('fse_red_ids')),
+          "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
+
+# 69b: a 36 x 8 inlet (a fan coil return) into a 10 in. round elbow past a
+#      transition: H is the elbow's D, 10 in. (the opening's smaller side,
+#      8 in., is less), 2 H 1.7 ft. At 2.0 ft not RED (the larger side, 36
+#      in., would ask 6 ft); at 1.5 ft RED "(H 10 in.)".
+RC368 = {'round': False, 'area_ft2': 2.0, 'd_in': None, 'w_in': 36.0, 'h_in': 8.0}
+for _l69b, _red69b in ((2.0, False), (1.5, True)):
+    _n = {940: _unit({941: RC368}),
+          942: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                    geom={'round': True, 'd_in': 10.0, 'r_in': 15.0, 'w_in': None,
+                          'h_in': None, 'angle': 90.0})}
+    _d = build([(941, 0.0, _l69b, 1000.0, 2.0, 'Return Air'),
+                (943, 0.0, 5.0, 1000.0, 2.0, 'Return Air')])
+    _d[EID(941)].size = '36x8"'
+    _r = _fse_run(_n, c33, _d, {950: (2000.0, 'Return Air', 'RG-69b')}, 940, cls='Return Air')
+    _txt = [t for k, t in _r.get('fse_notes', ()) if k == 'red']
+    check("case69b 36x8 inlet, 10 in. round elbow at %.1f ft (2 H 1.7 ft): %s" % (
+              _l69b, 'RED (H 10 in.)' if _red69b else 'not RED'),
+          ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1 and '(H 10 in.)' in _txt[0])
+           if _red69b else not _r.get('fse_red_ids')),
+          "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
+
+# 70: the max() group (Colin, 2026-11-04) with a transition in it, where the
+#     duct and fittings win: case 64's run with the elbow pushed to about
+#     5.6 ft (Le 5.71 ft), so the fan system effect is small and the
+#     transition and elbow, priced at their model velocity, are charged.
+d70 = build([(961, 0.0, 4.5, 1000.0, 4.0, 'Supply Air'),
+             (963, 0.0, 0.6, 666.7, 6.0, 'Supply Air'),
+             (965, 0.0, 5.0, 666.7, 6.0, 'Supply Air')])
+f70 = _fse_run(n64, c34, d70, {970: (4000.0, 'Supply Air', 'SD-70')}, 960, fan=FSE_ON)
+_g70 = [i for i in f70.get('items', ()) if i[0] in ('Fitting 962', 'Fitting 964')]
+_fs70 = [i for i in f70.get('items', ()) if i[4] and i[4][0].startswith('Fan system effect')]
+check("case70 transition in the group, duct and fittings win: fan system effect listed at 0, not charged",
+      f70.get('fse_inwc') == 0.0 and len(_fs70) == 1 and _fs70[0][3] == 0.0
+      and 'not charged' in _fs70[0][1], "fse %r rows %r" % (f70.get('fse_inwc'), _fs70))
+check("case70 the transition and elbow are charged at their model velocity",
+      len(_g70) == 2 and all(i[3] > 0.0 and 'fan system effect' not in i[1] for i in _g70)
+      and abs(f70['fitting_inwc'] - sum(i[3] for i in _g70)) < 1e-12
+      and abs(_items_sum(f70) - f70['subtotal_inwc']) < 1e-9,
+      "rows %r fit %r" % (_g70, f70.get('fitting_inwc')))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

@@ -81,13 +81,17 @@ RJA DECISIONS (Colin, 2026-11-03):
     'connection': the connection velocity alone. The velocity sets Pv, the
     loss, the GRAY check and the outlet Le. The transitions passed between
     the unit and the first disruption are priced at the same velocity.
+    Outlets only (Colin, 2026-11-04): an inlet always uses its connection
+    velocity.
   - Straight duct check, RED for the engineer, still priced as above
     (Colin, 2026-11-03, .claude/docs/Duct Velocity/FAN_SYSTEM_EFFECT_PLAN.md
     section C): an elbow under OUTLET_RED_RATIO x Le of a unit OUTLET (Le
     Eq. 36 / 37; Eq. 37 is the 2.5 D rule up to about 2500 fpm), or under
     INLET_RED_D x D of a unit INLET, where the loss is steep. D is the larger
-    of the unit opening and the first duct (round D, else the larger side,
-    H). The straight duct between the unit and the elbow is RED with it. The
+    of the unit opening and the first duct (round D). On a rect inlet elbow
+    H is its side in the plane of the turn, not less than the opening's
+    smaller side (Colin, 2026-11-04). The straight duct between the unit
+    and the elbow is RED with it. The
     note gives the RED line length and the no loss length: 1.0 Le at an
     outlet, INLET_FLOOR_D x D at an inlet (where the tables stop falling).
     Elbows past the RED line are still priced. Replaces 5 D at both sides.
@@ -550,9 +554,19 @@ def velocity_text(where, v_used, v_conn):
 
 
 def transition_text(eid, l_ft, where, v_used):
-    """The NOTE for a transition priced at the fan velocity."""
+    """The NOTE for a transition priced at the fan velocity. Not printed
+    since 2026-11-04 (group_text replaced the fan velocity transition)."""
     return ('NOTE: transition %s, %.1f ft from the %s, priced at the default fan '
             'velocity, %.0f fpm at the unit end.' % (eid, float(l_ft), where, float(v_used)))
+
+
+def group_text(eid, l_ft, where):
+    """The NOTE for the group charged once with the fan system effect
+    (Colin, 2026-11-04): the straight duct, any transition and the first
+    elbow, the larger of the two."""
+    return ('NOTE: the straight duct from the %s to elbow %s (%.1f ft), any transition '
+            'on it and the elbow are charged once: the larger of the fan system effect '
+            'and their own duct and fitting losses.' % (where, eid, float(l_ft)))
 
 
 # ── report text ──────────────────────────────────────────────────────────────
@@ -611,26 +625,28 @@ def method_lines(settings):
     method = ('Fan system effect (2001 Fundamentals Eq. 38): the first disruption '
               'past each unit connection. Outlet: within Le (Eq. 36 or 37), an elbow '
               'is priced from the %s tables %s to %s, worst of positions A to D, at '
-              'Ab/Ao %.2f; the elbow is also priced as a fitting. Inlet: within the '
-              'table floor distance (5 D or 5 H), an elbow is priced from ED7-2 '
-              '(round) or ER7-1 (rect), whose C includes the elbow, so it is not '
-              'priced again. Added before the safety factor. A loss of %.1f in. wc '
+              'Ab/Ao %.2f. Inlet: within the table floor distance (5 D or 5 H), an '
+              'elbow is priced from ED7-2 (round) or ER7-1 (rect). The straight '
+              'duct, any transition on it and the first elbow are charged once, as '
+              'the larger of the fan system effect and their own duct and fitting '
+              'losses. Added before the safety factor. A loss of %.1f in. wc '
               'or more is GRAY, with the straight length that brings it under. '
               'L runs from the unit through straight duct and any transitions, '
-              'their length counted, to the first elbow; transitions are priced '
-              'as fittings. Taps and splits inside the window are flagged, not '
+              'their length counted, to the first elbow. Taps and splits inside '
+              'the window are flagged, not '
               'priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
               'row. An elbow under 0.5 Le of a unit outlet, or under 2 D of an inlet '
-              '(D the larger of the unit opening and the first duct), is RED with '
-              'the straight duct before it.' % (
+              '(D the larger of the unit opening and the first duct; on a rect '
+              'elbow H, its side in the plane of the turn), is RED with the '
+              'straight duct before it.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
                   MITERED_R_OVER_H))
     if settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
-        method += (' Velocity: the larger of the default fan velocity, %.0f fpm, and '
-                   'the connection velocity (cfm over the unit connector area); the '
-                   'transitions between the unit and the first disruption are priced '
-                   'at it too.' % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
+        method += (' Velocity at an outlet: the larger of the default fan velocity, '
+                   '%.0f fpm, and the connection velocity (cfm over the unit connector '
+                   'area). At an inlet: the connection velocity.'
+                   % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
     else:
         method += (' Velocity: the connection velocity, cfm over the unit connector '
                    'area (the first duct when unreadable).')

@@ -254,7 +254,9 @@ class SettingsTest(unittest.TestCase):
     def test_method_lines_and_dwdi_assumption(self):
         m, a = F.method_lines({'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5})
         self.assertIn('SR7-9 to SR7-12', m)
-        self.assertIn('not priced again', m)
+        self.assertIn('charged once, as the larger of the fan system effect', m)
+        self.assertIn('At an inlet: the connection velocity', m)
+        self.assertIn('in the plane of the turn', m)
         self.assertEqual(len(a), 1)
         self.assertTrue(a[0].startswith('ASSUMPTION'))
         self.assertIn('SWSI', a[0])
