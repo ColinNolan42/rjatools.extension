@@ -900,13 +900,32 @@ _GAS_BODY = (
     '<TextBox x:Name="tb_heat" Width="72" Margin="8,0,6,0"'
     ' ToolTip="Get this value from the utility. Shall be greater than 0."/>'
     '<TextBlock Text="BTU/CF" VerticalAlignment="Center"/>'
-    '</StackPanel>' +
+    '</StackPanel>'
+    '<TextBlock x:Name="tb_heat_note" Style="{DynamicResource RjaHint}" FontSize="11"'
+    ' FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>' +
     _hint('RJA standard: CFH = BTU/h / Heat Content of Gas. Get this value from the '
           'utility. Default %g BTU/CF is Denver. Sea level is 1000 BTU/CF.'
           % float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)) +
 
     _BASIS_XAML
 )
+
+
+def heat_content_note(table_id):
+    """The note shown under the heat content box, or "" when it is used.
+
+    Propane Tables 402.4(25) to (36) publish capacity in MBH, so the sizer
+    compares the MBH load directly and heat content is not used there
+    (Colin, 2026-11-04). The box is greyed out and this note says why.
+    """
+    if not table_id:
+        return ""
+    try:
+        if gas_tables.table_units(table_id) == "MBH":
+            return "Not used: Table {} is published in MBH.".format(table_id)
+    except ValueError:
+        return ""
+    return ""
 
 
 def show_gas_picker(title, prv_option, use_theme=True):
@@ -934,6 +953,7 @@ def show_gas_picker(title, prv_option, use_theme=True):
     pnl_prv = _named(win, 'pnl_prv')
     cb_downstream = _named(win, 'cb_downstream')
     tb_heat = _named(win, 'tb_heat')
+    tb_heat_note = _named(win, 'tb_heat_note')
 
     materials = gas_tables.get_material_labels()
     for m in materials:
@@ -978,9 +998,19 @@ def show_gas_picker(title, prv_option, use_theme=True):
         if cb_table.Items.Count > 0:
             cb_table.SelectedIndex = 0
 
+    def update_heat_box():
+        """Grey the heat content box on an MBH (propane) table."""
+        up = upstream_option()
+        note = heat_content_note(up["table_id"] if up else None)
+        tb_heat.IsEnabled = not note
+        tb_heat_note.Text = note
+        tb_heat_note.Visibility = (Visibility.Visible if note
+                                   else Visibility.Collapsed)
+
     populate_table(materials[0])
     tb_heat.Text = "{:.0f}".format(
         float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+    update_heat_box()
 
     if prv_option:
         cb_prv.Visibility = Visibility.Visible
@@ -989,8 +1019,10 @@ def show_gas_picker(title, prv_option, use_theme=True):
     def on_material_changed(sender, args):
         if cb_material.SelectedItem is not None:
             populate_table(cb_material.SelectedItem)
+        update_heat_box()
 
     def on_table_changed(sender, args):
+        update_heat_box()
         if prv_option:
             populate_downstream()
 

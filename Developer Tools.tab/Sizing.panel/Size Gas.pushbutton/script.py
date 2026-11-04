@@ -242,9 +242,11 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result,
         unchecked_list.append({"pipe_id": pipe_id, "table_id": table_id})
         return
 
-    demand_cfh = sizing_engine.mbh_to_cfh(
-        demand, result.get("heat_content_btu_per_cf",
-                            shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+    # Demand in the table's units: CFH via heat content, or the MBH load
+    # itself on a propane table 402.4(25) to (36) (Colin, 2026-11-04).
+    demand_cfh, units = sizing_engine.demand_in_table_units(
+        demand, table_id, result.get("heat_content_btu_per_cf",
+                                     shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
     try:
         current_cap = float(gas_tables.get_capacity(
             table_id, run_ft, current_nom))
@@ -261,6 +263,7 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result,
             "current_nom":    current_nom,
             "demand_mbh":     float(demand),
             "current_cap":    current_cap,
+            "units":          units,
             "recommended_nom": recommended_nom,
         })
 
@@ -553,16 +556,25 @@ def main():
                         existing_check["table_id"],
                         float(existing_check["run_ft"])))
             else:
+                # Capacity and demand are in the table's units: CFH, or MBH
+                # for a propane table 402.4(25) to (36) (Colin, 2026-11-04).
+                units = existing_check.get("units", "CFH")
+                if units == "MBH":
+                    load_text = "{:.0f} MBH".format(
+                        float(existing_check["total_load_mbh"]))
+                else:
+                    load_text = "{:.0f} {} ({:.0f} MBH)".format(
+                        float(existing_check["demand_cfh"]), units,
+                        float(existing_check["total_load_mbh"]))
                 existing_warnings.append(
-                    "The existing {}\" pipe carries {:.0f} CFH at {:.0f} ft "
-                    "developed length, but existing plus new load is {:.0f} "
-                    "CFH ({:.0f} MBH). The existing pipe is NOT adequate and "
-                    "was not resized.".format(
+                    "The existing {}\" pipe carries {:.0f} {} at {:.0f} ft "
+                    "developed length, but existing plus new load is {}. "
+                    "The existing pipe is NOT adequate and was not "
+                    "resized.".format(
                         existing_check["size_nominal"],
-                        float(existing_check["capacity_cfh"]),
+                        float(existing_check["capacity_cfh"]), units,
                         float(existing_check["run_ft"]),
-                        float(existing_check["demand_cfh"]),
-                        float(existing_check["total_load_mbh"])))
+                        load_text))
     output.print_html(
         "<pre style='font-family:monospace;font-size:12px;'>{}</pre>".format(
             diag.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")))
@@ -859,12 +871,13 @@ def _print_existing_audit(existing_skip_count, existing_overloaded,
         output.print_md("")
         output.print_md(
             "| Pipe ID | Current Size | New Load | Current Capacity"
-            " (CFH) | Recommended |")
+            " | Recommended |")
         output.print_md("| --- | --- | --- | --- | --- |")
         for e in existing_overloaded:
             cap = e["current_cap"]
             cap_text = ("none published" if cap is None
-                        else "{:.1f}".format(float(cap)))
+                        else "{:.1f} {}".format(float(cap),
+                                                e.get("units", "CFH")))
             output.print_md(
                 "| {} | {}\" | {:.1f} MBH | {} | {}\" |".format(
                     e["pipe_id"],

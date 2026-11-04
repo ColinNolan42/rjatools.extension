@@ -215,6 +215,30 @@ class TestExhaustFanDialog(unittest.TestCase):
         self.assertNotIn("rated static", sizer_dialogs._FAN_BODY.lower())
 
 
+class TestGasHeatContentOnMbhTables(unittest.TestCase):
+    """Propane Tables 402.4(25) to (36) publish MBH: the heat content box
+    is greyed out with a note (Colin, 2026-11-04)."""
+
+    def test_note_element_starts_collapsed(self):
+        self.assertIn("tb_heat_note", _names_in(sizer_dialogs._GAS_BODY))
+        root = ET.fromstring("<Root %s>%s</Root>" % (NS, sizer_dialogs._GAS_BODY))
+        note = [el for el in root.iter()
+                if el.get("{http://schemas.microsoft.com/winfx/2006/xaml}Name")
+                == "tb_heat_note"][0]
+        self.assertEqual(note.get("Visibility"), "Collapsed")
+
+    def test_note_text_per_table(self):
+        for n in range(25, 37):
+            tid = "402.4(%d)" % n
+            self.assertEqual(sizer_dialogs.heat_content_note(tid),
+                             "Not used: Table %s is published in MBH." % tid)
+        for tid in ("402.4(1)", "402.4(10)", "402.4(15)", "402.4(24)",
+                    "402.4(37)"):
+            self.assertEqual(sizer_dialogs.heat_content_note(tid), "", tid)
+        self.assertEqual(sizer_dialogs.heat_content_note(None), "")
+        self.assertEqual(sizer_dialogs.heat_content_note("402.4(99)"), "")
+
+
 class TestGasCalculationBasis(unittest.TestCase):
 
     def test_rows_are_ascii_label_value_pairs(self):

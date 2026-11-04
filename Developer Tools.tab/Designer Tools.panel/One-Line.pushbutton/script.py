@@ -1893,10 +1893,12 @@ def main():
     # minimum IFGC size that handles the branch MBH demand at the system length.
     def _pick_fallback_size(demand_mbh, pairs):
         """Smallest nominal size in pairs whose capacity covers demand_mbh,
-        converted to CFH via the same Heat Content of Gas used by Size Gas
-        (see sizing_engine.mbh_to_cfh()), so this fallback matches the same
-        comparison. Returns "" if no size in pairs is sufficient."""
-        demand_cfh = sizing_engine.mbh_to_cfh(demand_mbh, heat_content_btu_per_cf)
+        in the table's own units the same way Size Gas compares it (see
+        sizing_engine.demand_in_table_units(): CFH via the Heat Content of
+        Gas, or MBH directly on a propane table 402.4(25) to (36)).
+        Returns "" if no size in pairs is sufficient."""
+        demand_cfh, _units = sizing_engine.demand_in_table_units(
+            demand_mbh, table_id, heat_content_btu_per_cf)
         for nom, cap in pairs:
             if cap is not None and cap >= demand_cfh:
                 return nom
