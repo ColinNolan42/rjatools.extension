@@ -2525,13 +2525,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return q, ab
 
     tapflow_cache = {}
+    tapafter_cache = {}     # duct id -> {tap id: main cfm left past its station}
+    _TAP_STATION_FT = 0.1   # taps this close share one station (F2, 2026-11-04)
     def _tap_flows(duct_id):
         """({tap id: (local common cfm, branch cfm, branch area, feet)}, ordered).
 
         On an unbroken Revit main the duct's cfm is the flow at its unit end;
         each tap sees that less the branches taken off ahead of it, so taps are
         put in order along the duct (hvac_graph.tap_positions_ft). When the
-        order cannot be read every tap sees the duct's own cfm (NOTE)."""
+        order cannot be read every tap sees the duct's own cfm (NOTE).
+
+        Taps within _TAP_STATION_FT of each other are one station (Colin,
+        2026-11-04, F2): each sees the flow arriving there and is priced from
+        its own geometry and flow, feet is the station's, and the main loses
+        the whole station's branch flow past it. Ties sort by element id, so
+        Revit's connector order can never change the answer."""
         if duct_id in tapflow_cache:
             return tapflow_cache[duct_id]
         dr = dr_by_int_id[duct_id]
@@ -2553,15 +2561,33 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             except Exception:
                 pos = {}
         ordered = bool(taps) and all(t in pos for t in taps)
-        order = sorted(taps, key=lambda t: pos[t]) if ordered else list(taps)
-        q = dr.cfm
-        out = {}
+        order = (sorted(taps, key=lambda t: (pos[t], t)) if ordered
+                 else sorted(taps))
+        stations = []
         for t in order:
-            qb, ab = _branch_flow(t)
-            out[t] = (q, qb, ab, pos.get(t))
-            if ordered and qb:
-                q = max(q - qb, 0.0)
+            if (ordered and stations and
+                    pos[t] - pos[stations[-1][0]] <= _TAP_STATION_FT + 1e-9):
+                stations[-1].append(t)
+            else:
+                stations.append([t])
+        q = dr.cfm
+        out, after = {}, {}
+        for group in stations:
+            q_in, taken = q, 0.0
+            for t in group:
+                qb, ab = _branch_flow(t)
+                out[t] = (q_in, qb, ab, pos.get(group[0]))
+                taken += qb or 0.0
+            if ordered:
+                q = max(q_in - taken, 0.0)
+            for t in group:
+                after[t] = q
+            if len(group) > 1:
+                fan_system_effect.log.info('tap station: duct %s taps %r at %s ft share '
+                                           '%.0f cfm', duct_id, group,
+                                           pos.get(group[0]), q_in)
         tapflow_cache[duct_id] = (out, ordered)
+        tapafter_cache[duct_id] = after
         return tapflow_cache[duct_id]
 
     def _floor_return(loss, sys_class, what):
@@ -2764,7 +2790,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         d_h = getattr(dr, 'd_h_in', None)
         eps = getattr(dr, 'roughness_ft', None)
         q, x0, total = dr.cfm, 0.0, 0.0
-        for t in sorted(taps, key=lambda t: flows[t][3]):
+        after = tapafter_cache.get(duct_id, {})
+        for t in sorted(taps, key=lambda t: (flows[t][3], t)):
             x1 = min(max(float(flows[t][3]), x0), stop)
             if x1 > x0 and q > 0:
                 total += (x1 - x0) / 100.0 * hvac_graph.duct_friction_loss_per_100ft(
@@ -2772,7 +2799,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             x0 = x1
             if x0 >= stop:
                 break
-            q = max(flows[t][0] - (flows[t][1] or 0.0), 0.0)
+            q = after.get(t, max(flows[t][0] - (flows[t][1] or 0.0), 0.0))
         if stop > x0 and q > 0:
             total += (stop - x0) / 100.0 * hvac_graph.duct_friction_loss_per_100ft(
                 q / dr.area_ft2, d_h, eps)
@@ -4162,10 +4189,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         if _ditem is not None:
                             fse_items = fse_items + (_ditem,)
                 current = best_here.get(key)
-                if current is None or (fric_l + fit_l + comp_here + filt + fse_loss) > (
-                        current['friction_inwc'] + current['fitting_inwc'] +
-                        current['component_inwc'] + current['filter_inwc'] +
-                        current['fse_inwc']):
+                # Equal runs (two taps at one station, F2 2026-11-04): the
+                # lower terminal id is the index run, so Revit's connector
+                # order cannot change which terminal is named.
+                _tot_here = fric_l + fit_l + comp_here + filt + fse_loss
+                _tot_cur = None if current is None else (
+                    current['friction_inwc'] + current['fitting_inwc'] +
+                    current['component_inwc'] + current['filter_inwc'] +
+                    current['fse_inwc'])
+                if (current is None or _tot_here > _tot_cur + 1e-12 or
+                        (abs(_tot_here - _tot_cur) <= 1e-12 and
+                         nid < current['terminal_id'])):
                     best_here[key] = {
                         'friction_inwc':    fric_l,
                         'fitting_inwc':     fit_l,

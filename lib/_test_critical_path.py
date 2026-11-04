@@ -2489,6 +2489,53 @@ check("case72 a supply outlet double bend: the same WARNING at the supply outlet
       len(_dbl(sa72)) == 1 and _dbl(sa72)[0].startswith('WARNING: Double bend at the supply outlet'),
       "notes %r" % (sa72.get('fse_notes'),))
 
+# ── case73: two taps at one station (F2, Colin 2026-11-04) ───────────────────
+# A 1000 cfm main ends in two facing taps at the same 8.0 ft station, 500 cfm
+# each (the M05 R5 shoes). Each is a tap from its own flow (Qb/Qc 0.5 on the
+# arriving 1000 cfm), neither is an "end of main turn", and Revit's connector
+# order (the child order) cannot change the answer.
+def _run73(order, cls, qa=500.0, qb=500.0, pos_b=8.0, fric_b=0.0):
+    ch = {699: [700], 700: list(order), 701: [711], 702: [712], 711: [721], 712: [722]}
+    n = {700: Elem(kind='duct', tap_pos={701: 8.0, 702: pos_b}),
+         701: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+         702: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+         711: Elem(kind='duct'), 712: Elem(kind='duct')}
+    d = build([(700, 0.0, 10.0, 1000.0, 1.0, cls),
+               (711, 0.0, 5.0, qa / 0.35, 0.35, cls),
+               (712, fric_b, 5.0, qb / 0.35, 0.35, cls)])
+    for _dr in d.values():
+        _dr.size = '12x12"'
+    t = {721: (qa, cls, 'T-A'), 722: (qb, cls, 'T-B')}
+    return crit([699], ch, d, t, n).get(699, {}).get(cls, {})
+def _tap_rows(r):
+    return sorted((i[0], round(i[3], 12), i[1]) for i in r.get('items', ())
+                  if i[0].startswith('Fitting 70'))
+for _cls73 in ('Return Air', 'Supply Air'):
+    _a73 = _run73((701, 702), _cls73)
+    _b73 = _run73((702, 701), _cls73)
+    check("case73 %s: both child orders give the same index run, total and tap rows" % _cls73,
+          _a73.get('terminal_id') == _b73.get('terminal_id')
+          and abs(_a73.get('total_inwc', -1) - _b73.get('total_inwc', -2)) < 1e-12
+          and _tap_rows(_a73) == _tap_rows(_b73),
+          "A %r %r / B %r %r" % (_a73.get('terminal_id'), _tap_rows(_a73),
+                                 _b73.get('terminal_id'), _tap_rows(_b73)))
+    check("case73 %s: the coincident tap is a tap, not an end of main turn" % _cls73,
+          _tap_rows(_a73) and not any('end of main' in r[2] for r in _tap_rows(_a73)),
+          "rows %r" % (_tap_rows(_a73),))
+# Equal taps price the same whichever is the index; the tie goes to the lower id.
+_e73 = _run73((702, 701), 'Supply Air')
+_l701 = [r[1] for r in _tap_rows(_e73)]
+check("case73 equal taps: the index run leaves through the lower id tap 701",
+      _e73.get('terminal_id') == 721, "term %r rows %r" % (_e73.get('terminal_id'), _tap_rows(_e73)))
+# A tap 0.05 ft on is the same station; one 0.5 ft on is not (the main then
+# carries only the second tap's flow there and it is the end of main turn).
+_n73 = _run73((702, 701), 'Supply Air', qa=300.0, qb=700.0, pos_b=8.05, fric_b=0.5)
+_f73 = _run73((702, 701), 'Supply Air', qa=300.0, qb=700.0, pos_b=8.5, fric_b=0.5)
+check("case73 a tap 0.05 ft on shares the station: no end of main turn",
+      _n73.get('terminal_id') == 722 and not any('end of main' in r[2] for r in _tap_rows(_n73)), "rows %r" % (_tap_rows(_n73),))
+check("case73 a tap 0.5 ft on is its own station: the last tap is the end of main turn",
+      _f73.get('terminal_id') == 722 and any('end of main' in r[2] for r in _tap_rows(_f73)), "rows %r" % (_tap_rows(_f73),))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)
