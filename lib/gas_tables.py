@@ -636,6 +636,24 @@ def get_table(table_id):
     return tables[table_id]
 
 
+def table_units(table_id):
+    """Units a table publishes its capacities in: "CFH" or "MBH".
+
+    2024 IFGC Tables 402.4(25) to (36) (propane) print "Capacity in
+    Thousands of Btu per Hour"; every other table, 402.4(37) included,
+    prints cubic feet per hour. Read from the table's "units" field.
+
+    Raises:
+        ValueError: unknown table, or a units value other than CFH or MBH.
+    """
+    units = str(get_table(table_id).get("units", "CFH")).strip().upper()
+    if units not in ("CFH", "MBH"):
+        raise ValueError(
+            "Table '{}' has unrecognized units '{}'. Expected CFH or "
+            "MBH.".format(table_id, units))
+    return units
+
+
 # Any table with a real numeric inlet pressure at or above this threshold
 # routes to the High Pressure (Weymouth/Cox) method; everything else
 # (the "<2 psi" placeholder 0.7 value, or a true in.w.c. category) routes
@@ -712,9 +730,10 @@ def get_length_row(table_id, length_ft):
 
     Returns:
         Tuple of (table_length_used_ft, capacities_list).
-        capacities_list is the raw row from the JSON: a list of CFH
-        values (or None for unavailable sizes), in the same order as
-        pipe_sizes_nominal for that table.
+        capacities_list is the raw row from the JSON: a list of
+        capacities in the table's units (CFH, or MBH for propane Tables
+        402.4(25) to (36), see table_units()), None for unavailable sizes,
+        in the same order as pipe_sizes_nominal for that table.
 
     Raises:
         ValueError: If table_id is unknown, length is invalid, or length
@@ -760,7 +779,7 @@ def get_length_row(table_id, length_ft):
 # ---------------------------------------------------------------------------
 
 def get_capacity(table_id, length_ft, pipe_size_nominal):
-    """Return the CFH capacity of a pipe size at a given run length.
+    """Return the capacity of a pipe size at a given run length.
 
     Performs IFGC A103.1 Step 5 length rounding internally.
 
@@ -768,10 +787,12 @@ def get_capacity(table_id, length_ft, pipe_size_nominal):
         table_id: Table identifier string.
         length_ft: Actual pipe length (typically the longest run), in feet.
         pipe_size_nominal: Nominal pipe size string matching the JSON,
-            e.g. "1/2", "3/4", "1", "1-1/4", "2-1/2", "EHD-25", "1 K&L".
+            e.g. "1/2", "3/4", "1", "1-1/4", "2-1/2", "EHD-25", "1 K&L",
+            "3/4 CTS".
 
     Returns:
-        Integer capacity in CFH.
+        Integer capacity in the table's units: CFH, or MBH for propane
+        Tables 402.4(25) to (36) (see table_units()).
 
     Raises:
         ValueError: If table_id is unknown, length is invalid, length
@@ -839,10 +860,14 @@ def _self_test():
     print("get_capacity('402.4(15)', 10, 'EHD-13') -> " + str(cap_csst) + " CFH")
     assert cap_csst == 32, "Expected 32 CFH"
 
-    # Copper table check
-    cap_cu = get_capacity("402.4(8)", 10, "1/2 K&L")
-    print("get_capacity('402.4(8)', 10, '1/2 K&L') -> " + str(cap_cu) + " CFH")
+    # Copper table check (2024 IFGC Table 402.4(8), 10 ft row: 1/4 K&L 20,
+    # 2 K&L 2,650 CFH)
+    cap_cu = get_capacity("402.4(8)", 10, "1/4 K&L")
+    print("get_capacity('402.4(8)', 10, '1/4 K&L') -> " + str(cap_cu) + " CFH")
     assert cap_cu == 20, "Expected 20 CFH"
+    assert get_capacity("402.4(8)", 10, "2 K&L") == 2650, "Expected 2650 CFH"
+    assert table_units("402.4(8)") == "CFH"
+    assert table_units("402.4(25)") == "MBH"
 
     # TABLE_OPTIONS check
     opts = get_table_option_labels()

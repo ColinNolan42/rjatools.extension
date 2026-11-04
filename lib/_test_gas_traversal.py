@@ -173,8 +173,14 @@ class TestWalkStaysInGasPiping(unittest.TestCase):
 
 
 class TestZeroDemandOnCopper(unittest.TestCase):
-    """402.4(8) has no 3/4 K&L capacity from 550 ft. A zero load appliance
-    at 600 ft used to abort the whole run."""
+    """A zero load appliance on a long copper run takes the smallest size at
+    or above the 3/4 in. firm minimum with a published capacity.
+
+    This test was written when the copper columns were shifted two sizes and
+    3/4 K&L read blank from 550 ft. Per the 2024 IFGC PDF, 402.4(8) publishes
+    3/4 K&L at every row, so the answer is 3/4 K&L (2026-11-04). No 2024
+    table leaves its first size at or above 3/4 in. blank while a larger one
+    has a value, so the skip-a-blank fallback is kept only as a guard."""
 
     def test_takes_the_first_published_size(self):
         g = pipe_graph.NetworkGraph()
@@ -191,10 +197,10 @@ class TestZeroDemandOnCopper(unittest.TestCase):
             g, "Semirigid Copper Tubing", 0.5, "402.4(8)",
             heat_content_btu_per_cf=1000.0)
         self.assertEqual(result["table_length_used_ft"], 600)
-        self.assertEqual(result["sizes"][12], "1 K&L")
+        self.assertEqual(result["sizes"][12], "3/4 K&L")
         detail = [d for d in result["segment_detail"] if d["pipe_id"] == 12][0]
         self.assertEqual(detail["capacity_mbh"],
-                         gas_tables.get_capacity("402.4(8)", 595.0, "1 K&L"))
+                         gas_tables.get_capacity("402.4(8)", 595.0, "3/4 K&L"))
 
 
 class TestTableOnlyInverseMap(unittest.TestCase):

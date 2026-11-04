@@ -33,7 +33,11 @@ NOMINAL_TO_INCHES = {
     "8":     8.0,
     "10":    10.0,
     "12":    12.0,
-    # Semirigid Copper Tubing (K&L nominal sizes per IFGC Table 402.4(8)-(14))
+    # Semirigid Copper Tubing, nominal K&L sizes per IFGC Table 402.4(8)-(14)
+    # and (29)-(31). The ACR column of those tables is stored separately in
+    # the JSON (pipe_sizes_acr); 1.625 in. is the OUTSIDE diameter of
+    # 1-1/2 K&L, not a size of its own.
+    "1/4 K&L":   0.25,
     "3/8 K&L":   0.375,
     "1/2 K&L":   0.5,
     "5/8 K&L":   0.625,
@@ -41,8 +45,11 @@ NOMINAL_TO_INCHES = {
     "1 K&L":     1.0,
     "1-1/4 K&L": 1.25,
     "1-1/2 K&L": 1.5,
-    "1-5/8 ACR": 1.625,
     "2 K&L":     2.0,
+    # Polyethylene plastic tubing, CTS nominal OD, Tables 402.4(23), (24), (37)
+    "1/2 CTS":   0.5,
+    "3/4 CTS":   0.75,
+    "1 CTS":     1.0,
     # CSST (approximate nominal equivalent per EHD designation)
     "EHD-13": 0.25,
     "EHD-15": 0.375,
@@ -118,6 +125,23 @@ def mbh_to_cfh(demand_mbh, heat_content_btu_per_cf):
     if heat_content_btu_per_cf <= 0:
         return float("inf")
     return (demand_mbh * 1000.0) / heat_content_btu_per_cf
+
+
+def demand_in_table_units(demand_mbh, table_id, heat_content_btu_per_cf):
+    """The demand to compare with a table's capacities, in that table's units.
+
+    IFGC Tables 402.4(25) to (36) (propane) publish capacity in MBH
+    (thousands of Btu per hour); every other table publishes CFH. An MBH
+    table is compared with the MBH load directly, so heat content has no
+    effect on it (Colin, 2026-11-04). A CFH table uses mbh_to_cfh().
+
+    Returns:
+        (value, units)  float demand and "MBH" or "CFH".
+    """
+    units = gas_tables.table_units(table_id)
+    if units == "MBH":
+        return float(demand_mbh), units
+    return mbh_to_cfh(demand_mbh, heat_content_btu_per_cf), units
 
 
 # ---------------------------------------------------------------------------
@@ -464,8 +488,11 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
             "longest_run_ft": e_run_ft,
         }
 
-        # CFH = BTUH / Heat Content of Gas (see mbh_to_cfh() docstring).
-        demand_cfh_effective = mbh_to_cfh(demand_mbh, heat_content_btu_per_cf)
+        # Demand in the table's own units: CFH = BTUH / Heat Content of Gas
+        # for a CFH table, the MBH load itself for a propane MBH table (see
+        # demand_in_table_units()).
+        demand_cfh_effective, e_units = demand_in_table_units(
+            demand_mbh, e_table_id, heat_content_btu_per_cf)
 
         # Zero demand: the smallest size at or above the firm minimum that
         # has a published capacity at this run. Copper tables leave the small
@@ -502,6 +529,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
                 "demand_cfh":          0.0,
                 "selected_size":       selected,
                 "capacity_mbh":        capacity_at_size,
+                "units":               e_units,
                 "table_id":            e_table_id,
                 "note":                note
             })
@@ -524,11 +552,15 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
                 continue
 
         if selected is None:
+            if e_units == "MBH":
+                demand_text = "{:.1f} MBH".format(float(demand_mbh))
+            else:
+                demand_text = "{:.1f} MBH ({:.1f} CFH)".format(
+                    float(demand_mbh), float(demand_cfh_effective))
             sizing_errors.append(
-                "Pipe {}: demand {:.1f} MBH ({:.1f} CFH) exceeds max table "
-                "capacity at {:.0f} ft in Table {}.".format(
-                    edge.element_id, float(demand_mbh),
-                    float(demand_cfh_effective), float(e_row_ft), e_table_id))
+                "Pipe {}: demand {} exceeds max table capacity at {:.0f} ft "
+                "in Table {}.".format(
+                    edge.element_id, demand_text, float(e_row_ft), e_table_id))
             continue
 
         selected, upsized = _apply_minimum(selected, e_sizes)
@@ -543,6 +575,7 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
             "demand_cfh":          round(demand_cfh_effective, 1),
             "selected_size":       selected,
             "capacity_mbh":        selected_capacity,
+            "units":               e_units,
             "table_id":            e_table_id,
             "note":                "upsized to 3/4\" firm minimum" if upsized else ""
         })
@@ -600,7 +633,10 @@ def basis_of_design_rows():
                              "table rows the next longer row is used.".format(
                                  float(shared_params.ELBOW_EQUIV_LENGTH_FT))),
         ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
-                   "the total load of every appliance downstream of it."),
+                   "the total load of every appliance downstream of it. "
+                   "Propane Tables 402.4(25) to (36) publish capacity in "
+                   "MBH: there the MBH load is compared directly and heat "
+                   "content is not used."),
         ("Specific gravity", "{:g}, matching the IFGC tables.".format(
             float(shared_params.SPECIFIC_GRAVITY))),
         ("Pipe size", "Smallest size in the table whose capacity covers the "
@@ -643,7 +679,9 @@ def check_existing_pipe(sizing_result, graph):
         None when the run did not start at an existing connection, else a
         dict: size_nominal, length_ft, existing_load_mbh, new_load_mbh,
         total_load_mbh, demand_cfh, capacity_cfh (None when the size is not
-        in the table), run_ft, table_id, adequate (bool).
+        in the table), units, run_ft, table_id, adequate (bool).
+        demand_cfh and capacity_cfh are in the table's units, given by
+        units: CFH, or MBH for a propane table 402.4(25) to (36).
     """
     existing = graph.existing
     if existing is None:
@@ -654,9 +692,9 @@ def check_existing_pipe(sizing_result, graph):
     total_load = existing["load_mbh"] + new_load
     heat = sizing_result.get("heat_content_btu_per_cf",
                              shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)
-    demand_cfh = mbh_to_cfh(total_load, heat)
     run_ft = sizing_result["longest_run_ft"]
     table_id = sizing_result["table_id"]
+    demand_cfh, units = demand_in_table_units(total_load, table_id, heat)
 
     try:
         capacity = gas_tables.get_capacity(
@@ -672,6 +710,7 @@ def check_existing_pipe(sizing_result, graph):
         "total_load_mbh":    total_load,
         "demand_cfh":        demand_cfh,
         "capacity_cfh":      capacity,
+        "units":             units,
         "run_ft":            run_ft,
         "table_id":          table_id,
         "adequate":          capacity is not None and capacity >= demand_cfh,
@@ -682,15 +721,20 @@ def format_existing_check(check):
     """The existing pipe check as plain lines for the output window."""
     if check is None:
         return []
+    units = check.get("units", "CFH")
+    load_line = "Load carried:    {:.1f} MBH existing + {:.1f} MBH new = " \
+                "{:.1f} MBH".format(
+                    float(check["existing_load_mbh"]),
+                    float(check["new_load_mbh"]),
+                    float(check["total_load_mbh"]))
+    if units != "MBH":
+        load_line += " ({:.1f} {})".format(float(check["demand_cfh"]), units)
     lines = [
         "=== EXISTING PIPE, METER TO NEW CONNECTION (entered, not modeled) ===",
         "Existing size:   {}\"".format(check["size_nominal"]),
         "Existing length: {:.1f} ft, added to the new longest run".format(
             float(check["length_ft"])),
-        "Load carried:    {:.1f} MBH existing + {:.1f} MBH new = {:.1f} MBH "
-        "({:.1f} CFH)".format(
-            float(check["existing_load_mbh"]), float(check["new_load_mbh"]),
-            float(check["total_load_mbh"]), float(check["demand_cfh"])),
+        load_line,
     ]
     if check["capacity_cfh"] is None:
         lines.append(
@@ -699,9 +743,9 @@ def format_existing_check(check):
                               float(check["run_ft"])))
     else:
         lines.append(
-            "Capacity:        {:.0f} CFH at {:.1f} ft developed length, Table "
-            "{}".format(float(check["capacity_cfh"]), float(check["run_ft"]),
-                        check["table_id"]))
+            "Capacity:        {:.0f} {} at {:.1f} ft developed length, Table "
+            "{}".format(float(check["capacity_cfh"]), units,
+                        float(check["run_ft"]), check["table_id"]))
     lines.append("Result:          {}".format(
         "ADEQUATE" if check["adequate"]
         else "NOT ADEQUATE - EXISTING PIPE WAS NOT RESIZED"))
@@ -782,9 +826,16 @@ def format_sizing_output(sizing_result, graph):
                 "farthest {}".format(
                     z["label"], z["table_id"], z["run_ft"], z["row_ft"],
                     z["farthest_name"] or "-"))
-    lines.append("Heat Content:  {:.0f} BTU/CF".format(
-        float(sizing_result.get("heat_content_btu_per_cf",
-                                shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))))
+    table_units = gas_tables.table_units(sizing_result["table_id"])
+    lines.append("Capacity in:   {}  (Table {} as published)".format(
+        table_units, sizing_result["table_id"]))
+    if table_units == "MBH":
+        lines.append("Heat Content:  not used. The table is in MBH, so the "
+                     "MBH load is compared directly.")
+    else:
+        lines.append("Heat Content:  {:.0f} BTU/CF".format(
+            float(sizing_result.get("heat_content_btu_per_cf",
+                                    shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))))
     lines.append("Total load:    {:.1f} MBH  |  {} fixtures".format(
         float(total_mbh), len(fixture_nodes)))
     lines.append("")
@@ -812,17 +863,21 @@ def format_sizing_output(sizing_result, graph):
                 and detail.get("table_id") == sizing_result["downstream_table_id"]
                 and detail.get("table_id") != sizing_result["table_id"]):
             note += "  [Table {}]".format(detail["table_id"])
+        units = detail.get("units", "CFH")
         cfh_note = ""
-        if abs(detail.get("demand_cfh", detail["demand_mbh"]) - detail["demand_mbh"]) > 0.05:
-            cfh_note = "  [{:.1f} CFH]".format(detail.get("demand_cfh", 0.0))
+        if (units != "MBH" and abs(detail.get("demand_cfh", detail["demand_mbh"])
+                                   - detail["demand_mbh"]) > 0.05):
+            cfh_note = "  [{:.1f} {}]".format(detail.get("demand_cfh", 0.0),
+                                              units)
         lines.append(
             "  [{}]  {:.1f} MBH{}  ->  {}\"  "
-            "(cap {} MBH)  {}{}{}".format(
+            "(cap {} {})  {}{}{}".format(
                 detail["pipe_id"],
                 detail["demand_mbh"],
                 cfh_note,
                 detail["selected_size"],
                 int(detail["capacity_mbh"]),
+                units,
                 length_str,
                 fixture_label,
                 note))
