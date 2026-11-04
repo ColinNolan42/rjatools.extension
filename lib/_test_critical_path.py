@@ -2536,6 +2536,58 @@ check("case73 a tap 0.05 ft on shares the station: no end of main turn",
 check("case73 a tap 0.5 ft on is its own station: the last tap is the end of main turn",
       _f73.get('terminal_id') == 722 and any('end of main' in r[2] for r in _tap_rows(_f73)), "rows %r" % (_tap_rows(_f73),))
 
+# ── case74: damper in the fan clearance WARNING (F1, Colin 2026-11-04) ───────
+# 24 x 24 outlet at 4000 cfm (Le 5.71 ft): duct 741 (l1 ft), accessory 742,
+# duct 743 (1.0 ft), radius elbow 744, duct 745 (10 ft) to the diffuser. A
+# damper of any kind (balancing, fire / smoke, backdraft) inside the window
+# is a WARNING; L and the price are unchanged; past the window, or an
+# accessory that is not a damper, says nothing.
+def _run74(fam, l1=1.0, cls='Supply Air', conn=SQ24):
+    n = {740: _unit({741: conn}), 742: Elem(kind='accessory', family_name=fam),
+         744: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+    c = {740: [741], 741: [742], 742: [743], 743: [744], 744: [745], 745: [750]}
+    d = build([(741, 0.0, l1, 1000.0, 4.0, cls), (743, 0.0, 1.0, 1000.0, 4.0, cls),
+               (745, 0.0, 10.0, 1000.0, 4.0, cls)])
+    for _r in d.values():
+        _r.size = '24x24"'
+    return _fse_run(n, c, d, {750: (4000.0, cls, 'T-74')}, 740, cls=cls)
+def _dmp(rec):
+    return [t for k, t in rec.get('fse_notes', ()) if k == 'warn' and 'Damper in the fan' in t]
+_fd74 = _run74('RJA - Fire Damper - Rectangular')
+_sa74 = _run74('Sound Attenuator - Rectangular')
+check("case74 a fire damper 1.0 ft from a supply outlet (Le 5.7 ft): one WARNING, exact text",
+      len(_dmp(_fd74)) == 1 and _dmp(_fd74)[0] == (
+          'WARNING: Damper in the fan clearance at the supply outlet: RJA - Fire Damper - '
+          'Rectangular 742 at 1.0 ft is inside Le (%.1f ft). The fan system effect counts '
+          'straight duct only, so the damper\'s length is not part of L, and the damper\'s '
+          'added loss this close to the fan is not priced, so the true loss is higher than '
+          'shown. Best practice: place dampers past Le from a fan connection.' % LE24),
+      "notes %r" % (_fd74.get('fse_notes'),))
+check("case74 the WARNING is Action required, not RED; L and the fan system effect unchanged",
+      duct_perf_console.correction('warn', _dmp(_fd74)[0] if _dmp(_fd74) else '')[0]
+      == duct_perf_console.ACTION
+      and 742 not in _fd74.get('fse_red_ids', set())
+      and _fd74.get('fse_inwc', -1) > 0.0
+      and abs(_fd74.get('fse_inwc', -1) - _sa74.get('fse_inwc', -2)) < 1e-12,
+      "fse %r / %r red %r" % (_fd74.get('fse_inwc'), _sa74.get('fse_inwc'),
+                              _fd74.get('fse_red_ids')))
+check("case74 balancing and backdraft dampers inside the window warn too",
+      len(_dmp(_run74('Balancing Damper - Rectangular'))) == 1
+      and len(_dmp(_run74('Backdraft Damper - Rectangular'))) == 1)
+check("case74 an accessory that is not a damper says nothing",
+      not _dmp(_sa74), "notes %r" % (_sa74.get('fse_notes'),))
+_far74 = _run74('RJA - Fire Damper - Rectangular', l1=7.0)
+check("case74 a damper 7.0 ft out, past Le 5.7 ft: no WARNING",
+      not _dmp(_far74), "notes %r" % (_far74.get('fse_notes'),))
+_in74 = _run74('RJA - Fire Damper - Rectangular', l1=3.0, cls='Return Air')
+check("case74 a return inlet damper at 3.0 ft, inside 5 H (10.0 ft): WARNING names the inlet window",
+      len(_dmp(_in74)) == 1 and _dmp(_in74)[0].startswith(
+          'WARNING: Damper in the fan clearance at the return inlet: RJA - Fire Damper - '
+          'Rectangular 742 at 3.0 ft is inside the inlet window, 5 H (10.0 ft).'),
+      "notes %r" % (_in74.get('fse_notes'),))
+check("case74 a return damper 11.0 ft out, past 5 H: no WARNING",
+      not _dmp(_run74('RJA - Fire Damper - Rectangular', l1=11.0, cls='Return Air')))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

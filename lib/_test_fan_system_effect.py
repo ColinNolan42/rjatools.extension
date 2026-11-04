@@ -231,6 +231,23 @@ class SwirlTest(unittest.TestCase):
         m, _a = F.method_lines(F.default_settings())
         self.assertIn('same plane a double bend WARNING', m)
 
+    def test_damper_window_text(self):
+        t = F.damper_window_text('supply outlet', 3695798,
+                                 'RJA - Fire Damper - Rectangular', 1.0, 4.8, 'Le')
+        self.assertEqual(t, 'WARNING: Damper in the fan clearance at the supply outlet: '
+                            'RJA - Fire Damper - Rectangular 3695798 at 1.0 ft is inside '
+                            'Le (4.8 ft). The fan system effect counts straight duct only, '
+                            'so the damper\'s length is not part of L, and the damper\'s '
+                            'added loss this close to the fan is not priced, so the true '
+                            'loss is higher than shown. Best practice: place dampers past '
+                            'Le from a fan connection.')
+        self.assertEqual(F.DAMPER_KINDS, ('damper', 'fire_damper', 'backdraft'))
+
+    def test_method_names_the_damper_warning(self):
+        m, _a = F.method_lines(F.default_settings())
+        self.assertIn('A damper within the fan system effect window of a unit connection '
+                      'is a WARNING; its length is not counted in L', m)
+
 
 class SettingsTest(unittest.TestCase):
     def test_defaults(self):

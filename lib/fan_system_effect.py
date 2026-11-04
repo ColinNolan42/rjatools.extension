@@ -518,6 +518,27 @@ def double_elbow_text(where, elbows, window_ft, d_h_in):
                float(d_h_in)))
 
 
+# Accessory kinds (fitting_tables.classify_accessory keys) that count as a
+# damper for the damper in the fan clearance WARNING (Colin, 2026-11-04,
+# backdraft dampers included).
+DAMPER_KINDS = ('damper', 'fire_damper', 'backdraft')
+
+
+def damper_window_text(where, acc_id, family, l_ft, win_ft, win_name):
+    """The WARNING line for a damper inside the fan system effect window of
+    a unit connection (1.0 Le at an outlet, 5 D or 5 H at an inlet; Colin,
+    2026-11-04, F1). The walk passes an accessory at zero length, so the
+    damper's own length is not part of L, and its added loss this close to
+    the fan is not priced. A WARNING only: L and the price are unchanged."""
+    return ('WARNING: Damper in the fan clearance at the %s: %s %s at %.1f ft is '
+            'inside %s (%.1f ft). The fan system effect counts straight duct only, '
+            'so the damper\'s length is not part of L, and the damper\'s added loss '
+            'this close to the fan is not priced, so the true loss is higher than '
+            'shown. Best practice: place dampers past %s from a fan connection.'
+            % (where, family or '?', acc_id, float(l_ft), win_name, float(win_ft),
+               win_name))
+
+
 # ── straight duct RED (Colin, 2026-11-03) ────────────────────────────────────
 
 def outlet_red_ft(le_ft):
@@ -660,7 +681,9 @@ def method_lines(settings):
               'straight duct before it. Two elbows within 6 Dh of a unit '
               'connection: turning in different planes is RED (swirl or close-'
               'coupled), in the same plane a double bend WARNING; the added loss '
-              'is not priced.' % (
+              'is not priced. A damper within the fan system effect window of a '
+              'unit connection is a WARNING; its length is not counted in L and '
+              'its added loss is not priced.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
                   MITERED_R_OVER_H))

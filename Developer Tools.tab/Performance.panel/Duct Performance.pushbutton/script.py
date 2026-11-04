@@ -3149,7 +3149,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
     def _fse_first_disruption(root_id, first, win, where='unit connection',
                               prev=None, seen=None, collect=None, passed=None,
-                              through_taps=False, ducts=None):
+                              through_taps=False, ducts=None, accessories=None):
         """(role or None, L ft, node id, notes): the first disruption within
         win feet of the unit connection at node first.
 
@@ -3179,7 +3179,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         them, for the straight duct check.
 
         ducts: a list filled with (duct id, L ft at its unit end) for every
-        duct passed, so the straight duct before a RED elbow is RED too."""
+        duct passed, so the straight duct before a RED elbow is RED too.
+
+        accessories: a list filled with (id, L ft, family) for every damper
+        passed (fan_system_effect.DAMPER_KINDS), for the damper in the fan
+        clearance WARNING (Colin, 2026-11-04, F1). Still passed at zero
+        length."""
         notes = []
         if seen is None:
             prev, seen = root_id, set([root_id])
@@ -3242,6 +3247,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     return role, l_ft, nid, notes
                 nxt = kids
             elif elem is not None and hvac_graph.is_accessory(elem):
+                if accessories is not None:
+                    fam = hvac_graph.fitting_family_name(elem)
+                    akey = fitting_tables.classify_accessory(fam)
+                    fan_system_effect.log.info('fan system effect: accessory %s (%s, %s) '
+                                               'at %.2f ft', nid, fam, akey, l_ft)
+                    if akey in fan_system_effect.DAMPER_KINDS:
+                        accessories.append((nid, l_ft, fam))
                 nxt = kids
             else:
                 return None, l_ft, None, notes      # a terminal or equipment
@@ -3544,6 +3556,23 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         else:
             fan_system_effect.log.info('swirl check: %s first duct Dh NOT FOUND, '
                                        'not checked', where)
+        # A damper inside the pricing window (1.0 Le at an outlet, 5 D / 5 H
+        # at an inlet): a WARNING only (Colin, 2026-11-04, F1). Walked past
+        # taps and elbows to the end of the window; L and the price below
+        # are unchanged.
+        acc = []
+        if pick is not None:
+            _fse_first_disruption(root_id, first, win, where, prev=pick[0],
+                                  seen=set(pick[1]), collect=[], through_taps=True,
+                                  accessories=acc)
+        else:
+            _fse_first_disruption(root_id, first, win, where, collect=[],
+                                  through_taps=True, accessories=acc)
+        fan_system_effect.log.info('damper check: %s, window %.2f ft, dampers %r',
+                                   where, win, acc)
+        for a_id, a_l, a_fam in acc:
+            notes.append(('warn', fan_system_effect.damper_window_text(
+                where, a_id, a_fam, a_l, win, win_name)))
         grp_ducts = []
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
