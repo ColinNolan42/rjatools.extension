@@ -218,6 +218,19 @@ class SwirlTest(unittest.TestCase):
         self.assertTrue(outlet.startswith('RED: Close-coupled elbows at the supply outlet'))
         self.assertNotIn('swirl', outlet.lower())
 
+    def test_double_elbow_text(self):
+        els = [(3650557, 1.5, None), (3650577, 1.8, (1, 0, 0)), (3650600, 3.0, None)]
+        t = F.double_elbow_text('supply outlet', els, 8.0, 16.0)
+        self.assertTrue(t.startswith('WARNING: Double bend at the supply outlet: elbows '
+                                     '3650557 (1.5 ft) and 3650577 (1.8 ft) follow each '
+                                     'other within 6 Dh (8.0 ft, Dh 16 in.) of the fan.'))
+        self.assertIn('not priced', t)
+        self.assertIn('Best practice: avoid a double bend at a fan connection.', t)
+
+    def test_method_names_the_double_bend(self):
+        m, _a = F.method_lines(F.default_settings())
+        self.assertIn('same plane a double bend WARNING', m)
+
 
 class SettingsTest(unittest.TestCase):
     def test_defaults(self):

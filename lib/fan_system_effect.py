@@ -499,6 +499,25 @@ def swirl_text(role, where, pair, window_ft, d_h_in):
                float(d_h_in), tail))
 
 
+def double_elbow_text(where, elbows, window_ft, d_h_in):
+    """The WARNING line for a double bend: two or more elbows within 6 Dh of
+    a unit connection that do not turn in different planes (the RED swirl /
+    close-coupled pair covers those). The first elbow is priced in the fan
+    system effect and the second at its own C, but the added loss of two
+    elbows this close is not, so the true loss is higher than shown (Colin,
+    2026-11-04: best practice, untested in numbers). elbows: [(element id,
+    L ft, normal or None)] in order from the unit; the first two are named."""
+    (a, la, _na), (b, lb, _nb) = elbows[0], elbows[1]
+    return ('WARNING: Double bend at the %s: elbows %s (%.1f ft) and %s (%.1f ft) '
+            'follow each other within %.0f Dh (%.1f ft, Dh %.0f in.) of the fan. The '
+            'fan system effect prices the first elbow only; the added loss of the '
+            'second elbow this close is not priced (no 2001 data for close-coupled '
+            'fittings, p. 34.11), so the true loss is higher than shown. Best '
+            'practice: avoid a double bend at a fan connection.'
+            % (where, a, float(la), b, float(lb), SWIRL_DH, float(window_ft),
+               float(d_h_in)))
+
+
 # ── straight duct RED (Colin, 2026-11-03) ────────────────────────────────────
 
 def outlet_red_ft(le_ft):
@@ -638,7 +657,10 @@ def method_lines(settings):
               'row. An elbow under 0.5 Le of a unit outlet, or under 2 D of an inlet '
               '(D the larger of the unit opening and the first duct; on a rect '
               'elbow H, its side in the plane of the turn), is RED with the '
-              'straight duct before it.' % (
+              'straight duct before it. Two elbows within 6 Dh of a unit '
+              'connection: turning in different planes is RED (swirl or close-'
+              'coupled), in the same plane a double bend WARNING; the added loss '
+              'is not priced.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
                   MITERED_R_OVER_H))

@@ -2447,6 +2447,48 @@ check("case70 the transition and elbow are charged at their model velocity",
       and abs(_items_sum(f70) - f70['subtotal_inwc']) < 1e-9,
       "rows %r fit %r" % (_g70, f70.get('fitting_inwc')))
 
+# ── case71: manual volume damper keywords (Colin, 2026-11-04) ───────────────
+_ca = fitting_tables.classify_accessory
+check("case71 a manual volume damper, a volume damper and an MVD are balancing dampers",
+      _ca('RJA - Manual Volume Damper - Round') == 'damper'
+      and _ca('Volume Damper - Rectangular') == 'damper'
+      and _ca('MVD - Round') == 'damper' and _ca('Damper (MVD)') == 'damper',
+      "%r %r %r" % (_ca('RJA - Manual Volume Damper - Round'), _ca('MVD - Round'),
+                    _ca('Damper (MVD)')))
+check("case71 MVD matches as a whole word only, and fire / smoke names are unchanged",
+      _ca('Xmvdx Coupling') is None and _ca('RJA - Fire Damper - Round') == 'fire_damper'
+      and _ca('RJA - Fire Smoke Damper - Round (Motorized)') == 'fire_damper'
+      and _ca('Sound Attenuator - Rectangular') is None,
+      "%r %r" % (_ca('Xmvdx Coupling'), _ca('Sound Attenuator - Rectangular')))
+
+# ── case72: double bend WARNING (Colin, 2026-11-04) ───────────────────────────
+# Same plane elbows inside 6 Dh (the case56 nodes with one normal): a WARNING
+# naming the first two, not RED, nothing priced for it.
+def _dbl(rec):
+    return [t for k, t in rec.get('fse_notes', ()) if k == 'warn' and 'Double bend' in t]
+_d56s = _dbl(ea56s)
+check("case72 three same plane elbows inside 6 Dh of an exhaust inlet: one double bend WARNING",
+      len(_d56s) == 1 and _d56s[0].startswith(
+          'WARNING: Double bend at the exhaust inlet: elbows 2202 (0.4 ft) and 2204 '
+          '(0.9 ft) follow each other within 6 Dh (3.0 ft, Dh 6 in.) of the fan.')
+      and 'Best practice' in _d56s[0] and 'p. 34.11' in _d56s[0],
+      "notes %r" % (ea56s.get('fse_notes'),))
+check("case72 the double bend is a WARNING in Action required, not RED, and not priced",
+      duct_perf_console.correction('warn', _d56s[0] if _d56s else '')[0] == duct_perf_console.ACTION
+      and ea56s.get('fse_red_ids') == RED56_IN
+      and abs(ea56s.get('fse_inwc', -1) - ea56.get('fse_inwc', -2)) < 1e-12,
+      "red %r fse %r / %r" % (ea56s.get('fse_red_ids'), ea56s.get('fse_inwc'), ea56.get('fse_inwc')))
+check("case72 unreadable plane on one elbow: still two elbows inside 6 Dh, WARNING",
+      len(_dbl(ea56n)) == 1, "notes %r" % (ea56n.get('fse_notes'),))
+check("case72 no WARNING with a RED swirl pair, or with one elbow inside 6 Dh",
+      not _dbl(ea56) and not _dbl(ea56w) and not _dbl(ra56),
+      "%r %r" % (_dbl(ea56), _dbl(ea56w)))
+sa72 = _fse_run(_swirl_nodes((1.0, 0.0, 0.0), (1.0, 0.0, 0.0)), c56,
+                _swirl_ducts('Supply Air'), {2210: (100.0, 'Supply Air', 'SD-72')}, 2200)
+check("case72 a supply outlet double bend: the same WARNING at the supply outlet",
+      len(_dbl(sa72)) == 1 and _dbl(sa72)[0].startswith('WARNING: Double bend at the supply outlet'),
+      "notes %r" % (sa72.get('fse_notes'),))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

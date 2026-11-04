@@ -3507,6 +3507,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 notes.append(('red', fan_system_effect.swirl_text(
                     role_here, where, pair, swin, d_h)))
                 rec['red'].update((pair[0][0], pair[1][0]))
+            elif len(elbows) >= 2:
+                # A double bend (Colin, 2026-11-04): two elbows inside 6 Dh
+                # that are not a different-plane pair. Only the first is in
+                # the fan system effect, so the real loss is higher. A
+                # WARNING, not RED, and nothing extra is priced.
+                notes.append(('warn', fan_system_effect.double_elbow_text(
+                    where, [(e, l, None) for e, l in elbows], swin, d_h)))
         else:
             fan_system_effect.log.info('swirl check: %s first duct Dh NOT FOUND, '
                                        'not checked', where)

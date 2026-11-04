@@ -25,6 +25,7 @@ IronPython 2.7 / pyRevit -- no f-strings, no walrus, no nonlocal.
 """
 
 import logging
+import re
 
 import vav_checks
 
@@ -442,9 +443,15 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
 # rounded up, not an RJA published number. The report prints each component's
 # count and the rate applied, so the number in use is always visible.
 _ACCESSORY_ROLES = (
-    ('damper',      ('balancing damper', 'balance damper', 'obd', 'opposed blade')),
+    ('damper',      ('balancing damper', 'balance damper', 'obd', 'opposed blade',
+                     'volume damper')),
     ('fire_damper', ('fire damper', 'smoke damper', 'fire/smoke', 'fire smoke')),
     ('backdraft',   ('backdraft', 'back draft', 'gravity damper')),
+)
+# Short tags matched as whole words only, so 'mvd' never hits inside a longer
+# word (Colin, 2026-11-04: a manual volume damper is a balancing damper).
+_ACCESSORY_WORDS = (
+    ('damper', ('mvd',)),
 )
 
 
@@ -456,6 +463,10 @@ def classify_accessory(family_name):
     for key, keywords in _ACCESSORY_ROLES:
         for kw in keywords:
             if kw in name:
+                return key
+    for key, words in _ACCESSORY_WORDS:
+        for w in words:
+            if re.search(r'(?<![a-z0-9])%s(?![a-z0-9])' % re.escape(w), name):
                 return key
     log.info('classify_accessory: not priced -> %r', family_name)
     return None
