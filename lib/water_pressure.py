@@ -72,8 +72,14 @@ FITTING_LABELS = {
 }
 
 # Valve kind from the accessory's family or type name. Words, not exact
-# family names, so any manufacturer's valve family is recognised.
-_VALVE_WORDS = (("butterfly", "butterfly"), ("ball", "ball"),
+# family names, so any manufacturer's valve family is recognised. First match
+# wins. A thermostatic mixing valve is priced as a ball valve until a
+# refined mixing valve calculation exists (Colin, 2026-11-04); it is listed
+# first so a mixing valve name that also says "check" or "ball" still reads
+# as a mixing valve. Circuit setters are deliberately absent: they sit on the
+# return, where the pump head charges their design drop (water_pump).
+_VALVE_WORDS = (("mixing", "ball"),
+                ("butterfly", "butterfly"), ("ball", "ball"),
                 ("gate", "gate"), ("check", "check"))
 
 # A pressure reducing valve holds its set pressure downstream, so it is not a

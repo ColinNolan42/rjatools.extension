@@ -75,6 +75,33 @@ class TestEquivalentLength(unittest.TestCase):
         self.assertEqual(water_pressure.equivalent_length_ft("elbow_90", 0.9)[0], 2.5)
 
 
+class _Named(object):
+    def __init__(self, family, type_name=""):
+        self.family_name = family
+        self.type_name = type_name
+
+
+class TestValveKind(unittest.TestCase):
+
+    def test_mixing_is_ball(self):
+        for family in ("Thermostatic Mixing Valve", "Leonard TM-26 Mixing Valve",
+                       "LFMMV Master Mixing Valve with Integral Check",
+                       "Mixing Valve - Ball Type"):
+            self.assertEqual(water_pressure.valve_kind(_Named(family)), "ball",
+                             family)
+
+    def test_existing_words_unchanged(self):
+        self.assertEqual(water_pressure.valve_kind(_Named("RJA - Check Valve - 0-.375-4 Inch")), "check")
+        self.assertEqual(water_pressure.valve_kind(_Named("RJA - Double Check Valve - 2.5-10 Inch")), "check")
+        self.assertEqual(water_pressure.valve_kind(_Named("BALL VALVE")), "ball")
+        self.assertEqual(water_pressure.valve_kind(_Named("RJA - Gate Valve")), "gate")
+
+    def test_circuit_setter_still_unknown(self):
+        # Circuit setters sit on the return; the pump head charges their
+        # design drop, so the outlet pressure walk does not price them.
+        self.assertIsNone(water_pressure.valve_kind(_Named("RJA - Circuit Setter - 0.5-2 Inch")))
+
+
 def fitting(g, nid, center, ends):
     """ends: {other id: (x, y, z)} connector origins."""
     node = add_node(g, nid, water_graph.KIND_FITTING)
@@ -236,6 +263,37 @@ class TestPathsAndBudget(unittest.TestCase):
         cold = [o for o in result["outlets"] if o.system == COLD][0]
         self.assertTrue(cold.behind_prv)
         self.assertIsNone(cold.passes)
+
+    def _hot_mixing_valve(self, g, drop=None):
+        # A point of use mixing valve between the hot pipe and the lavatory,
+        # 1 in so Table E103.3(6) has a ball valve value (0.5 ft).
+        valve = add_node(g, 8, water_graph.KIND_ACCESSORY)
+        valve.family_name = "Thermostatic Mixing Valve"
+        valve.type_name = "1 in"
+        valve.connectors = [{"diameter_in": 1.0}]
+        valve.device_drop_psi = drop
+        g.nodes[3].parent_by_system[HOT] = 8
+        valve.parent_by_system[HOT] = 6
+        return valve
+
+    def test_mixing_valve_priced_as_ball(self):
+        g, segs = build()
+        self._hot_mixing_valve(g)
+        result = water_pressure.analyze(g, segs, start_psi=50.0)
+        hot = [o for o in result["outlets"] if o.system == HOT][0]
+        rate = water_pressure.friction_psi_per_100ft(4.0, 0.785)
+        self.assertAlmostEqual(hot.fitting_psi, 0.5 * rate / 100.0, places=6)
+        self.assertEqual(hot.device_psi, 0.0)
+        self.assertFalse(any("not a known valve" in n for n in hot.notes))
+        self.assertIsNotNone(hot.passes)
+
+    def test_mixing_valve_device_drop_overrides(self):
+        g, segs = build()
+        self._hot_mixing_valve(g, drop=3.0)
+        result = water_pressure.analyze(g, segs, start_psi=50.0)
+        hot = [o for o in result["outlets"] if o.system == HOT][0]
+        self.assertAlmostEqual(hot.device_psi, 3.0, places=6)
+        self.assertAlmostEqual(hot.fitting_psi, 0.0, places=6)
 
     def test_unreached_outlet_not_in_static_warning(self):
         g, segs = build()
