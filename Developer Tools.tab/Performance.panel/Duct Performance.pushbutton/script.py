@@ -282,7 +282,7 @@ _SETTINGS_XAML = '''
                                      ToolTip="Percent added to the external static total. Does not affect the per duct checks. Range 0 to 100."/>
                             <TextBlock Text="% added to the external static total" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <StackPanel x:Name="pnl_filter" Orientation="Horizontal" Margin="0,8,0,0">
                             <CheckBox x:Name="cb_filter" Content="Include return filter" VerticalAlignment="Center"
                                       ToolTip="A known filter drop added once to the return path. Leave off when the filter is inside the unit and already deducted from its published ESP."/>
                             <TextBox x:Name="tb_filter" Width="56" Margin="8,0,6,0"
@@ -551,6 +551,7 @@ def _show_velocity_settings_xaml(use_theme):
     pnl_static = N('pnl_static')
     tb_sf = N('tb_sf')
     cb_filter = N('cb_filter')
+    pnl_filter = N('pnl_filter')
     cb_exh_cap = N('cb_exh_cap')
     tb_filter = N('tb_filter')
     cb_fse = N('cb_fse')
@@ -951,6 +952,10 @@ def _show_velocity_settings_xaml(use_theme):
         # both ticked (Colin, 2026-11-02).
         exh = master and bool(rb_scope_exhaust.IsChecked)
         pnl_exh_static.Visibility = Visibility.Visible if exh else Visibility.Collapsed
+        # An exhaust fan has no return path, so the return filter is not
+        # asked for under Exhaust System (Colin, 2026-11-04).
+        pnl_filter.Visibility = (Visibility.Collapsed if bool(rb_scope_exhaust.IsChecked)
+                                 else Visibility.Visible)
         # The medium pressure supply row shows with VAV System alone.
         vis = Visibility.Visible if bool(rb_scope_vav.IsChecked) else Visibility.Collapsed
         for el in mp_row:
@@ -1036,7 +1041,9 @@ def _show_velocity_settings_xaml(use_theme):
                 calc_basis[k] = v
 
         filter_inwc = 0.0
-        if ext_static and bool(cb_filter.IsChecked):
+        # Exhaust System: no return path, the hidden filter box is ignored.
+        if (ext_static and bool(cb_filter.IsChecked)
+                and not bool(rb_scope_exhaust.IsChecked)):
             f = num(tb_filter, 'Return filter drop', 'nonneg')
             if f is not None:
                 filter_inwc = f
@@ -1499,6 +1506,16 @@ def _show_velocity_settings_dialog_legacy():
     filt_panel.Children.Add(filt_suffix)
     outer.Children.Add(filt_panel)
 
+    # Exhaust System: no return path, so the return filter is not asked for
+    # (Colin, 2026-11-04).
+    def _sync_filter(s=None, e=None):
+        on = not bool(rb_exhaust.IsChecked)
+        cb_filter.IsEnabled = on
+        tb_filter.IsEnabled = on
+    rb_exhaust.Checked += _sync_filter
+    rb_exhaust.Unchecked += _sync_filter
+    _sync_filter()
+
     # The roof or wall cap on an inline exhaust fan's discharge (Colin,
     # 2026-11-02), priced at the Wall / roof cap component drop.
     cb_exh_cap = CheckBox()
@@ -1758,7 +1775,7 @@ def _show_velocity_settings_dialog_legacy():
                     return
                 calc_basis[k] = v
             filter_inwc = 0.0
-            if bool(cb_filter.IsChecked):
+            if bool(cb_filter.IsChecked) and not bool(rb_exhaust.IsChecked):
                 filter_inwc = float(tb_filter.Text)
                 if filter_inwc < 0:
                     forms.alert('The return filter drop cannot be negative.',
@@ -6119,7 +6136,11 @@ def main():
         _fse_assume = list(_fse_assume) + [a for a in fse_extra_assume
                                            if a not in _fse_assume]
         _method += ' ' + _fse_method
-        if filter_inwc > 0.0:
+        # The filter clause only when a return run was priced: an exhaust
+        # run has no return path (Colin, 2026-11-04).
+        _return_priced = any('Return Air' in (_pc or {})
+                             for _pc in (critical or {}).values())
+        if filter_inwc > 0.0 and _return_priced:
             _not_inc = ('NOT INCLUDED: coil and cabinet, already in the published ESP. '
                         'Return filter IS included as a {:.3f} in. wc known drop.'.format(
                             filter_inwc))
