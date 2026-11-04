@@ -10,6 +10,7 @@
 #
 # IronPython 2.7  -  Revit API via Autodesk.Revit.DB
 
+import os
 import sys
 from Autodesk.Revit.DB import (
     BuiltInParameter,
@@ -952,6 +953,96 @@ def get_element_by_id(doc, element_id_int):
         return None
 
 
+def lib_folder():
+    """The folder this lib was loaded from, for the console header, so a
+    stale second copy of the extension shows at once (G7C, 2026-11-04)."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def is_valid_element(element):
+    """False when element is None or Revit has deleted it.
+
+    Element.IsValidObject turns False when the element is deleted, for
+    example a fitting Revit replaces when the pipes on it change size. Every
+    other property read on such an element raises.
+    """
+    if element is None:
+        return False
+    try:
+        return bool(getattr(element, "IsValidObject", True))
+    except Exception:
+        return False
+
+
+def current_element(doc, element_id_int):
+    """The element now in the model under this id, or None when it is gone."""
+    element = get_element_by_id(doc, element_id_int)
+    return element if is_valid_element(element) else None
+
+
+def _distance(xyz, point):
+    return ((xyz.X - point[0]) ** 2 + (xyz.Y - point[1]) ** 2 +
+            (xyz.Z - point[2]) ** 2) ** 0.5
+
+
+def find_replacement_fitting(pipes, location_xyz, known_ids):
+    """The fitting Revit placed where a deleted one was.
+
+    When pipes are resized Revit may delete a fitting and place another
+    (a coupling between two pipes that now differ becomes a transition, or
+    the routing preferences pick another family for the new size). The
+    replacement sits on the end of the same pipes. For each pipe that still
+    exists, the connector nearest the old fitting's location is read and the
+    first element on it that is not a pipe, not a system and not already in
+    the graph is returned.
+
+    Args:
+        pipes:        the pipes that touched the deleted fitting.
+        location_xyz: [x, y, z] of the deleted fitting, in feet.
+        known_ids:    set of element ids already in the graph (never
+                      returned, so a fitting is not sized twice).
+
+    Returns:
+        (element, distance_ft) or (None, None).
+    """
+    fn = "find_replacement_fitting"
+    if not location_xyz:
+        _log_entry("WARNING", fn, None, "No location for the old fitting.")
+        return None, None
+    best, best_d = None, None
+    for pipe in pipes:
+        if not is_valid_element(pipe):
+            continue
+        manager = _get_connector_manager(pipe)
+        if manager is None:
+            continue
+        nearest, nearest_d = None, None
+        for connector in manager.Connectors:
+            try:
+                d = _distance(connector.Origin, location_xyz)
+            except Exception:
+                continue
+            if nearest_d is None or d < nearest_d:
+                nearest, nearest_d = connector, d
+        if nearest is None or not nearest.IsConnected:
+            continue
+        for ref in nearest.AllRefs:
+            owner = ref.Owner
+            if owner is None or not is_valid_element(owner):
+                continue
+            if _is_mep_system(owner) or is_pipe(owner):
+                continue
+            oid = _safe_eid(owner)
+            if oid is None or oid == _safe_eid(pipe) or oid in known_ids:
+                continue
+            if best_d is None or nearest_d < best_d:
+                best, best_d = owner, nearest_d
+    _log_entry("INFO", fn, _safe_eid(best) if best is not None else None,
+               "Replacement fitting {}.".format(
+                   "found" if best is not None else "NOT FOUND"))
+    return best, best_d
+
+
 def get_last_phase_id(doc):
     """Id of the project's LAST phase (normally New Construction), as an int.
 
@@ -984,7 +1075,10 @@ def get_created_phase_id(element):
         _log_entry("ERROR", fn, None, "Element is None.")
         return None
 
-    eid = eid_int(element.Id)
+    # _safe_eid: an element Revit deleted (a fitting replaced when its pipes
+    # were resized) raises on .Id, and that once rolled back every fitting
+    # in Size Gas (G7C, 2026-11-04).
+    eid = _safe_eid(element)
     try:
         phase_id = eid_int(element.CreatedPhaseId)
     except Exception as e:

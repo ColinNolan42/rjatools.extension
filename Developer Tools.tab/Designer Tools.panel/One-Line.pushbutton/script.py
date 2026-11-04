@@ -1678,6 +1678,7 @@ def _draw_notes_block(doc, view, table_id, inlet_psi,
 
 def main():
     output.print_md("# Gas Piping One-Line Diagram")
+    output.print_md("Tools loaded from `{}`".format(revit_helpers.lib_folder()))
     output.print_md("---")
 
     revit_helpers.clear_log()

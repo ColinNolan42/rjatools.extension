@@ -644,6 +644,7 @@ def main():
     output.print_md('---')
     ts = datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
     output.print_md('Timestamp: `{}`'.format(ts))
+    output.print_md('Tools loaded from `{}`'.format(revit_helpers.lib_folder()))
 
     revit_helpers.clear_log()
 

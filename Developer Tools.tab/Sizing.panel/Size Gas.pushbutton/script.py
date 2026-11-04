@@ -102,69 +102,135 @@ def _resize_fittings(graph, new_sizes, doc):
         parameter) and failures (list of str, real write failures).
     """
     counts = {"resized": 0, "no_sized_pipe": 0, "existing": 0,
-              "no_element": 0, "appliance": 0, "failures": []}
+              "no_element": 0, "appliance": 0, "replaced": 0,
+              "failures": []}
+    done_ids = set()   # replacement fittings already sized this run
 
+    # One guard per fitting: an exception on one fitting is one failure
+    # line, never the rollback of every fitting (G7C, 2026-11-04).
     for node in graph.nodes.values():
         if node.node_type not in ("tee", "fitting", "elbow", "fixture"):
             continue
-        if node.element is None:
-            counts["no_element"] += 1
-            continue
-
-        if not revit_helpers.is_new_construction(node.element, doc):
-            counts["existing"] += 1
-            revit_helpers._log_entry(
-                "INFO", "_resize_fittings", node.element_id,
-                "Existing phase (or phase unreadable): not resized.")
-            continue
-
-        # Find the highest-load connected new pipe to determine target size
-        target_size = None
-        max_load    = -1
-        for edge in graph.edges.values():
-            if (edge.from_node_id == node.element_id or
-                    edge.to_node_id == node.element_id):
-                if (edge.element_id in new_sizes and
-                        edge.cumulative_load_mbh > max_load):
-                    max_load    = edge.cumulative_load_mbh
-                    target_size = new_sizes[edge.element_id]
-
-        if target_size is None:
-            counts["no_sized_pipe"] += 1
-            revit_helpers._log_entry(
-                "INFO", "_resize_fittings", node.element_id,
-                "No new construction pipe sized this run touches it: not "
-                "resized.")
-            continue
-
-        # An appliance is resized only when it is a cap style family with a
-        # 'Nominal Radius' (the cap first, then the stub pipe, STEP 9). Real
-        # equipment has no such parameter and is left alone, not a failure.
-        if node.is_gas_fixture and _lookup_param(
-                node.element, "Nominal Radius") is None:
-            counts["appliance"] += 1
-            revit_helpers._log_entry(
-                "INFO", "_resize_fittings", node.element_id,
-                "Appliance with no 'Nominal Radius': not resized.")
-            continue
-
-        nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(target_size)
-        if nominal_inches is None:
+        try:
+            _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids)
+        except Exception as e:
             counts["failures"].append(
-                "Fitting {} ({}): unrecognised nominal size '{}'.".format(
-                    node.element_id, node.family_name, target_size))
-            continue
-
-        ok, approach = revit_helpers.set_fitting_size(
-            node.element, nominal_inches)
-        if ok:
-            counts["resized"] += 1
-        else:
-            counts["failures"].append(
-                "Fitting {} ({}): could not set size to {}\" ({}).".format(
-                    node.element_id, node.family_name, target_size, approach))
+                "Fitting {} ({}): {}".format(
+                    node.element_id, node.family_name, str(e)))
+            revit_helpers._log_entry(
+                "ERROR", "_resize_fittings", node.element_id,
+                "Resize raised: {}".format(str(e)))
 
     return counts
+
+
+def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids):
+    """Resize one fitting node. See _resize_fittings for the rules.
+
+    The node's element is re-read first. Revit may have deleted it when the
+    pipes were resized in the pipe transaction and placed another fitting;
+    that replacement is found on the connected pipes and sized instead.
+    """
+    if node.element is None:
+        counts["no_element"] += 1
+        return
+
+    element  = node.element
+    replaced = False
+    if not revit_helpers.is_valid_element(element):
+        element = revit_helpers.current_element(doc, node.element_id)
+    if element is None:
+        pipes = [e.pipe for e in graph.edges.values()
+                 if node.element_id in (e.from_node_id, e.to_node_id)
+                 and e.pipe is not None]
+        element, _d = revit_helpers.find_replacement_fitting(
+            pipes, node.location_xyz, set(graph.nodes.keys()) | done_ids)
+        if element is None:
+            counts["failures"].append(
+                "Fitting {} ({}): deleted by Revit when its pipes were "
+                "resized, and no replacement fitting was found on its "
+                "pipes.".format(node.element_id, node.family_name))
+            return
+        replaced = True
+        revit_helpers._log_entry(
+            "INFO", "_resize_fittings", node.element_id,
+            "Deleted by Revit; replacement {} sized instead.".format(
+                revit_helpers.eid_int(element.Id)))
+
+    if not revit_helpers.is_new_construction(element, doc):
+        counts["existing"] += 1
+        revit_helpers._log_entry(
+            "INFO", "_resize_fittings", node.element_id,
+            "Existing phase (or phase unreadable): not resized.")
+        return
+
+    # Find the highest-load connected new pipe to determine target size
+    target_size = None
+    max_load    = -1
+    for edge in graph.edges.values():
+        if (edge.from_node_id == node.element_id or
+                edge.to_node_id == node.element_id):
+            if (edge.element_id in new_sizes and
+                    edge.cumulative_load_mbh > max_load):
+                max_load    = edge.cumulative_load_mbh
+                target_size = new_sizes[edge.element_id]
+
+    if target_size is None:
+        counts["no_sized_pipe"] += 1
+        revit_helpers._log_entry(
+            "INFO", "_resize_fittings", node.element_id,
+            "No new construction pipe sized this run touches it: not "
+            "resized.")
+        return
+
+    # An appliance is resized only when it is a cap style family with a
+    # 'Nominal Radius' (the cap first, then the stub pipe, STEP 9). Real
+    # equipment has no such parameter and is left alone, not a failure.
+    if node.is_gas_fixture and _lookup_param(
+            element, "Nominal Radius") is None:
+        counts["appliance"] += 1
+        revit_helpers._log_entry(
+            "INFO", "_resize_fittings", node.element_id,
+            "Appliance with no 'Nominal Radius': not resized.")
+        return
+
+    nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(target_size)
+    if nominal_inches is None:
+        counts["failures"].append(
+            "Fitting {} ({}): unrecognised nominal size '{}'.".format(
+                node.element_id, node.family_name, target_size))
+        return
+
+    ok, approach = revit_helpers.set_fitting_size(element, nominal_inches)
+    if ok:
+        counts["resized"] += 1
+        if replaced:
+            counts["replaced"] += 1
+            done_ids.add(revit_helpers.eid_int(element.Id))
+    else:
+        counts["failures"].append(
+            "Fitting {} ({}): could not set size to {}\" ({}).".format(
+                node.element_id, node.family_name, target_size, approach))
+
+
+def _size_one_stub(s, graph):
+    """Size one fixture stub pipe (STEP 9). True when it was written."""
+    edge = graph.edges.get(s["pipe_id"])
+    if (edge is None or edge.pipe is None
+            or not revit_helpers.is_valid_element(edge.pipe)):
+        revit_helpers._log_entry(
+            "ERROR", "size_gas_stubs", s["pipe_id"],
+            "Stub pipe NOT FOUND in graph, or deleted.")
+        return False
+    nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(
+        s["recommended_size"])
+    if nominal_inches is None:
+        revit_helpers._log_entry(
+            "ERROR", "size_gas_stubs", s["pipe_id"],
+            "Unrecognised nominal size '{}'.".format(s["recommended_size"]))
+        return False
+    ok, _approach = _set_pipe_diameter(edge.pipe, nominal_inches)
+    return ok
 
 
 def _lookup_param(element, name):
@@ -277,6 +343,7 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result,
 
 def main():
     output.print_md("# Size Gas - IFGC Longest Run Method")
+    output.print_md("Tools loaded from `{}`".format(revit_helpers.lib_folder()))
     output.print_md("---")
 
     revit_helpers.clear_log()
@@ -588,8 +655,16 @@ def main():
     unnamed        = [n for n in fixture_nodes
                       if n.fixture_name in ("", "UNNAMED", None)]
 
+    # Table Intended Use load limits (2024 IFGC Table 402.4(13): 150 CFH).
+    # The meter carries the whole system, so the total load is checked.
+    total_mbh = sum(n.gas_load_mbh for n in fixture_nodes)
+    table_warnings = sizing_engine.table_limit_warnings(
+        table_id,
+        sizing_engine.mbh_to_cfh(total_mbh, heat_content_btu_per_cf),
+        total_mbh)
+
     if (no_load or unnamed or graph.disconnected or prv_warnings
-            or existing_warnings):
+            or existing_warnings or table_warnings):
         output.print_md("---")
         output.print_md("## :warning: Pre-Sizing Warnings")
 
@@ -598,6 +673,9 @@ def main():
 
         for w in prv_warnings:
             output.print_md("**PRV:** {}".format(w))
+
+        for w in table_warnings:
+            output.print_md("**IFGC table limit:** {}".format(w))
 
         if no_load:
             output.print_md(
@@ -756,7 +834,7 @@ def main():
     # ------------------------------------------------------------------
     output.print_md("**Resizing fittings (Nominal Radius parameter)...**")
     fit = {"resized": 0, "no_sized_pipe": 0, "existing": 0,
-           "no_element": 0, "appliance": 0, "failures": []}
+           "no_element": 0, "appliance": 0, "replaced": 0, "failures": []}
     fit_committed = False
 
     t2 = Transaction(doc, "RJA Tools - Resize Pipe Fittings")
@@ -771,7 +849,7 @@ def main():
         output.print_md(
             ":warning: Fitting resize transaction failed: {}".format(str(e)))
         fit = {"resized": 0, "no_sized_pipe": 0, "existing": 0,
-               "no_element": 0, "appliance": 0,
+               "no_element": 0, "appliance": 0, "replaced": 0,
                "failures": ["Fitting transaction rolled back: {}".format(
                    str(e))]}
 
@@ -783,6 +861,11 @@ def main():
                 "with no size parameter, {} failed.".format(
                     fit["resized"], fit["existing"], fit["no_sized_pipe"],
                     fit["appliance"], len(fit["failures"])))
+            if fit.get("replaced"):
+                output.print_md(
+                    ":information_source: {} fitting(s) were replaced by "
+                    "Revit when their pipes were resized; the replacement "
+                    "was sized.".format(fit["replaced"]))
             for f in fit["failures"]:
                 output.print_md(":warning: {}".format(f))
         except Exception as e:
@@ -805,27 +888,19 @@ def main():
         stub_committed = False
         try:
             for s in skipped_stubs:
-                edge = graph.edges.get(s["pipe_id"])
-                if edge is None or edge.pipe is None:
+                # One guard per stub: one bad stub never rolls back the rest.
+                try:
+                    if _size_one_stub(s, graph):
+                        stub_success += 1
+                    else:
+                        stub_fail += 1
+                except Exception as e:
                     stub_fail += 1
                     revit_helpers._log_entry(
                         "ERROR", "size_gas_stubs", s["pipe_id"],
-                        "Stub pipe NOT FOUND in graph.")
-                    continue
-                nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(
-                    s["recommended_size"])
-                if nominal_inches is None:
-                    stub_fail += 1
-                    revit_helpers._log_entry(
-                        "ERROR", "size_gas_stubs", s["pipe_id"],
-                        "Unrecognised nominal size '{}'.".format(
-                            s["recommended_size"]))
-                    continue
-                ok, _approach = _set_pipe_diameter(edge.pipe, nominal_inches)
-                if ok:
-                    stub_success += 1
-                else:
-                    stub_fail += 1
+                        "Stub resize raised: {}".format(str(e)))
+                    output.print_md(":warning: Stub pipe {}: {}".format(
+                        s["pipe_id"], str(e)))
             doc.Regenerate()
             t3.Commit()
             stub_committed = True
@@ -918,6 +993,9 @@ def _print_summary(result, existing_check, success_count, stub_success,
         output.print_md("| Existing pipes not checked | {} |".format(
             len(existing_unchecked)))
     output.print_md("| Fittings + caps resized | {} |".format(fit["resized"]))
+    if fit.get("replaced"):
+        output.print_md("| Fittings replaced by Revit, replacement sized | "
+                        "{} |".format(fit["replaced"]))
     output.print_md("| Existing fittings left alone | {} |".format(
         fit["existing"]))
     output.print_md("| Fittings with no new pipe sized | {} |".format(

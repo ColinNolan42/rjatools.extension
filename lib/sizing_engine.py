@@ -608,6 +608,45 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         "segment_detail":         segment_detail,
     }
 
+# ---------------------------------------------------------------------------
+# Table load limits (Intended Use rows)
+# ---------------------------------------------------------------------------
+
+# Tables whose Intended Use row caps the load they may size. 2024 IFGC Table
+# 402.4(13) Intended Use: "Pipe sizing between point of delivery and the
+# house line regulator. Total load supplied by a single house line regulator
+# not exceeding 150 cubic feet per hour." (PDF pages 149 and 150, read from
+# the page image, 2026-11-04.) Tables 402.4(12) and (14) carry no such row.
+TABLE_LOAD_LIMITS_CFH = {
+    "402.4(13)": (150.0, "total load supplied by a single house line "
+                         "regulator"),
+}
+
+
+def table_limit_warnings(table_id, demand_cfh, demand_mbh):
+    """Pre-sizing warnings for a table used above its Intended Use load.
+
+    Args:
+        table_id:   the IFGC table the system is sized on.
+        demand_cfh: the total system load in CFH (the meter sees it all).
+        demand_mbh: the same load in MBH, for the message.
+
+    Returns:
+        list of warning strings, empty when the table has no limit or the
+        load is within it.
+    """
+    limit = TABLE_LOAD_LIMITS_CFH.get(table_id)
+    if limit is None or demand_cfh is None:
+        return []
+    limit_cfh, use = limit
+    if float(demand_cfh) <= limit_cfh:
+        return []
+    return ["Table {} is limited to {:.0f} CFH (Intended Use: {}). This "
+            "system carries {:.0f} CFH ({:.0f} MBH). Use Table 402.4(12) or "
+            "(14), or size per IFGC A104.".format(
+                table_id, limit_cfh, use, float(demand_cfh),
+                float(demand_mbh))]
+
 
 # ---------------------------------------------------------------------------
 # Calculation basis
