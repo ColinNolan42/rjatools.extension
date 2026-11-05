@@ -6395,6 +6395,27 @@ def main():
         clearance_notes = []
         branch_duct_ids = set(eid_int(k) for k, v in branch_ctx.items() if v is not None)
 
+        # A short stub straight off a unit connection that runs into a
+        # transition is the connection adapter at the unit's own size, not an
+        # oversized duct: never PURPLE (Colin, 2026-11-05, TB-M05C / M12C /
+        # M13C exhaust fans, 12x12 stub then transition to 10x10).
+        _ADAPTER_MAX_FT = 2.0
+        _parent_of = {}
+        for _p, _cs in all_children.items():
+            for _c in _cs:
+                _parent_of.setdefault(_c, _p)
+        def _unit_adapter_stub(nid, dr):
+            par = all_nodes.get(_parent_of.get(nid))
+            if par is None or not hvac_graph.is_equipment(par):
+                return False
+            if (getattr(dr, 'length_ft', 0.0) or 0.0) > _ADAPTER_MAX_FT:
+                return False
+            kids = [all_nodes.get(c) for c in all_children.get(nid, [])]
+            return (len(kids) == 1 and kids[0] is not None
+                    and hvac_graph.is_fitting(kids[0])
+                    and fitting_tables.classify_fitting(
+                        hvac_graph.fitting_family_name(kids[0])) == 'transition')
+
         for eid, dr in all_duct_results.items():
             downstream_h, downstream_elem = hvac_graph.downstream_height_elem(
                 eid_int(eid), all_nodes, all_children)
@@ -6410,6 +6431,10 @@ def main():
             else:
                 label, green_cap, reason, branch_res = _label_duct(
                     dr, custom_limits, tol_pct, downstream_h, branch_ctx.get(eid))
+                if label == 'PURPLE' and _unit_adapter_stub(eid_int(eid), dr):
+                    hvac_graph.log.info('duct %s: unit connection adapter stub, '
+                                        'not judged oversized', eid_int(eid))
+                    label, reason = 'GREEN', ''
             if dr.element_id in vav_red:
                 label, reason = 'RED', vav_red[dr.element_id]
             # The straight duct before an elbow under the straight duct line
