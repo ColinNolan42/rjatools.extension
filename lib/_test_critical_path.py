@@ -91,6 +91,12 @@ def _duct_continues_past(nid, nodes, children):
                for cid in children.get(nid, []))
 
 
+def _duct_is_capped(nid, nodes, children):
+    """True if nid has a child end cap (node kind 'cap')."""
+    return any(nodes.get(cid) is not None and nodes[cid].kind == 'cap'
+               for cid in children.get(nid, []))
+
+
 def _is_fitting(elem):
     return elem is not None and elem.kind in _FITTING_KINDS
 
@@ -164,6 +170,7 @@ hvac_graph.equipment_connection_geometry = _equipment_connection_geometry
 hvac_graph.duct_friction_loss_per_100ft = _duct_friction_loss_per_100ft
 hvac_graph.takeoff_child_ids       = _takeoff_child_ids
 hvac_graph.duct_continues_past     = _duct_continues_past
+hvac_graph.duct_is_capped          = _duct_is_capped
 hvac_graph.is_fitting              = _is_fitting
 hvac_graph.is_accessory            = _is_accessory
 hvac_graph.is_equipment            = _is_equipment
@@ -1179,10 +1186,20 @@ d31 = build([(901, 0.10, 20.0, 1000.0, 4.0, 'Supply Air')])
 t31 = {910: (4000.0, 'Supply Air', 'SD-31')}
 on31 = _fse_run(n31, c31, d31, t31, 900)
 off31 = _fse_run(n31, c31, d31, t31, 900, fan=None)
-check("case31 straight 20 ft from the outlet (Le 5.71 ft): fse 0, no take-off line, total as with it off",
-      on31.get('fse_inwc') == 0.0 and not _fse_items(on31)
+check("case31 straight 20 ft from the outlet (Le 5.71 ft): fse 0, total as with it off",
+      on31.get('fse_inwc') == 0.0
       and abs(on31['total_inwc'] - off31['total_inwc']) < 1e-12,
       "on %r off %r" % (on31.get('total_inwc'), off31.get('total_inwc')))
+# Outlet and inlet always read apart (Colin, 2026-11-05): an unpriced
+# connection still prints its own take-off row at 0.000 with the reason.
+_it31 = _fse_items(on31)
+check("case31 one 0.000 take-off row 'Fan system effect, supply outlet', none: no elbow within Le",
+      len(_it31) == 1 and _it31[0][3] == 0.0
+      and _it31[0][4][0] == 'Fan system effect, supply outlet'
+      and _it31[0][4][1].startswith('none: no elbow within Le (5.7 ft)'),
+      "items %r" % (_it31,))
+check("case31 fan system effect off: no fan system effect row at all",
+      not _fse_items(off31), "items %r" % (_fse_items(off31),))
 
 # 32: elbow right on the outlet (L 0): DWDI Ab/Ao 0.5, worst of A-D is
 #     SR7-11 C 3.80 (A 2.20, B 3.60, D 3.20): GRAY (Colin, 2026-10-29).
@@ -2535,6 +2552,36 @@ check("case73 a tap 0.05 ft on shares the station: no end of main turn",
       _n73.get('terminal_id') == 722 and not any('end of main' in r[2] for r in _tap_rows(_n73)), "rows %r" % (_tap_rows(_n73),))
 check("case73 a tap 0.5 ft on is its own station: the last tap is the end of main turn",
       _f73.get('terminal_id') == 722 and any('end of main' in r[2] for r in _tap_rows(_f73)), "rows %r" % (_tap_rows(_f73),))
+
+# ── case75: a CAPPED main's last tap is a tap (Colin, 2026-11-05, TB-M10C) ───
+# The case73 layout with the second tap 0.5 ft on (its own station, the last
+# tap) and an end cap 703 on main 700: the main runs on past the tap to the
+# cap, so the last tap prices from the tap table, never as an end of main turn.
+def _run75(cap):
+    ch = {699: [700], 700: [701, 702] + ([703] if cap else []),
+          701: [711], 702: [712], 711: [721], 712: [722]}
+    n = {700: Elem(kind='duct', tap_pos={701: 8.0, 702: 8.5}),
+         701: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+         702: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+         711: Elem(kind='duct'), 712: Elem(kind='duct')}
+    if cap:
+        n[703] = Elem(kind='cap', family_name='Rectangular Endcap', is_round=False)
+    d = build([(700, 0.0, 10.0, 1000.0, 1.0, 'Supply Air'),
+               (711, 0.0, 5.0, 300.0 / 0.35, 0.35, 'Supply Air'),
+               (712, 0.5, 5.0, 700.0 / 0.35, 0.35, 'Supply Air')])
+    for _dr in d.values():
+        _dr.size = '12x12"'
+    t = {721: (300.0, 'Supply Air', 'T-A'), 722: (700.0, 'Supply Air', 'T-B')}
+    return crit([699], ch, d, t, n).get(699, {}).get('Supply Air', {})
+_o75, _c75 = _run75(False), _run75(True)
+check("case75 uncapped: the last tap is still the end of main turn (2026-10-26 ruling)",
+      any('end of main' in r[2] for r in _tap_rows(_o75)), "rows %r" % (_tap_rows(_o75),))
+check("case75 capped: the last tap is a tap, not an end of main turn",
+      _tap_rows(_c75) and not any('end of main' in r[2] for r in _tap_rows(_c75)),
+      "rows %r" % (_tap_rows(_c75),))
+check("case75 capped: the tap prices higher than the turn, so the run total rises",
+      _c75.get('total_inwc', 0) > _o75.get('total_inwc', 0),
+      "capped %r uncapped %r" % (_c75.get('total_inwc'), _o75.get('total_inwc')))
 
 # ── case74: damper in the fan clearance WARNING (F1, Colin 2026-11-04) ───────
 # 24 x 24 outlet at 4000 cfm (Le 5.71 ft): duct 741 (l1 ft), accessory 742,

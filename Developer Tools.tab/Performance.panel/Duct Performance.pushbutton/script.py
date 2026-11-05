@@ -2470,6 +2470,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             cont_cache[nid] = hvac_graph.duct_continues_past(nid, all_nodes, all_children)
         return cont_cache[nid]
 
+    cap_cache = {}
+    def _capped(nid):
+        if nid not in cap_cache:
+            cap_cache[nid] = hvac_graph.duct_is_capped(nid, all_nodes, all_children)
+        return cap_cache[nid]
+
     # ── ASHRAE 2001 lookups (Colin, 2026-10-23) ─────────────────────────────
     # Every elbow, transition and tap is priced from the 2001 Fundamentals
     # table for its own geometry and flows (ashrae_fittings). When the geometry
@@ -2628,7 +2634,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # Pv. Round main: die stamped r/D 1.5, the company standard.
                 # Rect main: smooth radius elbow, r/W 1.5, H/W as drawn.
                 # Unreadable size falls through to the tap table below.
-                if min(qb / qc, 1.0) >= 0.99 and not _continues(main):
+                # A CAPPED main runs on past its last tap to the cap: that
+                # tap is a real side tap, priced from the tap table (Colin,
+                # 2026-11-05, TB-M10C).
+                if (min(qb / qc, 1.0) >= 0.99 and not _continues(main)
+                        and not _capped(main)):
                     ec, elabel, enotes = None, None, []
                     if _is_round_duct(dr):
                         _d = _round_d_in(dr)
@@ -3412,7 +3422,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         report ASSUMPTION lines}."""
         rec = {'loss': 0.0, 'item': None, 'where': 'unit connection', 'notes': [],
                'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
-               'red_ducts': {}, 'assumptions': [], 'group': set()}
+               'red_ducts': {}, 'assumptions': [], 'group': set(),
+               # Every fan connection prints its own take-off row, outlet and
+               # inlet apart (Colin, 2026-11-05): 'none' is the reason a
+               # connection carries no fan system effect, shown at 0.000.
+               'where_item': None, 'none': None}
         if _kind(first) == 'equipment':
             rec['notes'].append(('note', 'NOTE: unit connection to element %s not '
                                  'checked for fan system effect: it feeds equipment '
@@ -3436,12 +3450,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         where_item = fan_system_effect.where_text(side, role_here)
         where = where_item + (' at element %s' % first if tag else '')
         rec['where'] = where
+        rec['where_item'] = where_item
         notes = rec['notes']
         flow = _first_duct(first)
         cfm = cfm_in if cfm_in else _connection_cfm(first)
         if flow is None or cfm <= 0 or not flow.area_ft2:
             notes.append(('note', 'NOTE: fan system effect at the %s not checked, no '
                           'airflow on its first duct' % where))
+            rec['none'] = 'not checked, no airflow on its first duct'
             return rec
         conn = _duct_conn(flow) if pick is not None else _unit_conn(root_id, first)
         if conn is not None and conn.get('area_ft2'):
@@ -3471,13 +3487,16 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if role_here == fan_system_effect.OUTLET:
             win, _eq = fan_system_effect.effective_duct_length_ft(area, v)
             win_name = 'Le'
+            win_short = 'Le'
         else:
             if size_c is None:
                 notes.append(('warn', 'WARNING: %s size unreadable; fan system effect '
                               'not checked' % where))
+                rec['none'] = 'not checked, connection size unreadable'
                 return rec
             win = fan_system_effect.inlet_window_ft(is_round_c, size_c)
-            win_name = 'the inlet window, 5 %s' % ('D' if is_round_c else 'H')
+            win_short = '5 %s' % ('D' if is_round_c else 'H')
+            win_name = 'the inlet window, ' + win_short
         # The straight duct check (Colin, 2026-11-03, FAN_SYSTEM_EFFECT_PLAN.md
         # section C): an elbow under 0.5 Le of an outlet, or under 2 D of an
         # inlet, is RED with the straight duct before it, still priced below.
@@ -3583,10 +3602,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                                             passed=passed, ducts=grp_ducts)
         notes.extend(wnotes)
         if role is None:
+            rec['none'] = 'no elbow within %s (%.1f ft)' % (win_short, win)
             return rec
         if role != 'elbow':
             notes.append(('warn', fan_system_effect.disruption_text(
                 _FSE_KIND_TEXT.get(role, role), did, where, l_ft, win, win_name)))
+            rec['none'] = '%s %s at %.1f ft inside %s, flagged, not priced' % (
+                _FSE_KIND_TEXT.get(role, role), did, l_ft, win_short)
             return rec
         if role_here == fan_system_effect.OUTLET:
             r = fan_system_effect.outlet_effect(
@@ -3600,6 +3622,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 notes.append(('warn', 'WARNING: elbow %s, %.1f ft from the %s, but no size '
                               'could be read; fan system effect not priced'
                               % (did, l_ft, where)))
+                rec['none'] = 'elbow %s size unreadable, not priced' % did
                 return rec
             r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft,
                                                pv_of=hvac_graph.velocity_pressure_inwg,
@@ -3610,6 +3633,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 fan_system_effect.log.info('fan system effect: inlet elbow %s at %.2f ft '
                                            'is past %.2f ft, priced as a fitting',
                                            did, l_ft, r['floor_ft'])
+                rec['none'] = ('elbow %s at %.1f ft, past %.1f ft, priced as a fitting'
+                               % (did, l_ft, r['floor_ft']))
                 return rec
             for _k, _t in enotes:
                 if _k == 'assume':
@@ -3649,6 +3674,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['gray'] = set()
         rec['boost'] = {}
         rec['assumptions'] = []
+        rec['none'] = None
         rec['notes'] = [n for n in rec['notes'] if n[0] == 'red']
         return rec
 
@@ -3894,7 +3920,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         items stay listed at 0. The group wins: the fan system effect line
         stays listed at 0."""
         if rec is None or rec.get('item') is None or not rec.get('group'):
-            return its, (rec or {}).get('loss', 0.0) or 0.0, 0.0, 0.0, (rec or {}).get('item')
+            item = (rec or {}).get('item')
+            if item is None and rec and rec.get('none') and rec.get('where_item'):
+                # No fan system effect here: its own row at 0.000 with the
+                # reason, so outlet and inlet always read apart (2026-11-05).
+                item = ('Fan system effect (none)', rec['none'], None, 0.0,
+                        ('Fan system effect, ' + rec['where_item'],
+                         'none: ' + rec['none'], None, None))
+            return its, (rec or {}).get('loss', 0.0) or 0.0, 0.0, 0.0, item
         g_fric, g_fit, hits = 0.0, 0.0, []
         for i, it in enumerate(its):
             m = _GROUP_ITEM.match(it[0])
@@ -4215,8 +4248,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     unpriced_l = unpriced_l + dis_here['unpriced']
                     if _drec is not None and _drec['loss']:
                         fse_loss += _dl
-                        if _ditem is not None:
-                            fse_items = fse_items + (_ditem,)
+                    if _drec is not None and _ditem is not None:
+                        fse_items = fse_items + (_ditem,)
                 current = best_here.get(key)
                 # Equal runs (two taps at one station, F2 2026-11-04): the
                 # lower terminal id is the index run, so Revit's connector
@@ -5809,6 +5842,15 @@ def main():
             duct_roles[eid] = 'Main (fan discharge)'
             continue
         term_elem = None
+        if len(tset) == 1 and hvac_graph.takeoff_child_ids(
+                eid_int(eid), all_nodes, all_children):
+            # A main stepped down to its last tap: the branch starts AT the
+            # tap, so this piece is still a main, judged on the main limits
+            # (Colin, 2026-11-05, TB-M10C 6x10 end piece read GRAY as a
+            # rect branch on a round neck).
+            branch_ctx[eid] = None
+            duct_roles[eid] = _duct_role_label(False, None)
+            continue
         if len(tset) == 1:
             term_elem = all_nodes.get(list(tset)[0])
         if term_elem is None:

@@ -1165,6 +1165,21 @@ def duct_continues_past(node_id, nodes, children):
     return False
 
 
+def duct_is_capped(node_id, nodes, children):
+    """Does a duct end in an end cap fitting?
+
+    A capped main runs on past its last tap to the cap, so the last tap is a
+    real side tap, priced from the tap table, not a turn into the branch
+    (Colin, 2026-11-05, TB-M10C)."""
+    for cid in children.get(node_id, []):
+        elem = nodes.get(cid)
+        if elem is None or not is_fitting(elem):
+            continue
+        if fitting_tables.classify_fitting(fitting_family_name(elem)) == 'endcap':
+            return True
+    return False
+
+
 def _duct_length_ft(duct):
     """Duct centerline length in feet (Revit internal units). 0.0 if unavailable."""
     try:
