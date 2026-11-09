@@ -4003,8 +4003,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             its = tuple(
                 (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, it[4])
                 if i in hits else it for i, it in enumerate(its))
-            item = (item[0], '{}; charged, at or above the straight duct and elbow '
-                    '({:.4f} in. wc)'.format(item[1], group), item[2], item[3], item[4])
+            # The row stays as is; the NOTE says it governed (Colin, 2026-11-09).
             return its, fse, g_fric, g_fit, item, note
         item = (item[0], '{}; not charged, the straight duct and elbow price higher '
                 '({:.4f} in. wc)'.format(item[1], group), item[2], 0.0, item[4])

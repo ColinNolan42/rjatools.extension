@@ -353,13 +353,14 @@ class DuctPerfSectionTests(unittest.TestCase):
                          'Total Diffusers/Grilles 18 | Ducts 60')
 
     def test_scope_wording(self):
-        """Colin, 2026-11-09: labels follow the Scope; an exhaust run never
-        reads Supply or Diffusers, and drops the other air column."""
+        """Colin, 2026-11-09: the airflow words follow the Scope (an exhaust
+        run never reads Supply, and drops the other air column); the count
+        reads Diffusers/Grilles on every Scope."""
         legend = {'limits': [], 'legend': [['Red', '1', '0', 'x']]}
-        exp = {'rtu': ('Supply CFM', 'Terminals'), 'vav': ('Supply CFM', 'Terminals'),
-               'vavbox': ('Box discharge CFM', 'Diffusers'),
-               'exhaust': ('Exhaust CFM', 'Grilles')}
-        for scope, (air, count) in exp.items():
+        count = 'Diffusers/Grilles'
+        exp = {'rtu': 'Supply CFM', 'vav': 'Supply CFM', 'vavbox': 'Box discharge CFM',
+               'exhaust': 'Exhaust CFM'}
+        for scope, air in exp.items():
             w = dpc.scope_words(scope)
             row = ['EF-1 (id 1)', '700', '5', '700 CFM Exhaust Air']
             html = dpc.system_summary({'grand': [], 'equipment': [row], 'words': w})
@@ -367,9 +368,11 @@ class DuctPerfSectionTests(unittest.TestCase):
             self.assertIn(count, html)
             self.assertIn('Fittings, Accessories &amp; ' + count,
                           dpc.limits_and_legend(dict(legend, words=w)))
+            self.assertEqual(dpc.scope_words(scope)['types'], 'Diffuser/Grille type')
+            self.assertEqual(dpc.scope_words(scope)['one'], 'diffuser/grille')
+            self.assertNotIn('tables', dpc.scope_words(scope))
             if scope == 'exhaust':
                 self.assertNotIn('Supply', html)
-                self.assertNotIn('Diffuser', html)
                 self.assertNotIn('700 CFM Exhaust Air', html)
                 self.assertEqual(len(shape(html).rows[0]), 3)
             else:

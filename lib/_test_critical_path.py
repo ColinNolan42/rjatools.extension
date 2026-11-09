@@ -2732,10 +2732,10 @@ check("case76 NOTE: individual losses charged instead, with L/Le 0.90 and both v
       and 'L/Le 0.90' in _g76[0]
       and ('(%.3f in. wc)' % (0.30 + _e76[0][3])) in _g76[0], "gov %r" % (_g76,))
 check("case76 control: case 32 (elbow at L 0) says the fan system effect is charged, "
-      "and its row says charged",
+      "and its row keeps its plain basis (the NOTE is enough, Colin 2026-11-09)",
       any('the fan system effect is charged for them' in t and 'L/Le 0.00' in t
           for _k, t in sa32.get('fse_gov_notes', ()))
-      and '; charged, at or above the straight duct and elbow' in _fse_items(sa32)[0][1],
+      and 'charged' not in _fse_items(sa32)[0][1],
       "gov %r rows %r" % (sa32.get('fse_gov_notes'), _fse_items(sa32)))
 
 # 77: the "priced at the default fan velocity" NOTE only where a fan system

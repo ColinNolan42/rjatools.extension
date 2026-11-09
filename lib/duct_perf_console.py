@@ -62,31 +62,31 @@ def _f3(value):
 
 
 # ── wording per Scope (Colin, 2026-11-09) ───────────────────────────────────
-# Every label that names the air or the terminals follows the Scope that was
-# picked, so an exhaust run never reads "Supply" or "Diffusers". RTU and VAV
-# System count every terminal the unit reaches, return grilles included.
+# The airflow words follow the Scope that was picked, so an exhaust run never
+# reads "Supply". The terminal count reads "Diffusers/Grilles" on every Scope
+# (Colin, 2026-11-09, replacing the per Scope count words).
 _SCOPE_WORDS = {
-    'rtu': {'airflow': 'Supply CFM', 'count': 'Terminals',
-            'other': 'Return / other air', 'types': 'Terminal type',
-            'one': 'terminal', 'many': 'terminals', 'discharge': 'supply',
-            'tables': 'diffuser and grille'},
-    'vavbox': {'airflow': 'Box discharge CFM', 'count': 'Diffusers',
-               'other': 'Other air', 'types': 'Diffuser type',
-               'one': 'diffuser', 'many': 'diffusers', 'discharge': 'box discharge',
-               'tables': 'diffuser'},
-    'exhaust': {'airflow': 'Exhaust CFM', 'count': 'Grilles',
-                'other': None, 'types': 'Grille type',
-                'one': 'grille', 'many': 'grilles', 'discharge': 'exhaust',
-                'tables': 'grille'},
+    'rtu': {'airflow': 'Supply CFM', 'other': 'Return / other air',
+            'discharge': 'supply'},
+    'vavbox': {'airflow': 'Box discharge CFM', 'other': 'Other air',
+               'discharge': 'box discharge'},
+    'exhaust': {'airflow': 'Exhaust CFM', 'other': None, 'discharge': 'exhaust'},
 }
 _SCOPE_WORDS['vav'] = _SCOPE_WORDS['rtu']
+_COUNT_WORDS = {'count': 'Diffusers/Grilles', 'types': 'Diffuser/Grille type',
+                'one': 'diffuser/grille', 'many': 'diffusers/grilles'}
 
 
 def scope_words(scope):
     """The label set for a Scope ('rtu', 'vav', 'vavbox', 'exhaust'); RTU's
     for anything else. 'other' is None when the Equipment table drops its
-    last column (Exhaust System: it repeated the exhaust cfm)."""
-    return dict(_SCOPE_WORDS.get(scope) or _SCOPE_WORDS['rtu'])
+    last column (Exhaust System: it repeated the exhaust cfm). 'scope' is
+    the Scope the words are for ('rtu' for an unknown one)."""
+    key = scope if scope in _SCOPE_WORDS else 'rtu'
+    out = dict(_SCOPE_WORDS[key])
+    out.update(_COUNT_WORDS)
+    out['scope'] = key
+    return out
 
 
 # The count line of the System Summary, the same on every Scope (Colin,
@@ -142,7 +142,7 @@ def branch_notes(words):
     it is more accurate"). Only the sentences about the auto-sizing diffuser
     and slot families name diffusers, and Exhaust System leaves them out,
     where they cannot apply."""
-    if words.get('one') == 'grille':
+    if words.get('scope') == 'exhaust':
         return [(_BRANCH_LEAD, 'Two things are checked: ' + _BRANCH_CHECKS),
                 _BRANCH_NOT_RJA]
     return [
