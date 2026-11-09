@@ -32,7 +32,7 @@ RJA DECISIONS (Colin, 2026-10-29):
     inside that connection's window. L is the straight duct from the unit
     connection to it. Outlet window: Le (Eq. 36 / 37) for that connection,
     whatever its length. Inlet window: the distance at which the inlet table
-    reaches its floor (5 D, a rect elbow on De), since the inlet tables never reach zero;
+    reaches its floor (5 D or 5 H), since the inlet tables never reach zero;
     past it the elbow is an ordinary fitting (Colin, 2026-10-29, second
     ruling; replaces a fixed 15 ft window).
   - Outlet elbow: Co is the WORST of positions A to D (the turn direction
@@ -61,7 +61,7 @@ RJA DECISIONS (Colin, 2026-10-29):
     the connection is long enough, and a curb adapter is part of it).
     Transitions are priced as ordinary fittings by the walk. A tap, split
     or other fitting inside the window is flagged, never priced (no table).
-  - A rect mitered inlet elbow is read on the ER7-1 r/D 1.0 row (Colin,
+  - A rect mitered inlet elbow is read on the ER7-1 r/H 1.0 row (Colin,
     2026-11-02), not the conservative unreadable radius row.
   - A duct pick with no unit takes the picked duct's unit side end as the
     unit outlet or inlet (Colin, 2026-11-02). Duct Performance no longer
@@ -72,10 +72,9 @@ RJA DECISIONS (Colin, 2026-10-29):
     It is still priced in the total. Colin, 2026-11-02: judged on the loss,
     not on C (was C 1.0 from 2026-10-29); 0.058 in. wc is reasonable, 0.5 is
     not, which takes a very short straight into a small, fast elbow.
-  - ER7-1 is printed for SQUARE elbows (figure, p. 34.60). A rectangular
-    inlet elbow is read with D = its equivalent diameter De, 1.30 (ab)^0.625
-    / (a + b)^0.25 (Colin, 2026-11-09), L/D and r/D on De, stated as an
-    ASSUMPTION (ER7_1_SQUARE_ASSUMPTION).
+  - ER7-1 is printed for SQUARE elbows (figure, p. 34.60). A non-square
+    rectangular inlet elbow is read with H = the side in the plane of the
+    turn, stated as an ASSUMPTION (ER7_1_SQUARE_ASSUMPTION).
 
 RJA DECISIONS (Colin, 2026-11-03):
   - Velocity basis, a dialog choice. 'default' (the default, conservative):
@@ -97,10 +96,9 @@ RJA DECISIONS (Colin, 2026-11-03):
     section C): an elbow under OUTLET_RED_RATIO x Le of a unit OUTLET (Le
     Eq. 36 / 37; Eq. 37 is the 2.5 D rule up to about 2500 fpm), or under
     INLET_RED_D x D of a unit INLET, where the loss is steep. D is the larger
-    of the elbow's D (round) or De (rect) and the first duct's De, never the
-    opening's long side (Colin, 2026-11-09, replaces H, the side in the
-    plane of the turn); a round opening keeps the larger of its D and the
-    first duct. The straight duct between the unit
+    of the unit opening and the first duct (round D). On a rect inlet elbow
+    H is its side in the plane of the turn, not less than the opening's
+    smaller side (Colin, 2026-11-04). The straight duct between the unit
     and the elbow is RED with it. The
     note gives the RED line length and the no loss length: 1.0 Le at an
     outlet, INLET_FLOOR_D x D at an inlet (where the tables stop falling).
@@ -118,10 +116,10 @@ log = logging.getLogger(__name__)
 
 HIGH_LOSS_INWC = 0.5         # a fan system effect loss at or above this is GRAY
 LENGTH_STEP_FT = 0.1         # the "increase length of duct to" figure, rounded up
-MITERED_R_OVER_H = 1.0       # ER7-1 r/D row a rect mitered inlet elbow is read on
-ER7_1_SQUARE_ASSUMPTION = ('ASSUMPTION: ER7-1 is printed for square elbows; a '
-                           'rectangular elbow is read with D = its equivalent diameter '
-                           'De, 1.30 (ab)^0.625 / (a + b)^0.25, L/D and r/D on De.')
+MITERED_R_OVER_H = 1.0       # ER7-1 row a rect mitered inlet elbow is read on
+ER7_1_SQUARE_ASSUMPTION = ('ASSUMPTION: ER7-1 is printed for square elbows; the '
+                           'rectangular elbow is read with H = the side in the plane '
+                           'of the turn.')
 FAN_TYPES = ('SWSI', 'DWDI')
 DEFAULT_FAN_TYPE = 'DWDI'
 DEFAULT_BLAST_RATIO = 0.5
@@ -410,8 +408,8 @@ def zero_ratio(key):
 
 def inlet_window_ft(is_round, size_in):
     """How far past an inlet a disruption is looked for: the largest floor
-    column over every row of its table (5 D on ED7-2 and on ER7-1, D a rect
-    elbow's De) x the connection size. Past it no row of the table is still falling."""
+    column over every row of its table (5 D on ED7-2, 5 H on ER7-1) x the
+    connection size. Past it no row of the table is still falling."""
     key = INLET_ROUND if is_round else INLET_RECT
     worst = max(floor_ratio(key, r) for r in _rows(key))
     return worst * float(size_in) / 12.0
@@ -459,7 +457,7 @@ def outlet_c(fan_type, blast_ratio, l_over_le):
 def inlet_c(is_round, r_over, l_over):
     """Co at the fan inlet from ED7-2 (round) or ER7-1 (rect).
 
-    r_over: r/D (D a rect elbow's De), None when the elbow radius is unreadable, which takes
+    r_over: r/D or r/H, None when the elbow radius is unreadable, which takes
     the smallest printed ratio (the highest C, conservative). L/D past the
     last printed column reads the last column (the floor), not a clamp.
     Returns (Co, table key, r ratio used, notes)."""
@@ -468,8 +466,8 @@ def inlet_c(is_round, r_over, l_over):
     rows = _rows(key)
     if r_over is None:
         r_over = rows[0]
-        notes.append('%s: elbow radius unreadable, smallest printed r/D %.2f used '
-                     '(highest C, conservative)' % (key, r_over))
+        notes.append('%s: elbow radius unreadable, smallest printed r/%s %.2f used '
+                     '(highest C, conservative)' % (key, 'D' if is_round else 'H', r_over))
     x = min(max(float(l_over), 0.0), _cols(key)[-1])
     c, n = ashrae_fittings.lookup(key, float(r_over), x)
     return c, key, float(r_over), notes + list(n)
@@ -507,7 +505,8 @@ def outlet_effect(fan_type, blast_ratio, area_ft2, cfm, l_ft, pv_of=None, v_fpm=
 def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None, v_fpm=None):
     """The fan inlet record for an elbow l_ft from the inlet.
 
-    size_in: the elbow's D (round) or De (rect, Colin 2026-11-09). r_in: centerline radius, None when unreadable (conservative row).
+    size_in: the elbow's D (round) or H (rect, the side in the plane of the
+    turn). r_in: centerline radius, None when unreadable (conservative row).
     area_ft2: the inlet connection area, for the velocity pressure.
     Returns {'side': 'inlet', 'c', 'table', 'r_ratio', 'size_in', 'v_fpm',
     'l_ft', 'ratio' (L/D), 'high', 'fix_ft', 'floor_ft', 'floor_ratio',
@@ -533,8 +532,8 @@ def inlet_effect(is_round, size_in, r_in, area_ft2, cfm, l_ft, pv_of=None, v_fpm
            'fix_ft': inlet_fix_ft(is_round, r_used, size_in, c_limit(pv)) if high else None,
            'floor_ft': floor_ft, 'floor_ratio': fr, 'floor_c': floor_c,
            'within': float(l_ft) < floor_ft - 1e-9, 'notes': notes}
-    log.info('fan_system_effect inlet: %s r/D %.2f L %.2f ft (%.2f x %.1f in.) '
-             'C %.2f at %.0f fpm', key, r_used,
+    log.info('fan_system_effect inlet: %s r/%s %.2f L %.2f ft (%.2f x %.1f in.) '
+             'C %.2f at %.0f fpm', key, 'D' if is_round else 'H', r_used,
              float(l_ft), l_over, size_in, c, v)
     return rec
 
@@ -617,7 +616,7 @@ DAMPER_KINDS = ('damper', 'fire_damper', 'backdraft')
 
 def damper_window_text(where, acc_id, family, l_ft, win_ft, win_name):
     """The WARNING line for a damper inside the fan system effect window of
-    a unit connection (1.0 Le at an outlet, 5 D at an inlet; Colin,
+    a unit connection (1.0 Le at an outlet, 5 D or 5 H at an inlet; Colin,
     2026-11-04, F1). The walk passes an accessory at zero length, so the
     damper's own length is not part of L, and its added loss this close to
     the fan is not priced. A WARNING only: L and the price are unchanged."""
@@ -664,28 +663,27 @@ def le_text(where, eid, l_ft, le_ft, eq, curb_ft=0.0):
 def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
                    source_short=None, curb_ft=0.0):
     """The RED line for an elbow under INLET_RED_D x D of a unit inlet, in
-    the Duct Performance reason style. D is a round elbow's diameter or a
-    rect one's equivalent diameter De (Colin, 2026-11-09); is_round False
-    labels it De. source names what D was read from, e.g. 'the 24x12 elbow'
-    (short 'the elbow'), so it reads with the fan system effect row (Colin,
-    2026-11-09, TB-M12 3720096)."""
-    lab = 'D' if is_round else 'De'
+    the Duct Performance reason style. H for a rectangular inlet. source
+    names what D or H was read from, e.g. 'the 12x12 inlet collar' (short
+    'the collar'), so it does not read against the fan system effect row,
+    which reads the elbow's own size (Colin, 2026-11-09, TB-M12 3720096)."""
+    dim = 'D' if is_round else 'H'
     of = (', ' + source) if source else ''
     of_short = (' of ' + source_short) if source_short else ''
     if curb_ft:
-        need = '%.1f ft of straight duct (%.0f D%s), the %s curb included (%.1f ft of ' \
+        need = '%.1f ft of straight duct (%.0f %s%s), the %s curb included (%.1f ft of ' \
                'duct past the curb)' % (
-                   _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, of_short,
+                   _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short,
                    curb_in_text(curb_ft),
                    _ceil_step(max(inlet_red_ft(size_in) - float(curb_ft), 0.0)))
     else:
-        need = '%.1f ft of straight duct (%.0f D%s)' % (
-            _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, of_short)
-    return ('RED: Elbow %s, %s, %.1f D (%s %.0f in.%s). Provide at least '
-            '%s; %.1f ft (%.0f D%s) is where the loss stops falling.' % (
+        need = '%.1f ft of straight duct (%.0f %s%s)' % (
+            _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short)
+    return ('RED: Elbow %s, %s, %.1f %s (%s %.0f in.%s). Provide at least '
+            '%s; %.1f ft (%.0f %s%s) is where the loss stops falling.' % (
                 eid, from_text(where, l_ft, curb_ft), float(l_ft) * 12.0 / float(size_in),
-                lab, float(size_in), of, need,
-                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D,
+                dim, dim, float(size_in), of, need,
+                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim,
                 ', curb included' if curb_ft else ''))
 
 
@@ -700,21 +698,21 @@ def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
     inlet (RTU, AHU, furnace, fan coil), past the 2 D RED line (Colin,
     2026-11-09): under 3 D the elbow causes a fan system effect the tool does
     not price, since the inlet is priced at its connection (opening)
-    velocity, so the external static shown is low. Same D as inlet_red_text
-    (De on a rect elbow); v_conn the connection velocity, fpm."""
-    lab = 'D' if is_round else 'De'
+    velocity, so the external static shown is low. Same D / H as
+    inlet_red_text; v_conn the connection velocity, fpm."""
+    dim = 'D' if is_round else 'H'
     curb = ''
     if curb_ft:
         curb = ', the %s curb included (%.1f ft of duct past the curb)' % (
             curb_in_text(curb_ft),
             _ceil_step(max(cabinet_warn_ft(size_in) - float(curb_ft), 0.0)))
     return ('%s%s is %s; provide at least %.1f ft of straight duct '
-            '(%.0f D, %s %.0f in.)%s. Under %.0f D the elbow causes a fan system effect '
+            '(%.0f %s, %s %.0f in.)%s. Under %.0f %s the elbow causes a fan system effect '
             'that is not priced (the inlet is priced at its %.0f fpm opening velocity), '
             'so the external static shown is low until the elbow is moved.'
             % (CABINET_WARN_PREFIX, eid, from_text(where, l_ft, curb_ft),
-               _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, lab,
-               float(size_in), curb, CABINET_WARN_D, float(v_conn)))
+               _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, dim, dim,
+               float(size_in), curb, CABINET_WARN_D, dim, float(v_conn)))
 
 
 def equivalent_diameter_in(conn):
@@ -764,7 +762,7 @@ def is_check_warning(text):
 
 def straight_duct_reason(eid, l_ft, role, dim='D', curb_ft=0.0):
     """The flagged table Reason for a straight duct RED with its elbow. dim:
-    'D' at an inlet (a rect elbow's De, Colin, 2026-11-09).
+    'H' when a rect inlet elbow was judged on H (Colin, 2026-11-09).
     curb_ft: a roof curb counted in l_ft, named after the modeled duct."""
     at = ('%.1f ft' % float(l_ft) if not curb_ft else '%.1f ft + %s curb' % (
         max(float(l_ft) - float(curb_ft), 0.0), curb_in_text(curb_ft)))
@@ -812,8 +810,8 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
     Near the end of the window (L close to Le) the fan system effect falls
     toward 0 and the group's own losses govern. transition: a transition is
     in the group, so it is named. size_note: at an inlet, the size the
-    window was read at, e.g. 'De 18 in. elbow' (Colin, 2026-11-09). warn_dim:
-    'D' when the elbow drew the cabinet inlet 3 D WARNING."""
+    window was read at, e.g. 'D 8 in. elbow' (Colin, 2026-11-09). warn_dim:
+    'D' or 'H' when the elbow drew the cabinet inlet 3 D WARNING."""
     group = 'straight duct, transition and elbow' if transition else 'straight duct and elbow'
     ratio = (' (L/%s %.2f%s)' % (win_short, float(l_ft) / float(win_ft),
                                  (', ' + size_note) if size_note else '')
@@ -841,14 +839,14 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
 def basis_text(rec):
     """The take-off's Table / basis cell, kept short for the sheet's clipped
     cell (Ab/Ao is in the METHOD line): 'SR7-10 pos B, L 2.0 / Le 5.7 ft' or
-    'ED7-2 r/D 1.50, L 1.0 ft, D 24 in' ('De' on ER7-1)."""
+    'ED7-2 r/D 1.50, L 1.0 ft, D 24 in'."""
     curb = rec.get('curb_ft') or 0.0
     if rec['side'] == 'outlet':
         return '%s pos %s, L %s / Le %.1f ft' % (
             rec['table'], rec['position'], l_text(rec['l_ft'], curb), rec['le_ft'])
-    lab = 'D' if rec['table'] == INLET_ROUND else 'De'
-    return '%s r/D %.2f, L %s, %s %.0f in' % (
-        rec['table'], rec['r_ratio'], l_text(rec['l_ft'], curb, unit=True), lab,
+    dim = 'D' if rec['table'] == INLET_ROUND else 'H'
+    return '%s r/%s %.2f, L %s, %s %.0f in' % (
+        rec['table'], dim, rec['r_ratio'], l_text(rec['l_ft'], curb, unit=True), dim,
         rec['size_in'])
 
 
@@ -866,7 +864,8 @@ def high_text(rec, where, eid):
     if rec['side'] == 'outlet':
         basis = '%s, worst of positions A to D, Le %.1f ft' % (rec['table'], rec['le_ft'])
     else:
-        basis = '%s r/D %.2f' % (rec['table'], rec['r_ratio'])
+        basis = '%s r/%s %.2f' % (rec['table'], 'D' if rec['table'] == INLET_ROUND
+                                  else 'H', rec['r_ratio'])
     return ('GRAY: System Effect Pressure Loss too high at elbow %s, %s, %.3f in. wc, '
             '%s (C %.2f at %.0f fpm, %s; %.1f in. wc or more).' % (
                 eid, from_text(where, rec['l_ft'], rec.get('curb_ft') or 0.0), rec['loss'],
@@ -894,9 +893,8 @@ def method_lines(settings):
     method = ('Fan system effect (2001 Fundamentals Eq. 38): the first disruption '
               'past each unit connection. Outlet: within Le (Eq. 36 or 37), an elbow '
               'is priced from the %s tables %s to %s, worst of positions A to D, at '
-              'Ab/Ao %.2f. Inlet: within the table floor distance (5 D), an '
-              'elbow is priced from ED7-2 (round) or ER7-1 (rect, D its equivalent '
-              'diameter De). The straight '
+              'Ab/Ao %.2f. Inlet: within the table floor distance (5 D or 5 H), an '
+              'elbow is priced from ED7-2 (round) or ER7-1 (rect). The straight '
               'duct, any transition on it and the first elbow are charged once, as '
               'the larger of the fan system effect and their own duct and fitting '
               'losses. Added before the safety factor. A loss of %.1f in. wc '
@@ -904,10 +902,10 @@ def method_lines(settings):
               'L runs from the unit through straight duct and any transitions, '
               'their length counted, to the first elbow. Taps and splits inside '
               'the window are flagged, not '
-              'priced. A rect mitered inlet elbow is read on the ER7-1 r/D %.1f '
+              'priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
               'row. An elbow under 0.5 Le of a unit outlet, or under 2 D of an inlet '
-              '(D the larger of the elbow\'s D or De and the first duct\'s De, never '
-              'the opening\'s long side), is RED with the '
+              '(D the larger of the unit opening and the first duct; on a rect '
+              'elbow H, its side in the plane of the turn), is RED with the '
               'straight duct before it. Two elbows within 6 Dh of a unit '
               'connection: turning in different planes is RED (swirl or close-'
               'coupled), in the same plane a double bend WARNING; the added loss '
