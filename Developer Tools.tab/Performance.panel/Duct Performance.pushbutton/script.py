@@ -2219,7 +2219,9 @@ def _pick_unit(scope, scope_label):
         filt = _UnitPickFilter(scope)
     except Exception:
         filt = None
-    prompt = 'Select the {} unit to analyze'.format(scope_label)
+    # 'Select the Rooftop Unit to analyze', not '... Unit unit' (Colin, 2026-11-09)
+    prompt = 'Select the {}{} to analyze'.format(
+        scope_label, '' if scope_label.lower().endswith('unit') else ' unit')
     try:
         if filt is not None:
             ref = uidoc.Selection.PickObject(ObjectType.Element, filt, prompt)

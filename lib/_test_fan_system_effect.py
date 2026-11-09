@@ -692,6 +692,14 @@ class DialogTest(unittest.TestCase):
         self.assertIn("_SCOPE_LABEL = {'rtu': 'Rooftop Unit',", self.src)
         self.assertIn("'Rooftop Unit, Indoor System or VAV System'", self.src)
         self.assertIn("rb_rtu = _scope_radio('Rooftop Unit.  Lists units only", self.src)
+        # the pick prompt does not double 'unit' (Colin, 2026-11-09)
+        pm = re.search(r"    prompt = ('Select the \{\}\{\} to analyze'\.format\(\s+.*?\))\s*\n",
+                       self.src.replace('\r\n', '\n'), re.S)
+        self.assertIsNotNone(pm)
+        for lab, want in (('Rooftop Unit', 'Select the Rooftop Unit to analyze'),
+                          ('Indoor System', 'Select the Indoor System unit to analyze'),
+                          ('VAV Box', 'Select the VAV Box unit to analyze')):
+            self.assertEqual(eval(pm.group(1), {'scope_label': lab}), want)
         names = set(e.get(xn) for e in root.iter() if e.get(xn))
         self.assertFalse({'cb_vav', 'cb_exhaust'} & names)
         self.assertIn('rb_scope_rtu.IsChecked = True', self.src)
