@@ -141,6 +141,7 @@ CABINET_WARN_PREFIX = 'WARNING: Elbow '
 OUTLET_TAP_D = 3.0           # a tap under 3 D of a cabinet unit supply outlet: WARNING (Colin, 2026-11-09)
 OUTLET_TAP_MARK = 'acts like an elbow at the outlet'
 TAP_ROLES = ('takeoff', 'split', 'tee', 'wye', 'cross')
+OUTLET_TAP_WALK_FT = 30.0    # how far the outlet tap walk looks past Le
 LE_SPLIT_MPS = 13.0          # Eq. 36 above this outlet velocity, Eq. 37 at or below
 SWIRL_DH = 6.0               # inlet swirl window, hydraulic diameters (p. 34.11)
 SWIRL_SAME_PLANE = 0.1       # |n1 x n2| under this: two turn planes are the same
@@ -714,9 +715,24 @@ def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
                float(size_in), curb, CABINET_WARN_D, dim, float(v_conn)))
 
 
+def equivalent_diameter_in(conn):
+    """De, in., of a duct section: a round one's diameter; a rect one's
+    ASHRAE equivalent diameter 1.30 (ab)^0.625 / (a + b)^0.25. None when the
+    size is unreadable. conn: {'round', 'd_in', 'w_in', 'h_in'}."""
+    if not conn:
+        return None
+    if conn.get('round') and conn.get('d_in'):
+        return float(conn['d_in'])
+    a, b = conn.get('w_in'), conn.get('h_in')
+    if not a or not b:
+        return None
+    a, b = float(a), float(b)
+    return 1.30 * (a * b) ** 0.625 / (a + b) ** 0.25
+
+
 def outlet_tap_ft(size_in):
-    """OUTLET_TAP_D x D, ft: a tap closer than this to a cabinet unit supply
-    outlet is a WARNING."""
+    """OUTLET_TAP_D x De, ft: a tap closer than this to a cabinet unit
+    supply outlet is a WARNING (De of the main the tap sits on)."""
     return OUTLET_TAP_D * float(size_in) / 12.0
 
 
@@ -913,7 +929,8 @@ def method_lines(settings):
         method += (' Velocity: the connection velocity, cfm over the unit connector '
                    'area (the first duct when unreadable).')
     method += (' A tap within 3 D of a cabinet unit\'s supply outlet is a WARNING '
-               '(system effect not priced).')
+               '(system effect not priced; D the De of the main it sits on, the walk '
+               'stopping at the first elbow).')
     if float(settings.get('curb_in') or 0.0) > 0.0:
         method += (' A roof curb (dialog, default %.0f in.; %g in. this run) is counted '
                    'as straight duct at RTU connections, length only.'

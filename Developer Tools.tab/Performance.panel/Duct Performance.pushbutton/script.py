@@ -3338,6 +3338,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             elem = all_nodes.get(nid)
             kids = [c for c in all_children.get(nid, []) if c not in seen]
             if dr is not None:
+                # Listed before its taps are read, so a tap returned below
+                # names the duct it sits on as the last entry (the supply
+                # outlet tap check reads that duct's De, Colin 2026-11-09).
+                if ducts is not None:
+                    ducts.append((nid, l_ft))
                 taps = _taps(nid)
                 if taps:
                     pos = {}
@@ -3368,8 +3373,6 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         return 'takeoff', l_ft + at, tid, notes
                     else:
                         return None, l_ft + at, None, notes
-                if ducts is not None:
-                    ducts.append((nid, l_ft))
                 l_ft += float(dr.length_ft or 0.0)
                 nxt = [c for c in kids if c not in taps]
             elif elem is not None and hvac_graph.is_fitting(elem):
@@ -3700,7 +3703,6 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # of straight duct. The walk reaches out to 3 D for it.
         cabinet_in = (role_here != fan_system_effect.OUTLET
                       and root_id not in inline_fan_roots and root_id not in box_ids)
-        warn_done = [False]
         if role_here == fan_system_effect.OUTLET or size_c is not None:
             if role_here == fan_system_effect.OUTLET:
                 red_ft = fan_system_effect.outlet_red_ft(win)
@@ -3816,43 +3818,38 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         notes.extend(wnotes)
         # A tap close to a cabinet unit's supply outlet (Colin, 2026-11-09):
         # a WARNING when the first tap, branch, tee, wye or cross on the main
-        # sits under 3 D (D the larger of the unit opening and the first
-        # duct, a rect one's larger side), with the curb counted. Merged with
-        # the tap inside Le flag: one WARNING, the window the larger of the
-        # two. Not at an exhaust fan, a VAV box root or an inlet.
+        # sits under 3 D, D the equivalent diameter De of the main duct the
+        # tap sits on (round: its diameter; never the unit opening, a fan
+        # coil collar is wide and flat), L to the tap with the curb counted.
+        # The walk stops at the first elbow, which has its own checks. One
+        # WARNING: inside Le it replaces the tap inside Le flag. Not at an
+        # exhaust fan, a VAV box root, an inlet or a duct pick.
         tap_out = (role_here == fan_system_effect.OUTLET and pick is None
                    and root_id not in inline_fan_roots
-                   and root_id not in discharge_roots and root_id not in box_ids
-                   and size_c is not None)
-        tap_ft = fan_system_effect.outlet_tap_ft(size_c) if tap_out else 0.0
-        if tap_out and tap_ft >= win:
-            tap_req, tap_basis = tap_ft, '%.0f D, D %.0f in.' % (
-                fan_system_effect.OUTLET_TAP_D, size_c)
-        else:
-            tap_req, tap_basis = win, '1.0 Le, Le %.1f ft' % win
+                   and root_id not in discharge_roots and root_id not in box_ids)
         tap_warned = False
-        if tap_out and role in fan_system_effect.TAP_ROLES:
-            notes.append(('warn', fan_system_effect.outlet_tap_text(
-                _FSE_KIND_TEXT.get(role, role), did, where, l_ft, tap_req, tap_basis,
-                curb_ft)))
-            tap_warned = True
-        elif tap_out:
-            # Nothing but elbows (or nothing) inside Le: walked on past the
-            # elbows to the first tap inside 3 D.
-            if pick is not None:
+        if tap_out:
+            if role is None:
+                # nothing inside Le: walked on (still stopping at an elbow)
+                t_ducts = []
                 t_role, t_l, t_id, _tn = _fse_first_disruption(
-                    root_id, first, tap_ft, where, prev=pick[0], seen=set(pick[1]),
-                    collect=[], l0=curb_ft)
+                    root_id, first, fan_system_effect.OUTLET_TAP_WALK_FT, where,
+                    ducts=t_ducts, l0=curb_ft)
             else:
-                t_role, t_l, t_id, _tn = _fse_first_disruption(
-                    root_id, first, tap_ft, where, collect=[], l0=curb_ft)
-            fan_system_effect.log.info('supply outlet tap check: %s, 3 D %.2f ft, first %r '
-                                       '%s at %.2f ft', where, tap_ft, t_role, t_id, t_l)
-            if t_role in fan_system_effect.TAP_ROLES and t_l < tap_ft:
-                notes.append(('warn', fan_system_effect.outlet_tap_text(
-                    _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, tap_ft,
-                    '%.0f D, D %.0f in.' % (fan_system_effect.OUTLET_TAP_D, size_c),
-                    curb_ft)))
+                t_role, t_l, t_id, t_ducts = role, l_ft, did, grp_ducts
+            if t_role in fan_system_effect.TAP_ROLES and t_ducts:
+                t_main = _duct_conn(dr_by_int_id.get(t_ducts[-1][0]))
+                t_de = fan_system_effect.equivalent_diameter_in(t_main)
+                t_need = fan_system_effect.outlet_tap_ft(t_de) if t_de else 0.0
+                fan_system_effect.log.info(
+                    'supply outlet tap check: %s, %s %s at %.2f ft on duct %s, De %s in., '
+                    '3 D %.2f ft', where, t_role, t_id, t_l, t_ducts[-1][0], t_de, t_need)
+                if t_de and t_l < t_need - 1e-9:
+                    notes.append(('warn', fan_system_effect.outlet_tap_text(
+                        _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, t_need,
+                        '%.0f D, De %.1f in.' % (fan_system_effect.OUTLET_TAP_D, t_de),
+                        curb_ft)))
+                    tap_warned = role is not None
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (win_short, win)
             # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
