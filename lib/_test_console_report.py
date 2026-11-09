@@ -376,6 +376,32 @@ class DuctPerfSectionTests(unittest.TestCase):
                 self.assertEqual(len(shape(html).rows[0]), 4)
         self.assertEqual(dpc.scope_words('nonsense'), dpc.scope_words('rtu'))
 
+    def test_branch_notes_and_clearance_per_scope(self):
+        """Colin, 2026-11-09 (TB-M10C rerun): terminal wording, "it is more
+        accurate". Exhaust System leaves out the auto-sizing diffuser and slot
+        notes; the other Scopes name diffusers only in those."""
+        ex = dpc.branch_notes(dpc.scope_words('exhaust'))
+        text = ' '.join(a + ' ' + b for a, b in ex)
+        self.assertIn('terminal sizing tables', text)
+        self.assertIn("whether the terminal's own neck/face", text)
+        self.assertNotIn('Diffuser', text.replace('diffusers and grilles', ''))
+        self.assertNotIn('diffuser', text.replace('diffusers and grilles', ''))
+        self.assertNotIn('slot', text)
+        self.assertEqual(dpc.clearance_text(0),
+                         'Terminal/duct height clearance issues (flagged Red): 0')
+        for scope in ('rtu', 'vav', 'vavbox'):
+            notes = dpc.branch_notes(dpc.scope_words(scope))
+            self.assertEqual(len(notes), 3)
+            self.assertIn('terminal sizing tables', notes[0][0])
+            self.assertIn("whether the terminal's own neck/face", notes[0][1])
+            self.assertTrue(notes[1][0].startswith('Branches feeding a slot diffuser'))
+            self.assertTrue(notes[2][0].startswith('Branches feeding a terminal'))
+        html = dpc.limits_and_legend({'limits': [], 'legend': [], 'notes': ex,
+                                      'words': dpc.scope_words('exhaust'),
+                                      'clearance': (False, dpc.clearance_text(0))})
+        self.assertIn('Terminal/duct height clearance', html)
+        self.assertNotIn('slot', html)
+
     def test_esp_header_basis(self):
         """Colin, 2026-11-09: the 2001 tables by geometry, the worksheet only
         as the fallback."""

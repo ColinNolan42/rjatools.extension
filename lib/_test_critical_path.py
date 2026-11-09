@@ -2736,6 +2736,25 @@ check("case76 control: case 32 (elbow at L 0) says the fan system effect is char
       and '; charged, at or above the straight duct and elbow' in _fse_items(sa32)[0][1],
       "gov %r rows %r" % (sa32.get('fse_gov_notes'), _fse_items(sa32)))
 
+# 77: the "priced at the default fan velocity" NOTE only where a fan system
+#     effect was priced (Colin, 2026-11-09, TB-M10C EF-1): case 31 has no
+#     elbow inside Le, so nothing is priced and the NOTE is not said; case 32
+#     prices the elbow at L 0 and says it.
+def _vel_notes(leaf):
+    return [t for _k, t in leaf.get('fse_notes', ())
+            if 'priced at the default fan velocity' in t]
+
+
+_FSE77 = dict(FSE_ON, velocity_basis='default', fan_fpm=2000.0)   # 2000 over 1000 fpm
+_none77 = _fse_run(n31, c31, d31, t31, 900, fan=_FSE77)
+_elb77 = _fse_run(n32, c32, d32, t32, 920, fan=_FSE77)
+check("case77 nothing priced (no elbow within Le): no fan velocity NOTE",
+      _none77.get('fse_inwc') == 0.0 and not _vel_notes(_none77),
+      "notes %r" % (_none77.get('fse_notes'),))
+check("case77 elbow priced at L 0: the fan velocity NOTE is said once",
+      _elb77.get('fse_inwc', 0.0) > 0.0 and len(_vel_notes(_elb77)) == 1,
+      "notes %r" % (_elb77.get('fse_notes'),))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

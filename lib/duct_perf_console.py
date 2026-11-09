@@ -125,6 +125,45 @@ def equipment_headers(words):
     return heads
 
 
+_BRANCH_LEAD = ('Branch ducts are checked against the terminal sizing tables '
+                '(diffusers and grilles, MEP Design Standards, section 1), not '
+                'against velocity or friction.')
+_BRANCH_CHECKS = ('whether the terminal\'s own neck/face is big enough for its own '
+                  'CFM, and whether the branch duct is at least as big as the '
+                  'terminal connects with. Either one failing is red; there is no '
+                  'yellow band on a size match. Oversize is not checked on branches.')
+_BRANCH_NOT_RJA = ('Branches feeding a terminal that is not an RJA auto-sizing family',
+                   '(no Sizing Warning parameter) get the main velocity/friction check.')
+
+
+def branch_notes(words):
+    """The branch method notes of the Design Limits and Legend section, as
+    [(bold lead, text)], in terminal terms (Colin, 2026-11-09: "terminals,
+    it is more accurate"). Only the sentences about the auto-sizing diffuser
+    and slot families name diffusers, and Exhaust System leaves them out,
+    where they cannot apply."""
+    if words.get('one') == 'grille':
+        return [(_BRANCH_LEAD, 'Two things are checked: ' + _BRANCH_CHECKS),
+                _BRANCH_NOT_RJA]
+    return [
+        (_BRANCH_LEAD,
+         'An auto-sizing diffuser is selected on static pressure and NC rather '
+         'than duct velocity, so velocity-checking a run that feeds only that one '
+         'diffuser is redundant. Two things are checked instead: ' + _BRANCH_CHECKS),
+        ('Branches feeding a slot diffuser',
+         'are judged off the auto-sized slot family: the branch duct shall be at '
+         'least the slot inlet diameter, and a filled Sizing Warning on the slot '
+         'is red. No neck table is published for slots.'),
+        _BRANCH_NOT_RJA,
+    ]
+
+
+def clearance_text(count):
+    """The clearance line of the legend, in terminal terms on every Scope
+    (Colin, 2026-11-09)."""
+    return 'Terminal/duct height clearance issues (flagged Red): {}'.format(count)
+
+
 def legend_fittings_header(words):
     return 'Fittings, Accessories & ' + words['count']
 

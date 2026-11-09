@@ -3511,8 +3511,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
         else:
             v, fan_gov = v_conn, False
-        if fan_gov:
-            notes.append(('note', fan_system_effect.velocity_text(where, v, v_conn)))
+        # Said only when a fan system effect is priced at this connection
+        # (Colin, 2026-11-09): with no elbow inside the window nothing is
+        # priced at the fan velocity. Put back in its place below.
+        vel_note = ((len(notes), ('note', fan_system_effect.velocity_text(where, v, v_conn)))
+                    if fan_gov else None)
         # D for the 5 D check and the inlet window: the larger of the unit
         # opening and the first duct. An outlet already has its fallback NOTE
         # above, so its size notes are not repeated.
@@ -3696,6 +3699,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         name = 'Fan system effect, ' + where_item
         basis = fan_system_effect.basis_text(r)
         rec['loss'] = loss
+        if vel_note is not None:
+            notes.insert(vel_note[0], vel_note[1])
         rec['item'] = ('Fan system effect {}'.format(did), basis, r['v_fpm'], loss,
                        (name, basis, r['c'], None))
         return rec
@@ -6959,29 +6964,13 @@ def main():
                                int(tol_pct), int(tol_pct))),
         'limits': limit_rows,
         'vav_basis': vav_basis,
-        'notes': [
-            ('Branch ducts are checked against the {} sizing tables '
-             '(MEP Design Standards, section 1), not against velocity or '
-             'friction.'.format(words['tables']),
-             'An auto-sizing diffuser is selected on static pressure and NC rather '
-             'than duct velocity, so velocity-checking a run that feeds only that one '
-             'diffuser is redundant. Two things are checked instead: whether the '
-             'diffuser\'s own neck/face is big enough for its own CFM, and whether the '
-             'branch duct is at least as big as the diffuser connects with. Either one '
-             'failing is red; there is no yellow band on a size match. Oversize is '
-             'not checked on branches.'),
-            ('Branches feeding a slot diffuser',
-             'are judged off the auto-sized slot family: the branch duct shall be at '
-             'least the slot inlet diameter, and a filled Sizing Warning on the slot '
-             'is red. No neck table is published for slots.'),
-            ('Branches feeding a diffuser that is not an RJA auto-sizing family',
-             '(no Sizing Warning parameter) get the main velocity/friction check.'),
-        ],
+        # Terminal wording (Colin, 2026-11-09), the auto-sizing diffuser and
+        # slot notes left out on Exhaust System, where they cannot apply.
+        'notes': duct_perf_console.branch_notes(words),
         'legend': legend_rows,
         'words': words,
         'clearance': (clearance_count > 0,
-                      'Diffuser/duct height clearance issues (flagged Red): {}'.format(
-                          clearance_count)),
+                      duct_perf_console.clearance_text(clearance_count)),
     }
 
     def _legend_text():
