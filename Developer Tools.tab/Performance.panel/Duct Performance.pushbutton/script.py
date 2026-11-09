@@ -57,7 +57,7 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, Transaction,
     BuiltInCategory, BuiltInParameter, ViewSheet, ViewType,
     Viewport, ViewDuplicateOption, ElementId, XYZ, ViewPlan, BrowserOrganization,
-    PlanViewPlane, PlanViewRange, Category,
+    BoundingBoxXYZ,
     OverrideGraphicSettings, Color,
     TextNote, TextNoteOptions, TextNoteType,
     Line, ViewDrafting, ViewFamilyType, ViewFamily,
@@ -6234,39 +6234,146 @@ def _target_plan_views(active_view, level_ids, sheets_by_view):
     return targets, missing
 
 
-def _open_view_range(view, base_lvl_id, low_lvl_id, top_z):
-    """Make one copied plan show a system that spans several levels.
+def _create_level_plan(like_view, lvl_eid):
+    """A new floor plan on level lvl_eid with like_view's view family type
+    and view template, for a level the system reaches that has no
+    mechanical plan (Colin, 2026-11-09). None when Revit refuses (logged).
+    ViewPlan.Create(doc, view family type id, level id) is the API as
+    understood here; not yet verified live."""
+    try:
+        v = ViewPlan.Create(doc, like_view.GetTypeId(), lvl_eid)
+    except Exception as ex:
+        hvac_graph.log.warning('level plan: ViewPlan.Create on level %s FAILED: %s',
+                               eid_int(lvl_eid), ex)
+        return None
+    try:
+        tid = like_view.ViewTemplateId
+        if tid != ElementId.InvalidElementId:
+            v.ViewTemplateId = tid
+    except Exception as ex:
+        hvac_graph.log.warning('level plan: template on view %s NOT SET: %s',
+                               eid_int(v.Id), ex)
+    hvac_graph.log.info('level plan: view %s made on level %s', eid_int(v.Id),
+                        eid_int(lvl_eid))
+    return v
 
-    The view's template is removed (the view keeps its current graphics; only
-    the copy is touched), the cut plane goes 1 ft above the highest element in
-    the system, the top is unlimited, and bottom and view depth go to the
-    lowest level the system reaches. Roofs, floors and ceilings are hidden in
-    the copy so the slabs between levels do not cover the ductwork below.
-    Tested live on OLMC 2026-10-16: 186 ducts from the RTU on the roof down
-    to the main level diffusers in one view.
-    """
-    base_lvl = doc.GetElement(base_lvl_id)
-    view.ViewTemplateId = ElementId.InvalidElementId
-    vr = view.GetViewRange()
-    vr.SetLevelId(PlanViewPlane.TopClipPlane, PlanViewRange.Unlimited)
-    vr.SetLevelId(PlanViewPlane.CutPlane, base_lvl_id)
-    # top_z is a bounding box Z (internal origin), so measure from the level's
-    # ProjectElevation, not Elevation: Elevation follows the level type's base
-    # (survey point) and put the cut plane 100 ft low on The Hub Boulder.
-    vr.SetOffset(PlanViewPlane.CutPlane, top_z - base_lvl.ProjectElevation + 1.0)
-    vr.SetLevelId(PlanViewPlane.BottomClipPlane, low_lvl_id)
-    vr.SetOffset(PlanViewPlane.BottomClipPlane, 0.0)
-    vr.SetLevelId(PlanViewPlane.ViewDepthPlane, low_lvl_id)
-    vr.SetOffset(PlanViewPlane.ViewDepthPlane, 0.0)
-    view.SetViewRange(vr)
-    for bic in (BuiltInCategory.OST_Roofs, BuiltInCategory.OST_Floors,
-                BuiltInCategory.OST_Ceilings):
+
+def _crop_box_xy(points, margin_ft):
+    """(min x, min y, max x, max y) around (x, y) points, margin_ft out on
+    every side, or None for no points. Pure, for the CPython test."""
+    pts = list(points)
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return (min(xs) - margin_ft, min(ys) - margin_ft,
+            max(xs) + margin_ft, max(ys) + margin_ft)
+
+
+def _crop_to_elements(view, elems, margin_ft):
+    """Crop a copied plan to its level's system, margin_ft out (Colin,
+    2026-11-09: 5 ft). The corners of each element's bounding box are taken
+    into the view's own crop coordinates (CropBox.Transform), and the crop's
+    Z is kept. A scope box on the copy is cleared first, since I believe it
+    holds the crop. Any failure is logged and the source crop is kept."""
+    try:
+        old = view.CropBox
+        inv = old.Transform.Inverse
+    except Exception as ex:
+        hvac_graph.log.warning('crop: view %s CropBox NOT READ: %s', eid_int(view.Id), ex)
+        return False
+    pts = []
+    for el in elems:
         try:
-            cat = Category.GetCategory(doc, bic)
-            if cat is not None and view.CanCategoryBeHidden(cat.Id):
-                view.SetCategoryHidden(cat.Id, True)
+            bb = el.get_BoundingBox(None)
+        except Exception:
+            bb = None
+        if bb is None:
+            continue
+        for x in (bb.Min.X, bb.Max.X):
+            for y in (bb.Min.Y, bb.Max.Y):
+                q = inv.OfPoint(XYZ(x, y, bb.Min.Z))
+                pts.append((q.X, q.Y))
+    box = _crop_box_xy(pts, margin_ft)
+    if box is None:
+        hvac_graph.log.info('crop: view %s, no element boxes, crop kept', eid_int(view.Id))
+        return False
+    try:
+        p = view.get_Parameter(BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP)
+        if p is not None and not p.IsReadOnly and p.AsElementId() != ElementId.InvalidElementId:
+            p.Set(ElementId.InvalidElementId)
+            hvac_graph.log.info('crop: view %s scope box cleared', eid_int(view.Id))
+    except Exception as ex:
+        hvac_graph.log.warning('crop: view %s scope box NOT CLEARED: %s', eid_int(view.Id), ex)
+    try:
+        nb = BoundingBoxXYZ()
+        nb.Transform = old.Transform
+        nb.Min = XYZ(box[0], box[1], old.Min.Z)
+        nb.Max = XYZ(box[2], box[3], old.Max.Z)
+        view.CropBoxActive = True
+        view.CropBox = nb
+        hvac_graph.log.info('crop: view %s cropped to %r (%d elements)', eid_int(view.Id),
+                            box, len(elems))
+        return True
+    except Exception as ex:
+        hvac_graph.log.warning('crop: view %s crop NOT SET, source crop kept: %s',
+                               eid_int(view.Id), ex)
+        return False
+
+
+LEVEL_VP_GAP_FT = 0.1           # sheet feet between level plans
+LEVEL_LABEL_UP_FT = 0.03        # sheet feet from a plan's top to its level label
+
+
+def _row_centers(first_center_x, widths, gap_ft):
+    """Viewport center X for boxes laid left to right, the first centered at
+    first_center_x, each gap_ft past the one before. Pure, for the CPython
+    test."""
+    out = []
+    right = None
+    for i, w in enumerate(widths):
+        if i == 0:
+            cx = first_center_x
+        else:
+            cx = right + gap_ft + w / 2.0
+        out.append(cx)
+        right = cx + w / 2.0
+    return out
+
+
+def _layout_level_viewports(sheet, vps, tn_type_id):
+    """Lay the level plans out left to right from the first one's fixed
+    center, and put each level's name above its plan (Colin, 2026-11-09).
+    Overlap with the title block or the table is accepted: the engineer
+    moves them. vps: [(Viewport, level name)] lowest level first."""
+    doc.Regenerate()
+    sizes = []
+    for vp, _name in vps:
+        try:
+            o = vp.GetBoxOutline()
+            sizes.append((o.MaximumPoint.X - o.MinimumPoint.X,
+                          o.MaximumPoint.Y - o.MinimumPoint.Y))
         except Exception as ex:
-            output.print_md(':warning: Could not hide {} in the copied plan: {}'.format(bic, ex))
+            hvac_graph.log.warning('layout: viewport %s outline NOT READ: %s',
+                                   eid_int(vp.Id), ex)
+            sizes.append((1.0, 1.0))
+    try:
+        c0 = vps[0][0].GetBoxCenter()
+    except Exception:
+        c0 = XYZ(1.201, 1.212, 0)
+    xs = _row_centers(c0.X, [w for w, _h in sizes], LEVEL_VP_GAP_FT)
+    for (vp, name), cx, (w, h) in zip(vps, xs, sizes):
+        try:
+            vp.SetBoxCenter(XYZ(cx, c0.Y, 0))
+        except Exception as ex:
+            hvac_graph.log.warning('layout: viewport %s NOT MOVED: %s', eid_int(vp.Id), ex)
+        if tn_type_id is not None and name:
+            try:
+                TextNote.Create(doc, sheet.Id,
+                                XYZ(cx - w / 2.0, c0.Y + h / 2.0 + LEVEL_LABEL_UP_FT, 0),
+                                name.upper(), TextNoteOptions(tn_type_id))
+            except Exception as ex:
+                hvac_graph.log.warning('layout: level label %r NOT PLACED: %s', name, ex)
 
 
 def _file_like_source_sheet(new_sheet, source_sheet):
@@ -7227,52 +7334,46 @@ def main():
     # otherwise stopped at the RTU boot, because the main level ductwork was
     # checked but never drawn.
     sheets_by_view = _sheets_by_view()
+    # The levels the system touches: every duct (its Reference Level), every
+    # terminal and the picked unit (Colin, 2026-11-09: a roof with only the
+    # RTU on it is a level of its own).
     level_ids = {}
+    level_elems = {}          # int level id -> [elements drawn on it], for the crop
     for eid, dr in all_duct_results.items():
         lid = _elem_level_id(dr.elem)
         if lid is not None:
             level_ids[eid_int(lid)] = lid
+    for _nid in list(all_terminals.keys()) + list(all_root_ids):
+        _el = all_nodes.get(_nid)
+        lid = _elem_level_id(_el) if _el is not None else None
+        if lid is not None:
+            level_ids[eid_int(lid)] = lid
+    for _nid, _el in all_nodes.items():
+        lid = _elem_level_id(_el) if _el is not None else None
+        if lid is not None:
+            level_elems.setdefault(eid_int(lid), []).append(_el)
     level_targets, missing_levels = _target_plan_views(active_view, level_ids, sheets_by_view)
 
-    # The whole system goes on ONE plan (Colin, 2026-10-16): the lowest
-    # level's mechanical plan, with its view range raised over every element
-    # in the system when more than one level is involved, so the RTU on the
-    # roof and the diffusers below are colored in the same view.
-    def _lvl_elev(item):
-        try:
-            return doc.GetElement(item[0]).Elevation
-        except Exception:
-            return float('inf')
-    level_targets.sort(key=_lvl_elev)
-    base_lvl, base_view, base_sheet = level_targets[0]
-    multi_level = len(level_targets) > 1
-    targets = [(None, base_view, base_sheet)]
-
-    system_top_z = None
-    for _nid, _el in all_nodes.items():
-        try:
-            bb = _el.get_BoundingBox(None)
-        except Exception:
-            bb = None
-        if bb is not None and (system_top_z is None or bb.Max.Z > system_top_z):
-            system_top_z = bb.Max.Z
-
-    # Lowest level any duct sits on: the view range bottom goes there, so a
-    # level with no mechanical plan of its own is still drawn in this one.
-    system_low_lvl = None
-    for _lid in level_ids.values():
-        lv = doc.GetElement(_lid)
-        if lv is not None and (system_low_lvl is None or
-                               lv.Elevation < doc.GetElement(system_low_lvl).Elevation):
-            system_low_lvl = _lid
-    if system_low_lvl is not None and base_lvl is not None and \
-            doc.GetElement(system_low_lvl).Elevation < doc.GetElement(base_lvl).Elevation:
-        multi_level = True
-
-    output.print_md('Plan: **{}** (source sheet **{}**){}'.format(
-        _view_name(base_view),
-        base_sheet.SheetNumber if base_sheet is not None else 'none',
-        ', view range opened to show every level of the system' if multi_level else ''))
+    # One colored plan per level, all on one sheet (Colin, 2026-11-09,
+    # replacing the 2026-10-16 single plan with its view range opened over
+    # every level, where the floors drew on top of each other). Each copy
+    # keeps its source plan's own view range and template and is cropped to
+    # that level's system (5 ft margin). A level with no mechanical plan gets
+    # one made from the active view's type and template, inside the
+    # transaction. A single level system is unchanged: the active view only.
+    multi_level = len(level_targets) + len(missing_levels) > 1
+    if multi_level:
+        targets = list(level_targets)
+    else:
+        targets = [(None, active_view, sheets_by_view.get(eid_int(active_view.Id)))]
+    _plan_txt = ', '.join(
+        '{} ({})'.format(_level_name(doc.GetElement(_l)) if _l is not None else _view_name(_v),
+                         _s.SheetNumber if _s is not None else 'no sheet')
+        for _l, _v, _s in targets)
+    if multi_level and missing_levels:
+        _plan_txt += ', ' + ', '.join('{} (new plan)'.format(_level_name(doc.GetElement(_l)))
+                                      for _l in missing_levels)
+    output.print_md('Plans: **{}**'.format(_plan_txt))
 
     # 6. Title block and solid fill
     tb_list = list(FilteredElementCollector(doc)
@@ -7508,33 +7609,75 @@ def main():
 
         new_sheets = []
         used_keys  = set()
+        made_ids   = set()        # int ids of level plans made below
+        # Multi level: a level with no mechanical plan gets one made here,
+        # before anything is drawn, so its NOTE is on the sheet (Colin,
+        # 2026-11-09). It is the copy itself (named like the others), not a
+        # source left in the model. Then lowest level first.
+        if multi_level:
+            for _lid in missing_levels:
+                _made = _create_level_plan(active_view, _lid)
+                _lname = _level_name(doc.GetElement(_lid))
+                if _made is None:
+                    _correct('warn', 'WARNING: no mechanical floor plan on {} and one could '
+                             'not be created; its ductwork is colored but not shown on '
+                             'the sheet.'.format(_lname))
+                    continue
+                _correct('note', 'NOTE: no mechanical floor plan on {}; one was created '
+                         'from the active view\'s type and template for this sheet.'
+                         .format(_lname))
+                made_ids.add(eid_int(_made.Id))
+                targets.append((_lid, _made, None))
+
+            def _lvl_elev(item):
+                try:
+                    return doc.GetElement(item[0]).Elevation
+                except Exception:
+                    return float('inf')
+            targets.sort(key=_lvl_elev)
+        act_sheet = sheets_by_view.get(eid_int(active_view.Id))
+        multi_sheet = None        # the one sheet every level is placed on
+        multi_vps = []            # (viewport, level name) placed on it, in order
         for lvl_eid, src_view, src_sheet in targets:
-            source_sheet_num = src_sheet.SheetNumber if src_sheet is not None else 'NoSheet'
-            # Two plans off the same sheet would give a duplicate sheet number
-            # and roll the whole run back, so the second one gets its level.
-            if source_sheet_num in used_keys and lvl_eid is not None:
-                source_sheet_num = '{}-{}'.format(
-                    source_sheet_num, _level_name(doc.GetElement(lvl_eid)))
-            n = 2
-            base_key = source_sheet_num
-            while source_sheet_num in used_keys:
-                source_sheet_num = '{}-{}'.format(base_key, n)
-                n += 1
-            used_keys.add(source_sheet_num)
+            made_here = eid_int(src_view.Id) in made_ids
+            if multi_level:
+                # One sheet named after the active view's sheet; each plan
+                # named with its level.
+                source_sheet_num = act_sheet.SheetNumber if act_sheet is not None else 'NoSheet'
+                lvl_txt = (_level_name(doc.GetElement(lvl_eid)) if lvl_eid is not None
+                           else _view_name(src_view))
+                view_key = '{}-{}'.format(source_sheet_num, lvl_txt)
+            else:
+                source_sheet_num = src_sheet.SheetNumber if src_sheet is not None else 'NoSheet'
+                # Two plans off the same sheet would give a duplicate sheet number
+                # and roll the whole run back, so the second one gets its level.
+                if source_sheet_num in used_keys and lvl_eid is not None:
+                    source_sheet_num = '{}-{}'.format(
+                        source_sheet_num, _level_name(doc.GetElement(lvl_eid)))
+                n = 2
+                base_key = source_sheet_num
+                while source_sheet_num in used_keys:
+                    source_sheet_num = '{}-{}'.format(base_key, n)
+                    n += 1
+                used_keys.add(source_sheet_num)
+                view_key = source_sheet_num
             mark_off_ft = (5.0 / (64.0 * 12.0)) * float(getattr(src_view, 'Scale', 48)) * 2.0
 
-            # Copy floor plan
-            new_vid  = src_view.Duplicate(ViewDuplicateOption.Duplicate)
-            new_view = doc.GetElement(new_vid)
-            base_name = 'Duct Performance - {} - {}'.format(source_sheet_num, ts)
+            # Copy floor plan (a plan made above for a level is used as is)
+            if made_here:
+                new_view = src_view
+                new_vid = new_view.Id
+            else:
+                new_vid  = src_view.Duplicate(ViewDuplicateOption.Duplicate)
+                new_view = doc.GetElement(new_vid)
+            base_name = 'Duct Performance - {} - {}'.format(view_key, ts)
             try:
                 new_view.Name = base_name
             except Exception:
                 new_view.Name = base_name + ' (2)'
 
-            if multi_level and system_top_z is not None and base_lvl is not None:
-                _open_view_range(new_view, base_lvl, system_low_lvl or base_lvl,
-                                 system_top_z)
+            if multi_level and lvl_eid is not None:
+                _crop_to_elements(new_view, level_elems.get(eid_int(lvl_eid), []), 5.0)
 
             for oid, lbl_key in elem_labels.items():
                 new_view.SetElementOverrides(oid, ogs_by_label[lbl_key])
@@ -7604,14 +7747,26 @@ def main():
                 except Exception:
                     pass
 
+            # Multi level: every level after the first goes on the one sheet,
+            # to the right of the one before it; overlaps are fine, the
+            # engineer moves them (Colin, 2026-11-09).
+            if multi_level and multi_sheet is not None:
+                _vp = Viewport.Create(doc, multi_sheet.Id, new_vid, XYZ(0, 0, 0))
+                rja_drafting.set_viewport_type_none(doc, _vp)
+                multi_vps.append((_vp, lvl_txt))
+                continue
+
             # Output sheet
             new_sheet             = ViewSheet.Create(doc, tb_id)
             new_sheet.SheetNumber = 'DV-{}-{}'.format(source_sheet_num, ts)
             # Sheet/View names share one uniqueness pool in Revit — new_view above
             # already claimed base_name verbatim, so reusing it here always collides.
-            new_sheet.Name = base_name + ' (Sheet)'
-            _file_like_source_sheet(new_sheet, src_sheet)
+            new_sheet.Name = ('Duct Performance - {} - {}'.format(source_sheet_num, ts)
+                              if multi_level else base_name) + ' (Sheet)'
+            _file_like_source_sheet(new_sheet, act_sheet if multi_level else src_sheet)
             new_sheets.append(new_sheet)
+            if multi_level:
+                multi_sheet = new_sheet
 
             # Place viewport
             # Fixed center, positioned by hand in Revit on the Elevation Volleyball
@@ -7629,6 +7784,8 @@ def main():
             doc.Regenerate()
             diagram_vp.SetBoxCenter(XYZ(1.201, 1.212, 0))
             rja_drafting.set_viewport_type_none(doc, diagram_vp)
+            if multi_level:
+                multi_vps.append((diagram_vp, lvl_txt))
 
             # System Summary + flagged-duct table + legend, placed as second
             # viewport on every sheet (the table covers all levels).
@@ -7659,6 +7816,11 @@ def main():
                     sched_vp = Viewport.Create(doc, new_sheet.Id, sched_view.Id,
                                                XYZ(sched_x, sched_y, 0))
                     rja_drafting.set_viewport_type_none(doc, sched_vp)
+
+        # Multi level: lay the level plans out left to right from the first
+        # one's fixed center, each labeled with its level name above it.
+        if multi_level and multi_sheet is not None and multi_vps:
+            _layout_level_viewports(multi_sheet, multi_vps, tn_type_id)
 
         t.Commit()
     except Exception as ex:
