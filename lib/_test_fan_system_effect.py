@@ -661,7 +661,12 @@ class DialogTest(unittest.TestCase):
         pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
         inner = set(e.get(xn) for e in pnl.iter() if e.get(xn))
         self.assertNotIn('cb_curb', inner)
-        self.assertIn('The curb is never modeled.', m.group(1))
+        # Colin, 2026-11-09: the hint is the one line, and the dialog's
+        # Calculation basis keeps only the high level steps (no curb or tap row).
+        self.assertIn('Text="Untick for indoor units (fan coil, furnace, indoor AHU)."', m.group(1))
+        self.assertNotIn('The curb is never modeled.', m.group(1))
+        self.assertNotIn("('Roof curb', ", self.src)
+        self.assertNotIn("('Tap near a supply outlet', ", self.src)
         self.assertNotIn('fan coils, about 1500 fpm', self.src)
         self.assertEqual(F.parse_curb_in('14'), (14.0, None))
         self.assertEqual(F.parse_curb_in('0'), (0.0, None))

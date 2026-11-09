@@ -279,13 +279,13 @@ _SETTINGS_XAML = '''
                      so it sits outside the external static group -->
                 <StackPanel x:Name="pnl_curb" Orientation="Horizontal" Margin="0,10,0,0">
                     <CheckBox x:Name="cb_curb" Content="Include roof curb" VerticalAlignment="Center"
-                              ToolTip="Counts the curb height as straight duct at the unit's supply and return connections. Rooftop Unit and VAV System only."/>
+                              ToolTip="Counts the curb height as straight duct at the unit connections."/>
                     <TextBox x:Name="tb_curb" Width="56" Margin="8,0,6,0"
                              ToolTip="Curb height, in., 0 to 48."/>
                     <TextBlock Text="in. high" VerticalAlignment="Center"/>
                 </StackPanel>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="The curb is never modeled. Its height counts as straight duct at the unit's supply and return connections. Untick for indoor units (fan coil, furnace, AHU)."/>
+                           Text="Untick for indoor units (fan coil, furnace, indoor AHU)."/>
 
                 <!-- External static pressure, grouped under Outputs -->
                 <CheckBox x:Name="cb_static" Content="Calculate total external static pressure" Margin="0,10,0,0"
@@ -386,7 +386,7 @@ _SETTINGS_XAML = '''
                             </Expander>
                             <Expander x:Name="exp_c" IsExpanded="False" Margin="0,4,0,0"
                                       Header="Fallback C values (RJA SP loss worksheet)"
-                                      ToolTip="Used only where a fitting's geometry or flows cannot be read; the report flags each one as FALLBACK. Cannot be negative.">
+                                      ToolTip="Used where a fitting's geometry or flows cannot be read (flagged FALLBACK in the report), and for tees, crosses, wyes, offsets and the flex bend, which have no 2001 table lookup. Cannot be negative.">
                                 <Grid x:Name="grid_c" Margin="16,4,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -913,7 +913,7 @@ def _show_velocity_settings_xaml(use_theme):
                      'Rect mitered elbows: no vanes to 45 deg (CR3-6), vanes above '
                      '(CR3-9). Transitions at the section o Pv, taps at the common '
                      'section Pv. RJA SP loss worksheet C where geometry is '
-                     'unreadable. One flex bend (C 3.3, ASHRAE Duct Systems Design '
+                     'unreadable, and for tees, crosses, wyes and offsets. One flex bend (C 3.3, ASHRAE Duct Systems Design '
                      'Guide) per flex run.'),
         ('External static', 'The most restrictive run (index run) from the unit to '
                             'a terminal, supply path plus return path. Includes duct '
@@ -925,7 +925,7 @@ def _show_velocity_settings_xaml(use_theme):
                             'Excludes the coil and cabinet (already in the published '
                             'ESP), the filter unless Include return filter is ticked, '
                             'and an exhaust roof / wall cap unless Include roof / wall '
-                            'cap is ticked (an inline fan; an upblast roof fan has none).'),
+                            'cap is ticked (never a second cap on a ceiling exhaust fan).'),
         ('Fan system effect', '2001 ASHRAE Fundamentals Eq. 38 (p. 34.14). The first '
                               'disruption past each unit connection: within Le '
                               '(Eq. 36 or 37) of an outlet, within the table floor '
@@ -938,7 +938,8 @@ def _show_velocity_settings_xaml(use_theme):
                               'effect and their own losses. Velocity at an outlet, '
                               'and at an inline or roof exhaust fan inlet: the larger '
                               'of the fan velocity (default by the Scope, 1500 fpm '
-                              'Exhaust System, 2000 fpm otherwise) and the connection '
+                              'Exhaust System and Indoor System, 2000 fpm otherwise) '
+                              'and the connection '
                               'velocity; at a cabinet unit inlet (RTU, AHU, furnace, '
                               'fan coil) the connection velocity, the fan sits past '
                               'the filter and coil. Added before the '
@@ -946,19 +947,6 @@ def _show_velocity_settings_xaml(use_theme):
                               'taps flagged, not priced. An elbow under 0.5 Le of an '
                               'outlet, or under 2 D of an inlet, is red with the '
                               'straight duct before it.'),
-        ('Roof curb', "Counted as straight duct at the unit's own supply and return "
-                      'connections, length only (Rooftop Unit and VAV System, default 14 in.; off '
-                      'for Indoor System, VAV Box and Exhaust System). It sets L for the fan '
-                      'system effect, the straight duct RED, the 3 D WARNING and the '
-                      'swirl and damper checks. Never modeled, so no friction or fitting '
-                      'loss is priced for it.'),
-        ('Tap near a supply outlet', "A tap, branch, tee or wye within 3 D of a cabinet "
-                                     "unit's supply outlet is a WARNING: it disturbs the "
-                                     'outlet like an elbow, a system effect not priced. D '
-                                     'is the equivalent diameter De of the main the tap '
-                                     'sits on (rect 1.30 (ab)^0.625 / (a + b)^0.25), L '
-                                     'with the roof curb; the walk stops at the first '
-                                     'elbow. Not at exhaust fans or VAV boxes.'),
     ] + _dialog_vav_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
@@ -6789,8 +6777,8 @@ def main():
         if scope == 'exhaust':
             _not_inc += (' Exhaust roof / wall cap IS included on every exhaust run.'
                          if exhaust_cap
-                         else ' Exhaust roof / wall cap not included (upblast roof fan, '
-                              'or Include roof / wall cap unticked).')
+                         else ' Exhaust roof / wall cap not included (Include roof / '
+                              'wall cap unticked).')
         if exhaust_on:
             _not_inc += (' A backdraft damper IS added to an exhaust fan run with none '
                          'modeled (not a ceiling exhaust fan, built in).' if exh_backdraft
