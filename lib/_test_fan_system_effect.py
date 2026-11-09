@@ -607,28 +607,69 @@ class DialogTest(unittest.TestCase):
 
     def test_scope_switch_sets_fan_velocity(self):
         # Colin, 2026-11-09: switching the Scope resets the fan velocity box
-        # to its default, with the fan type; a value typed after holds.
+        # and the roof curb to its defaults, with the fan type; a value typed
+        # after holds. Fan Coil: 1500 fpm, curb off and greyed out.
         import textwrap
-        m = re.search(r'^    def _scope_fan_type\(.*?(?=^    \S)', self.src, re.S | re.M)
+        m = re.search(r'^    def _dialog_scope\(.*?(?=^    for rb in)', self.src, re.S | re.M)
         self.assertIsNotNone(m)
+        so = re.search(r'^def _scope_of\(.*?(?=^\S)', self.src, re.S | re.M).group(0)
 
         class Box(object):
             IsChecked = False
+            IsEnabled = True
             Text = ''
         ns = {'fan_system_effect': F}
-        for n in ('rb_scope_exhaust', 'rb_fan_swsi', 'rb_fan_dwdi', 'tb_fan_fpm'):
+        exec(so, ns)
+        names = ('rb_scope_rtu', 'rb_scope_vav', 'rb_scope_vavbox', 'rb_scope_exhaust',
+                 'rb_scope_fancoil', 'rb_fan_swsi', 'rb_fan_dwdi', 'tb_fan_fpm', 'cb_curb',
+                 'tb_curb')
+        for n in names:
             ns[n] = Box()
         exec(textwrap.dedent(m.group(0)), ns)
-        ns['rb_scope_exhaust'].IsChecked = True
-        ns['_scope_fan_type']()
-        self.assertEqual((ns['tb_fan_fpm'].Text, ns['rb_fan_swsi'].IsChecked), ('1500', True))
-        ns['rb_scope_exhaust'].IsChecked = False
-        ns['_scope_fan_type']()
-        self.assertEqual((ns['tb_fan_fpm'].Text, ns['rb_fan_dwdi'].IsChecked), ('2000', True))
-        # the plain fallback dialog takes the Scope's default too
-        self.assertIsNotNone(re.search(
-            r"fan_system_effect\.default_settings\(\s+'exhaust' if bool\(rb_exhaust\.IsChecked\)",
-            self.src))
+
+        def pick(rb):
+            for n in names[:5]:
+                ns[n].IsChecked = (n == rb)
+            ns['_scope_fan_type']()
+            return (ns['tb_fan_fpm'].Text, ns['rb_fan_swsi'].IsChecked,
+                    ns['cb_curb'].IsChecked, ns['cb_curb'].IsEnabled, ns['tb_curb'].Text)
+        self.assertEqual(pick('rb_scope_exhaust'), ('1500', True, False, False, '14'))
+        self.assertEqual(pick('rb_scope_fancoil'), ('1500', False, False, False, '14'))
+        self.assertEqual(pick('rb_scope_rtu'), ('2000', False, True, True, '14'))
+        self.assertEqual(pick('rb_scope_vav'), ('2000', False, True, True, '14'))
+        self.assertEqual(pick('rb_scope_vavbox'), ('2000', False, False, False, '14'))
+        self.assertEqual(ns['_dialog_scope'](), 'vavbox')
+        # the plain fallback dialog takes the Scope's fan velocity and curb,
+        # Fan Coil included
+        self.assertIn('fan_system_effect.default_settings(fb_scope)', self.src)
+        self.assertIn('curb_in=fan_system_effect.scope_curb_in(fb_scope)', self.src)
+        self.assertIn("rb_fancoil = _scope_radio('Fan Coil.", self.src)
+        self.assertIn('bool(rb_exhaust.IsChecked), bool(rb_fancoil.IsChecked))', self.src)
+
+    def test_curb_dialog_and_settings(self):
+        # Colin, 2026-11-09: roof curb box, default on at 14 in., outside the
+        # external static group, validated 0 to 48 in.
+        m = re.search(r"^_SETTINGS_XAML = '{3}(.*?)'{3}", self.src, re.S | re.M)
+        root = ET.fromstring(m.group(1).replace('@@RESOURCES@@', '').replace('@@HEADER@@', ''))
+        xn = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
+        names = set(e.get(xn) for e in root.iter() if e.get(xn))
+        self.assertTrue({'pnl_curb', 'cb_curb', 'tb_curb'} <= names)
+        pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
+        inner = set(e.get(xn) for e in pnl.iter() if e.get(xn))
+        self.assertNotIn('cb_curb', inner)
+        self.assertIn('The curb is never modeled.', m.group(1))
+        self.assertNotIn('fan coils, about 1500 fpm', self.src)
+        self.assertEqual(F.parse_curb_in('14'), (14.0, None))
+        self.assertEqual(F.parse_curb_in('0'), (0.0, None))
+        for bad in ('-1', '49', 'x', 'nan'):
+            v, err = F.parse_curb_in(bad)
+            self.assertIsNone(v)
+            self.assertTrue(err)
+        self.assertEqual([F.scope_curb_in(k) for k in ('rtu', 'vav', 'fancoil', 'vavbox',
+                                                       'exhaust')],
+                         [14.0, 14.0, 0.0, 0.0, 0.0])
+        self.assertEqual(F.scope_fan_fpm('fancoil'), 1500.0)
+        self.assertIn("errors.append((tb_curb, 'Roof curb height ' + err + '.', ()))", self.src)
 
     def test_scope_is_one_choice(self):
         # Colin, 2026-11-03: Scope is RTU, VAV System or Exhaust System, one
@@ -638,8 +679,9 @@ class DialogTest(unittest.TestCase):
         xn = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
         radios = dict((e.get(xn), e) for e in root.iter()
                       if e.tag.endswith('RadioButton') and e.get('GroupName') == 'scope')
-        self.assertEqual(sorted(radios), ['rb_scope_exhaust', 'rb_scope_rtu', 'rb_scope_vav',
-                                          'rb_scope_vavbox'])
+        self.assertEqual(sorted(radios), ['rb_scope_exhaust', 'rb_scope_fancoil',
+                                          'rb_scope_rtu', 'rb_scope_vav', 'rb_scope_vavbox'])
+        self.assertEqual(radios['rb_scope_fancoil'].get('Content'), 'Fan Coil')
         self.assertEqual(radios['rb_scope_vavbox'].get('Content'), 'VAV Box')
         self.assertEqual(radios['rb_scope_rtu'].get('Content'), 'RTU')
         names = set(e.get(xn) for e in root.iter() if e.get(xn))
@@ -688,9 +730,9 @@ class DialogTest(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertEqual([n.strip() for n in m.group(1).split(',')],
                          ['rb_scope_rtu', 'rb_scope_vav', 'rb_scope_vavbox',
-                          'rb_scope_exhaust'])
+                          'rb_scope_exhaust', 'rb_scope_fancoil'])
         body = m.group(0)
-        self.assertIn('swsi = bool(rb_scope_exhaust.IsChecked)', body)
+        self.assertIn("swsi = key == 'exhaust'", body)
         self.assertIn("fan_type='SWSI' if bool(rb_exhaust.IsChecked)", self.src)  # legacy
 
     def test_dialog_basis_vav_static_only(self):

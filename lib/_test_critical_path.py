@@ -2969,7 +2969,7 @@ check("case80 same ED7-2 C either way, only Pv changes",
 RC1212R = {'round': False, 'area_ft2': 1.0, 'd_in': None, 'w_in': 12.0, 'h_in': 12.0}
 
 
-def _run81(l_ft, inline=False):
+def _run81(l_ft, inline=False, fan=None, **kw):
     n = {4700: _unit({4701: RC1212R}),
          4702: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
                     geom={'round': False, 'd_in': None, 'r_in': 18.0, 'w_in': 12.0,
@@ -2981,9 +2981,9 @@ def _run81(l_ft, inline=False):
         _r.d_h_in = 12.0
     t = {4710: (800.0, cls, 'RG-81')}
     if inline:
-        return crit([4700], c, d, t, n, 10.0, fan_effect=FSE_ON,
-                    inline_fan_roots={4700})[4700][cls]
-    return _fse_run(n, c, d, t, 4700, cls=cls)
+        return crit([4700], c, d, t, n, 10.0, fan_effect=fan or FSE_ON,
+                    inline_fan_roots={4700}, **kw)[4700][cls]
+    return _fse_run(n, c, d, t, 4700, cls=cls, fan=fan or FSE_ON, **kw)
 
 
 def _w81(leaf):
@@ -3035,6 +3035,89 @@ check("case81 elbow at 3.0 ft: no WARNING, and the governs NOTE does not point t
 _r81e = _run81(2.4, inline=True)
 check("case81 exhaust fan inlet, same layout: no WARNING",
       not _w81(_r81e), "notes %r" % (_r81e.get('fse_notes'),))
+
+# 82: the roof curb (Colin, 2026-11-09): never modeled, its height counted
+#     as straight duct at a unit's own connections, length only.
+def _curb(inches, base=None):
+    return dict(base or FSE_ON, curb_in=float(inches))
+
+
+def _notes(leaf, kind=None):
+    return [t for k, t in leaf.get('fse_notes', ()) if kind is None or k == kind]
+
+
+# inlet, 12x12 return, rect elbow H 12 (2 H 2.0 ft, 3 H 3.0 ft)
+_i0 = _run81(1.9)
+_i14 = _run81(1.9, fan=_curb(14))
+check("case82 inlet 1.9 ft: RED with no curb; a 14 in. curb (L 3.07 ft) clears 3 H: no RED, no WARNING",
+      4702 in (_i0.get('fse_red_ids') or set())
+      and not _i14.get('fse_red_ids') and not _w81(_i14),
+      "red %r notes %r" % (_i14.get('fse_red_ids'), _notes(_i14)))
+_i6 = _run81(1.9, fan=_curb(6))
+check("case82 inlet 1.9 ft + 6 in. curb (L 2.4 ft): the 3 H WARNING names the curb and the duct past it",
+      _w81(_i6) == ['WARNING: Elbow 4702 is 1.9 ft from the return inlet (plus a 6 in. roof '
+                    'curb); provide at least 3.0 ft of straight duct (3 H, H 12 in.), the 6 '
+                    'in. curb included (2.5 ft of duct past the curb). Under 3 H the elbow '
+                    'causes a fan system effect that is not priced (the inlet is priced at '
+                    'its 800 fpm opening velocity), so the external static shown is low until '
+                    'the elbow is moved.'] and not _i6.get('fse_red_ids'),
+      "notes %r" % (_notes(_i6),))
+_i6r = _run81(1.0, fan=_curb(6))
+_red6 = _notes(_i6r, 'red')
+check("case82 inlet 1.0 ft + 6 in. curb (L 1.5 ft): RED, the duct past the curb asked for",
+      len(_red6) == 1 and _red6[0].startswith(
+          'RED: Elbow 4702, 1.0 ft from the return inlet (plus a 6 in. roof curb), 1.5 H (H 12 in.')
+      and 'Provide at least 2.0 ft of straight duct (2 H of the elbow), the 6 in. curb included '
+          '(1.5 ft of duct past the curb); 5.0 ft (5 H, curb included)' in _red6[0]
+      and (_i6r.get('fse_red_ducts') or {}).get(4701) ==
+      ('Straight duct: elbow 4702 at 1.0 ft + 6 in. curb, under 2 H',
+       'Straight duct 1.5 ft past the curb'),
+      "red %r ducts %r" % (_red6, _i6r.get('fse_red_ducts')))
+check("case82 one curb NOTE per unit",
+      _notes(_i6).count('NOTE: roof curb 6 in. counted as straight duct at the unit '
+                        'connections (not modeled).') == 1, "notes %r" % (_notes(_i6),))
+_i6g = [t for _k, t in _i6.get('fse_gov_notes', ())]
+_f6 = _fse_items(_i6)
+check("case82 the basis and governs NOTE give L as duct + curb",
+      _f6 and 'L 1.9 + 0.5 ft curb' in _f6[0][1]
+      and len(_i6g) == 1 and 'elbow 4702 at 1.9 + 0.5 ft curb' in _i6g[0],
+      "rows %r gov %r" % (_f6, _i6g))
+_c0 = _run81(1.9, fan=_curb(0))
+check("case82 curb 0: the same as no curb, no curb NOTE",
+      _c0.get('fse_red_ids') == _i0.get('fse_red_ids') and _notes(_c0) == _notes(_i0)
+      and abs(_c0['total_inwc'] - _i0['total_inwc']) < 1e-12)
+check("case82 the curb adds length only: friction and fittings unchanged",
+      abs(_i6['friction_inwc'] - _run81(1.9)['friction_inwc']) < 1e-12)
+_e0 = _run81(1.9, inline=True)
+_e14 = _run81(1.9, inline=True, fan=_curb(14))
+check("case82 exhaust fan inlet: the curb is not counted",
+      _notes(_e14) == _notes(_e0) and _e14.get('fse_red_ids') == _e0.get('fse_red_ids')
+      and abs(_e14['total_inwc'] - _e0['total_inwc']) < 1e-12, "notes %r" % (_notes(_e14),))
+_b14 = _run81(1.9, fan=_curb(14), vav_box_ids={4700})
+check("case82 VAV box root: no curb, no curb NOTE",
+      not any('roof curb' in t for t in _notes(_b14)), "notes %r" % (_notes(_b14),))
+# outlet: SQ24 supply outlet, elbow 1.0 ft out (case 31 layout, Le 5.71 ft)
+n82 = {990: _unit({991: SQ24}),
+       992: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c82 = {990: [991], 991: [992], 992: [993], 993: [995]}
+d82 = build([(991, 0.0, 1.0, 1000.0, 4.0, 'Supply Air'),
+             (993, 0.0, 10.0, 1000.0, 4.0, 'Supply Air')])
+t82 = {995: (4000.0, 'Supply Air', 'SD-82')}
+_o0 = _fse_run(n82, c82, d82, t82, 990)
+_o14 = _fse_run(n82, c82, d82, t82, 990, fan=_curb(14))
+_ro14 = _notes(_o14, 'red')
+check("case82 outlet 1.0 ft + 14 in. curb: still RED under 0.5 Le, named with the curb, lower FSE",
+      len(_ro14) == 1 and _ro14[0].startswith('RED: Elbow 992, 1.0 ft from the supply outlet '
+                                              '(plus a 14 in. roof curb), L/Le ')
+      and 'ft of straight duct, the 14 in. curb included (' in _ro14[0]
+      and _o14.get('fse_inwc', 0) < _o0.get('fse_inwc', 0)
+      and 'L 1.0 + 1.2 ft curb / Le ' in _fse_items(_o14)[0][1],
+      "red %r fse %r / %r rows %r" % (_ro14, _o14.get('fse_inwc'), _o0.get('fse_inwc'),
+                                      _fse_items(_o14)))
+check("case82 METHOD names the curb used",
+      'A roof curb (dialog, default 14 in.; 14 in. this run) is counted as straight duct '
+      'at RTU connections, length only.' in FSE.method_lines(_curb(14))[0]
+      and 'roof curb' not in FSE.method_lines(FSE_ON)[0])
 
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round

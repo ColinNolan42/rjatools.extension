@@ -218,9 +218,13 @@ _SETTINGS_XAML = '''
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"
                            Text="One unit per run. The scope sets which equipment the next list shows."/>
                 <RadioButton x:Name="rb_scope_rtu" GroupName="scope" Content="RTU"
-                             ToolTip="A constant volume unit with supply and return: RTU, AHU, furnace or fan coil. VAV boxes and exhaust fans are not listed."/>
+                             ToolTip="A constant volume rooftop or packaged unit with supply and return. The roof curb is counted. VAV boxes and exhaust fans are not listed."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
                            Text="Lists units only, no VAV boxes or exhaust fans."/>
+                <RadioButton x:Name="rb_scope_fancoil" GroupName="scope" Content="Fan Coil" Margin="0,8,0,0"
+                             ToolTip="An indoor unit with supply and return (fan coil, furnace, indoor AHU), checked like an RTU with no roof curb and a 1500 fpm fan velocity."/>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                           Text="Lists units only. Indoor unit: no roof curb, fan velocity 1500 fpm."/>
                 <RadioButton x:Name="rb_scope_vav" GroupName="scope" Content="VAV System" Margin="0,8,0,0"
                              ToolTip="The full system from the unit: supply mains to the VAV box inlets checked as medium pressure (MP), the boxes, low pressure after them and the return, with external static."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -271,6 +275,18 @@ _SETTINGS_XAML = '''
                     </Grid.ColumnDefinitions>
                 </Grid>
 
+                <!-- Roof curb (Colin, 2026-11-09): the straight duct checks use it,
+                     so it sits outside the external static group -->
+                <StackPanel x:Name="pnl_curb" Orientation="Horizontal" Margin="0,10,0,0">
+                    <CheckBox x:Name="cb_curb" Content="Include roof curb" VerticalAlignment="Center"
+                              ToolTip="Counts the curb height as straight duct at the unit's supply and return connections. RTU and VAV System only."/>
+                    <TextBox x:Name="tb_curb" Width="56" Margin="8,0,6,0"
+                             ToolTip="Curb height, in., 0 to 48."/>
+                    <TextBlock Text="in. high" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
+                           Text="The curb is never modeled. Its height counts as straight duct at the unit's supply and return connections. Untick for indoor units (fan coil, furnace, AHU)."/>
+
                 <!-- External static pressure, grouped under Outputs -->
                 <CheckBox x:Name="cb_static" Content="Calculate total external static pressure" Margin="0,10,0,0"
                           ToolTip="The fan static along the most restrictive run outside the unit, supply path plus return path. See Calculation basis."/>
@@ -312,11 +328,11 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System, 2000 fpm RTU, VAV System and VAV Box."/>
+                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System and Fan Coil, 2000 fpm RTU, VAV System and VAV Box."/>
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Set by the Scope: 1500 fpm Exhaust System, 2000 fpm otherwise; fan coils, about 1500 fpm. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
+                                       Text="Set by the Scope: 1500 fpm Exhaust System and Fan Coil, 2000 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
@@ -459,10 +475,12 @@ def _wpf_named(win, name):
     return el
 
 
-def _scope_of(vav, vavbox, exhaust):
+def _scope_of(vav, vavbox, exhaust, fancoil=False):
     """The Scope key from the dialog's choice."""
     if vavbox:
         return 'vavbox'
+    if fancoil:
+        return 'fancoil'
     return 'vav' if vav else 'exhaust' if exhaust else 'rtu'
 
 
@@ -480,7 +498,7 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
     which has no fields for it) takes fan_system_effect.default_settings().
     exhaust_settings: {'backdraft' (Include backdraft damper)}; a missing
     'backdraft' is taken as off in main() (Colin, 2026-11-03).
-    'scope': 'rtu', 'vav', 'vavbox' or 'exhaust' (Colin, 2026-11-03: one
+    'scope': 'rtu', 'fancoil', 'vav', 'vavbox' or 'exhaust' (Colin, 2026-11-03: one
     Scope choice). None derives it from vav / exhaust (no VAV Box).
     """
     limits = dict(limits)
@@ -538,6 +556,9 @@ def _show_velocity_settings_xaml(use_theme):
     rb_scope_vav = N('rb_scope_vav')
     rb_scope_vavbox = N('rb_scope_vavbox')
     rb_scope_exhaust = N('rb_scope_exhaust')
+    rb_scope_fancoil = N('rb_scope_fancoil')
+    cb_curb = N('cb_curb')
+    tb_curb = N('tb_curb')
     pnl_exh_static = N('pnl_exh_static')
     cb_exh_backdraft = N('cb_exh_backdraft')
     tb_backdraft = N('tb_backdraft')
@@ -615,9 +636,12 @@ def _show_velocity_settings_xaml(use_theme):
     rb_fan_swsi.IsChecked = _fse_def['fan_type'] == 'SWSI'
     rb_fan_dwdi.IsChecked = _fse_def['fan_type'] != 'SWSI'
     tb_fan_fpm.Text = '%g' % _fse_def['fan_fpm']
+    tb_curb.Text = '%g' % fan_system_effect.DEFAULT_CURB_IN
+    cb_curb.IsChecked = True     # RTU, the default Scope (Colin, 2026-11-09)
     tb_backdraft.Text = '%.2f' % fitting_tables.component_of('backdraft')
     tb_exh_cap.Text = '%.2f' % fitting_tables.component_of('cap')
-    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_fan_fpm, tb_backdraft, tb_exh_cap):
+    for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_fan_fpm, tb_backdraft, tb_exh_cap,
+              tb_curb):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
@@ -922,6 +946,12 @@ def _show_velocity_settings_xaml(use_theme):
                               'taps flagged, not priced. An elbow under 0.5 Le of an '
                               'outlet, or under 2 D of an inlet, is red with the '
                               'straight duct before it.'),
+        ('Roof curb', "Counted as straight duct at the unit's own supply and return "
+                      'connections, length only (RTU and VAV System, default 14 in.; off '
+                      'for Fan Coil, VAV Box and Exhaust System). It sets L for the fan '
+                      'system effect, the straight duct RED, the 3 D WARNING and the '
+                      'swirl and damper checks. Never modeled, so no friction or fitting '
+                      'loss is priced for it.'),
     ] + _dialog_vav_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
@@ -961,6 +991,7 @@ def _show_velocity_settings_xaml(use_theme):
         fse_on = master and bool(cb_fse.IsChecked) and not box
         pnl_fse.IsEnabled = fse_on
         pnl_fse.Opacity = 1.0 if fse_on else 0.55
+        tb_curb.IsEnabled = bool(cb_curb.IsEnabled) and bool(cb_curb.IsChecked)
         # VAV box and static fields appear only with VAV and external static
         # both ticked (Colin, 2026-10-22).
         both = master and bool(rb_scope_vav.IsChecked)
@@ -978,22 +1009,34 @@ def _show_velocity_settings_xaml(use_theme):
         for el in mp_row:
             el.Visibility = vis
     for cb in (cb_static, cb_filter, cb_fse, rb_scope_rtu, rb_scope_vav, rb_scope_vavbox,
-               rb_scope_exhaust):
+               rb_scope_exhaust, rb_scope_fancoil, cb_curb):
         cb.Checked += sync_enable
         cb.Unchecked += sync_enable
     sync_enable()
 
-    # Fan type and fan velocity follow the Scope (Colin, 2026-11-03 and
-    # 2026-11-09): RTU and VAV System DWDI at 2000 fpm, Exhaust System SWSI
-    # at 1500 fpm. Set only when the Scope changes, so a value typed after
-    # the switch holds for the run.
+    # Fan type, fan velocity and roof curb follow the Scope (Colin,
+    # 2026-11-03 and 2026-11-09): RTU and VAV System DWDI at 2000 fpm with
+    # the curb on, Fan Coil DWDI at 1500 fpm, Exhaust System SWSI at 1500
+    # fpm, the curb off and greyed out on Fan Coil, VAV Box and Exhaust
+    # System. Set only when the Scope changes, so a value typed after the
+    # switch holds for the run.
+    def _dialog_scope():
+        return _scope_of(bool(rb_scope_vav.IsChecked), bool(rb_scope_vavbox.IsChecked),
+                         bool(rb_scope_exhaust.IsChecked), bool(rb_scope_fancoil.IsChecked))
+
     def _scope_fan_type(s=None, e=None):
-        swsi = bool(rb_scope_exhaust.IsChecked)
+        key = _dialog_scope()
+        swsi = key == 'exhaust'
         rb_fan_swsi.IsChecked = swsi
         rb_fan_dwdi.IsChecked = not swsi
-        tb_fan_fpm.Text = '%g' % fan_system_effect.scope_fan_fpm(
-            'exhaust' if swsi else None)
-    for rb in (rb_scope_rtu, rb_scope_vav, rb_scope_vavbox, rb_scope_exhaust):
+        tb_fan_fpm.Text = '%g' % fan_system_effect.scope_fan_fpm(key)
+        curb = key in fan_system_effect.CURB_SCOPES
+        cb_curb.IsEnabled = curb
+        cb_curb.IsChecked = curb
+        tb_curb.Text = '%g' % fan_system_effect.DEFAULT_CURB_IN
+        tb_curb.IsEnabled = curb
+    for rb in (rb_scope_rtu, rb_scope_vav, rb_scope_vavbox, rb_scope_exhaust,
+               rb_scope_fancoil):
         rb.Checked += _scope_fan_type
 
     # ── OK: validate every field, report inline, window stays open ──────────
@@ -1082,7 +1125,10 @@ def _show_velocity_settings_xaml(use_theme):
             if cap is not None:
                 comp_values['cap'] = cap
 
-        fan_effect = fan_system_effect.default_settings()
+        scope_key = _dialog_scope()
+        # The Scope's fan velocity even with external static off: the
+        # straight duct RED reads the outlet Le at it (Colin, 2026-11-09).
+        fan_effect = fan_system_effect.default_settings(scope_key)
         fan_effect['on'] = bool(cb_fse.IsChecked)
         fan_effect['fan_type'] = 'SWSI' if bool(rb_fan_swsi.IsChecked) else 'DWDI'
         # The fan velocity, the connection's when higher; no other choice in
@@ -1100,6 +1146,15 @@ def _show_velocity_settings_xaml(use_theme):
                     errors.append((tb_fan_fpm, 'Fan velocity ' + err + '.', ()))
                 else:
                     fan_effect['fan_fpm'] = v
+        # Roof curb (Colin, 2026-11-09): RTU and VAV System only, read
+        # whether or not external static is ticked (the RED checks use it).
+        fan_effect['curb_in'] = 0.0
+        if bool(cb_curb.IsChecked) and scope_key in fan_system_effect.CURB_SCOPES:
+            v, err = fan_system_effect.parse_curb_in(tb_curb.Text)
+            if err:
+                errors.append((tb_curb, 'Roof curb height ' + err + '.', ()))
+            else:
+                fan_effect['curb_in'] = v
 
         vav = bool(rb_scope_vav.IsChecked)
         vav_settings = vav_checks.default_settings()
@@ -1122,9 +1177,7 @@ def _show_velocity_settings_xaml(use_theme):
                                   fan_effect,
                                   ext_static and exhaust and bool(cb_exh_cap.IsChecked),
                                   exhaust, exhaust_settings,
-                                  scope=_scope_of(bool(rb_scope_vav.IsChecked),
-                                                  bool(rb_scope_vavbox.IsChecked),
-                                                  exhaust))
+                                  scope=scope_key)
         return errors, values
 
     def on_ok(s, e):
@@ -1300,7 +1353,10 @@ def _show_velocity_settings_dialog_legacy():
         outer.Children.Add(rb)
         return rb
 
-    rb_rtu = _scope_radio('RTU.  Lists units only, no VAV boxes or exhaust fans.', True)
+    rb_rtu = _scope_radio('RTU.  Lists units only, no VAV boxes or exhaust fans. Roof '
+                          'curb %g in. counted.' % fan_system_effect.DEFAULT_CURB_IN, True)
+    rb_fancoil = _scope_radio('Fan Coil.  Lists units only. Indoor unit: no roof curb, fan '
+                              'velocity 1500 fpm.')
     rb_vav = _scope_radio('VAV System.  Lists units only. The full system: supply mains '
                           'between the unit and the box inlets are checked as medium '
                           'pressure (MP).')
@@ -1807,6 +1863,8 @@ def _show_velocity_settings_dialog_legacy():
                     forms.alert('The return filter drop cannot be negative.',
                                 title='Invalid Input')
                     return
+            fb_scope = _scope_of(bool(rb_vav.IsChecked), bool(rb_vavbox.IsChecked),
+                                 bool(rb_exhaust.IsChecked), bool(rb_fancoil.IsChecked))
             result[0] = _settings_result(out, gpct, selected_cols, full_diag,
                                          ext_static, safety_pct, c_values,
                                          comp_values, calc_basis, filter_inwc,
@@ -1814,16 +1872,13 @@ def _show_velocity_settings_dialog_legacy():
                                          # no fan fields here: the fan type
                                          # follows the Scope (Colin, 2026-11-03)
                                          fan_effect=dict(
-                                             fan_system_effect.default_settings(
-                                                 'exhaust' if bool(rb_exhaust.IsChecked)
-                                                 else None),
+                                             fan_system_effect.default_settings(fb_scope),
                                              fan_type='SWSI' if bool(rb_exhaust.IsChecked)
-                                             else 'DWDI'),
+                                             else 'DWDI',
+                                             curb_in=fan_system_effect.scope_curb_in(fb_scope)),
                                          exhaust_cap=ext_static and bool(cb_exh_cap.IsChecked),
                                          exhaust=bool(rb_exhaust.IsChecked),
-                                         scope=_scope_of(bool(rb_vav.IsChecked),
-                                                         bool(rb_vavbox.IsChecked),
-                                                         bool(rb_exhaust.IsChecked)))
+                                         scope=fb_scope)
         except ValueError:
             forms.alert('Enter valid numbers for all fields.', title='Invalid Input')
             return
@@ -2109,7 +2164,8 @@ def _show_system_picker_legacy(display_names, scope_label):
 # ── helpers ────────────────────────────────────────────────────────────────────
 # Scope (Colin, 2026-11-03): one choice, one unit per run. Each lists only
 # its kinds of equipment; a VAV box can still be picked alone under VAV System.
-_SCOPE_LABEL = {'rtu': 'RTU', 'vav': 'VAV System', 'vavbox': 'VAV Box',
+_SCOPE_LABEL = {'rtu': 'RTU', 'fancoil': 'Fan Coil', 'vav': 'VAV System',
+                'vavbox': 'VAV Box',
                 'exhaust': 'Exhaust System'}
 # Exhaust fan type as read from its connections (Colin, 2026-11-03).
 _EXHAUST_FAN_KIND_TEXT = {
@@ -2122,9 +2178,10 @@ _EXHAUST_FAN_KIND_TEXT = {
 }
 # VAV System is the full system from the unit, VAV Box one box's low pressure
 # supply (Colin, 2026-11-03).
-_SCOPE_LISTS = {'rtu': ('unit',), 'vav': ('unit',), 'vavbox': ('VAV box',),
+_SCOPE_LISTS = {'rtu': ('unit',), 'fancoil': ('unit',), 'vav': ('unit',),
+                'vavbox': ('VAV box',),
                 'exhaust': ('exhaust fan',)}
-_KIND_SCOPE = {'unit': 'RTU or VAV System', 'VAV box': 'VAV Box',
+_KIND_SCOPE = {'unit': 'RTU, Fan Coil or VAV System', 'VAV box': 'VAV Box',
                'exhaust fan': 'Exhaust System'}
 
 
@@ -3223,9 +3280,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
     def _fse_first_disruption(root_id, first, win, where='unit connection',
                               prev=None, seen=None, collect=None, passed=None,
-                              through_taps=False, ducts=None, accessories=None):
+                              through_taps=False, ducts=None, accessories=None,
+                              l0=0.0):
         """(role or None, L ft, node id, notes): the first disruption within
         win feet of the unit connection at node first.
+
+        l0: straight length counted before the first node, a roof curb that
+        is never modeled (Colin, 2026-11-09). Every L returned counts it.
 
         L is the straight duct from the unit connection to it: duct lengths
         and transition lengths summed (Colin, 2026-11-02: a curb adapter is
@@ -3262,7 +3323,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         notes = []
         if seen is None:
             prev, seen = root_id, set([root_id])
-        nid, l_ft = first, 0.0
+        nid, l_ft = first, float(l0)
         while nid is not None and nid not in seen and l_ft < win:
             seen.add(nid)
             dr = dr_by_int_id.get(nid)
@@ -3547,6 +3608,16 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['where'] = where
         rec['where_item'] = where_item
         notes = rec['notes']
+        # A roof curb (Colin, 2026-11-09): never modeled, counted as straight
+        # duct at a unit's own connections, so every L below starts at its
+        # height. Not at an exhaust fan, a VAV box root or a duct pick.
+        curb_ft = 0.0
+        if (pick is None and root_id not in inline_fan_roots
+                and root_id not in discharge_roots and root_id not in box_ids):
+            curb_ft = float(fse_set.get('curb_in') or 0.0) / 12.0
+        rec['curb_ft'] = curb_ft
+        where_c = where + ((' (plus a %s roof curb)' % fan_system_effect.curb_in_text(curb_ft))
+                           if curb_ft else '')
         flow = _first_duct(first)
         cfm = cfm_in if cfm_in else _connection_cfm(first)
         if flow is None or cfm <= 0 or not flow.area_ft2:
@@ -3633,10 +3704,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if pick is not None:
                 _fse_first_disruption(root_id, first, walk_ft, where, prev=pick[0],
                                       seen=set(pick[1]), collect=elbows_r,
-                                      through_taps=True, ducts=ducts_r)
+                                      through_taps=True, ducts=ducts_r, l0=curb_ft)
             else:
                 _fse_first_disruption(root_id, first, walk_ft, where, collect=elbows_r,
-                                      through_taps=True, ducts=ducts_r)
+                                      through_taps=True, ducts=ducts_r, l0=curb_ft)
             first_elbow = min(elbows_r, key=lambda x: x[1])[0] if elbows_r else None
             fan_system_effect.log.info('straight duct check: %s, RED line %.2f ft, '
                                        'elbows %r, ducts %r', where, red_ft, elbows_r,
@@ -3644,7 +3715,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             for e_r, l_r in elbows_r:
                 if role_here == fan_system_effect.OUTLET:
                     notes.append(('red', fan_system_effect.le_text(where, e_r, l_r, win,
-                                                                   _eq)))
+                                                                   _eq, curb_ft)))
                     need = fan_system_effect.outlet_red_ft(win)
                 else:
                     # The walk used the larger side (conservative); a rect
@@ -3661,11 +3732,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         if (cabinet_in and e_r == first_elbow
                                 and l_r < fan_system_effect.cabinet_warn_ft(size_e) - 1e-9):
                             notes.append(('warn', fan_system_effect.cabinet_warn_text(
-                                where, e_r, l_r, size_e, is_round_c, v_conn)))
+                                where, e_r, l_r, size_e, is_round_c, v_conn, curb_ft)))
                             rec['warn3'] = (e_r, 'D' if is_round_c else 'H')
                         continue
                     notes.append(('red', fan_system_effect.inlet_red_text(
-                        where, e_r, l_r, size_e, is_round_c, src_l, src_s)))
+                        where, e_r, l_r, size_e, is_round_c, src_l, src_s, curb_ft)))
                     need = fan_system_effect.inlet_red_ft(size_e)
                 rec['red'].add(e_r)
                 for d_r, at in ducts_r:
@@ -3673,8 +3744,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         rec['red'].add(d_r)
                         rec['red_ducts'][d_r] = (
                             fan_system_effect.straight_duct_reason(
-                                e_r, l_r, role_here, 'D' if is_round_c else 'H'),
-                            'Straight duct %.1f ft' % fan_system_effect._ceil_step(need))
+                                e_r, l_r, role_here, 'D' if is_round_c else 'H', curb_ft),
+                            ('Straight duct %.1f ft past the curb' % fan_system_effect._ceil_step(
+                                max(need - curb_ft, 0.0))) if curb_ft else
+                            ('Straight duct %.1f ft' % fan_system_effect._ceil_step(need)))
         passed = {}     # transitions inside the pricing window (win)
         # Two elbows turning in different planes within 6 Dh of the
         # connection: RED, never priced (Colin, 2026-11-02; supply, return
@@ -3685,16 +3758,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             elbows = []
             if pick is not None:
                 _fse_first_disruption(root_id, first, swin, where, prev=pick[0],
-                                      seen=set(pick[1]), collect=elbows)
+                                      seen=set(pick[1]), collect=elbows, l0=curb_ft)
             else:
-                _fse_first_disruption(root_id, first, swin, where, collect=elbows)
+                _fse_first_disruption(root_id, first, swin, where, collect=elbows, l0=curb_ft)
             pair = fan_system_effect.swirl_pair(
                 [(e, l, hvac_graph.elbow_turn_normal(all_nodes.get(e))) for e, l in elbows])
             fan_system_effect.log.info('swirl check: %s, %d elbows within %.2f ft, pair %r',
                                        where, len(elbows), swin, pair)
             if pair is not None:
                 notes.append(('red', fan_system_effect.swirl_text(
-                    role_here, where, pair, swin, d_h)))
+                    role_here, where_c,
+                    tuple((e, l - curb_ft, nv) for e, l, nv in pair), swin, d_h)))
                 rec['red'].update((pair[0][0], pair[1][0]))
             elif len(elbows) >= 2:
                 # A double bend (Colin, 2026-11-04): two elbows inside 6 Dh
@@ -3702,7 +3776,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # the fan system effect, so the real loss is higher. A
                 # WARNING, not RED, and nothing extra is priced.
                 notes.append(('warn', fan_system_effect.double_elbow_text(
-                    where, [(e, l, None) for e, l in elbows], swin, d_h)))
+                    where_c, [(e, l - curb_ft, None) for e, l in elbows], swin, d_h)))
         else:
             fan_system_effect.log.info('swirl check: %s first duct Dh NOT FOUND, '
                                        'not checked', where)
@@ -3714,23 +3788,23 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if pick is not None:
             _fse_first_disruption(root_id, first, win, where, prev=pick[0],
                                   seen=set(pick[1]), collect=[], through_taps=True,
-                                  accessories=acc)
+                                  accessories=acc, l0=curb_ft)
         else:
             _fse_first_disruption(root_id, first, win, where, collect=[],
-                                  through_taps=True, accessories=acc)
+                                  through_taps=True, accessories=acc, l0=curb_ft)
         fan_system_effect.log.info('damper check: %s, window %.2f ft, dampers %r',
                                    where, win, acc)
         for a_id, a_l, a_fam in acc:
             notes.append(('warn', fan_system_effect.damper_window_text(
-                where, a_id, a_fam, a_l, win, win_name)))
+                where_c, a_id, a_fam, a_l - curb_ft, win, win_name)))
         grp_ducts = []
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
                 root_id, first, win, where, prev=pick[0], seen=set(pick[1]),
-                passed=passed, ducts=grp_ducts)
+                passed=passed, ducts=grp_ducts, l0=curb_ft)
         else:
             role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where,
-                                                            passed=passed, ducts=grp_ducts)
+                                                            passed=passed, ducts=grp_ducts, l0=curb_ft)
         notes.extend(wnotes)
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (win_short, win)
@@ -3739,9 +3813,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return rec
         if role != 'elbow':
             notes.append(('warn', fan_system_effect.disruption_text(
-                _FSE_KIND_TEXT.get(role, role), did, where, l_ft, win, win_name)))
-            rec['none'] = '%s %s at %.1f ft inside %s, flagged, not priced' % (
-                _FSE_KIND_TEXT.get(role, role), did, l_ft, win_short)
+                _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft - curb_ft, win,
+                win_name)))
+            rec['none'] = '%s %s at %s inside %s, flagged, not priced' % (
+                _FSE_KIND_TEXT.get(role, role), did,
+                fan_system_effect.l_text(l_ft, curb_ft, unit=True), win_short)
             return rec
         if role_here == fan_system_effect.OUTLET:
             r = fan_system_effect.outlet_effect(
@@ -3750,11 +3826,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         else:
             enotes = []
             is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow, enotes,
-                                                   did, l_ft, where)
+                                                   did, l_ft - curb_ft, where_c)
             if size is None:
-                notes.append(('warn', 'WARNING: elbow %s, %.1f ft from the %s, but no size '
+                notes.append(('warn', 'WARNING: elbow %s, %s, but no size '
                               'could be read; fan system effect not priced'
-                              % (did, l_ft, where)))
+                              % (did, fan_system_effect.from_text(where, l_ft, curb_ft))))
                 rec['none'] = 'elbow %s size unreadable, not priced' % did
                 return rec
             r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft,
@@ -3766,17 +3842,19 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 fan_system_effect.log.info('fan system effect: inlet elbow %s at %.2f ft '
                                            'is past %.2f ft, priced as a fitting',
                                            did, l_ft, r['floor_ft'])
-                rec['none'] = ('elbow %s at %.1f ft, past %.1f ft, priced as a fitting'
-                               % (did, l_ft, r['floor_ft']))
+                _lt = fan_system_effect.l_text(l_ft, curb_ft, unit=True)
+                rec['none'] = ('elbow %s at %s, past %.1f ft, priced as a fitting'
+                               % (did, _lt, r['floor_ft']))
                 notes.append(('note', fan_system_effect.no_effect_text(
-                    where, 'elbow %s at %.1f ft is past %.1f ft, where the inlet table '
-                    'floors' % (did, l_ft, r['floor_ft']))))
+                    where, 'elbow %s at %s is past %.1f ft, where the inlet table '
+                    'floors' % (did, _lt, r['floor_ft']))))
                 return rec
             for _k, _t in enotes:
                 if _k == 'assume':
                     rec['assumptions'].append(_t)
                 else:
                     notes.append((_k, _t))
+        r['curb_ft'] = curb_ft     # the basis and GRAY text name it
         loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
         # The straight duct, any transition (a curb adapter) and the first
         # elbow are one group, charged once as the larger of the fan system
@@ -3809,9 +3887,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                       'transition': bool(passed), 'transitions': sorted(passed),
                       'size': g_size,
                       'warn3': (rec.get('warn3') or (None, None))[1]
-                      if (rec.get('warn3') or (None,))[0] == did else None}
-        notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
-                     for n in r['notes'])
+                      if (rec.get('warn3') or (None,))[0] == did else None,
+                      'curb': curb_ft}
+        notes.extend(('note', 'NOTE: elbow %s, %s: %s' % (
+            did, fan_system_effect.from_text(where, l_ft, curb_ft), n)) for n in r['notes'])
         if r['high']:
             # GRAY, not RED (Colin, 2026-10-29): still priced in the total,
             # reported with the straight length that brings the loss under
@@ -3839,7 +3918,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['boost'] = {}
         rec['assumptions'] = []
         rec['none'] = None
-        rec['notes'] = [n for n in rec['notes'] if n[0] == 'red']
+        rec['notes'] = [n for n in rec['notes'] if n[0] == 'red' or (
+            n[0] == 'warn' and n[1].startswith(fan_system_effect.CABINET_WARN_PREFIX))]
         return rec
 
     def _fse_root(root_id):
@@ -3912,6 +3992,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                       cfm_in=dis_cfm if d == 'out' else None)
                 if rec is not None:
                     recs[first] = rec
+            _curb = max([r.get('curb_ft') or 0.0 for r in recs.values()] or [0.0])
+            if _curb:
+                rnotes.append(('note', fan_system_effect.curb_note(_curb)))
         return recs, rnotes
 
     # ── inline exhaust fans (Colin, 2026-11-03) ──────────────────────────────
@@ -4122,7 +4205,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 gov.get('win'), gov.get('win_short', 'Le'),
                 transition=gov.get('transition', False),
                 size_note=('%s %s' % gov['size']) if gov.get('size') else None,
-                warn_dim=gov.get('warn3'))
+                warn_dim=gov.get('warn3'), curb_ft=gov.get('curb') or 0.0)
         # The group's charge always sits on the fan system effect row, whichever
         # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
         # ', in the fan system effect' on their Table / basis, so the take-off
@@ -4186,8 +4269,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if tables:
             text += ' (%s)' % ', '.join(tables)
         if gov.get('win'):
-            text += ', L %.1f / %s %.1f ft' % (float(gov['l_ft']), gov.get('win_short', 'Le'),
-                                             float(gov['win']))
+            text += ', L %s / %s %.1f ft' % (
+                fan_system_effect.l_text(gov['l_ft'], gov.get('curb') or 0.0),
+                gov.get('win_short', 'Le'), float(gov['win']))
             if gov.get('size'):
                 # inlet: the size the window was read at (Colin, 2026-11-09)
                 text += ' (%s, the %s)' % gov['size']

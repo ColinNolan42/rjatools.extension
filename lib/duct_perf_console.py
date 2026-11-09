@@ -73,6 +73,7 @@ _SCOPE_WORDS = {
     'exhaust': {'airflow': 'Exhaust CFM', 'other': None, 'discharge': 'exhaust'},
 }
 _SCOPE_WORDS['vav'] = _SCOPE_WORDS['rtu']
+_SCOPE_WORDS['fancoil'] = _SCOPE_WORDS['rtu']   # Fan Coil reads as RTU (Colin, 2026-11-09)
 _COUNT_WORDS = {'count': 'Diffusers/Grilles', 'types': 'Diffuser/Grille type',
                 'one': 'diffuser/grille', 'many': 'diffusers/grilles'}
 

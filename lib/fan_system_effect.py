@@ -129,6 +129,10 @@ VELOCITY_BASES = ('default', 'connection')
 DEFAULT_VELOCITY_BASIS = 'default'
 DEFAULT_FAN_FPM = 2000.0     # default fan velocity, firm value (Colin, 2026-11-03)
 EXHAUST_FAN_FPM = 1500.0     # Exhaust System Scope default (Colin, 2026-11-09)
+FAN_COIL_FAN_FPM = 1500.0    # Fan Coil Scope default (Colin, 2026-11-09)
+DEFAULT_CURB_IN = 14.0       # roof curb counted as straight duct, RTU / VAV System (Colin, 2026-11-09)
+CURB_MAX_IN = 48.0           # dialog cap on the curb height
+CURB_SCOPES = ('rtu', 'vav')  # Scopes the curb applies to; off and greyed otherwise
 OUTLET_RED_RATIO = 0.5       # an elbow under 0.5 Le of a unit outlet is RED
 INLET_RED_D = 2.0            # an elbow under 2 D of a unit inlet is RED
 INLET_FLOOR_D = 5.0          # where the inlet tables stop falling (the note)
@@ -187,9 +191,73 @@ def where_text(sys_class, role):
 
 def scope_fan_fpm(scope=None):
     """The fan velocity default for a Duct Performance Scope (Colin,
-    2026-11-09): EXHAUST_FAN_FPM on Exhaust System, DEFAULT_FAN_FPM on RTU,
-    VAV System and VAV Box."""
-    return EXHAUST_FAN_FPM if scope == 'exhaust' else DEFAULT_FAN_FPM
+    2026-11-09): EXHAUST_FAN_FPM on Exhaust System, FAN_COIL_FAN_FPM on Fan
+    Coil, DEFAULT_FAN_FPM on RTU, VAV System and VAV Box."""
+    if scope == 'exhaust':
+        return EXHAUST_FAN_FPM
+    if scope == 'fancoil':
+        return FAN_COIL_FAN_FPM
+    return DEFAULT_FAN_FPM
+
+
+def scope_curb_in(scope=None):
+    """The roof curb default for a Scope: DEFAULT_CURB_IN on RTU and VAV
+    System, 0 (off) elsewhere (Colin, 2026-11-09)."""
+    return DEFAULT_CURB_IN if scope in CURB_SCOPES else 0.0
+
+
+def parse_curb_in(text):
+    """(value, None) or (None, error text) for the dialog's roof curb box."""
+    try:
+        v = float(text)
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError('not finite')
+    except (ValueError, TypeError):
+        return None, 'must be a number'
+    if not (0.0 <= v <= CURB_MAX_IN):
+        return None, 'must be between 0 and %.0f in.' % CURB_MAX_IN
+    return v, None
+
+
+# ── roof curb wording (Colin, 2026-11-09) ────────────────────────────────────
+# A roof curb is never modeled. Its height is added to L at a unit's own
+# connections, so every distance the checks use counts it; the report gives
+# the modeled duct and names the curb.
+
+def curb_in_text(curb_ft):
+    return '%.0f in.' % (float(curb_ft) * 12.0)
+
+
+def from_text(where, l_ft, curb_ft=0.0):
+    """'1.0 ft from the supply outlet (plus a 14 in. roof curb)': the
+    modeled duct, the curb named. l_ft counts the curb."""
+    if not curb_ft:
+        return '%.1f ft from the %s' % (float(l_ft), where)
+    return '%.1f ft from the %s (plus a %s roof curb)' % (
+        max(float(l_ft) - float(curb_ft), 0.0), where, curb_in_text(curb_ft))
+
+
+def l_text(l_ft, curb_ft=0.0, unit=False):
+    """L for a basis cell: '2.2' / '2.2 ft', or '1.0 + 1.2 ft curb'."""
+    if not curb_ft:
+        return ('%.1f ft' if unit else '%.1f') % float(l_ft)
+    return '%.1f + %.1f ft curb' % (max(float(l_ft) - float(curb_ft), 0.0), float(curb_ft))
+
+
+def need_text(need_ft, curb_ft=0.0, noun=''):
+    """A required length, rounded up, then noun ('of straight duct'), with
+    the modeled duct past the curb when a curb is counted."""
+    head = ('%.1f ft' % _ceil_step(need_ft)) + ((' ' + noun) if noun else '')
+    if not curb_ft:
+        return head
+    return '%s, the %s curb included (%.1f ft of duct past the curb)' % (
+        head, curb_in_text(curb_ft), _ceil_step(max(float(need_ft) - float(curb_ft), 0.0)))
+
+
+def curb_note(curb_ft):
+    """One NOTE per unit when a curb is counted."""
+    return ('NOTE: roof curb %s counted as straight duct at the unit connections (not '
+            'modeled).' % curb_in_text(curb_ft))
 
 
 def default_settings(scope=None):
@@ -574,19 +642,22 @@ def inlet_floor_ft(size_in):
     return INLET_FLOOR_D * float(size_in) / 12.0
 
 
-def le_text(where, eid, l_ft, le_ft, eq):
+def le_text(where, eid, l_ft, le_ft, eq, curb_ft=0.0):
     """The RED line for an elbow under OUTLET_RED_RATIO x Le of a unit
     outlet, in the Duct Performance reason style. The lengths given are
-    rounded UP to LENGTH_STEP_FT, so they are past the edge."""
+    rounded UP to LENGTH_STEP_FT, so they are past the edge. curb_ft: a roof
+    curb counted in l_ft (from_text, need_text)."""
     ratio = float(l_ft) / float(le_ft) if le_ft else 0.0
-    return ('RED: Elbow %s, %.1f ft from the %s, L/Le %.2f (Le %.1f ft, %s). Provide at '
-            'least %.1f ft of straight duct; %.1f ft (1.0 Le) removes the system '
-            'effect.' % (eid, float(l_ft), where, ratio, float(le_ft), eq,
-                         _ceil_step(outlet_red_ft(le_ft)), _ceil_step(le_ft)))
+    return ('RED: Elbow %s, %s, L/Le %.2f (Le %.1f ft, %s). Provide at '
+            'least %s; %.1f ft (1.0 Le%s) removes the system '
+            'effect.' % (eid, from_text(where, l_ft, curb_ft), ratio, float(le_ft), eq,
+                         need_text(outlet_red_ft(le_ft), curb_ft, 'of straight duct'),
+                         _ceil_step(le_ft),
+                         ', curb included' if curb_ft else ''))
 
 
 def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
-                   source_short=None):
+                   source_short=None, curb_ft=0.0):
     """The RED line for an elbow under INLET_RED_D x D of a unit inlet, in
     the Duct Performance reason style. H for a rectangular inlet. source
     names what D or H was read from, e.g. 'the 12x12 inlet collar' (short
@@ -595,12 +666,21 @@ def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
     dim = 'D' if is_round else 'H'
     of = (', ' + source) if source else ''
     of_short = (' of ' + source_short) if source_short else ''
-    return ('RED: Elbow %s, %.1f ft from the %s, %.1f %s (%s %.0f in.%s). Provide at least '
-            '%.1f ft of straight duct (%.0f %s%s); %.1f ft (%.0f %s) is where the loss '
-            'stops falling.' % (
-                eid, float(l_ft), where, float(l_ft) * 12.0 / float(size_in), dim, dim,
-                float(size_in), of, _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim,
-                of_short, _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim))
+    if curb_ft:
+        need = '%.1f ft of straight duct (%.0f %s%s), the %s curb included (%.1f ft of ' \
+               'duct past the curb)' % (
+                   _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short,
+                   curb_in_text(curb_ft),
+                   _ceil_step(max(inlet_red_ft(size_in) - float(curb_ft), 0.0)))
+    else:
+        need = '%.1f ft of straight duct (%.0f %s%s)' % (
+            _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short)
+    return ('RED: Elbow %s, %s, %.1f %s (%s %.0f in.%s). Provide at least '
+            '%s; %.1f ft (%.0f %s%s) is where the loss stops falling.' % (
+                eid, from_text(where, l_ft, curb_ft), float(l_ft) * 12.0 / float(size_in),
+                dim, dim, float(size_in), of, need,
+                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim,
+                ', curb included' if curb_ft else ''))
 
 
 def cabinet_warn_ft(size_in):
@@ -609,7 +689,7 @@ def cabinet_warn_ft(size_in):
     return CABINET_WARN_D * float(size_in) / 12.0
 
 
-def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn):
+def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
     """The WARNING for an elbow under CABINET_WARN_D x D of a cabinet unit
     inlet (RTU, AHU, furnace, fan coil), past the 2 D RED line (Colin,
     2026-11-09): under 3 D the elbow causes a fan system effect the tool does
@@ -617,20 +697,28 @@ def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn):
     velocity, so the external static shown is low. Same D / H as
     inlet_red_text; v_conn the connection velocity, fpm."""
     dim = 'D' if is_round else 'H'
-    return ('%s%s is %.1f ft from the %s; provide at least %.1f ft of straight duct '
-            '(%.0f %s, %s %.0f in.). Under %.0f %s the elbow causes a fan system effect '
+    curb = ''
+    if curb_ft:
+        curb = ', the %s curb included (%.1f ft of duct past the curb)' % (
+            curb_in_text(curb_ft),
+            _ceil_step(max(cabinet_warn_ft(size_in) - float(curb_ft), 0.0)))
+    return ('%s%s is %s; provide at least %.1f ft of straight duct '
+            '(%.0f %s, %s %.0f in.)%s. Under %.0f %s the elbow causes a fan system effect '
             'that is not priced (the inlet is priced at its %.0f fpm opening velocity), '
             'so the external static shown is low until the elbow is moved.'
-            % (CABINET_WARN_PREFIX, eid, float(l_ft), where,
+            % (CABINET_WARN_PREFIX, eid, from_text(where, l_ft, curb_ft),
                _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, dim, dim,
-               float(size_in), CABINET_WARN_D, dim, float(v_conn)))
+               float(size_in), curb, CABINET_WARN_D, dim, float(v_conn)))
 
 
-def straight_duct_reason(eid, l_ft, role, dim='D'):
+def straight_duct_reason(eid, l_ft, role, dim='D', curb_ft=0.0):
     """The flagged table Reason for a straight duct RED with its elbow. dim:
-    'H' when a rect inlet elbow was judged on H (Colin, 2026-11-09)."""
-    return 'Straight duct: elbow %s at %.1f ft, under %s' % (
-        eid, float(l_ft), '%.1f Le' % OUTLET_RED_RATIO if role == OUTLET
+    'H' when a rect inlet elbow was judged on H (Colin, 2026-11-09).
+    curb_ft: a roof curb counted in l_ft, named after the modeled duct."""
+    at = ('%.1f ft' % float(l_ft) if not curb_ft else '%.1f ft + %s curb' % (
+        max(float(l_ft) - float(curb_ft), 0.0), curb_in_text(curb_ft)))
+    return 'Straight duct: elbow %s at %s, under %s' % (
+        eid, at, '%.1f Le' % OUTLET_RED_RATIO if role == OUTLET
         else '%.0f %s' % (INLET_RED_D, dim))
 
 
@@ -667,7 +755,7 @@ def no_effect_text(where, why):
 
 
 def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short,
-                 transition=False, size_note=None, warn_dim=None):
+                 transition=False, size_note=None, warn_dim=None, curb_ft=0.0):
     """The NOTE saying which was charged for the group at one connection
     (Colin, 2026-11-09): the two values side by side, then the outcome.
     Near the end of the window (L close to Le) the fan system effect falls
@@ -679,9 +767,9 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
     ratio = (' (L/%s %.2f%s)' % (win_short, float(l_ft) / float(win_ft),
                                  (', ' + size_note) if size_note else '')
              if win_ft else '')
-    head = ('NOTE: %s, elbow %s at %.1f ft%s: fan system effect %.3f in. wc, %s %.3f '
-            'in. wc. ' % (where, eid, float(l_ft), ratio, float(fse_inwc), group,
-                          float(own_inwc)))
+    head = ('NOTE: %s, elbow %s at %s%s: fan system effect %.3f in. wc, %s %.3f '
+            'in. wc. ' % (where, eid, l_text(l_ft, curb_ft, unit=True), ratio,
+                          float(fse_inwc), group, float(own_inwc)))
     if warn_dim:
         # the cabinet inlet 3 D WARNING fired on this elbow (Colin, 2026-11-09)
         under = '%.0f %s' % (CABINET_WARN_D, warn_dim)
@@ -703,12 +791,14 @@ def basis_text(rec):
     """The take-off's Table / basis cell, kept short for the sheet's clipped
     cell (Ab/Ao is in the METHOD line): 'SR7-10 pos B, L 2.0 / Le 5.7 ft' or
     'ED7-2 r/D 1.50, L 1.0 ft, D 24 in'."""
+    curb = rec.get('curb_ft') or 0.0
     if rec['side'] == 'outlet':
-        return '%s pos %s, L %.1f / Le %.1f ft' % (
-            rec['table'], rec['position'], rec['l_ft'], rec['le_ft'])
+        return '%s pos %s, L %s / Le %.1f ft' % (
+            rec['table'], rec['position'], l_text(rec['l_ft'], curb), rec['le_ft'])
     dim = 'D' if rec['table'] == INLET_ROUND else 'H'
-    return '%s r/%s %.2f, L %.1f ft, %s %.0f in' % (
-        rec['table'], dim, rec['r_ratio'], rec['l_ft'], dim, rec['size_in'])
+    return '%s r/%s %.2f, L %s, %s %.0f in' % (
+        rec['table'], dim, rec['r_ratio'], l_text(rec['l_ft'], curb, unit=True), dim,
+        rec['size_in'])
 
 
 def high_text(rec, where, eid):
@@ -720,16 +810,17 @@ def high_text(rec, where, eid):
         fix = ('no straight length in the table brings it under %.1f in. wc'
                % HIGH_LOSS_INWC)
     else:
-        fix = 'increase length of duct to %.1f ft' % rec['fix_ft']
+        fix = 'increase length of duct to %s' % need_text(rec['fix_ft'],
+                                                            rec.get('curb_ft') or 0.0)
     if rec['side'] == 'outlet':
         basis = '%s, worst of positions A to D, Le %.1f ft' % (rec['table'], rec['le_ft'])
     else:
         basis = '%s r/%s %.2f' % (rec['table'], 'D' if rec['table'] == INLET_ROUND
                                   else 'H', rec['r_ratio'])
-    return ('GRAY: System Effect Pressure Loss too high at elbow %s, %.1f ft from '
-            'the %s, %.3f in. wc, %s (C %.2f at %.0f fpm, %s; %.1f in. wc or more).' % (
-                eid, rec['l_ft'], where, rec['loss'], fix, rec['c'], rec['v_fpm'],
-                basis, HIGH_LOSS_INWC))
+    return ('GRAY: System Effect Pressure Loss too high at elbow %s, %s, %.3f in. wc, '
+            '%s (C %.2f at %.0f fpm, %s; %.1f in. wc or more).' % (
+                eid, from_text(where, rec['l_ft'], rec.get('curb_ft') or 0.0), rec['loss'],
+                fix, rec['c'], rec['v_fpm'], basis, HIGH_LOSS_INWC))
 
 
 def disruption_text(kind, eid, where, l_ft, limit_ft, limit_name):
@@ -788,6 +879,10 @@ def method_lines(settings):
     else:
         method += (' Velocity: the connection velocity, cfm over the unit connector '
                    'area (the first duct when unreadable).')
+    if float(settings.get('curb_in') or 0.0) > 0.0:
+        method += (' A roof curb (dialog, default %.0f in.; %g in. this run) is counted '
+                   'as straight duct at RTU connections, length only.'
+                   % (DEFAULT_CURB_IN, float(settings['curb_in'])))
     assumptions = []
     if fan != 'SWSI':
         assumptions.append(
