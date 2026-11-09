@@ -3251,6 +3251,53 @@ check("case79 supply, a positive SD5-1 Cc,s stays as read, no FALLBACK",
       and not any(u.startswith('FALLBACK: tap 701') for u in sa79.get('unpriced', ())),
       "tap rows %r notes %r" % (_tps79, sa79.get('unpriced')))
 
+# 84: the GRAY rule at an INLET, the case32b twin (Colin, 2026-11-09): a
+#     12x12 return inlet at 3000 fpm (connection velocity, cabinet inlet), a
+#     rect radius elbow r 18 in. 0.3 ft in: ER7-1 r/H 1.5 at L/H 0.3 is
+#     0.94 x Pv(3000), 0.5 in. wc or more, so GRAY with the straight length
+#     that brings it under, still priced. With a 2 in. curb (L 0.47 ft) still
+#     GRAY, the curb named; a 6 in. curb (L 0.8 ft) brings it under: no GRAY.
+def _run84(curb_in=0.0):
+    n = {4800: _unit({4801: RC1212R}),
+         4802: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
+                    geom={'round': False, 'd_in': None, 'r_in': 18.0, 'w_in': 12.0,
+                          'h_in': 12.0, 'angle': 90.0})}
+    c = {4800: [4801], 4801: [4802], 4802: [4803], 4803: [4810]}
+    d = build([(4801, 0.0, 0.3, 3000.0, 1.0, 'Return Air'),
+               (4803, 0.0, 10.0, 3000.0, 1.0, 'Return Air')])
+    fan = dict(FSE_ON, curb_in=float(curb_in)) if curb_in else FSE_ON
+    return _fse_run(n, c, d, {4810: (3000.0, 'Return Air', 'RG-84')}, 4800,
+                    cls='Return Air', fan=fan)
+
+
+_g84 = _run84()
+_r84 = FSE.inlet_effect(False, 12.0, 18.0, 1.0, 3000.0, 0.3, pv_of=pv)
+_gt84 = [t for k, t in _g84.get('fse_notes', ()) if k == 'gray']
+check("case84 inlet elbow at 0.3 ft, 3000 fpm: GRAY with its fix length, listed for the plan, still priced",
+      _r84['high'] and _r84['fix_ft'] is not None and len(_gt84) == 1
+      and _gt84[0].startswith('GRAY: System Effect Pressure Loss too high at elbow 4802, '
+                              '0.3 ft from the return inlet, ')
+      and 'increase length of duct to %.1f ft (C %.2f at 3000 fpm, ER7-1 r/H 1.50; 0.5 in. '
+          'wc or more).' % (_r84['fix_ft'], _r84['c']) in _gt84[0]
+      and _g84.get('fse_gray_ids') == {4802} and _g84.get('fse_inwc', 0.0) >= 0.5,
+      "gray %r ids %r fse %r" % (_gt84, _g84.get('fse_gray_ids'), _g84.get('fse_inwc')))
+_g84c = _run84(2.0)
+_r84c = FSE.inlet_effect(False, 12.0, 18.0, 1.0, 3000.0, 0.3 + 2.0 / 12.0, pv_of=pv)
+_gt84c = [t for k, t in _g84c.get('fse_notes', ()) if k == 'gray']
+check("case84 the same + 2 in. curb (L 0.47 ft): still GRAY, the curb and the duct past it named",
+      _r84c['high'] and len(_gt84c) == 1
+      and '0.3 ft from the return inlet (plus a 2 in. roof curb)' in _gt84c[0]
+      and 'increase length of duct to %.1f ft, the 2 in. curb included (%.1f ft of duct past '
+          'the curb)' % (_r84c['fix_ft'], FSE._ceil_step(_r84c['fix_ft'] - 2.0 / 12.0))
+          in _gt84c[0]
+      and _g84c.get('fse_gray_ids') == {4802},
+      "gray %r" % (_gt84c,))
+_g84s = _run84(6.0)
+check("case84 a 6 in. curb (L 0.8 ft) brings the loss under 0.5: no GRAY, still priced",
+      not [t for k, t in _g84s.get('fse_notes', ()) if k == 'gray']
+      and not _g84s.get('fse_gray_ids') and _g84s.get('fse_inwc', 0.0) > 0.0,
+      "notes %r" % (_g84s.get('fse_notes'),))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)
