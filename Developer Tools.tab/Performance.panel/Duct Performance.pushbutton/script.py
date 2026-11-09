@@ -2834,16 +2834,33 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             length, total, dr.friction_loss_inwc)
         return total, stop
 
+    def _shown_class(nid, sys_class):
+        """The system name printed for a fitting. A discharge duct carries
+        flow_class 'Supply Air' so its fittings read the supply (away from the
+        fan) tables (hvac_graph.build_network); the report names the duct's own
+        classification, Exhaust Air on an exhaust fan discharge (Colin,
+        2026-11-09, TB-M10C transition 3696775)."""
+        if nid is None:
+            return sys_class
+        for d in vav_checks.nearest_ducts_down(nid, all_children, _kind):
+            dr = dr_by_int_id.get(d)
+            if (dr is not None and getattr(dr, 'flow_class', None) == sys_class
+                    and dr.sys_class):
+                return dr.sys_class
+        return sys_class
+
     def _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area, loc_id=None):
         """(loss in. wc, label, notes, downstream area) from the 2001 tables,
-        or None to fall back to the worksheet."""
+        or None to fall back to the worksheet. sys_class picks the table; the
+        printed name is _shown_class."""
         eid = loc_id if loc_id is not None else '?'
+        shown = _shown_class(loc_id, sys_class)
         if role == 'elbow':
             g = hvac_graph.elbow_geometry(elem)
             if g is None:
                 return None
             where = ('elbow %s (%s, %s, %.0f deg)'
-                     % (eid, sys_class, _size_text(g['round'], g['d_in'], g['w_in'],
+                     % (eid, shown, _size_text(g['round'], g['d_in'], g['w_in'],
                                                    g['h_in']), g['angle'] or 90.0))
             f = (fam or '').lower()
             if g['round']:
@@ -2880,7 +2897,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 return None
             vo = up_fpm * up_area / eo[0]
             where = ('transition %s (%s, %s to %s, %.1f deg)'
-                     % (eid, sys_class,
+                     % (eid, shown,
                         _size_text(e1[1] == 'round', e1[2], e1[2], e1[3]),
                         _size_text(eo[1] == 'round', eo[2], eo[2], eo[3]), theta))
             return (c * hvac_graph.velocity_pressure_inwg(vo),

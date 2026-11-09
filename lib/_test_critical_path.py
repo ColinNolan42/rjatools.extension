@@ -1922,6 +1922,37 @@ check("case54 the same run as an ordinary exhaust reads the INLET tables (ED7-2)
       and 'Wall / roof cap' not in [i[4][0] for i in inl54.get('items', ()) if i[4]],
       "rows %r" % ([i[4][0] for i in inl54.get('items', ()) if i[4]],))
 
+# 54b: a transition on an exhaust discharge (Colin, 2026-11-09, TB-M10C
+#      3696775): priced on the supply (SD4) tables through flow_class, but its
+#      NOTE names the duct's own class, Exhaust Air, never Supply Air.
+def _fan54b():
+    n = {2100: _unit({2101: SQ24}),
+         2102: Elem(kind='transition', family_name='Rectangular to Round Transition',
+                    is_round=False,
+                    tgeom=([(1.0, 'rect', 12.0, 12.0, None),
+                            (math.pi * 0.25, 'round', 12.0, 12.0, None)], 0.0))}
+    c = {2100: [2101], 2101: [2102], 2102: [2103], 2103: []}
+    d = build([(2101, 0.01, 20.0, 400.0, 1.0, 'Exhaust Air'),
+               (2103, 0.01, 20.0, 400.0 / (math.pi * 0.25), math.pi * 0.25,
+                'Exhaust Air')])
+    for dr in d.values():
+        dr.flow_class = 'Supply Air'
+    t = {2103: (400.0, 'Exhaust Air', 'Wall / roof cap')}
+    r = crit([2100], c, d, t, n, 10.0, fan_effect=FSE_ON,
+             discharge_roots={2100: 2103})
+    return r.get(2100, {}).get('Exhaust Air', {})
+
+
+ea54b = _fan54b()
+_txt54b = ' | '.join([t for _k, t in ea54b.get('fse_notes', ())]
+                     + [str(i) for i in ea54b.get('items', ())]
+                     + list(ea54b.get('unpriced', ())))
+check("case54b discharge transition priced on SD4 (supply tables)",
+      'SD4-' in _txt54b, _txt54b)
+check("case54b its printed system is Exhaust Air, not Supply Air",
+      'transition 2102 (Exhaust Air' in _txt54b
+      and 'transition 2102 (Supply Air' not in _txt54b, _txt54b)
+
 # ── case 55: Include exhaust roof cap (Colin, 2026-11-02) ──────────────────
 # An ordinary exhaust run (grille to fan) pays the cap drop once when ticked;
 # supply runs never do, and a ceiling fan's own cap is not charged twice.
