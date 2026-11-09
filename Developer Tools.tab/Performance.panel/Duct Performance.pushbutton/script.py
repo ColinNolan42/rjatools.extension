@@ -907,9 +907,11 @@ def _show_velocity_settings_xaml(use_theme):
                               '(Eq. 36 or 37) of an outlet, within the table floor '
                               'distance (5 D or 5 H) of an inlet. Outlet elbow: SR7 '
                               'tables for the fan type, worst of positions A to D, at '
-                              'Ab/Ao and L/Le, elbow priced separately. Inlet elbow: '
-                              'ED7-2 round, ER7-1 rect (SWSI tables, an assumption for '
-                              'DWDI), at r/D and L/D, elbow included. Velocity: the '
+                              'Ab/Ao and L/Le. Inlet elbow: ED7-2 round, ER7-1 rect '
+                              '(SWSI tables, an assumption for DWDI), at r/D and L/D. '
+                              'The straight duct, any transition on it and the first '
+                              'elbow are charged once, the larger of the fan system '
+                              'effect and their own losses. Velocity: the '
                               'larger of the default fan velocity and the connection '
                               'velocity, or the connection alone. Added before the '
                               'safety factor. Transitions are priced as fittings, '
@@ -2396,12 +2398,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     fan_effect is the dialog's {'on', 'fan_type', 'blast_ratio'}, None or
     off for none. For each unit root, each unit connection is walked to its
     first disruption inside its window (outlet: Le; inlet: the table's floor
-    distance, 5 D or 5 H). An elbow is priced (supply outlet: SR7, worst of
-    positions A to D, elbow also priced as a fitting; return or exhaust
-    inlet: ED7-2 / ER7-1, which include the elbow, so the elbow is not
-    priced again) and added to the subtotal BEFORE the safety factor, like
-    any fitting; a transition, tap or other fitting inside the window is
-    flagged, not priced.
+    distance, 5 D or 5 H). An elbow is priced (outlet: SR7, worst of
+    positions A to D; inlet: ED7-2 / ER7-1) and added to the subtotal BEFORE
+    the safety factor. At outlets and inlets alike the straight duct, any
+    transition on it and that elbow are charged once, as the larger of the
+    fan system effect and their own losses (Colin, 2026-11-04,
+    _fse_group_max); a tap or other fitting inside the window is flagged,
+    not priced.
 
     The walk leaves a unit at the unit connection's velocity (first duct cfm
     over the connector area) and the first duct's class, so a fitting right

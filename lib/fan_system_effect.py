@@ -39,9 +39,14 @@ RJA DECISIONS (Colin, 2026-10-29):
     against the fan rotation is not in the model), read at the blast area
     ratio Ab/Ao (dialog, default 0.5) and L/Le. FSE2 = Co x Pv at the outlet.
   - Inlet elbow: ED7-2 (round) or ER7-1 (rect), at r/D and L/D. FSE1 = Co x
-    Pv at the inlet. These Co INCLUDE the elbow's own loss (Colin), so the
-    walk does not price that elbow again; the outlet SR7 Co is the system
-    effect only and the elbow is priced separately.
+    Pv at the inlet.
+  - Charged once, outlets AND inlets (Colin, 2026-11-04, c0333e9; replaces
+    the 10-29 outlet ruling that priced the elbow separately, which Colin
+    ruled wrong 2026-11-09): the straight duct, any transition on it and the
+    first elbow are one group, charged as the LARGER of the fan system effect
+    and their own duct and fitting losses. Own losses generally govern only
+    near Le, where the fan system effect is small. A NOTE says which governed
+    (governs_text).
   - ED7-2 and ER7-1 are printed for SWSI fans. With DWDI selected they are
     used as a stated ASSUMPTION (method_lines). Inlet swirl, FSE1,sw, has no
     coefficient in the book (p. 34.13: inlet spin changes the fan curve
