@@ -217,7 +217,7 @@ _SETTINGS_XAML = '''
                 </Border>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"
                            Text="One unit per run. The scope sets which equipment the next list shows."/>
-                <RadioButton x:Name="rb_scope_rtu" GroupName="scope" Content="RTU"
+                <RadioButton x:Name="rb_scope_rtu" GroupName="scope" Content="Rooftop Unit"
                              ToolTip="A constant volume rooftop or packaged unit with supply and return. The roof curb is counted. VAV boxes and exhaust fans are not listed."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
                            Text="Lists units only, no VAV boxes or exhaust fans."/>
@@ -279,7 +279,7 @@ _SETTINGS_XAML = '''
                      so it sits outside the external static group -->
                 <StackPanel x:Name="pnl_curb" Orientation="Horizontal" Margin="0,10,0,0">
                     <CheckBox x:Name="cb_curb" Content="Include roof curb" VerticalAlignment="Center"
-                              ToolTip="Counts the curb height as straight duct at the unit's supply and return connections. RTU and VAV System only."/>
+                              ToolTip="Counts the curb height as straight duct at the unit's supply and return connections. Rooftop Unit and VAV System only."/>
                     <TextBox x:Name="tb_curb" Width="56" Margin="8,0,6,0"
                              ToolTip="Curb height, in., 0 to 48."/>
                     <TextBlock Text="in. high" VerticalAlignment="Center"/>
@@ -313,7 +313,7 @@ _SETTINGS_XAML = '''
                                 <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center" Margin="0,0,14,0"
                                              ToolTip="Outlet tables SR7-5 to SR7-8. Set by the Scope: Exhaust System."/>
                                 <RadioButton x:Name="rb_fan_dwdi" GroupName="fan_type" Content="DWDI" VerticalAlignment="Center"
-                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the Scope: RTU and VAV System."/>
+                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the Scope: Rooftop Unit and VAV System."/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
                                        Text="SWSI, single width single inlet: air enters one side of the wheel (exhaust fans, utility sets). DWDI, double width double inlet: air enters both sides (most RTU and AHU blowers)."/>
@@ -328,7 +328,7 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System and Indoor System, 2000 fpm RTU, VAV System and VAV Box."/>
+                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System and Indoor System, 2000 fpm Rooftop Unit, VAV System and VAV Box."/>
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
@@ -947,7 +947,7 @@ def _show_velocity_settings_xaml(use_theme):
                               'outlet, or under 2 D of an inlet, is red with the '
                               'straight duct before it.'),
         ('Roof curb', "Counted as straight duct at the unit's own supply and return "
-                      'connections, length only (RTU and VAV System, default 14 in.; off '
+                      'connections, length only (Rooftop Unit and VAV System, default 14 in.; off '
                       'for Indoor System, VAV Box and Exhaust System). It sets L for the fan '
                       'system effect, the straight duct RED, the 3 D WARNING and the '
                       'swirl and damper checks. Never modeled, so no friction or fitting '
@@ -1353,7 +1353,7 @@ def _show_velocity_settings_dialog_legacy():
         outer.Children.Add(rb)
         return rb
 
-    rb_rtu = _scope_radio('RTU.  Lists units only, no VAV boxes or exhaust fans. Roof '
+    rb_rtu = _scope_radio('Rooftop Unit.  Lists units only, no VAV boxes or exhaust fans. Roof '
                           'curb %g in. counted.' % fan_system_effect.DEFAULT_CURB_IN, True)
     rb_fancoil = _scope_radio('Indoor System.  Lists units only: fan coil, furnace, indoor '
                               'AHU.')
@@ -2164,7 +2164,7 @@ def _show_system_picker_legacy(display_names, scope_label):
 # ── helpers ────────────────────────────────────────────────────────────────────
 # Scope (Colin, 2026-11-03): one choice, one unit per run. Each lists only
 # its kinds of equipment; a VAV box can still be picked alone under VAV System.
-_SCOPE_LABEL = {'rtu': 'RTU', 'fancoil': 'Indoor System', 'vav': 'VAV System',
+_SCOPE_LABEL = {'rtu': 'Rooftop Unit', 'fancoil': 'Indoor System', 'vav': 'VAV System',
                 'vavbox': 'VAV Box',
                 'exhaust': 'Exhaust System'}
 # Exhaust fan type as read from its connections (Colin, 2026-11-03).
@@ -2181,7 +2181,7 @@ _EXHAUST_FAN_KIND_TEXT = {
 _SCOPE_LISTS = {'rtu': ('unit',), 'fancoil': ('unit',), 'vav': ('unit',),
                 'vavbox': ('VAV box',),
                 'exhaust': ('exhaust fan',)}
-_KIND_SCOPE = {'unit': 'RTU, Indoor System or VAV System', 'VAV box': 'VAV Box',
+_KIND_SCOPE = {'unit': 'Rooftop Unit, Indoor System or VAV System', 'VAV box': 'VAV Box',
                'exhaust fan': 'Exhaust System'}
 
 
@@ -5990,7 +5990,7 @@ def main():
                          .WhereElementIsNotElementType())
 
     scope = dialog_result.get('scope', 'rtu')
-    scope_label = _SCOPE_LABEL.get(scope, 'RTU')
+    scope_label = _SCOPE_LABEL.get(scope, 'Rooftop Unit')
     hidden = {'VAV box': 0, 'exhaust fan': 0, 'unit': 0}
     listed = []
     for eq in equip_in_view:
