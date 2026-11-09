@@ -235,30 +235,34 @@ def curb_in_text(curb_ft):
     return '%.0f in.' % (float(curb_ft) * 12.0)
 
 
-def from_text(where, l_ft, curb_ft=0.0):
-    """'1.0 ft from the supply outlet (plus a 14 in. roof curb)': the
-    modeled duct, the curb named. l_ft counts the curb."""
+def curb_where(where, curb_ft=0.0):
+    """'the return inlet, 14 in. roof curb included' when a curb is counted:
+    every length said with it is ONE total that includes the curb (Colin,
+    2026-11-09). Plain where otherwise."""
     if not curb_ft:
-        return '%.1f ft from the %s' % (float(l_ft), where)
-    return '%.1f ft from the %s (plus a %s roof curb)' % (
-        max(float(l_ft) - float(curb_ft), 0.0), where, curb_in_text(curb_ft))
+        return where
+    return '%s, %s roof curb included' % (where, curb_in_text(curb_ft))
+
+
+def from_text(where, l_ft, curb_ft=0.0):
+    """'4.0 ft from the return inlet, 14 in. roof curb included': one total
+    length, the curb in it (Colin, 2026-11-09). l_ft counts the curb."""
+    return '%.1f ft from the %s' % (float(l_ft), curb_where(where, curb_ft))
 
 
 def l_text(l_ft, curb_ft=0.0, unit=False):
-    """L for a basis cell: '2.2' / '2.2 ft', or '1.0 + 1.2 ft curb'."""
+    """L for a basis cell: '2.2' / '2.2 ft', or '4.0 ft incl. curb' (one
+    total, Colin, 2026-11-09)."""
     if not curb_ft:
         return ('%.1f ft' if unit else '%.1f') % float(l_ft)
-    return '%.1f + %.1f ft curb' % (max(float(l_ft) - float(curb_ft), 0.0), float(curb_ft))
+    return '%.1f ft incl. curb' % float(l_ft)
 
 
 def need_text(need_ft, curb_ft=0.0, noun=''):
-    """A required length, rounded up, then noun ('of straight duct'), with
-    the modeled duct past the curb when a curb is counted."""
-    head = ('%.1f ft' % _ceil_step(need_ft)) + ((' ' + noun) if noun else '')
-    if not curb_ft:
-        return head
-    return '%s, the %s curb included (%.1f ft of duct past the curb)' % (
-        head, curb_in_text(curb_ft), _ceil_step(max(float(need_ft) - float(curb_ft), 0.0)))
+    """A required length, rounded up, then noun ('of straight duct'). One
+    total that includes any curb (Colin, 2026-11-09); curb_ft is kept for
+    the callers."""
+    return ('%.1f ft' % _ceil_step(need_ft)) + ((' ' + noun) if noun else '')
 
 
 def curb_note(curb_ft):
@@ -659,7 +663,7 @@ def le_text(where, eid, l_ft, le_ft, eq, curb_ft=0.0):
             'least %s; %.1f ft (1.0 Le%s) removes the system effect. Priced as drawn; '
             '%s' % (eid, from_text(where, l_ft, curb_ft), ratio, float(le_ft), eq,
                     need_text(outlet_red_ft(le_ft), curb_ft, 'of straight duct'),
-                    _ceil_step(le_ft), ', curb included' if curb_ft else '', FINAL))
+                    _ceil_step(le_ft), '', FINAL))
 
 
 def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
@@ -672,22 +676,14 @@ def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
     dim = 'D' if is_round else 'H'
     of = (', ' + source) if source else ''
     of_short = (' of ' + source_short) if source_short else ''
-    if curb_ft:
-        need = '%.1f ft of straight duct (%.0f %s%s), the %s curb included (%.1f ft of ' \
-               'duct past the curb)' % (
-                   _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short,
-                   curb_in_text(curb_ft),
-                   _ceil_step(max(inlet_red_ft(size_in) - float(curb_ft), 0.0)))
-    else:
-        need = '%.1f ft of straight duct (%.0f %s%s)' % (
-            _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short)
+    need = '%.1f ft of straight duct (%.0f %s%s)' % (
+        _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim, of_short)
     return ('RED: Elbow %s is %s, %.1f %s (%s %.0f in.%s). Recommended: at least '
             '%s; %.1f ft (%.0f %s%s) is where the loss stops falling. Priced as drawn; '
             '%s' % (
                 eid, from_text(where, l_ft, curb_ft), float(l_ft) * 12.0 / float(size_in),
                 dim, dim, float(size_in), of, need,
-                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim,
-                ', curb included' if curb_ft else '', FINAL))
+                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim, '', FINAL))
 
 
 def cabinet_warn_ft(size_in):
@@ -704,11 +700,7 @@ def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
     loss (Colin, 2026-11-09 wording). Same D / H as
     inlet_red_text; v_conn the connection velocity, fpm."""
     dim = 'D' if is_round else 'H'
-    curb = ''
-    if curb_ft:
-        curb = ', the %s curb included (%.1f ft of duct past the curb)' % (
-            curb_in_text(curb_ft),
-            _ceil_step(max(cabinet_warn_ft(size_in) - float(curb_ft), 0.0)))
+    curb = ''      # one total length, the curb in it (Colin, 2026-11-09)
     return ('%s%s is %s; recommended: at least %.1f ft of straight duct '
             '(%.0f %s, %s %.0f in.)%s. The fan system effect is priced at the %.0f fpm '
             'opening velocity; closer to the fan the air speeds up, and the loss rises '
@@ -747,10 +739,7 @@ def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0):
     priced. req_ft: the straight duct asked for (the larger of 3 D and Le),
     basis its words ('3 D, D 24 in.' or '1.0 Le, Le 5.7 ft'). l_ft and req_ft
     count a roof curb."""
-    curb = ''
-    if curb_ft:
-        curb = ', the %s curb included (%.1f ft of duct past the curb)' % (
-            curb_in_text(curb_ft), _ceil_step(max(float(req_ft) - float(curb_ft), 0.0)))
+    curb = ''      # one total length, the curb in it (Colin, 2026-11-09)
     return ('WARNING: %s %s is %s; recommended: at least %.1f ft of straight duct to '
             'the first tap (%s)%s. A tap this close to the fan %s; its system effect is not '
             'priced, so the external static shown is low; the engineer has final say where space does not allow.'
@@ -768,8 +757,7 @@ def straight_duct_reason(eid, l_ft, role, dim='D', curb_ft=0.0):
     """The flagged table Reason for a straight duct RED with its elbow. dim:
     'H' when a rect inlet elbow was judged on H (Colin, 2026-11-09).
     curb_ft: a roof curb counted in l_ft, named after the modeled duct."""
-    at = ('%.1f ft' % float(l_ft) if not curb_ft else '%.1f ft + %s curb' % (
-        max(float(l_ft) - float(curb_ft), 0.0), curb_in_text(curb_ft)))
+    at = ('%.1f ft' % float(l_ft) if not curb_ft else '%.1f ft incl. curb' % float(l_ft))
     return 'Straight duct: elbow %s at %s, under %s' % (
         eid, at, '%.1f Le' % OUTLET_RED_RATIO if role == OUTLET
         else '%.0f %s' % (INLET_RED_D, dim))

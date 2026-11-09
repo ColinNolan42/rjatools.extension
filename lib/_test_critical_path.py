@@ -3058,10 +3058,10 @@ check("case82 inlet 1.9 ft: RED with no curb; a 14 in. curb (L 3.07 ft) clears 3
       and not _i14.get('fse_red_ids') and not _w81(_i14),
       "red %r notes %r" % (_i14.get('fse_red_ids'), _notes(_i14)))
 _i6 = _run81(1.9, fan=_curb(6))
-check("case82 inlet 1.9 ft + 6 in. curb (L 2.4 ft): the 3 H WARNING names the curb and the duct past it",
-      _w81(_i6) == ['WARNING: Elbow 4702 is 1.9 ft from the return inlet (plus a 6 in. roof '
-                    'curb); recommended: at least 3.0 ft of straight duct (3 H, H 12 in.), the 6 '
-                    'in. curb included (2.5 ft of duct past the curb). The fan system effect '
+check("case82 inlet 1.9 ft + 6 in. curb (L 2.4 ft): the 3 H WARNING gives one total length, curb included",
+      _w81(_i6) == ['WARNING: Elbow 4702 is 2.4 ft from the return inlet, 6 in. roof curb '
+                    'included; recommended: at least 3.0 ft of straight duct (3 H, H 12 in.). '
+                    'The fan system effect '
                     'is priced at the 800 fpm opening velocity; closer to the fan the air '
                     'speeds up, and the loss rises with velocity pressure (the square of '
                     'velocity), so the true loss may be higher. The engineer has final say '
@@ -3069,23 +3069,24 @@ check("case82 inlet 1.9 ft + 6 in. curb (L 2.4 ft): the 3 H WARNING names the cu
       "notes %r" % (_notes(_i6),))
 _i6r = _run81(1.0, fan=_curb(6))
 _red6 = _notes(_i6r, 'red')
-check("case82 inlet 1.0 ft + 6 in. curb (L 1.5 ft): RED, the duct past the curb asked for",
+check("case82 inlet 1.0 ft + 6 in. curb (L 1.5 ft): RED, one total length incl. curb (Colin, 2026-11-09)",
       len(_red6) == 1 and _red6[0].startswith(
-          'RED: Elbow 4702 is 1.0 ft from the return inlet (plus a 6 in. roof curb), 1.5 H (H 12 in.')
-      and 'Recommended: at least 2.0 ft of straight duct (2 H of the elbow), the 6 in. curb included '
-          '(1.5 ft of duct past the curb); 5.0 ft (5 H, curb included)' in _red6[0]
+          'RED: Elbow 4702 is 1.5 ft from the return inlet, 6 in. roof curb included, 1.5 H (H 12 in.')
+      and 'Recommended: at least 2.0 ft of straight duct (2 H of the elbow); 5.0 ft (5 H) is '
+          'where' in _red6[0]
+      and 'past the curb' not in _red6[0]
       and (_i6r.get('fse_red_ducts') or {}).get(4701) ==
-      ('Straight duct: elbow 4702 at 1.0 ft + 6 in. curb, under 2 H',
-       'Straight duct 1.5 ft past the curb'),
+      ('Straight duct: elbow 4702 at 1.5 ft incl. curb, under 2 H',
+       'Straight duct 2.0 ft incl. curb'),
       "red %r ducts %r" % (_red6, _i6r.get('fse_red_ducts')))
 check("case82 one curb NOTE per unit",
       _notes(_i6).count('NOTE: roof curb 6 in. counted as straight duct at the unit '
                         'connections (not modeled).') == 1, "notes %r" % (_notes(_i6),))
 _i6g = [t for _k, t in _i6.get('fse_gov_notes', ())]
 _f6 = _fse_items(_i6)
-check("case82 the basis and governs NOTE give L as duct + curb",
-      _f6 and 'L 1.9 + 0.5 ft curb' in _f6[0][1]
-      and len(_i6g) == 1 and 'elbow 4702 at 1.9 + 0.5 ft curb' in _i6g[0],
+check("case82 the basis and governs NOTE give one L incl. curb",
+      _f6 and 'L 2.4 ft incl. curb, H 12 in' in _f6[0][1]
+      and len(_i6g) == 1 and 'elbow 4702 at 2.4 ft incl. curb (' in _i6g[0],
       "rows %r gov %r" % (_f6, _i6g))
 _c0 = _run81(1.9, fan=_curb(0))
 check("case82 curb 0: the same as no curb, no curb NOTE",
@@ -3112,11 +3113,11 @@ _o0 = _fse_run(n82, c82, d82, t82, 990)
 _o14 = _fse_run(n82, c82, d82, t82, 990, fan=_curb(14))
 _ro14 = _notes(_o14, 'red')
 check("case82 outlet 1.0 ft + 14 in. curb: still RED under 0.5 Le, named with the curb, lower FSE",
-      len(_ro14) == 1 and _ro14[0].startswith('RED: Elbow 992 is 1.0 ft from the supply outlet '
-                                              '(plus a 14 in. roof curb), L/Le ')
-      and 'ft of straight duct, the 14 in. curb included (' in _ro14[0]
+      len(_ro14) == 1 and _ro14[0].startswith('RED: Elbow 992 is 2.2 ft from the supply outlet, '
+                                              '14 in. roof curb included, L/Le ')
+      and 'past the curb' not in _ro14[0]
       and _o14.get('fse_inwc', 0) < _o0.get('fse_inwc', 0)
-      and 'L 1.0 + 1.2 ft curb / Le ' in _fse_items(_o14)[0][1],
+      and 'L 2.2 ft incl. curb / Le ' in _fse_items(_o14)[0][1],
       "red %r fse %r / %r rows %r" % (_ro14, _o14.get('fse_inwc'), _o0.get('fse_inwc'),
                                       _fse_items(_o14)))
 check("case82 METHOD names the curb used",
@@ -3178,11 +3179,11 @@ _t83c = _run83(2.2, fan=_curb(14))
 check("case83 tap at 2.2 ft + 14 in. curb (3.37 ft): past 3 De, no WARNING",
       not _tw83(_t83c) and _tw83(_run83(2.2)), "notes %r" % (_notes(_t83c),))
 _t83k = _run83(1.0, fan=_curb(14))
-check("case83 tap at 1.0 ft + 14 in. curb: the WARNING names the curb and the duct past it",
+check("case83 tap at 1.0 ft + 14 in. curb: the WARNING gives one total length, curb included",
       len(_tw83(_t83k)) == 1 and _tw83(_t83k)[0].startswith(
-          'WARNING: Tap 4802 is 1.0 ft from the supply outlet (plus a 14 in. roof curb); '
-          'recommended: at least 3.3 ft of straight duct to the first tap (3 D, De 13.1 in.), the '
-          '14 in. curb included (2.2 ft of duct past the curb).'), "notes %r" % (_notes(_t83k),))
+          'WARNING: Tap 4802 is 2.2 ft from the supply outlet, 14 in. roof curb included; '
+          'recommended: at least 3.3 ft of straight duct to the first tap (3 D, De 13.1 in.). '),
+      "notes %r" % (_notes(_t83k),))
 _t83l = _run83(0.5, elbow_first=True)
 check("case83 a tap past the first elbow: not this check", not _tw83(_t83l),
       "notes %r" % (_notes(_t83l),))
@@ -3289,12 +3290,11 @@ check("case84 inlet elbow at 0.3 ft, 3000 fpm: GRAY with its fix length, listed 
 _g84c = _run84(2.0)
 _r84c = FSE.inlet_effect(False, 12.0, 18.0, 1.0, 3000.0, 0.3 + 2.0 / 12.0, pv_of=pv)
 _gt84c = [t for k, t in _g84c.get('fse_notes', ()) if k == 'gray']
-check("case84 the same + 2 in. curb (L 0.47 ft): still GRAY, the curb and the duct past it named",
+check("case84 the same + 2 in. curb (L 0.47 ft): still GRAY, one total length incl. curb",
       _r84c['high'] and len(_gt84c) == 1
-      and '0.3 ft from the return inlet (plus a 2 in. roof curb)' in _gt84c[0]
-      and 'increase length of duct to %.1f ft, the 2 in. curb included (%.1f ft of duct past '
-          'the curb)' % (_r84c['fix_ft'], FSE._ceil_step(_r84c['fix_ft'] - 2.0 / 12.0))
-          in _gt84c[0]
+      and '0.5 ft from the return inlet, 2 in. roof curb included, ' in _gt84c[0]
+      and 'increase length of duct to %.1f ft (C ' % _r84c['fix_ft'] in _gt84c[0]
+      and 'past the curb' not in _gt84c[0]
       and _g84c.get('fse_gray_ids') == {4802},
       "gray %r" % (_gt84c,))
 _g84s = _run84(6.0)

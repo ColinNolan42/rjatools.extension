@@ -3612,8 +3612,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 and root_id not in discharge_roots and root_id not in box_ids):
             curb_ft = float(fse_set.get('curb_in') or 0.0) / 12.0
         rec['curb_ft'] = curb_ft
-        where_c = where + ((' (plus a %s roof curb)' % fan_system_effect.curb_in_text(curb_ft))
-                           if curb_ft else '')
+        # One total length with the curb in it (Colin, 2026-11-09).
+        where_c = fan_system_effect.curb_where(where, curb_ft)
         flow = _first_duct(first)
         cfm = cfm_in if cfm_in else _connection_cfm(first)
         if flow is None or cfm <= 0 or not flow.area_ft2:
@@ -3772,8 +3772,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 e_r, l_r, role_here,
                                 'D' if role_here == fan_system_effect.OUTLET else dim_e,
                                 curb_ft),
-                            ('Straight duct %.1f ft past the curb' % fan_system_effect._ceil_step(
-                                max(need - curb_ft, 0.0))) if curb_ft else
+                            ('Straight duct %.1f ft incl. curb' % fan_system_effect._ceil_step(
+                                need)) if curb_ft else
                             ('Straight duct %.1f ft' % fan_system_effect._ceil_step(need)))
         passed = {}     # transitions inside the pricing window (win)
         # Two elbows turning in different planes within 6 Dh of the
@@ -3795,7 +3795,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if pair is not None:
                 notes.append(('red', fan_system_effect.swirl_text(
                     role_here, where_c,
-                    tuple((e, l - curb_ft, nv) for e, l, nv in pair), swin, d_h)))
+                    tuple((e, l, nv) for e, l, nv in pair), swin, d_h)))
                 rec['red'].update((pair[0][0], pair[1][0]))
             elif len(elbows) >= 2:
                 # A double bend (Colin, 2026-11-04): two elbows inside 6 Dh
@@ -3803,7 +3803,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # the fan system effect, so the real loss is higher. A
                 # WARNING, not RED, and nothing extra is priced.
                 notes.append(('warn', fan_system_effect.double_elbow_text(
-                    where_c, [(e, l - curb_ft, None) for e, l in elbows], swin, d_h)))
+                    where_c, [(e, l, None) for e, l in elbows], swin, d_h)))
         else:
             fan_system_effect.log.info('swirl check: %s first duct Dh NOT FOUND, '
                                        'not checked', where)
@@ -3823,7 +3823,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                    where, win, acc)
         for a_id, a_l, a_fam in acc:
             notes.append(('warn', fan_system_effect.damper_window_text(
-                where_c, a_id, a_fam, a_l - curb_ft, win, win_name)))
+                where_c, a_id, a_fam, a_l, win, win_name)))
         grp_ducts = []
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
@@ -3875,7 +3875,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if role != 'elbow':
             if not tap_warned:
                 notes.append(('warn', fan_system_effect.disruption_text(
-                    _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft - curb_ft, win,
+                    _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft, win,
                     win_name)))
             rec['none'] = '%s %s at %s inside %s, flagged, not priced' % (
                 _FSE_KIND_TEXT.get(role, role), did,
@@ -3888,7 +3888,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         else:
             enotes = []
             is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow, enotes,
-                                                   did, l_ft - curb_ft, where_c)
+                                                   did, l_ft, where_c)
             if size is None:
                 notes.append(('warn', 'WARNING: elbow %s, %s, but no size '
                               'could be read; fan system effect not priced'
