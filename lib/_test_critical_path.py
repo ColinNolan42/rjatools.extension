@@ -2997,20 +2997,20 @@ def _w81(leaf):
 _r81 = _run81(2.4)
 check("case81 cabinet inlet elbow at 2.4 ft (2 H 2.0, 3 H 3.0): the 3 H WARNING, not RED",
       _w81(_r81) == ["WARNING: Elbow 4702 is 2.4 ft from the return inlet; recommended: at least "
-                     "3.0 ft of straight duct (3 H, H 12 in.). Under 3 H the elbow causes a "
-                     "fan system effect that is not priced (the inlet is priced at its 800 "
-                     "fpm opening velocity), so the external static shown is low; "
-                     "the engineer has final say where space does not allow."]
+                     "3.0 ft of straight duct (3 H, H 12 in.). The fan system effect is priced "
+                     "at the 800 fpm opening velocity; closer to the fan the air speeds up, and "
+                     "the loss rises with velocity pressure (the square of velocity), so the true "
+                     "loss may be higher. The engineer has final say where space does not allow."]
       and not _r81.get('fse_red_ids'), "notes %r red %r" % (_r81.get('fse_notes'),
                                                              _r81.get('fse_red_ids')))
 _g81 = [t for _k, t in _r81.get('fse_gov_notes', ())]
 check("case81 the governs NOTE points to the WARNING",
       len(_g81) == 1 and (
-          _g81[0].endswith('charged at their own losses; the fan system effect under 3 H is '
-                           'not priced, see the WARNING.')
+          _g81[0].endswith('charged at their own losses; under 3 H the fan system effect may '
+                           'be understated, see the WARNING.')
           or _g81[0].endswith('Fan system effect charged at the opening velocity, the '
-                              'straight duct and elbow are not charged again; under 3 H the '
-                              'full fan system effect is not priced, see the WARNING.')),
+                              'straight duct and elbow are not charged again; under 3 H it '
+                              'may be understated, see the WARNING.')),
       "gov %r" % (_g81,))
 # both governs wordings, straight from the text builder
 _gw = FSE.governs_text(True, 1, 2.4, 'return inlet', 0.05, 0.01, 5.0, '5 H',
@@ -3019,10 +3019,10 @@ _go = FSE.governs_text(False, 1, 2.4, 'return inlet', 0.01, 0.05, 5.0, '5 H',
                        transition=True, warn_dim='D')
 check("case81 governs wordings with the WARNING",
       _gw.endswith('Fan system effect charged at the opening velocity, the straight duct, '
-                   'transition and elbow are not charged again; under 3 H the full fan '
-                   'system effect is not priced, see the WARNING.')
-      and _go.endswith('Straight duct, transition and elbow charged at their own losses; the '
-                       'fan system effect under 3 D is not priced, see the WARNING.')
+                   'transition and elbow are not charged again; under 3 H it may be '
+                   'understated, see the WARNING.')
+      and _go.endswith('Straight duct, transition and elbow charged at their own losses; '
+                       'under 3 D the fan system effect may be understated, see the WARNING.')
       and FSE.governs_text(False, 1, 2.4, 'return inlet', 0.01, 0.05, 5.0, '5 H')
       .endswith('charged at their own losses, no fan system effect.'),
       "%r / %r" % (_gw, _go))
@@ -3061,10 +3061,11 @@ _i6 = _run81(1.9, fan=_curb(6))
 check("case82 inlet 1.9 ft + 6 in. curb (L 2.4 ft): the 3 H WARNING names the curb and the duct past it",
       _w81(_i6) == ['WARNING: Elbow 4702 is 1.9 ft from the return inlet (plus a 6 in. roof '
                     'curb); recommended: at least 3.0 ft of straight duct (3 H, H 12 in.), the 6 '
-                    'in. curb included (2.5 ft of duct past the curb). Under 3 H the elbow '
-                    'causes a fan system effect that is not priced (the inlet is priced at '
-                    'its 800 fpm opening velocity), so the external static shown is low; '
-                    'the engineer has final say where space does not allow.'] and not _i6.get('fse_red_ids'),
+                    'in. curb included (2.5 ft of duct past the curb). The fan system effect '
+                    'is priced at the 800 fpm opening velocity; closer to the fan the air '
+                    'speeds up, and the loss rises with velocity pressure (the square of '
+                    'velocity), so the true loss may be higher. The engineer has final say '
+                    'where space does not allow.'] and not _i6.get('fse_red_ids'),
       "notes %r" % (_notes(_i6),))
 _i6r = _run81(1.0, fan=_curb(6))
 _red6 = _notes(_i6r, 'red')

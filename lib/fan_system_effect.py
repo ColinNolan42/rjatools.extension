@@ -699,9 +699,9 @@ def cabinet_warn_ft(size_in):
 def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
     """The WARNING for an elbow under CABINET_WARN_D x D of a cabinet unit
     inlet (RTU, AHU, furnace, fan coil), past the 2 D RED line (Colin,
-    2026-11-09): under 3 D the elbow causes a fan system effect the tool does
-    not price, since the inlet is priced at its connection (opening)
-    velocity, so the external static shown is low. Same D / H as
+    2026-11-09): the elbow's fan system effect IS priced, at the connection
+    (opening) velocity; this close to the unit that may understate the true
+    loss (Colin, 2026-11-09 wording). Same D / H as
     inlet_red_text; v_conn the connection velocity, fpm."""
     dim = 'D' if is_round else 'H'
     curb = ''
@@ -710,12 +710,13 @@ def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
             curb_in_text(curb_ft),
             _ceil_step(max(cabinet_warn_ft(size_in) - float(curb_ft), 0.0)))
     return ('%s%s is %s; recommended: at least %.1f ft of straight duct '
-            '(%.0f %s, %s %.0f in.)%s. Under %.0f %s the elbow causes a fan system effect '
-            'that is not priced (the inlet is priced at its %.0f fpm opening velocity), '
-            'so the external static shown is low; the engineer has final say where space does not allow.'
+            '(%.0f %s, %s %.0f in.)%s. The fan system effect is priced at the %.0f fpm '
+            'opening velocity; closer to the fan the air speeds up, and the loss rises '
+            'with velocity pressure (the square of velocity), so the true loss may be '
+            'higher. The engineer has final say where space does not allow.'
             % (CABINET_WARN_PREFIX, eid, from_text(where, l_ft, curb_ft),
                _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, dim, dim,
-               float(size_in), curb, CABINET_WARN_D, dim, float(v_conn)))
+               float(size_in), curb, float(v_conn)))
 
 
 def equivalent_diameter_in(conn):
@@ -827,10 +828,10 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
         under = '%.0f %s' % (CABINET_WARN_D, warn_dim)
         if fse_wins:
             return head + ('Fan system effect charged at the opening velocity, the %s are '
-                           'not charged again; under %s the full fan system effect is not '
-                           'priced, see the WARNING.' % (group, under))
-        return head + ('%s charged at their own losses; the fan system effect under %s is '
-                       'not priced, see the WARNING.' % (group[0].upper() + group[1:], under))
+                           'not charged again; under %s it may be understated, see the '
+                           'WARNING.' % (group, under))
+        return head + ('%s charged at their own losses; under %s the fan system effect may '
+                       'be understated, see the WARNING.' % (group[0].upper() + group[1:], under))
     if fse_wins:
         return head + 'Fan system effect charged, the %s are not charged again.' % group
     return head + ('%s charged at their own losses, no fan system effect.'
@@ -925,8 +926,9 @@ def method_lines(settings):
                    'area). At an inlet: the connection velocity on a cabinet unit '
                    '(RTU, AHU, furnace, fan coil), the fan sits past the filter and '
                    'coil, with at least 3 D of straight duct before the first elbow; '
-                   'closer, the elbow\'s fan system effect is not priced and a WARNING '
-                   'says so; on exhaust fans (inline, roof), where the duct meets the '
+                   'closer, the air speeds up toward the fan and the loss, proportional '
+                   'to velocity pressure, may be understated at the opening velocity; a '
+                   'WARNING says so; on exhaust fans (inline, roof), where the duct meets the '
                    'fan, the larger of the fan velocity and the connection velocity.'
                    % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
     else:
