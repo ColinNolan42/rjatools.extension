@@ -6159,27 +6159,79 @@ def _sheets_by_view():
     return out
 
 
-def _target_plan_views(active_view, level_ids, sheets_by_view):
-    """One floor plan per level the traversed ductwork sits on.
+def _rect_overlap(a, b):
+    """Overlap area of two (min x, min y, max x, max y) rectangles, 0.0 when
+    they do not overlap. Pure, for the CPython test."""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0.0
 
-    The view the tool was run from always covers its own level. Every other
-    level gets the floor plan on that level that is placed on a sheet, ranked:
-    same view template as the active view, then any 'RJA Mechanical' template,
-    then anything else on a sheet. Demolition plans and earlier Duct
-    Performance outputs are never picked (Colin, 2026-10-16: a roof plan run
-    stopped at the RTU boot because the main level was never drawn).
 
-    level_ids: int level id -> ElementId.
-    Returns ([(level ElementId, view, source sheet or None)], [missing level ElementIds]).
+def _plan_rank(template_rank, crop_rect, sys_rect):
+    """Sort key for a candidate plan on one level, or None when it does not
+    qualify (Colin, 2026-11-09, TB-M12C took another bench's plan): its crop
+    shall overlap that level's system. Ranked by template (2 same as the
+    active view, 1 RJA Mechanical), then a cropped plan over an uncropped
+    one (crop_rect None: covers everything), then the larger overlap. Pure,
+    for the CPython test."""
+    if template_rank <= 0:
+        return None
+    if crop_rect is None:
+        return (template_rank, 0, 0.0)
+    if sys_rect is None:
+        return None
+    area = _rect_overlap(crop_rect, sys_rect)
+    if area <= 0.0:
+        return None
+    return (template_rank, 1, area)
+
+
+def _view_crop_rect(view):
+    """The plan's crop region as a model XY rectangle, or None when its crop
+    is off (covers everything). The CropBox corners go through
+    CropBox.Transform to model coordinates, as understood here, not yet
+    verified live. A crop that cannot be read is logged and treated as off."""
+    try:
+        if not view.CropBoxActive:
+            return None
+        bb = view.CropBox
+        tr = bb.Transform
+        pts = [tr.OfPoint(XYZ(x, y, bb.Min.Z))
+               for x in (bb.Min.X, bb.Max.X) for y in (bb.Min.Y, bb.Max.Y)]
+    except Exception as ex:
+        hvac_graph.log.warning('plan pick: view %s crop NOT READ, taken as uncropped: %s',
+                               eid_int(view.Id), ex)
+        return None
+    return _crop_box_xy([(p.X, p.Y) for p in pts], 0.0)
+
+
+def _target_plan_views(active_view, level_ids, sheets_by_view, level_rects=None):
+    """One floor plan per level the traversed ductwork and terminals sit on.
+
+    The active view covers its own level when the system is on it. Every
+    other level gets a mechanical floor plan on that level that is placed on
+    a sheet and whose crop overlaps that level's system (_plan_rank: same
+    view template as the active view, then any 'RJA Mechanical' template,
+    then cropped over uncropped, then the larger overlap). Demolition plans,
+    dependent views and earlier Duct Performance outputs are never picked
+    (Colin, 2026-10-16: a roof plan run stopped at the RTU boot because the
+    main level was never drawn; 2026-11-09: TB-M12C took TB-M01C's plan).
+
+    level_ids: int level id -> ElementId. level_rects: int level id -> model
+    XY rectangle of that level's system (None: no overlap test).
+    Returns ([(level ElementId, view, source sheet or None)], [missing level
+    ElementIds]); a missing level gets a plan made in main().
     """
+    level_rects = level_rects or {}
     targets = []
     active_lvl = None
     try:
         active_lvl = active_view.GenLevel.Id
     except Exception:
         pass
-    sheet = sheets_by_view.get(eid_int(active_view.Id))
-    targets.append((active_lvl, active_view, sheet))
+    if active_lvl is not None and eid_int(active_lvl) in level_ids:
+        sheet = sheets_by_view.get(eid_int(active_view.Id))
+        targets.append((active_lvl, active_view, sheet))
 
     candidates = {}
     for v in FilteredElementCollector(doc).OfClass(ViewPlan):
@@ -6187,6 +6239,9 @@ def _target_plan_views(active_view, level_ids, sheets_by_view):
             if v.IsTemplate or v.ViewType != ViewType.FloorPlan or v.GenLevel is None:
                 continue
         except Exception:
+            continue
+        lid = eid_int(v.GenLevel.Id)
+        if lid not in level_ids:
             continue
         sh = sheets_by_view.get(eid_int(v.Id))
         if sh is None:
@@ -6215,16 +6270,18 @@ def _target_plan_views(active_view, level_ids, sheets_by_view):
                 rank = 1
         except Exception:
             pass
-        if rank == 0:
+        key = _plan_rank(rank, _view_crop_rect(v), level_rects.get(lid))
+        hvac_graph.log.info('plan pick: level %s view %s (%s) key %r', lid, eid_int(v.Id),
+                            name, key)
+        if key is None:
             continue
-        lid = eid_int(v.GenLevel.Id)
         best = candidates.get(lid)
-        if best is None or rank > best[0]:
-            candidates[lid] = (rank, v, sh)
+        if best is None or key > best[0]:
+            candidates[lid] = (key, v, sh)
 
     missing = []
     for lid, lvl_eid in sorted(level_ids.items()):
-        if active_lvl is not None and lid == eid_int(active_lvl):
+        if any(t[0] is not None and eid_int(t[0]) == lid for t in targets):
             continue
         found = candidates.get(lid)
         if found is None:
@@ -6256,6 +6313,23 @@ def _create_level_plan(like_view, lvl_eid):
     hvac_graph.log.info('level plan: view %s made on level %s', eid_int(v.Id),
                         eid_int(lvl_eid))
     return v
+
+
+def _elem_box_points(elems):
+    """Model XY corners of each element's bounding box, skipping any that
+    has none."""
+    pts = []
+    for el in elems or ():
+        try:
+            bb = el.get_BoundingBox(None)
+        except Exception:
+            bb = None
+        if bb is None:
+            continue
+        for x in (bb.Min.X, bb.Max.X):
+            for y in (bb.Min.Y, bb.Max.Y):
+                pts.append((x, y))
+    return pts
 
 
 def _crop_box_xy(points, margin_ft):
@@ -7334,16 +7408,17 @@ def main():
     # otherwise stopped at the RTU boot, because the main level ductwork was
     # checked but never drawn.
     sheets_by_view = _sheets_by_view()
-    # The levels the system touches: every duct (its Reference Level), every
-    # terminal and the picked unit (Colin, 2026-11-09: a roof with only the
-    # RTU on it is a level of its own).
+    # The levels the system touches: every duct (its Reference Level) and
+    # every terminal. A level holding only the unit (an RTU on a roof deck)
+    # gets no plan; the unit is colored in whichever plan shows it (Colin,
+    # 2026-11-09, TB-M12C "LEVEL 2 - DECK").
     level_ids = {}
-    level_elems = {}          # int level id -> [elements drawn on it], for the crop
+    level_elems = {}          # int level id -> [elements drawn on it]: crop and plan pick
     for eid, dr in all_duct_results.items():
         lid = _elem_level_id(dr.elem)
         if lid is not None:
             level_ids[eid_int(lid)] = lid
-    for _nid in list(all_terminals.keys()) + list(all_root_ids):
+    for _nid in all_terminals.keys():
         _el = all_nodes.get(_nid)
         lid = _elem_level_id(_el) if _el is not None else None
         if lid is not None:
@@ -7352,7 +7427,13 @@ def main():
         lid = _elem_level_id(_el) if _el is not None else None
         if lid is not None:
             level_elems.setdefault(eid_int(lid), []).append(_el)
-    level_targets, missing_levels = _target_plan_views(active_view, level_ids, sheets_by_view)
+    # Each level's system as a model XY rectangle: a source plan's crop
+    # shall overlap it (Colin, 2026-11-09, TB-M12C took TB-M01C's plan).
+    level_rects = {}
+    for _lid in level_ids:
+        level_rects[_lid] = _crop_box_xy(_elem_box_points(level_elems.get(_lid, [])), 0.0)
+    level_targets, missing_levels = _target_plan_views(active_view, level_ids, sheets_by_view,
+                                                       level_rects)
 
     # One colored plan per level, all on one sheet (Colin, 2026-11-09,
     # replacing the 2026-10-16 single plan with its view range opened over
@@ -7361,7 +7442,13 @@ def main():
     # that level's system (5 ft margin). A level with no mechanical plan gets
     # one made from the active view's type and template, inside the
     # transaction. A single level system is unchanged: the active view only.
-    multi_level = len(level_targets) + len(missing_levels) > 1
+    # Multi level: the system is on more than one level, or on one level that
+    # is not the active view's (that level's own plan is used).
+    try:
+        _act_lid = eid_int(active_view.GenLevel.Id)
+    except Exception:
+        _act_lid = None
+    multi_level = len(level_ids) > 1 or (len(level_ids) == 1 and _act_lid not in level_ids)
     if multi_level:
         targets = list(level_targets)
     else:
@@ -7636,6 +7723,11 @@ def main():
                     return float('inf')
             targets.sort(key=_lvl_elev)
         act_sheet = sheets_by_view.get(eid_int(active_view.Id))
+        if multi_level and not targets:
+            # No level plan found or made: the active view alone, as for a
+            # single level system, so the run still gives a sheet.
+            multi_level = False
+            targets = [(None, active_view, act_sheet)]
         multi_sheet = None        # the one sheet every level is placed on
         multi_vps = []            # (viewport, level name) placed on it, in order
         for lvl_eid, src_view, src_sheet in targets:
