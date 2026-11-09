@@ -18,7 +18,8 @@ Mains and branches are judged by two different methods:
           for its own CFM and whether the duct is big enough for the diffuser.
           Slot diffusers have no published neck table, so a slot branch is
           judged off the auto-sized slot family: its inlet diameter and its
-          Sizing Warning (Colin, 2026-10-22).
+          Sizing Warning (Colin, 2026-10-22), and its Flow against the slot
+          table for its length and slot count (Colin, 2026-11-09).
 
 The diffuser/duct height clearance check still applies to both, and still
 overrides either verdict - it is an installability problem, not a sizing one.
@@ -895,7 +896,8 @@ def _show_velocity_settings_xaml(use_theme):
     # ── calculation basis reference (condensed) ─────────────────────────────
     ref_rows = [
         ('Limits', 'Checked on main ducts only. Branches are judged against the '
-                   'diffuser capacity tables.'),
+                   'diffuser capacity tables, slots on the slot tables by length and '
+                   'number of slots.'),
         ('Friction', 'Darcy Weisbach with the Altshul Tsal friction factor '
                      '(explicit approximation to Colebrook White), checked against '
                      'the RJA SP loss worksheet.'),

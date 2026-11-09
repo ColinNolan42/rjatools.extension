@@ -215,8 +215,10 @@ SIDEWALL_RETURN_EXHAUST_TABLE = [
 #
 # From the MEP Design Standards "Slot Diffuser, Supply / Return" tables
 # (build_doc.py, matched to the docx 2026-10-23). The same numbers drive the
-# slot families' slot count and Max CFM. Reference only: the branch check
-# for a slot trusts the auto-sizing family's own inlet (Colin, 2026-10-22).
+# slot families' slot count and Max CFM (24 in.: 435 supply, 535 return at
+# 8 slots, read live on TB-M11 2026-11-09). The branch check judges an RJA
+# slot's Flow against its own length and slot count here (slot_max_cfm,
+# Colin, 2026-11-09), on top of the family's Sizing Warning and inlet.
 #
 # Supply basis: Titus ML-38, 3/4 in. slot (catalog F25), cfm/ft interpolated
 # between the published 0.065 and 0.102 in. w.g. rows to 0.08 in. w.g.,
@@ -239,6 +241,57 @@ SLOT_RETURN_TABLE = [
     (72, [200, 400, 600, 800, 1000, 1200, 1400, 1600]),
 ]
 
+
+
+SLOT_LENGTH_TOL_IN = 0.5     # a slot length matches a table row within this
+
+
+def _slot_table(is_supply):
+    return SLOT_SUPPLY_TABLE if is_supply else SLOT_RETURN_TABLE
+
+
+def slot_max_cfm(is_supply, length_in, count):
+    """Max cfm of a linear slot of length_in (24 to 72 in.) with count slots
+    (1 to 8), from SLOT_SUPPLY_TABLE or SLOT_RETURN_TABLE, or None when the
+    length or count is not in the table."""
+    try:
+        n = int(count)
+        length_in = float(length_in)
+    except (TypeError, ValueError):
+        return None
+    if n < 1 or n > 8:
+        return None
+    for row_len, cfms in _slot_table(is_supply):
+        if abs(row_len - length_in) <= SLOT_LENGTH_TOL_IN:
+            return cfms[n - 1]
+    return None
+
+
+def slot_fit(is_supply, length_in, count, cfm):
+    """The smallest slot that carries cfm, as (length_in, count), or None
+    when no slot in the table does ('Max CFM reached, split slot'). The same
+    length with more slots first (the family adds slots on its own), then
+    the next longer length with the fewest slots that fit."""
+    cfm = float(cfm)
+    table = _slot_table(is_supply)
+    for row_len, cfms in table:
+        if abs(row_len - float(length_in)) <= SLOT_LENGTH_TOL_IN:
+            for n in range(int(count) + 1, 9):
+                if cfms[n - 1] >= cfm:
+                    return row_len, n
+    for row_len, cfms in table:
+        if row_len <= float(length_in) + SLOT_LENGTH_TOL_IN:
+            continue
+        for n in range(1, 9):
+            if cfms[n - 1] >= cfm:
+                return row_len, n
+    return None
+
+
+def slot_label(length_in, count):
+    """'24 in. x 5 slots'."""
+    n = int(count)
+    return '%.0f in. x %d slot%s' % (float(length_in), n, '' if n == 1 else 's')
 
 # Dimensional match tolerance, inches. Callers snap to the nominal 2" grid
 # before calling in, so anything reaching a lookup should already be an exact

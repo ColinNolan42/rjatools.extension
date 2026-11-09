@@ -206,5 +206,89 @@ class TestClassifyRectNeck(unittest.TestCase):
         self.assertEqual(r.status, 'GRAY')
 
 
+class _SlotParam(object):
+    def __init__(self, v):
+        self.v = v
+
+    def AsDouble(self):
+        return float(self.v)
+
+    def AsInteger(self):
+        return int(self.v)
+
+    def AsString(self):
+        return self.v
+
+
+def _slot(length_in, count, inlet=10.0, sys_class='Supply Air', warning=''):
+    """An RJA slot as read live on TB-M11 D-SLOT1 (2026-11-09): instance
+    "Select Diffuser's Number of Slots" (Integer) and "Selected Nominal
+    Diffuser's Length" (feet), "Sizing Warning" text."""
+    t = _Terminal(('round', float(inlet)), 'slot', sys_class)
+    p = {"Select Diffuser's Number of Slots": _SlotParam(count),
+         "Sizing Warning": _SlotParam(warning)}
+    if length_in is not None:
+        p["Selected Nominal Diffuser's Length"] = _SlotParam(length_in / 12.0)
+    t.LookupParameter = p.get
+    return t
+
+
+class TestSlotTable(unittest.TestCase):
+    """Colin, 2026-11-09: a slot's Flow against the slot table for its own
+    length and slot count; over it RED with the slot that fits."""
+
+    def test_d_slot1_live_values_pass(self):
+        # D-SLOT1: 24 in., 5 slots (275 cfm), 251 cfm, 10 in. inlet
+        r = check(_slot(24.0, 5), 251.0, 10.0)
+        self.assertEqual(r.status, 'GREEN', r.reason)
+
+    def test_table_numbers_match_the_family_max(self):
+        D = HG.diffuser_tables
+        self.assertEqual(D.slot_max_cfm(True, 24.0, 8), 435)     # Type '24" - 435 CFM Max'
+        self.assertEqual(D.slot_max_cfm(False, 24.0, 8), 535)    # Type '24" - 535 CFM'
+        self.assertIsNone(D.slot_max_cfm(True, 30.0, 4))
+        self.assertIsNone(D.slot_max_cfm(True, 24.0, 9))
+
+    def test_over_its_count_names_more_slots(self):
+        # 24 in. x 4 slots carries 220; 251 needs 5 slots at the same length
+        r = check(_slot(24.0, 4), 251.0, 10.0)
+        self.assertEqual(r.status, 'RED')
+        self.assertEqual(r.reason, 'Slot over table capacity (24 in. x 4 slots max 220 CFM), '
+                                   'use 24 in. x 5 slots')
+        self.assertEqual(r.required_size, '24 in. x 5 slots')
+
+    def test_over_the_length_names_a_longer_slot(self):
+        # past 24 in. x 8 (435): 36 in. needs 6 slots (490)
+        r = check(_slot(24.0, 8), 450.0, 12.0)
+        self.assertEqual(r.status, 'RED')
+        self.assertTrue(r.reason.endswith('use 36 in. x 6 slots'), r.reason)
+
+    def test_over_the_largest_is_split_slot(self):
+        r = check(_slot(72.0, 8), 1400.0, 12.0)
+        self.assertEqual((r.status, r.reason), ('RED', 'Max CFM reached, split slot'))
+        self.assertEqual(r.required_size, 'Split slot')
+
+    def test_return_reads_the_return_table(self):
+        # MLR-38 24 in. x 1 slot 65 cfm; 100 cfm needs 2 slots (135)
+        r = check(_slot(24.0, 1, 6.0, 'Return Air'), 100.0, 6.0)
+        self.assertEqual(r.status, 'RED')
+        self.assertTrue(r.reason.endswith('use 24 in. x 2 slots'), r.reason)
+        self.assertEqual(check(_slot(24.0, 1, 6.0, 'Return Air'), 0.0, 6.0).status, 'GREEN')
+
+    def test_table_fail_and_branch_undersized(self):
+        r = check(_slot(24.0, 4), 251.0, 8.0)
+        self.assertEqual(r.status, 'RED')
+        self.assertTrue(r.reason.endswith(', branch undersized'), r.reason)
+
+    def test_existing_checks_kept(self):
+        self.assertEqual(check(_slot(24.0, 5), 251.0, 8.0).reason, 'Branch smaller than diffuser')
+        r = check(_slot(24.0, 5, warning='OVER CAPACITY'), 251.0, 10.0)
+        self.assertEqual(r.reason, 'Diffuser undersized for CFM')
+
+    def test_unreadable_length_skips_the_table(self):
+        # no length: the table check is skipped (logged), the rest still runs
+        self.assertEqual(check(_slot(None, 4), 251.0, 10.0).status, 'GREEN')
+
+
 if __name__ == '__main__':
     unittest.main()

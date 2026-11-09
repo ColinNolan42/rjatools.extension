@@ -153,8 +153,10 @@ def branch_notes(words):
          'diffuser is redundant. Two things are checked instead: ' + _BRANCH_CHECKS),
         ('Branches feeding a slot diffuser',
          'are judged off the auto-sized slot family: the branch duct shall be at '
-         'least the slot inlet diameter, and a filled Sizing Warning on the slot '
-         'is red. No neck table is published for slots.'),
+         'least the slot inlet diameter, a filled Sizing Warning on the slot is '
+         'red, and the slot\'s Flow over the slot table for its length and number '
+         'of slots (Titus ML-38 supply, MLR-38 return) is red, naming the slot '
+         'that fits or "Max CFM reached, split slot".'),
         _BRANCH_NOT_RJA,
     ]
 

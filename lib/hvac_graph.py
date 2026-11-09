@@ -422,6 +422,53 @@ def _terminal_neck_is_horizontal(elem):
 # 2026-09-14, so connector shape alone no longer identifies a slot (Colin
 # chose the parameter route, 2026-10-16).
 _SLOT_MARKER_PARAMS = ('Selected Number of Slots', "Select Diffuser's Number of Slots")
+# The RJA slot families' own length and slot count, read live on TB-M11
+# D-SLOT1 / RS-SLOT1 (2026-11-09): the count an instance Integer (1 to 8,
+# picked by the family from the Flow), the length an instance Length in
+# feet, with the Type's input length as the fallback.
+_SLOT_COUNT_PARAM = "Select Diffuser's Number of Slots"
+_SLOT_LENGTH_PARAMS = ("Selected Nominal Diffuser's Length", "Input the ML(R)'s Nominal Length")
+
+
+def _slot_param(elem, name):
+    for holder in (elem, getattr(elem, 'Symbol', None)):
+        if holder is None:
+            continue
+        try:
+            p = holder.LookupParameter(name)
+        except Exception:
+            p = None
+        if p is not None:
+            return p
+    return None
+
+
+def slot_length_count(elem):
+    """(length in., slot count) of an RJA slot diffuser, either None when
+    unreadable (logged)."""
+    eid = eid_int(elem.Id)
+    length_in = None
+    for name in _SLOT_LENGTH_PARAMS:
+        p = _slot_param(elem, name)
+        try:
+            v = p.AsDouble() if p is not None else 0.0
+        except Exception:
+            v = 0.0
+        if v > 0:
+            length_in = v * 12.0
+            break
+    count = None
+    p = _slot_param(elem, _SLOT_COUNT_PARAM)
+    try:
+        count = p.AsInteger() if p is not None else None
+    except Exception:
+        count = None
+    if not count:
+        count = None
+    log.info('slot_length_count: id=%s length %s in., %s slots', eid,
+             '%.0f' % length_in if length_in else 'NOT FOUND',
+             count if count else 'NOT FOUND')
+    return length_in, count
 
 
 def _is_slot_diffuser(elem):
@@ -1331,6 +1378,11 @@ def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
     the ceiling and sidewall tables are: (a) the diffuser passes unless its
     Sizing Warning text is filled, and (b) the branch duct must be at least
     the inlet diameter. No velocity or friction verdict, like every branch.
+    (c) Colin, 2026-11-09: the slot's Flow is judged against the slot table
+    for its own length and slot count (diffuser_tables.slot_max_cfm), a
+    consistency check on the family. Over it is RED naming the slot that
+    fits ('use 24 in. x 6 slots') or 'Max CFM reached, split slot'. A length
+    or count that is unreadable or not in the table skips (c), logged.
     """
     res.sys_class = terminal_sys_class(terminal_elem)
     if geom[0] != 'round' or not geom[1]:
@@ -1355,6 +1407,29 @@ def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
             break
     diffuser_ok = not warning
 
+    # (c) the slot table for its own length and slot count (Colin, 2026-11-09)
+    table_fail = None
+    is_supply = res.sys_class == 'Supply Air'
+    length_in, count = slot_length_count(terminal_elem)
+    max_cfm = (diffuser_tables.slot_max_cfm(is_supply, length_in, count)
+               if (length_in and count) else None)
+    if max_cfm is None:
+        log.warning('branch_diffuser_check: slot id=%s table check skipped, length %s '
+                    'count %s not in the %s slot table', tid, length_in, count,
+                    'supply' if is_supply else 'return')
+    elif res.cfm > max_cfm + 1e-6:
+        fit = diffuser_tables.slot_fit(is_supply, length_in, count, res.cfm)
+        here = diffuser_tables.slot_label(length_in, count)
+        if fit is None:
+            table_fail = 'Max CFM reached, split slot'
+            res.required_size = 'Split slot'
+        else:
+            res.required_size = diffuser_tables.slot_label(fit[0], fit[1])
+            table_fail = 'Slot over table capacity (%s max %d CFM), use %s' % (
+                here, max_cfm, res.required_size)
+        log.info('branch_diffuser_check: slot id=%s %.0f cfm over %s max %d -> %s',
+                 tid, res.cfm, here, max_cfm, table_fail)
+
     branch_ok = None
     if installed_branch_size is None:
         unverified = 'branch duct size unreadable'
@@ -1368,7 +1443,11 @@ def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
         branch_ok = _ge_in(duct_dia, inlet_dia)
         unverified = ''
 
-    if not diffuser_ok and branch_ok is False:
+    if table_fail and branch_ok is False:
+        res.status, res.reason = 'RED', table_fail + ', branch undersized'
+    elif table_fail:
+        res.status, res.reason = 'RED', table_fail
+    elif not diffuser_ok and branch_ok is False:
         res.status, res.reason = 'RED', 'Diffuser + branch undersized'
     elif not diffuser_ok:
         res.status, res.reason = 'RED', 'Diffuser undersized for CFM'
