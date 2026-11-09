@@ -231,6 +231,10 @@ class TestLimitsAndFields(unittest.TestCase):
                        '2000 fpm', '0.30', '1.50'):
             self.assertIn(needle, joined)
         self.assertNotIn(' - ', joined)
+        # MP mains go purple when a smaller size meets the MP limits (Colin,
+        # 2026-11-02); the legend shall say so, not "never oversized".
+        self.assertIn('purple when a smaller size still meets the MP limits', joined)
+        self.assertNotIn('never oversized', joined)
         self.assertNotIn('straight', joined.lower())
 
     def test_pressure_left(self):

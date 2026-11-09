@@ -117,7 +117,8 @@ def basis_rows(settings=None):
         ('VAV, MP supply',
          'Supply mains between the unit and the box inlets with two or more boxes '
          'downstream: {:.0f} fpm and {:.2f} in. wc per 100 ft (EDR VAV Guide p3, '
-         'p100). Always mains, never oversized.'.format(
+         'p100). Always mains; purple when a smaller size still meets the MP '
+         'limits.'.format(
              float(s['mp_fpm']), float(s['mp_fric']))),
         ('VAV, LP',
          'After the box: the Supply Air limits (EDR p99, Taylor 2019 p54).'),
