@@ -595,18 +595,36 @@ def velocity_text(where, v_used, v_conn):
 
 def transition_text(eid, l_ft, where, v_used):
     """The NOTE for a transition priced at the fan velocity. Not printed
-    since 2026-11-04 (group_text replaced the fan velocity transition)."""
+    since 2026-11-04 (the group charged once replaced the fan velocity
+    transition; its NOTE is governs_text)."""
     return ('NOTE: transition %s, %.1f ft from the %s, priced at the default fan '
             'velocity, %.0f fpm at the unit end.' % (eid, float(l_ft), where, float(v_used)))
 
 
-def group_text(eid, l_ft, where):
-    """The NOTE for the group charged once with the fan system effect
-    (Colin, 2026-11-04): the straight duct, any transition and the first
-    elbow, the larger of the two."""
-    return ('NOTE: the straight duct from the %s to elbow %s (%.1f ft), any transition '
-            'on it and the elbow are charged once: the larger of the fan system effect '
-            'and their own duct and fitting losses.' % (where, eid, float(l_ft)))
+def _l_ratio(l_ft, win_ft, win_short):
+    if not win_ft:
+        return ''
+    return ', L/%s %.2f' % (win_short, float(l_ft) / float(win_ft))
+
+
+def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short):
+    """The NOTE saying which was charged for the group at one connection
+    (Colin, 2026-11-09): the fan system effect, or the straight duct, any
+    transition and the elbow at their own losses. Near the end of the window
+    (L close to Le) the fan system effect falls toward 0 and the individual
+    losses govern."""
+    ratio = _l_ratio(l_ft, win_ft, win_short)
+    if fse_wins:
+        return ('NOTE: fan system effect at the %s (%.3f in. wc%s) is at or above the '
+                'straight duct from the %s to elbow %s (%.1f ft), any transition on it '
+                'and the elbow at their own losses (%.3f in. wc); the fan system effect '
+                'is charged for them.' % (where, float(fse_inwc), ratio, where, eid,
+                                          float(l_ft), float(own_inwc)))
+    return ('NOTE: fan system effect at the %s (%.3f in. wc%s) is below the straight '
+            'duct from the %s to elbow %s (%.1f ft), any transition on it and the elbow '
+            'at their own losses (%.3f in. wc); the individual losses are charged '
+            'instead.' % (where, float(fse_inwc), ratio, where, eid, float(l_ft),
+                          float(own_inwc)))
 
 
 # ── report text ──────────────────────────────────────────────────────────────

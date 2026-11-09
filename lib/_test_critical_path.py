@@ -1573,7 +1573,8 @@ check("case42 the take-off lists the elbow at 0, inside the fan system effect li
 check("case42 items add up to the subtotal",
       abs(_items_sum(ra35) - ra35['subtotal_inwc']) < 1e-9)
 check("case42 the report says the group is charged once",
-      any('elbow 1002' in t and 'charged once' in t for _k, t in ra35.get('fse_notes', ())))
+      any('elbow 1002' in t and 'fan system effect is charged for them' in t
+          for _k, t in ra35.get('fse_gov_notes', ())), "gov %r" % (ra35.get('fse_gov_notes'),))
 check("case42 outlet: the elbow on the unit is in the group too (fitting 0, fan system effect wins)",
       abs(sa32['fitting_inwc']) < 1e-12 and sa32.get('fse_inwc', 0) > 0.0,
       "fit %r fse %r" % (sa32['fitting_inwc'], sa32.get('fse_inwc')))
@@ -2231,8 +2232,8 @@ check("case64 default basis: the transition is in the group, at the model veloci
       and 'at 667 fpm' in _t64f[0][1],
       "conn %r fan %r" % (_t64c, _t64f))
 check("case64 a NOTE names the group, no fan velocity transition NOTE",
-      any(k == 'note' and 'charged once' in t and 'supply outlet' in t
-          for k, t in f64.get('fse_notes', ()))
+      any(k == 'note' and 'fan system effect is charged for them' in t
+          and 'supply outlet' in t for k, t in f64.get('fse_gov_notes', ()))
       and not any(t.startswith('NOTE: transition') for _k, t in f64.get('fse_notes', ())),
       "notes %r" % (f64.get('fse_notes'),))
 check("case64 the group's own losses are left out of friction and fittings",
@@ -2394,7 +2395,8 @@ check("case67 discharge transition at the default basis: in the outlet group, ne
       and _t67f[0][1].endswith('in the fan system effect') and _t67f[0][3] == 0.0,
       "conn %r fan %r" % (_t67c, _t67f))
 check("case67 the group NOTE names the discharge elbow, no transition NOTE",
-      any('elbow 4105' in t and 'charged once' in t for _k, t in f67r.get('fse_notes', ()))
+      any('elbow 4105' in t and 'fan system effect is charged for them' in t
+          for _k, t in f67r.get('fse_gov_notes', ()))
       and not any(t.startswith('NOTE: transition 4103') for _k, t in f67r.get('fse_notes', ())))
 
 # a second discharge: no fan system effect record, a NOTE that the first is priced
@@ -2692,6 +2694,47 @@ check("case74 a return inlet damper at 3.0 ft, inside 5 H (10.0 ft): WARNING nam
       "notes %r" % (_in74.get('fse_notes'),))
 check("case74 a return damper 11.0 ft out, past 5 H: no WARNING",
       not _dmp(_run74('RJA - Fire Damper - Rectangular', l1=11.0, cls='Return Air')))
+
+# 76: near the end of Le the fan system effect falls toward 0, so the straight
+#     duct and elbow at their own losses govern (Colin, 2026-11-09). Supply
+#     outlet, elbow at L/Le 0.9, a straight duct pricing 0.30 in. wc (well
+#     over the fan system effect there): the duct and elbow rows are charged
+#     at their own values, the fan system effect row is listed at 0, not
+#     charged, and a NOTE says the individual losses govern, with both values.
+_v76, _gov76 = FSE.design_velocity(FSE_ON, 1000.0)
+_le76, _eq76 = FSE.effective_duct_length_ft(4.0, _v76)
+_l76 = 0.9 * _le76
+n76 = {3500: _unit({3501: SQ24}),
+       3502: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c76 = {3500: [3501], 3501: [3502], 3502: [3503], 3503: [3510]}
+d76 = build([(3501, 0.30, _l76, 1000.0, 4.0, 'Supply Air'),
+             (3503, 0.01, 10.0, 1000.0, 4.0, 'Supply Air')])
+sa76 = _fse_run(n76, c76, d76, {3510: (4000.0, 'Supply Air', 'SD-75')}, 3500)
+_f76 = _fse_items(sa76)
+_d76 = [i for i in sa76.get('items', ()) if i[0] == 'Duct 3501']
+_e76 = [i for i in sa76.get('items', ()) if i[0] == 'Fitting 3502']
+_g76 = [t for _k, t in sa76.get('fse_gov_notes', ())]
+check("case76 L/Le 0.9: own losses govern, fan system effect not charged (fse 0)",
+      sa76.get('fse_inwc') == 0.0 and len(_f76) == 1 and _f76[0][3] == 0.0
+      and 'not charged' in _f76[0][1], "fse %r rows %r" % (sa76.get('fse_inwc'), _f76))
+check("case76 the straight duct and elbow rows are charged at their own values",
+      _d76 and abs(_d76[0][3] - 0.30) < 1e-12 and _e76 and _e76[0][3] > 0.0
+      and 'in the fan system effect' not in _d76[0][1]
+      and 'in the fan system effect' not in _e76[0][1],
+      "duct %r elbow %r" % (_d76, _e76))
+check("case76 items add up to the subtotal",
+      abs(_items_sum(sa76) - sa76['subtotal_inwc']) < 1e-9)
+check("case76 NOTE: individual losses charged instead, with L/Le 0.90 and both values",
+      len(_g76) == 1 and 'is below the straight duct from the supply outlet to elbow 3502'
+      in _g76[0] and 'the individual losses are charged instead' in _g76[0]
+      and 'L/Le 0.90' in _g76[0]
+      and ('(%.3f in. wc)' % (0.30 + _e76[0][3])) in _g76[0], "gov %r" % (_g76,))
+check("case76 control: case 32 (elbow at L 0) says the fan system effect is charged, "
+      "and its row says charged",
+      any('the fan system effect is charged for them' in t and 'L/Le 0.00' in t
+          for _k, t in sa32.get('fse_gov_notes', ()))
+      and '; charged, at or above the straight duct and elbow' in _fse_items(sa32)[0][1],
+      "gov %r rows %r" % (sa32.get('fse_gov_notes'), _fse_items(sa32)))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

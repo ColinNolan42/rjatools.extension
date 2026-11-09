@@ -3680,7 +3680,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # effect and their own losses (Colin, 2026-11-04), outlet and inlet.
         # The walk prices them as usual; each path's end picks the larger.
         rec['group'] = set(d for d, _at in grp_ducts) | set(passed) | set([did])
-        notes.append(('note', fan_system_effect.group_text(did, l_ft, where)))
+        # Which one governs is said once the path is known (_fse_group_max,
+        # Colin, 2026-11-09), not here.
+        rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': win, 'win_short': win_short}
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])
         if r['high']:
@@ -3949,9 +3951,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
         its: the take-off items of the path, or of a discharge chain.
         Returns (items, fse charged, friction removed, fittings removed,
-        fse item or None). The fan system effect wins a tie: its group
-        items stay listed at 0. The group wins: the fan system effect line
-        stays listed at 0."""
+        fse item or None, governs NOTE or None). The fan system effect wins a
+        tie: its group items stay listed at 0. The group wins: the fan system
+        effect line stays listed at 0, not charged, and the individual losses
+        are charged (Colin, 2026-11-09). The NOTE and the fan system effect
+        row both say which governed."""
         if rec is None or rec.get('item') is None or not rec.get('group'):
             item = (rec or {}).get('item')
             if item is None and rec and rec.get('none') and rec.get('where_item'):
@@ -3960,7 +3964,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 item = ('Fan system effect (none)', rec['none'], None, 0.0,
                         ('Fan system effect, ' + rec['where_item'],
                          'none: ' + rec['none'], None, None))
-            return its, (rec or {}).get('loss', 0.0) or 0.0, 0.0, 0.0, item
+            return its, (rec or {}).get('loss', 0.0) or 0.0, 0.0, 0.0, item, None
         g_fric, g_fit, hits = 0.0, 0.0, []
         for i, it in enumerate(its):
             m = _GROUP_ITEM.match(it[0])
@@ -3977,14 +3981,22 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                    'fittings %.4f (%d items)', rec.get('where'), fse,
                                    group, len(hits))
         item = rec['item']
+        gov = rec.get('gov') or {}
+        note = None
+        if gov:
+            note = fan_system_effect.governs_text(
+                fse >= group, gov['eid'], gov['l_ft'], rec.get('where'), fse, group,
+                gov.get('win'), gov.get('win_short', 'Le'))
         if fse >= group:
             its = tuple(
                 (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, it[4])
                 if i in hits else it for i, it in enumerate(its))
-            return its, fse, g_fric, g_fit, item
+            item = (item[0], '{}; charged, at or above the straight duct and elbow '
+                    '({:.4f} in. wc)'.format(item[1], group), item[2], item[3], item[4])
+            return its, fse, g_fric, g_fit, item, note
         item = (item[0], '{}; not charged, the straight duct and elbow price higher '
                 '({:.4f} in. wc)'.format(item[1], group), item[2], 0.0, item[4])
-        return its, 0.0, 0.0, 0.0, item
+        return its, 0.0, 0.0, 0.0, item, note
 
     best = {}              # root_id -> {sys_class: {...}}
     box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
@@ -4265,14 +4277,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         fse_rec = fse_recs[_first]
                 # The group at the connection (straight duct, transition, first
                 # elbow) is charged once with its fan system effect, the larger.
-                items_l, fse_loss, _gfr, _gft, _fitem = _fse_group_max(fse_rec, items)
+                items_l, fse_loss, _gfr, _gft, _fitem, _gnote = _fse_group_max(
+                    fse_rec, items)
                 fse_items = (_fitem,) if _fitem is not None else ()
+                gov_notes = (('note', _gnote),) if _gnote else ()
                 fric_l, fit_l, dis_items = fric - _gfr, fit - _gft, ()
                 n_d, n_f, len_l, unpriced_l = dcount, fcount, dlen, unpriced
                 if dis_here is not None:
                     _drec = fse_recs.get(dis_here['first'])
-                    dis_items, _dl, _dfr, _dft, _ditem = _fse_group_max(
+                    dis_items, _dl, _dfr, _dft, _ditem, _dnote = _fse_group_max(
                         _drec, dis_here['items'])
+                    if _dnote:
+                        gov_notes = gov_notes + (('note', _dnote),)
                     fric_l += dis_here['fric'] - _dfr
                     fit_l += dis_here['fit'] - _dft
                     n_d += dis_here['n_duct']
@@ -4304,6 +4320,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         # The UNIT's fan system effect notes, the same on
                         # every class of this root: print them once per unit.
                         'fse_notes':        fse_unit_notes,
+                        # Which governed at this run's connection(s): fan
+                        # system effect or the individual losses (2026-11-09).
+                        'fse_gov_notes':    gov_notes,
                         'fse_gray_ids':     fse_gray,
                         'fse_red_ids':      fse_red,
                         'fse_red_ducts':    fse_red_ducts,
@@ -6162,6 +6181,11 @@ def main():
                     if _text not in fse_extra_assume:
                         fse_extra_assume.append(_text)
                 else:
+                    _correct(_kind, _text, unit_label)
+            # Which governed at each index run's connection: per class, since
+            # supply and return leave through different connections.
+            for _cls in sorted(per_class.keys()):
+                for _kind, _text in per_class[_cls].get('fse_gov_notes', ()):
                     _correct(_kind, _text, unit_label)
             fse_gray_ids.update(_fse_leaf.get('fse_gray_ids', ()))
             fse_red_ids.update(_fse_leaf.get('fse_red_ids', ()))
