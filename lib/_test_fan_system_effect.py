@@ -310,7 +310,8 @@ class SettingsTest(unittest.TestCase):
                          'NOTE: fan system effect at the return inlet at element 7 priced at '
                          'the connection velocity, 812 fpm: cabinet inlet, the fan sits past '
                          'the filter and coil.')
-        self.assertIn('in the plane of the turn', m)
+        self.assertIn("D the larger of the elbow's D or De and the first duct's De", m)
+        self.assertNotIn('plane of the turn', m)
         self.assertEqual(len(a), 1)
         self.assertTrue(a[0].startswith('ASSUMPTION'))
         self.assertIn('SWSI', a[0])
@@ -321,7 +322,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(a2, [])
         self.assertNotIn('adapter', m)
         self.assertIn('their length counted', m)
-        self.assertIn('r/H 1.0', m)
+        self.assertIn('r/D 1.0', m)
         m3, a3 = F.method_lines({'on': False})
         self.assertIn('not included', m3)
         self.assertEqual(a3, [])
@@ -400,12 +401,21 @@ class FiveDTest(unittest.TestCase):
         self.assertEqual(t, 'RED: Elbow 456, 0.8 ft from the return inlet, 0.5 D (D 20 in.). '
                             'Provide at least 3.4 ft of straight duct (2 D); 8.4 ft (5 D) is '
                             'where the loss stops falling.')
-        self.assertIn('(H 20 in.)', F.inlet_red_text('return inlet', 456, 0.8, 20.0, False))
+        # a rect elbow reads De (Colin, 2026-11-09)
+        self.assertIn('0.5 D (De 20 in.)', F.inlet_red_text('return inlet', 456, 0.8, 20.0,
+                                                            False))
         # the size named (Colin, 2026-11-09, TB-M12 3720096)
-        t = F.inlet_red_text('exhaust inlet', 3720096, 1.3, 12.0, False,
-                             'the 12x12 inlet collar', 'the collar')
-        self.assertIn('1.3 H (H 12 in., the 12x12 inlet collar). Provide at least 2.0 ft of '
-                      'straight duct (2 H of the collar); 5.0 ft (5 H) is where', t)
+        t = F.inlet_red_text('exhaust inlet', 3720096, 1.3, 13.1, False,
+                             'the first duct, 12x12', 'the first duct')
+        self.assertIn('1.2 D (De 13 in., the first duct, 12x12). Provide at least 2.2 ft of '
+                      'straight duct (2 D of the first duct); 5.5 ft (5 D) is where', t)
+        # De: 1.30 (ab)^0.625 / (a + b)^0.25; a 24x12 is 18.3 in., round is its D
+        self.assertAlmostEqual(F.equivalent_diameter_in(
+            {'round': False, 'w_in': 24.0, 'h_in': 12.0}), 18.3, places=1)
+        self.assertEqual(F.equivalent_diameter_in({'round': True, 'd_in': 10.0}), 10.0)
+        self.assertIn('De', F.ER7_1_SQUARE_ASSUMPTION)
+        self.assertIn('(3 D, De 18 in.)', F.cabinet_warn_text('return inlet', 1, 3.5, 18.3,
+                                                              False, 800.0))
         g = F.governs_text(True, 3720096, 1.3, 'exhaust inlet', 0.1, 0.05, 40.0 / 12.0,
                            '5 D', size_note='D 8 in. elbow')
         self.assertIn('(L/5 D 0.39, D 8 in. elbow)', g)
