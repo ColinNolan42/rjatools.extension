@@ -606,12 +606,6 @@ def transition_text(eid, l_ft, where, v_used):
             'velocity, %.0f fpm at the unit end.' % (eid, float(l_ft), where, float(v_used)))
 
 
-def _l_ratio(l_ft, win_ft, win_short):
-    if not win_ft:
-        return ''
-    return ', L/%s %.2f' % (win_short, float(l_ft) / float(win_ft))
-
-
 def no_effect_text(where, why):
     """The NOTE when no fan system effect is used at a connection (Colin,
     2026-11-09): no elbow inside the window, so the straight duct and
@@ -621,24 +615,22 @@ def no_effect_text(where, why):
             'are priced at their own losses.' % (where, why))
 
 
-def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short):
+def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short,
+                 transition=False):
     """The NOTE saying which was charged for the group at one connection
-    (Colin, 2026-11-09): the fan system effect, or the straight duct, any
-    transition and the elbow at their own losses. Near the end of the window
-    (L close to Le) the fan system effect falls toward 0 and the individual
-    losses govern."""
-    ratio = _l_ratio(l_ft, win_ft, win_short)
-    if fse_wins:
-        return ('NOTE: fan system effect at the %s (%.3f in. wc%s) is at or above the '
-                'straight duct from the %s to elbow %s (%.1f ft), any transition on it '
-                'and the elbow at their own losses (%.3f in. wc); the fan system effect '
-                'is charged for them.' % (where, float(fse_inwc), ratio, where, eid,
-                                          float(l_ft), float(own_inwc)))
-    return ('NOTE: fan system effect at the %s (%.3f in. wc%s) is below the straight '
-            'duct from the %s to elbow %s (%.1f ft), any transition on it and the elbow '
-            'at their own losses (%.3f in. wc); the individual losses are charged '
-            'instead.' % (where, float(fse_inwc), ratio, where, eid, float(l_ft),
+    (Colin, 2026-11-09): the two values side by side, then the outcome.
+    Near the end of the window (L close to Le) the fan system effect falls
+    toward 0 and the group's own losses govern. transition: a transition is
+    in the group, so it is named."""
+    group = 'straight duct, transition and elbow' if transition else 'straight duct and elbow'
+    ratio = (' (L/%s %.2f)' % (win_short, float(l_ft) / float(win_ft))) if win_ft else ''
+    head = ('NOTE: %s, elbow %s at %.1f ft%s: fan system effect %.3f in. wc, %s %.3f '
+            'in. wc. ' % (where, eid, float(l_ft), ratio, float(fse_inwc), group,
                           float(own_inwc)))
+    if fse_wins:
+        return head + 'Fan system effect charged, the %s are not charged again.' % group
+    return head + ('%s charged at their own losses, no fan system effect.'
+                   % (group[0].upper() + group[1:]))
 
 
 # ── report text ──────────────────────────────────────────────────────────────

@@ -3694,7 +3694,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['group'] = set(d for d, _at in grp_ducts) | set(passed) | set([did])
         # Which one governs is said once the path is known (_fse_group_max,
         # Colin, 2026-11-09), not here.
-        rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': win, 'win_short': win_short}
+        rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': win, 'win_short': win_short,
+                      'transition': bool(passed)}
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])
         if r['high']:
@@ -4001,7 +4002,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if gov:
             note = fan_system_effect.governs_text(
                 fse >= group, gov['eid'], gov['l_ft'], rec.get('where'), fse, group,
-                gov.get('win'), gov.get('win_short', 'Le'))
+                gov.get('win'), gov.get('win_short', 'Le'),
+                transition=gov.get('transition', False))
         if fse >= group:
             its = tuple(
                 (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, it[4])
