@@ -327,7 +327,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(a3, [])
         # Colin, 2026-11-03: no duct pick; 5 D RED and the velocity basis named
         self.assertNotIn('duct pick', m.lower())
-        self.assertIn('under 2 D', m)
+        self.assertIn('under 2 H', m)
         self.assertIn('the larger of the fan velocity, 2000 fpm', m)   # basis missing: default
         m4, _a4 = F.method_lines(dict(F.default_settings(), velocity_basis='connection'))
         self.assertIn('the connection velocity, cfm over the unit connector', m4)
@@ -397,14 +397,15 @@ class FiveDTest(unittest.TestCase):
         # the plan's section D wording; lengths rounded UP (3.33 to 3.4 ft,
         # 8.33 to 8.4 ft), so the figure given is past the edge
         t = F.inlet_red_text('return inlet', 456, 0.8, 20.0)
-        self.assertEqual(t, 'RED: Elbow 456, 0.8 ft from the return inlet, 0.5 D (D 20 in.). '
-                            'Provide at least 3.4 ft of straight duct (2 D); 8.4 ft (5 D) is '
-                            'where the loss stops falling.')
+        self.assertEqual(t, 'RED: Elbow 456 is 0.8 ft from the return inlet, 0.5 D (D 20 in.). '
+                            'Recommended: at least 3.4 ft of straight duct (2 D); 8.4 ft (5 D) is '
+                            'where the loss stops falling. Priced as drawn; the engineer has '
+                            'final say where space does not allow.')
         self.assertIn('(H 20 in.)', F.inlet_red_text('return inlet', 456, 0.8, 20.0, False))
         # the size named (Colin, 2026-11-09, TB-M12 3720096)
         t = F.inlet_red_text('exhaust inlet', 3720096, 1.3, 12.0, False,
                              'the 12x12 inlet collar', 'the collar')
-        self.assertIn('1.3 H (H 12 in., the 12x12 inlet collar). Provide at least 2.0 ft of '
+        self.assertIn('1.3 H (H 12 in., the 12x12 inlet collar). Recommended: at least 2.0 ft of '
                       'straight duct (2 H of the collar); 5.0 ft (5 H) is where', t)
         g = F.governs_text(True, 3720096, 1.3, 'exhaust inlet', 0.1, 0.05, 40.0 / 12.0,
                            '5 D', size_note='D 8 in. elbow')
@@ -412,9 +413,10 @@ class FiveDTest(unittest.TestCase):
         self.assertIn('(L/Le 0.50)', F.governs_text(True, 1, 1.0, 'supply outlet', 0.1,
                                                      0.05, 2.0, 'Le'))
         o = F.le_text('supply outlet', 123, 1.2, 3.9, 'Eq. 37')
-        self.assertEqual(o, 'RED: Elbow 123, 1.2 ft from the supply outlet, L/Le 0.31 (Le 3.9 '
-                            'ft, Eq. 37). Provide at least 2.0 ft of straight duct; 3.9 ft '
-                            '(1.0 Le) removes the system effect.')
+        self.assertEqual(o, 'RED: Elbow 123 is 1.2 ft from the supply outlet, L/Le 0.31 (Le 3.9 '
+                            'ft, Eq. 37). Recommended: at least 2.0 ft of straight duct; 3.9 ft '
+                            '(1.0 Le) removes the system effect. Priced as drawn; the '
+                            'engineer has final say where space does not allow.')
         self.assertEqual(F.straight_duct_reason(941, 3.0, F.INLET),
                          'Straight duct: elbow 941 at 3.0 ft, under 2 D')
         self.assertEqual(F.straight_duct_reason(941, 1.0, F.OUTLET),
@@ -422,7 +424,9 @@ class FiveDTest(unittest.TestCase):
 
     def test_le_text_and_method(self):
         m, _a = F.method_lines(F.default_settings())
-        self.assertIn('under 0.5 Le of a unit outlet, or under 2 D of an inlet', m)
+        self.assertIn('under 0.5 Le of a unit outlet, or under 2 H of an inlet', m)
+        self.assertIn('the engineer has final say', m)
+        self.assertNotIn('larger of the unit opening', m)
         # Eq. 37 is the 2.5 D rule: a 24 x 24 outlet's Le over its round
         # equivalent diameter (27.08 in.)
         le, _eq = F.effective_duct_length_ft(4.0, 1000.0)

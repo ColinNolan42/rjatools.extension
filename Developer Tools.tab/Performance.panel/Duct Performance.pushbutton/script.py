@@ -947,7 +947,8 @@ def _show_velocity_settings_xaml(use_theme):
                               'the filter and coil. Added before the '
                               'safety factor. Transitions are priced as fittings, '
                               'taps flagged, not priced. An elbow under 0.5 Le of an '
-                              'outlet, or under 2 D of an inlet, is red with the '
+                              'outlet, or under 2 H (its side in the plane of the turn; '
+                              'D if round) of an inlet, is red with the '
                               'straight duct before it.'),
     ] + _dialog_vav_rows()
     for r, (lab, val) in enumerate(ref_rows):
@@ -3426,10 +3427,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return None, None
 
     def _fse_window_size(conn, flow, notes):
-        """(is_round, D in.) for the 5 D check and the inlet window: the
-        LARGER of the unit opening (_fse_conn_size) and the first duct, each
-        a round D or a rect larger side (Colin, 2026-11-03). is_round is the
-        opening's. (None, None) if nothing is readable."""
+        """(is_round, size in.) the inlet walks REACH out on: every side of
+        the unit opening and the first duct, so no elbow is missed. A search
+        reach only, never a judging size and never printed (Colin,
+        2026-11-09): each elbow is judged on its own H or D (_fse_elbow_h).
+        (None, None) if nothing is readable."""
         is_round, size = _fse_conn_size(conn, flow, notes, 'window')
         if size is None:
             return None, None
@@ -3447,61 +3449,54 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return bool(dc.get('d_in')), d_duct
         return is_round, size
 
-    def _fse_turn_plane_h(eid, conn):
-        """H in. for the 2 H straight duct check at a rect unit inlet, elbow
-        eid: its side in the plane of its turn (hvac_graph.elbow_geometry),
-        or its D when it is round (past a transition), and not less than the
-        unit opening's smaller side, since the opening's own side in that
-        plane is not read (Colin, 2026-11-04). None when the elbow is
-        unreadable (the caller keeps the larger side)."""
-        g = hvac_graph.elbow_geometry(all_nodes.get(eid))
-        h = None
-        if g is not None:
-            h = g.get('d_in') if g.get('round') else g.get('w_in')
-        if not h:
-            fan_system_effect.log.info('turn plane H: elbow %s NOT FOUND, larger side kept', eid)
-            return None
-        if conn is not None and conn.get('w_in') and conn.get('h_in'):
-            h = max(h, min(conn['w_in'], conn['h_in']))
-        fan_system_effect.log.info('turn plane H: elbow %s, %.1f in.', eid, h)
-        return h
+    def _fse_elbow_h(eid):
+        """(is_round, size in.) an inlet elbow is judged on (Colin,
+        2026-11-09): a round elbow's D, a rect elbow's H, its side in the
+        plane of its turn (hvac_graph.elbow_geometry). No floor from the
+        opening or the first duct. (None, None) when unreadable."""
+        g = hvac_graph.elbow_geometry(all_nodes.get(eid)) if eid is not None else None
+        if g is not None and g.get('round') and g.get('d_in'):
+            return True, float(g['d_in'])
+        if g is not None and not g.get('round') and g.get('w_in'):
+            fan_system_effect.log.info('inlet H: elbow %s, %.1f in. (turn plane)',
+                                       eid, g['w_in'])
+            return False, float(g['w_in'])
+        fan_system_effect.log.info('inlet H: elbow %s NOT FOUND', eid)
+        return None, None
 
-    def _inlet_size_source(size, conn, flow, elbow=None):
-        """(long, short) naming what an inlet D or H was read from, for the
-        RED line (Colin, 2026-11-09, TB-M12 3720096: the RED line read the
-        12x12 collar, the fan system effect row the 8 in. elbow, and they
-        read as a contradiction): the unit's inlet collar, else the first
-        duct, else the elbow (its side in the plane of its turn). elbow: the
-        elbow id at a rect inlet, where H is the elbow's side in the plane
-        of its turn when that governs (_fse_turn_plane_h); named first."""
-        def _same(a):
-            return bool(a) and abs(float(a) - float(size)) < 0.05
-        if elbow is not None:
-            g = hvac_graph.elbow_geometry(all_nodes.get(elbow))
-            if g is not None and g.get('round') and _same(g.get('d_in')):
-                return ('the %.0f in. round elbow' % g['d_in'], 'the elbow')
-            if g is not None and not g.get('round') and _same(g.get('w_in')):
-                return ("the elbow's side in the plane of its turn", 'the elbow')
-        if conn is not None:
-            if conn.get('round') and _same(conn.get('d_in')):
-                return ('the %.0f in. round inlet collar' % conn['d_in'], 'the collar')
-            w, h = conn.get('w_in'), conn.get('h_in')
-            if w and h and (_same(w) or _same(h)):
-                return ('the %.0fx%.0f inlet collar' % (w, h), 'the collar')
+    def _inlet_fallback_size(conn, flow):
+        """(is_round, size in., long, short) when the inlet elbow is
+        unreadable or none is found: the first duct's D or Height, else the
+        unit inlet's D or Height, each named. (None, None, None, None) when
+        nothing is readable."""
         dc = _duct_conn(flow)
-        if dc is not None:
-            if _same(dc.get('d_in')):
-                return ('the first duct, %.0f in. round' % dc['d_in'], 'the first duct')
-            w, h = dc.get('w_in'), dc.get('h_in')
-            if w and h and (_same(w) or _same(h)):
-                return ('the first duct, %.0fx%.0f' % (w, h), 'the first duct')
+        for c, what in ((dc, 'first duct'), (conn, 'inlet collar')):
+            if c is None:
+                continue
+            if c.get('round') and c.get('d_in'):
+                lab = ('the first duct, %.0f in. round' % c['d_in'] if what == 'first duct'
+                       else 'the %.0f in. round inlet collar' % c['d_in'])
+                return True, float(c['d_in']), lab, 'the ' + what
+            if c.get('w_in') and c.get('h_in'):
+                lab = ("the first duct's height, %.0fx%.0f" % (c['w_in'], c['h_in'])
+                       if what == 'first duct' else
+                       "the %.0fx%.0f inlet collar's height" % (c['w_in'], c['h_in']))
+                return False, float(c['h_in']), lab, 'the ' + what
+        return None, None, None, None
+
+    def _inlet_size_source(eid, is_round):
+        """(long, short) naming the elbow an inlet H or D was read from."""
+        if is_round:
+            g = hvac_graph.elbow_geometry(all_nodes.get(eid))
+            return ('the %.0f in. round elbow' % g['d_in'], 'the elbow')
         return ("the elbow's side in the plane of its turn", 'the elbow')
 
     def _fse_inlet_size(elem, conn, flow, notes, did=None, l_ft=0.0, where='inlet'):
         """(is_round, D or H in., r in. or None) for the inlet elbow. H is
         the side in the plane of the turn (hvac_graph.elbow_geometry swaps
-        Width and Height to put it there). Unreadable elbow: the inlet
-        connection's size (larger side, conservative), radius unknown.
+        Width and Height to put it there). Unreadable elbow: the first
+        duct's D or Height, else the unit inlet's (_inlet_fallback_size),
+        radius unknown.
         A readable rect mitered elbow (family name, as _ashrae_fitting reads
         it) has no radius and is read on the ER7-1 r/H 1.0 row (Colin,
         2026-11-02), not the conservative unreadable radius row."""
@@ -3523,12 +3518,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                               % (did, float(l_ft), where,
                                  fan_system_effect.MITERED_R_OVER_H)))
             return False, g['w_in'], r_in
-        is_round, size = _fse_conn_size(conn, flow, notes, 'elbow')
+        is_round, size, src_l, _src_s = _inlet_fallback_size(conn, flow)
         if size is not None:
             notes.append(('note', 'NOTE: inlet elbow geometry unreadable; %s %.0f in. '
-                          'taken from the unit inlet (%s), radius unknown' % (
-                              'D' if is_round else 'H', size,
-                              'diameter' if is_round else 'larger side, conservative')))
+                          'taken from %s, radius unknown' % (
+                              'D' if is_round else 'H', size, src_l)))
         return is_round, size, None
 
     def _duct_conn(dr):
@@ -3665,9 +3659,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 == 'default'):
             vel_note = (len(notes), ('note', fan_system_effect.cabinet_inlet_text(
                 where, v_conn)))
-        # D for the 5 D check and the inlet window: the larger of the unit
-        # opening and the first duct. An outlet already has its fallback NOTE
-        # above, so its size notes are not repeated.
+        # The inlet search reach (internal, never printed): every side of
+        # the opening and the first duct. An outlet already has its fallback
+        # NOTE above, so its size notes are not repeated.
         is_round_c, size_c = _fse_window_size(
             conn, flow, notes if role_here == fan_system_effect.INLET else [])
         if role_here == fan_system_effect.OUTLET:
@@ -3680,9 +3674,30 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                               'not checked' % where))
                 rec['none'] = 'not checked, connection size unreadable'
                 return rec
-            win = fan_system_effect.inlet_window_ft(is_round_c, size_c)
-            win_short = '5 %s' % ('D' if is_round_c else 'H')
+            # The inlet window is 5 H (5 D) of the FIRST elbow, its own H
+            # or D (Colin, 2026-11-09): found on the search reach, past taps.
+            # No elbow, or an unreadable one: the first duct's D or Height.
+            reach = fan_system_effect.inlet_window_ft(is_round_c, size_c)
+            elbows_w = []
+            if pick is not None:
+                _fse_first_disruption(root_id, first, reach, where, prev=pick[0],
+                                      seen=set(pick[1]), collect=elbows_w,
+                                      through_taps=True, l0=curb_ft)
+            else:
+                _fse_first_disruption(root_id, first, reach, where, collect=elbows_w,
+                                      through_taps=True, l0=curb_ft)
+            first_w = min(elbows_w, key=lambda x: x[1])[0] if elbows_w else None
+            round_w, h_w = _fse_elbow_h(first_w)
+            if h_w is None:
+                round_w, h_w, _l, _s = _inlet_fallback_size(conn, flow)
+            if h_w is None:
+                round_w, h_w = is_round_c, size_c
+            win = fan_system_effect.inlet_window_ft(round_w, h_w)
+            win_short = '5 %s' % ('D' if round_w else 'H')
             win_name = 'the inlet window, ' + win_short
+            fan_system_effect.log.info('inlet window: %s, first elbow %s, %s %.1f in., '
+                                       '%.2f ft (search reach %.2f ft)', where, first_w,
+                                       'D' if round_w else 'H', h_w, win, reach)
         # The straight duct check (Colin, 2026-11-03, FAN_SYSTEM_EFFECT_PLAN.md
         # section C): an elbow under 0.5 Le of an outlet, or under 2 D of an
         # inlet, is RED with the straight duct before it, still priced below.
@@ -3719,25 +3734,34 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                                                    _eq, curb_ft)))
                     need = fan_system_effect.outlet_red_ft(win)
                 else:
-                    # The walk used the larger side (conservative); a rect
-                    # elbow is then judged on H, its side in the plane of its
-                    # turn (Colin, 2026-11-04).
-                    h_e = _fse_turn_plane_h(e_r, conn) if not is_round_c else None
-                    size_e = h_e if h_e else size_c
-                    src_l, src_s = _inlet_size_source(size_e, conn, flow,
-                                                      e_r if h_e else None)
+                    # The walk reached out on the search reach; each elbow
+                    # is judged on its own H (rect, the side in the plane of
+                    # its turn) or D (round), no floor (Colin, 2026-11-09).
+                    # Unreadable: the first duct's D or Height, named.
+                    round_e, size_e = _fse_elbow_h(e_r)
+                    if size_e:
+                        src_l, src_s = _inlet_size_source(e_r, round_e)
+                    else:
+                        round_e, size_e, src_l, src_s = _inlet_fallback_size(conn, flow)
+                    if not size_e:
+                        notes.append(('warn', 'WARNING: elbow %s, %s: no size could be '
+                                      'read; straight duct not checked.' % (
+                                          e_r, fan_system_effect.from_text(where, l_r,
+                                                                           curb_ft))))
+                        continue
+                    dim_e = 'D' if round_e else 'H'
                     if l_r >= fan_system_effect.inlet_red_ft(size_e) - 1e-9:
                         fan_system_effect.log.info(
-                            'straight duct check: elbow %s at %.2f ft is past 2 H '
-                            '(H %.1f in., turn plane), not RED', e_r, l_r, size_e)
+                            'straight duct check: elbow %s at %.2f ft is past 2 %s '
+                            '(%s %.1f in.), not RED', e_r, l_r, dim_e, dim_e, size_e)
                         if (cabinet_in and e_r == first_elbow
                                 and l_r < fan_system_effect.cabinet_warn_ft(size_e) - 1e-9):
                             notes.append(('warn', fan_system_effect.cabinet_warn_text(
-                                where, e_r, l_r, size_e, is_round_c, v_conn, curb_ft)))
-                            rec['warn3'] = (e_r, 'D' if is_round_c else 'H')
+                                where, e_r, l_r, size_e, round_e, v_conn, curb_ft)))
+                            rec['warn3'] = (e_r, dim_e)
                         continue
                     notes.append(('red', fan_system_effect.inlet_red_text(
-                        where, e_r, l_r, size_e, is_round_c, src_l, src_s, curb_ft)))
+                        where, e_r, l_r, size_e, round_e, src_l, src_s, curb_ft)))
                     need = fan_system_effect.inlet_red_ft(size_e)
                 rec['red'].add(e_r)
                 for d_r, at in ducts_r:
@@ -3745,7 +3769,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         rec['red'].add(d_r)
                         rec['red_ducts'][d_r] = (
                             fan_system_effect.straight_duct_reason(
-                                e_r, l_r, role_here, 'D' if is_round_c else 'H', curb_ft),
+                                e_r, l_r, role_here,
+                                'D' if role_here == fan_system_effect.OUTLET else dim_e,
+                                curb_ft),
                             ('Straight duct %.1f ft past the curb' % fan_system_effect._ceil_step(
                                 max(need - curb_ft, 0.0))) if curb_ft else
                             ('Straight duct %.1f ft' % fan_system_effect._ceil_step(need)))
@@ -3902,9 +3928,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # The ratio said in the NOTE and the Duct losses basis is on the same
         # size the table was read at (Colin, 2026-11-09, TB-M10 3652084): an
         # outlet's Le; an inlet's 5 x the elbow's own D or H (the side in the
-        # plane of its turn, as ER7-1 / ED7-2 and the RED line read it), not
-        # the search window, which uses the larger of the opening and the
-        # first duct.
+        # plane of its turn, as ER7-1 / ED7-2 and the RED line read it).
         g_size = None
         if role_here == fan_system_effect.OUTLET:
             g_win, g_short = win, win_short
@@ -3912,13 +3936,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             g_win = fan_system_effect.inlet_floor_ft(r['size_in'])
             g_dim = 'D' if r.get('table') == fan_system_effect.INLET_ROUND else 'H'
             g_short = '%g %s' % (fan_system_effect.INLET_FLOOR_D, g_dim)
-            # Named, so it does not read against the RED line, which reads
-            # the inlet collar (Colin, 2026-11-09, TB-M12 3720096). An
-            # unreadable elbow took the collar's size (its own NOTE says so).
+            # Named, so it reads with the RED line (Colin, 2026-11-09,
+            # TB-M12 3720096). An unreadable elbow took the first duct's D or
+            # Height (its own NOTE says so).
             g_geo = hvac_graph.elbow_geometry(all_nodes.get(did))
             g_own = g_geo is not None and bool(g_geo.get('d_in') or g_geo.get('w_in'))
             g_size = ('%s %.0f in.' % (g_dim, r['size_in']),
-                      'elbow' if g_own else 'inlet collar')
+                      'elbow' if g_own else 'first duct')
         rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': g_win, 'win_short': g_short,
                       'transition': bool(passed), 'transitions': sorted(passed),
                       'size': g_size,

@@ -1417,8 +1417,9 @@ check("case36 non-square ER7-1 elbow: the square ASSUMPTION line, not a per-run 
       and not any('plane of the turn' in t for _k, t in ea36.get('fse_notes', ())),
       "assume %r" % (ea36.get('fse_assumptions'),))
 
-# 37: inlet elbow geometry unreadable: H = the LARGER side of the unit inlet,
-#     radius unknown -> smallest row r/H 0.5; L 0 -> ER7-1 2.50.
+# 37: inlet elbow geometry unreadable: H = the first duct's Height, else the
+#     unit inlet's (Colin, 2026-11-09: never the larger side), radius
+#     unknown -> smallest row r/H 0.5; L 0 -> ER7-1 2.50.
 n37 = {1100: _unit({1102: RC2412}),
        1102: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered',
                   is_round=False, geom=None)}
@@ -1426,9 +1427,11 @@ c37 = {1100: [1102], 1102: [1103], 1103: [1110]}
 d37 = build([(1103, 0.0, 10.0, 1000.0, 2.0, 'Return Air')])
 ra37 = _fse_run(n37, c37, d37, {1110: (2000.0, 'Return Air', 'RG-37')}, 1100,
                 cls='Return Air')
-check("case37 unreadable inlet elbow: larger inlet side, smallest r/H row -> 2.50 x Pv, said so",
+check("case37 unreadable inlet elbow: the inlet collar's height, smallest r/H row -> 2.50 x Pv, said so",
       abs(ra37.get('fse_inwc', -1) - 2.50 * pv(1000.0)) < 1e-9
-      and any('larger side' in t for _k, t in ra37.get('fse_notes', ()))
+      and any("H 12 in. taken from the 24x12 inlet collar's height" in t
+              for _k, t in ra37.get('fse_notes', ()))
+      and not any('larger' in t for _k, t in ra37.get('fse_notes', ()))
       and any('conservative' in t for _k, t in ra37.get('fse_notes', ())),
       "got %r notes %r" % (ra37.get('fse_inwc'), ra37.get('fse_notes')))
 
@@ -2160,8 +2163,8 @@ check("case60 1.48 in. wc is GRAY",
       sa60.get('fse_gray_ids') == {921}, "gray %r" % (sa60.get('fse_gray_ids'),))
 check("case60 elbow at 0 ft is RED under 0.5 Le (Le 5.7 ft, Eq. 37) and drawn red",
       sa60.get('fse_red_ids') == {921}
-      and any(k == 'red' and t.startswith('RED: Elbow 921, 0.0 ft from the supply outlet, '
-                                          'L/Le 0.00 (Le 5.7 ft, Eq. 37). Provide at least '
+      and any(k == 'red' and t.startswith('RED: Elbow 921 is 0.0 ft from the supply outlet, '
+                                          'L/Le 0.00 (Le 5.7 ft, Eq. 37). Recommended: at least '
                                           '2.9 ft of straight duct; 5.8 ft (1.0 Le) removes '
                                           'the system effect.')
               for k, t in sa60.get('fse_notes', ())),
@@ -2199,8 +2202,8 @@ for _l62, _red62 in ((2.8, True), (2.9, False)):
           (_s62.get('fse_red_ids') == {941, 942}) if _red62 else not _s62.get('fse_red_ids'),
           "red %r" % (_s62.get('fse_red_ids'),))
 
-# 63: at an INLET, 2 D on the larger of the opening and the first duct: a
-#     12 x 12 return opening (2 H 2 ft) into a 24 x 24 duct (2 H 4 ft),
+# 63: an unreadable inlet elbow is judged on the first duct's Height (Colin,
+#     2026-11-09): a 12 x 12 return opening into a 24 x 24 duct (2 H 4 ft),
 #     elbow at 3 ft: RED with its duct.
 SQ12 = {'round': False, 'area_ft2': 1.0, 'd_in': None, 'w_in': 12.0, 'h_in': 12.0}
 n63 = dict(n33)
@@ -2212,11 +2215,12 @@ sa63 = _fse_run(n63, c33, d63, {950: (4000.0, 'Return Air', 'RG-63')}, 940,
                 cls='Return Air')
 check("case63 12x12 return opening into a 24x24 duct: 2 H on 24 in., elbow at 3 ft RED with its duct",
       sa63.get('fse_red_ids') == {941, 942}
-      and any(k == 'red' and t.startswith('RED: Elbow 942, 3.0 ft from the return inlet, '
-                                          '1.5 H (H 24 in., the first duct, 24x24). Provide '
-                                          'at least 4.0 ft of straight duct (2 H of the '
-                                          'first duct); 10.0 ft (5 H) is where the loss '
-                                          'stops falling.')
+      and any(k == 'red' and t.startswith('RED: Elbow 942 is 3.0 ft from the return inlet, '
+                                          "1.5 H (H 24 in., the first duct's height, 24x24). "
+                                          'Recommended: at least 4.0 ft of straight duct (2 H '
+                                          'of the first duct); 10.0 ft (5 H) is where the loss '
+                                          'stops falling. Priced as drawn; the engineer has '
+                                          'final say where space does not allow.')
               for k, t in sa63.get('fse_notes', ()))
       and sa63.get('fse_red_ducts') == {941: ('Straight duct: elbow 942 at 3.0 ft, under 2 H',
                                               'Straight duct 4.0 ft')},
@@ -2235,9 +2239,9 @@ for _shape63, _conn63, _dim63 in (('rect', SQ24, 'H'), ('round', RD24, 'D')):
         check("case63b %s inlet elbow at %.1f ft (2 %s 4.0 ft): %s" % (
                   _shape63, _l63, _dim63, 'RED with its duct' if _red63 else 'not RED'),
               ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1
-                and '(%s 24 in., the %s inlet collar)' % (
-                    _dim63, '24x24' if _dim63 == 'H' else '24 in. round') in _txt[0]
-                and '4.0 ft of straight duct (2 %s of the collar); 10.0 ft (5 %s)' % (
+                and ("(H 24 in., the 24x24 inlet collar's height)" if _dim63 == 'H' else
+                     '(D 24 in., the 24 in. round inlet collar)') in _txt[0]
+                and '4.0 ft of straight duct (2 %s of the inlet collar); 10.0 ft (5 %s)' % (
                     _dim63, _dim63) in _txt[0])
                if _red63 else not _r.get('fse_red_ids')),
               "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
@@ -2300,8 +2304,8 @@ sa65 = _fse_run(n65, c65, d65, t65, 3000)
 _red65 = [t for k, t in sa65.get('fse_notes', ()) if k == 'red']
 check("case65 tap at 1 ft, elbows at 2.0 and 2.5 ft (0.5 Le 2.86 ft): both RED with their ducts, past the tap",
       sa65.get('fse_red_ids') == {3001, 3003, 3004, 3005} and len(_red65) == 2
-      and _red65[0].startswith('RED: Elbow 3003, 2.0 ft')
-      and _red65[1].startswith('RED: Elbow 3005, 2.5 ft'),
+      and _red65[0].startswith('RED: Elbow 3003 is 2.0 ft')
+      and _red65[1].startswith('RED: Elbow 3005 is 2.5 ft'),
       "red %r notes %r" % (sa65.get('fse_red_ids'), _red65))
 check("case65 the tap is still the priced window's first disruption (WARNING, no fse)",
       sa65.get('fse_inwc') == 0.0
@@ -2527,7 +2531,7 @@ for _w69, _l69, _red69 in ((12.0, 3.0, False), (12.0, 1.9, True), (24.0, 3.0, Tr
           "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
 
 # 69b: a 36 x 8 inlet (a fan coil return) into a 10 in. round elbow past a
-#      transition: H is the elbow's D, 10 in. (the opening's smaller side,
+#      transition: D is the elbow's own, 10 in. (no floor from the opening's side,
 #      8 in., is less), 2 H 1.7 ft. At 2.0 ft not RED (the larger side, 36
 #      in., would ask 6 ft); at 1.5 ft RED "(H 10 in.)".
 RC368 = {'round': False, 'area_ft2': 2.0, 'd_in': None, 'w_in': 36.0, 'h_in': 8.0}
@@ -2544,8 +2548,8 @@ for _l69b, _red69b in ((2.0, False), (1.5, True)):
     check("case69b 36x8 inlet, 10 in. round elbow at %.1f ft (2 H 1.7 ft): %s" % (
               _l69b, 'RED (H 10 in.)' if _red69b else 'not RED'),
           ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1
-            and '(H 10 in., the 10 in. round elbow)' in _txt[0]
-            and '(2 H of the elbow)' in _txt[0])
+            and '(D 10 in., the 10 in. round elbow)' in _txt[0]
+            and '(2 D of the elbow)' in _txt[0])
            if _red69b else not _r.get('fse_red_ids')),
           "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
 
@@ -2857,7 +2861,7 @@ check("case78 the RED line names the same 5 H, 6.7 ft",
 
 # 78b: TB-M12 L1 inline fan 3720082 (Colin, 2026-11-09): a 12x12 exhaust
 #      inlet collar, an 8 in. round elbow at 1.3 ft. The straight duct RED
-#      reads H 12 in. off the collar (the opening's smaller side governs over
+#      read H 12 in. off the collar until 2026-11-09 (the opening's smaller side governed over
 #      the 8 in. elbow); the fan system effect reads ED7-2 on the elbow's own
 #      D 8 in. Each names its size so the two do not read as a contradiction.
 RC1212 = {'round': False, 'area_ft2': 1.0, 'd_in': None, 'w_in': 12.0, 'h_in': 12.0}
@@ -2872,9 +2876,9 @@ ea78b = _fse_run(n78b, c78b, d78b, {1180: (400.0, 'Exhaust Air', 'EG-78b')}, 117
                  cls='Exhaust Air')
 _red78b = [t for k, t in ea78b.get('fse_notes', ()) if k == 'red']
 _g78b = [t for _k, t in ea78b.get('fse_gov_notes', ())]
-check("case78b RED names the collar: (H 12 in., the 12x12 inlet collar), 2 H of the collar",
-      len(_red78b) == 1 and '1.3 H (H 12 in., the 12x12 inlet collar)' in _red78b[0]
-      and '2.0 ft of straight duct (2 H of the collar); 5.0 ft (5 H)' in _red78b[0],
+check("case78b RED reads the 8 in. elbow's own D, no collar floor (Colin, 2026-11-09)",
+      len(_red78b) == 1 and '(D 8 in., the 8 in. round elbow)' in _red78b[0]
+      and '1.4 ft of straight duct (2 D of the elbow); 3.4 ft (5 D)' in _red78b[0],
       "red %r" % (_red78b,))
 check("case78b governs NOTE names the elbow: (L/5 D 0.39, D 8 in. elbow)",
       len(_g78b) == 1 and '(L/5 D %.2f, D 8 in. elbow)' % (1.3 / (40.0 / 12.0)) in _g78b[0],
@@ -2992,11 +2996,11 @@ def _w81(leaf):
 
 _r81 = _run81(2.4)
 check("case81 cabinet inlet elbow at 2.4 ft (2 H 2.0, 3 H 3.0): the 3 H WARNING, not RED",
-      _w81(_r81) == ["WARNING: Elbow 4702 is 2.4 ft from the return inlet; provide at least "
+      _w81(_r81) == ["WARNING: Elbow 4702 is 2.4 ft from the return inlet; recommended: at least "
                      "3.0 ft of straight duct (3 H, H 12 in.). Under 3 H the elbow causes a "
                      "fan system effect that is not priced (the inlet is priced at its 800 "
-                     "fpm opening velocity), so the external static shown is low until the "
-                     "elbow is moved."]
+                     "fpm opening velocity), so the external static shown is low; "
+                     "the engineer has final say where space does not allow."]
       and not _r81.get('fse_red_ids'), "notes %r red %r" % (_r81.get('fse_notes'),
                                                              _r81.get('fse_red_ids')))
 _g81 = [t for _k, t in _r81.get('fse_gov_notes', ())]
@@ -3056,18 +3060,18 @@ check("case82 inlet 1.9 ft: RED with no curb; a 14 in. curb (L 3.07 ft) clears 3
 _i6 = _run81(1.9, fan=_curb(6))
 check("case82 inlet 1.9 ft + 6 in. curb (L 2.4 ft): the 3 H WARNING names the curb and the duct past it",
       _w81(_i6) == ['WARNING: Elbow 4702 is 1.9 ft from the return inlet (plus a 6 in. roof '
-                    'curb); provide at least 3.0 ft of straight duct (3 H, H 12 in.), the 6 '
+                    'curb); recommended: at least 3.0 ft of straight duct (3 H, H 12 in.), the 6 '
                     'in. curb included (2.5 ft of duct past the curb). Under 3 H the elbow '
                     'causes a fan system effect that is not priced (the inlet is priced at '
-                    'its 800 fpm opening velocity), so the external static shown is low until '
-                    'the elbow is moved.'] and not _i6.get('fse_red_ids'),
+                    'its 800 fpm opening velocity), so the external static shown is low; '
+                    'the engineer has final say where space does not allow.'] and not _i6.get('fse_red_ids'),
       "notes %r" % (_notes(_i6),))
 _i6r = _run81(1.0, fan=_curb(6))
 _red6 = _notes(_i6r, 'red')
 check("case82 inlet 1.0 ft + 6 in. curb (L 1.5 ft): RED, the duct past the curb asked for",
       len(_red6) == 1 and _red6[0].startswith(
-          'RED: Elbow 4702, 1.0 ft from the return inlet (plus a 6 in. roof curb), 1.5 H (H 12 in.')
-      and 'Provide at least 2.0 ft of straight duct (2 H of the elbow), the 6 in. curb included '
+          'RED: Elbow 4702 is 1.0 ft from the return inlet (plus a 6 in. roof curb), 1.5 H (H 12 in.')
+      and 'Recommended: at least 2.0 ft of straight duct (2 H of the elbow), the 6 in. curb included '
           '(1.5 ft of duct past the curb); 5.0 ft (5 H, curb included)' in _red6[0]
       and (_i6r.get('fse_red_ducts') or {}).get(4701) ==
       ('Straight duct: elbow 4702 at 1.0 ft + 6 in. curb, under 2 H',
@@ -3107,7 +3111,7 @@ _o0 = _fse_run(n82, c82, d82, t82, 990)
 _o14 = _fse_run(n82, c82, d82, t82, 990, fan=_curb(14))
 _ro14 = _notes(_o14, 'red')
 check("case82 outlet 1.0 ft + 14 in. curb: still RED under 0.5 Le, named with the curb, lower FSE",
-      len(_ro14) == 1 and _ro14[0].startswith('RED: Elbow 992, 1.0 ft from the supply outlet '
+      len(_ro14) == 1 and _ro14[0].startswith('RED: Elbow 992 is 1.0 ft from the supply outlet '
                                               '(plus a 14 in. roof curb), L/Le ')
       and 'ft of straight duct, the 14 in. curb included (' in _ro14[0]
       and _o14.get('fse_inwc', 0) < _o0.get('fse_inwc', 0)
@@ -3159,10 +3163,10 @@ def _tw83(leaf):
 
 _t83 = _run83(2.0)
 check("case83 tap at 2.0 ft on a 12x12 main (3 D 3.3 ft): the WARNING, De, exact text, nothing priced",
-      _tw83(_t83) == ['WARNING: Tap 4802 is 2.0 ft from the supply outlet; provide at least '
+      _tw83(_t83) == ['WARNING: Tap 4802 is 2.0 ft from the supply outlet; recommended: at least '
                       '3.3 ft of straight duct to the first tap (3 D, De 13.1 in.). A tap this '
                       'close to the fan acts like an elbow at the outlet; its system effect is '
-                      'not priced, so the external static shown is low until the tap is moved.']
+                      'not priced, so the external static shown is low; the engineer has final say where space does not allow.']
       and _t83.get('fse_inwc') == 0.0 and not _t83.get('fse_red_ids')
       and not any(t.startswith('WARNING: tap 4802,') for t in _notes(_t83)),
       "notes %r" % (_notes(_t83),))
@@ -3176,7 +3180,7 @@ _t83k = _run83(1.0, fan=_curb(14))
 check("case83 tap at 1.0 ft + 14 in. curb: the WARNING names the curb and the duct past it",
       len(_tw83(_t83k)) == 1 and _tw83(_t83k)[0].startswith(
           'WARNING: Tap 4802 is 1.0 ft from the supply outlet (plus a 14 in. roof curb); '
-          'provide at least 3.3 ft of straight duct to the first tap (3 D, De 13.1 in.), the '
+          'recommended: at least 3.3 ft of straight duct to the first tap (3 D, De 13.1 in.), the '
           '14 in. curb included (2.2 ft of duct past the curb).'), "notes %r" % (_notes(_t83k),))
 _t83l = _run83(0.5, elbow_first=True)
 check("case83 a tap past the first elbow: not this check", not _tw83(_t83l),
@@ -3297,6 +3301,37 @@ check("case84 a 6 in. curb (L 0.8 ft) brings the loss under 0.5: no GRAY, still 
       not [t for k, t in _g84s.get('fse_notes', ()) if k == 'gray']
       and not _g84s.get('fse_gray_ids') and _g84s.get('fse_inwc', 0.0) > 0.0,
       "notes %r" % (_g84s.get('fse_notes'),))
+
+# 85: the inlet window is 5 H of the FIRST elbow (Colin, 2026-11-09, TB-M11
+#     F1): a 28 x 18 return inlet and duct, a rect radius elbow at 3.0 ft
+#     turning on its 18 in. side (5 H 7.5 ft), a backdraft damper past it.
+#     At 10.4 ft (inside 5 x 28 in. = 11.7 ft, the old larger side window)
+#     no WARNING; at 6.0 ft the WARNING names 5 H (7.5 ft).
+RC2818 = {'round': False, 'area_ft2': 3.5, 'd_in': None, 'w_in': 28.0, 'h_in': 18.0}
+
+
+def _run85(l_dmp):
+    n = {8500: _unit({8501: RC2818}),
+         8502: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
+                    geom={'round': False, 'd_in': None, 'r_in': 27.0, 'w_in': 18.0,
+                          'h_in': 28.0, 'angle': 90.0}),
+         8504: Elem(kind='accessory', family_name='Backdraft Damper - Rectangular')}
+    c = {8500: [8501], 8501: [8502], 8502: [8503], 8503: [8504], 8504: [8505],
+         8505: [8510]}
+    d = build([(8501, 0.0, 3.0, 2100.0, 3.5, 'Return Air'),
+               (8503, 0.0, l_dmp - 3.0, 2100.0, 3.5, 'Return Air'),
+               (8505, 0.0, 10.0, 2100.0, 3.5, 'Return Air')])
+    for _r in d.values():
+        _r.size = '28x18"'
+    return _fse_run(n, c, d, {8510: (2100.0, 'Return Air', 'RG-85')}, 8500,
+                    cls='Return Air')
+
+
+check("case85 backdraft at 10.4 ft, past 5 H of the first elbow (7.5 ft): no WARNING",
+      not _dmp(_run85(10.4)), "notes %r" % (_run85(10.4).get('fse_notes'),))
+_d85 = _dmp(_run85(6.0))
+check("case85 backdraft at 6.0 ft: the WARNING names the inlet window, 5 H (7.5 ft)",
+      len(_d85) == 1 and 'is inside the inlet window, 5 H (7.5 ft).' in _d85[0], "warn %r" % (_d85,))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
