@@ -2318,7 +2318,9 @@ _fr66 = hvac_graph.duct_friction_loss_per_100ft(500.0, 12.0) * 6.0 / 100.0
 check("case66 inline fan: read as inline, with a NOTE naming intake and discharge",
       in66.get('exhaust_fan_kind') == 'inline'
       and any(t.startswith('NOTE: exhaust fan read as an inline fan: intake at element 4001, '
-                           'discharge at element 4002') and '500 cfm' in t
+                           'discharge at element 4002. The discharge carries 500 cfm, '
+                           'the sum of the exhaust terminal airflows, and is priced once '
+                           'on the index run.')
               for _k, t in in66.get('fse_notes', ())),
       "kind %r notes %r" % (in66.get('exhaust_fan_kind'), in66.get('fse_notes')))
 check("case66 the discharge ducts are priced at the grille cfm (6 ft past the group at 500 fpm)",
@@ -2751,6 +2753,15 @@ _elb77 = _fse_run(n32, c32, d32, t32, 920, fan=_FSE77)
 check("case77 nothing priced (no elbow within Le): no fan velocity NOTE",
       _none77.get('fse_inwc') == 0.0 and not _vel_notes(_none77),
       "notes %r" % (_none77.get('fse_notes'),))
+check("case77 nothing priced: the no fan system effect NOTE is said instead, once",
+      [t for _k, t in _none77.get('fse_notes', ())
+       if t.startswith('NOTE: no fan system effect at the supply outlet: no elbow within '
+                       'Le (')
+       and t.endswith('the straight duct and fittings are priced at their own losses.')]
+      .__len__() == 1, "notes %r" % (_none77.get('fse_notes'),))
+check("case77 priced: no 'no fan system effect' NOTE",
+      not any(t.startswith('NOTE: no fan system effect') for _k, t in
+              _elb77.get('fse_notes', ())), "notes %r" % (_elb77.get('fse_notes'),))
 check("case77 elbow priced at L 0: the fan velocity NOTE is said once",
       _elb77.get('fse_inwc', 0.0) > 0.0 and len(_vel_notes(_elb77)) == 1,
       "notes %r" % (_elb77.get('fse_notes'),))

@@ -3640,6 +3640,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         notes.extend(wnotes)
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (win_short, win)
+            # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
+            notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
             return rec
         if role != 'elbow':
             notes.append(('warn', fan_system_effect.disruption_text(
@@ -3672,6 +3674,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                            did, l_ft, r['floor_ft'])
                 rec['none'] = ('elbow %s at %.1f ft, past %.1f ft, priced as a fitting'
                                % (did, l_ft, r['floor_ft']))
+                notes.append(('note', fan_system_effect.no_effect_text(
+                    where, 'elbow %s at %.1f ft is past %.1f ft, where the inlet table '
+                    'floors' % (did, l_ft, r['floor_ft']))))
                 return rec
             for _k, _t in enotes:
                 if _k == 'assume':
@@ -3853,10 +3858,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         cfm = sum([_connection_cfm(f) for f in intake], 0.0)
         dirs = dict((f, 'in') for f in intake)
         dirs.update((f, 'out') for f in dis)
+        # Worded as the sum of the terminals (Colin, 2026-11-09).
         return dirs, cfm, [('note', 'NOTE: exhaust fan read as an inline fan: intake at '
-                            'element %s, discharge at element %s (no grilles), carrying '
-                            '%.0f cfm picked up from the grilles, added to every exhaust '
-                            'run.' % (
+                            'element %s, discharge at element %s. The discharge carries '
+                            '%.0f cfm, the sum of the exhaust terminal airflows, and is '
+                            'priced once on the index run.' % (
                                 ', '.join(str(f) for f in intake),
                                 ', '.join(str(f) for f in dis), cfm))], 'inline'
 

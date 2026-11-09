@@ -607,6 +607,15 @@ def _l_ratio(l_ft, win_ft, win_short):
     return ', L/%s %.2f' % (win_short, float(l_ft) / float(win_ft))
 
 
+def no_effect_text(where, why):
+    """The NOTE when no fan system effect is used at a connection (Colin,
+    2026-11-09): no elbow inside the window, so the straight duct and
+    fittings are priced at their own losses. Said in place of the fan
+    velocity NOTE."""
+    return ('NOTE: no fan system effect at the %s: %s; the straight duct and fittings '
+            'are priced at their own losses.' % (where, why))
+
+
 def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short):
     """The NOTE saying which was charged for the group at one connection
     (Colin, 2026-11-09): the fan system effect, or the straight duct, any
