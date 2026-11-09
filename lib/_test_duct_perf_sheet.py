@@ -133,21 +133,38 @@ def _corrections():
             c('warn', 'UNPRICED: Fitting 777', 'RTU-1 (id 123456)')]
 
 
-class ClipTests(unittest.TestCase):
+class FitTests(unittest.TestCase):
+    """Colin, 2026-11-09: a column widens to its longest text, never clipped
+    with '...' and never wrapped, however wide the table gets."""
 
-    def test_short_text_untouched(self):
-        self.assertEqual(rd._clip('0.123', 0.1), '0.123')
+    def test_no_clip_left(self):
+        self.assertFalse(hasattr(rd, '_clip'))
 
-    def test_long_text_cut_with_ellipsis(self):
-        out = rd._clip(LONG_TERMINAL, 0.2)
-        self.assertTrue(out.endswith('...'))
-        self.assertLessEqual(len(out), int((0.2 - 2 * rd.PAD) / rd.CHAR_W))
+    def test_text_width(self):
+        self.assertAlmostEqual(rd.text_width('abcd'), 4 * rd.CHAR_W + 2 * rd.PAD)
+        self.assertGreater(rd.text_width('x' * 50, True), rd.text_width('x' * 50))
 
-    def test_bold_cuts_sooner(self):
-        self.assertLess(len(rd._clip('x' * 200, 0.3, True)), len(rd._clip('x' * 200, 0.3)))
+    def test_fit_shares_target_when_text_fits(self):
+        w = rd.fit_widths([0.05, 0.05], [0.5, 0.5], 1.0)
+        self.assertAlmostEqual(w[0], 0.5)
+        self.assertAlmostEqual(sum(w), 1.0)
 
-    def test_tiny_cell_left_alone(self):
-        self.assertEqual(rd._clip('abcdef', 0.01), 'abcdef')
+    def test_fit_holds_need_and_keeps_target(self):
+        w = rd.fit_widths([0.7, 0.05, 0.05], [0.34, 0.33, 0.33], 1.0)
+        self.assertAlmostEqual(w[0], 0.7)
+        self.assertAlmostEqual(sum(w), 1.0)
+        self.assertAlmostEqual(w[1], w[2])
+
+    def test_fit_widens_past_target(self):
+        w = rd.fit_widths([0.8, 0.5], [0.5, 0.5], 1.0)
+        self.assertEqual(w, [0.8, 0.5])
+
+    def test_column_needs_bold_and_band(self):
+        rows = [{'band': 'B' * 100}, ['abc', '1'], {'cells': ['x' * 30, '2'], 'bold': True}]
+        needs, band = rd.column_needs(['Item', 'in. wc'], rows)
+        self.assertAlmostEqual(needs[0], rd.text_width('x' * 30, True))
+        self.assertAlmostEqual(band, rd.text_width('B' * 100, True))
+        self.assertAlmostEqual(rd.table_need(['Item', 'in. wc'], rows), band)
 
 
 class StyledTableTests(unittest.TestCase):
@@ -194,11 +211,16 @@ class StyledTableTests(unittest.TestCase):
                     mid = row_top(r) - rd.ROW_H / 2.0
                     self.assertFalse(lo < mid < hi)
 
-    def test_clip_keeps_cells_inside(self):
+    def test_fit_widens_instead_of_clipping(self):
         rd._styled_table(None, None, 0.0, 0.0, [('Item', 0.2), ('in. wc', 0.08)],
-                         [[LONG_TERMINAL, '0.123']], clip=True)
-        self.assertNotIn(LONG_TERMINAL, self.rec.values())
-        self.assertIn('0.123', self.rec.values())
+                         [[LONG_TERMINAL, '0.123'], {'band': 'Supply Air, ' + 'z' * 120}],
+                         fit=True)
+        self.assertIn(LONG_TERMINAL, self.rec.values())
+        right = max(max(x0, x1) for x0, _y0, x1, _y1, _w in self.rec.lines)
+        self.assertGreaterEqual(right + 1e-9, rd.text_width('Supply Air, ' + 'z' * 120, True))
+        divider = [x0 for x0, y0, x1, y1, _w in self.rec.lines
+                   if abs(x0 - x1) < 1e-12 and 0 < x0 < right - 1e-9]
+        self.assertGreaterEqual(min(divider) + 1e-9, rd.text_width(LONG_TERMINAL))
 
 
 class SheetRowTests(unittest.TestCase):
@@ -361,30 +383,71 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertEqual(total[3], 'bold')
         self.assertLess(y, 0.0)
 
-    def test_table_cells_fit_their_columns(self):
-        """Every table text is clipped to its column width (sheet columns
-        at the narrowest table width)."""
-        esp = {'units': [_unit()], 'combined': [], 'warnings': []}
-        DRAW['_draw_external_static'](None, None, 0.0, TOTAL_W, esp)
-        widths = [TOTAL_W * f for f in DRAW['_SHEET_TAKEOFF_COLS']]
-        xs = [0.0]
-        for w in widths:
-            xs.append(xs[-1] + w)
-        for x, _y, value, kind, align in self.rec.texts:
-            if align != 'left' or kind == 'title':
-                continue
-            for c in range(len(widths)):
-                if abs(x - xs[c]) < 1e-9:
-                    cw = rd.BOLD_CHAR_W if kind == 'bold' else rd.CHAR_W
-                    # a band heading row spans the full width
-                    room = (TOTAL_W if value.startswith(('Supply Air,', 'Return Air,',
-                                                         'Exhaust Air,'))
-                            else widths[c]) - 2 * rd.PAD
-                    if c == 0 and len(value) * cw > room:
-                        # note panel text starts at x 0 too, wrapped to the width
-                        self.assertLessEqual(len(value) * rd.CHAR_W, TOTAL_W, value)
-                    elif c > 0:
-                        self.assertLessEqual(len(value) * cw, room + 1e-9, value)
+    def test_every_sheet_table_fits_its_text(self):
+        """Colin, 2026-11-09: no '...' in any drawn table text, every column
+        at least its longest text estimate, and every table spans the sheet
+        width _sheet_width sets."""
+        long_rows = [
+            ['Duct losses: straight duct, transition and elbow (SR4-1, CR3-1), '
+             'L 3.4 / Le 3.5 ft', 'x', '1', '-', '0.050'],
+            ['Fan system effect: SR7-11 pos C, L 1.0 / Le 4.9 ft', 'x', '1', '-', '0.100'],
+            ['none: tap 3653648 at 3.3 ft inside 5 H, flagged, not priced', 'x', '1', '-', ''],
+            ['Straight duct', 'Darcy-Weisbach, in the fan system effect', '12', '-', '0.000']]
+        unit = _unit()
+        unit['classes'][0]['takeoff'] = long_rows
+        esp = {'units': [unit], 'combined': [], 'warnings': []}
+        vav = {'basis': 'MP', 'minimum': 0.5, 'units': [{'label': 'RTU-1 (id 1)',
+               'mp_terminal_text': None, 'boxes': [
+                   {'box': 'VAV-1-01 ' + LONG_TERMINAL, 'status': 'LOW', 'loss': 0.4,
+                    'loss_sf': 0.44, 'left': 0.31}]}]}
+        summ = {'grand': [('Grand total airflow', '5,250 CFM')],
+                'equipment': [[LONG_TERMINAL + ' ' + LONG_TERMINAL, '5,250', '14', '-']],
+                'by_class': [['Supply Air', '5,250', '14']],
+                'types': [[LONG_TERMINAL, '6', '900']]}
+        heads = ['#', 'Status', 'Reason']
+        flagged = [['1', 'RED', 'Straight duct: elbow 123 at 1.2 ft under 0.5 Le 3.5 ft, '
+                                'Required Size Straight duct 3.5 ft']]
+        legend = ['Gray: ' + 'w' * 260]
+        width = DRAW['_sheet_width'](0.6, summ, esp, vav, heads, flagged, legend)
+        self.assertGreaterEqual(width, DRAW['_LEGEND_TEXT_X'] + rd.text_width(legend[0]))
+
+        drawn = []
+        real = rd._styled_table
+
+        def spy(st, view, ox, top, columns, rows, **kw):
+            drawn.append((ox, columns, rows, kw))
+            return real(st, view, ox, top, columns, rows, **kw)
+
+        rd._styled_table = spy
+        try:
+            DRAW['_draw_system_summary'](None, None, 0.0, width, summ)
+            DRAW['_draw_external_static'](None, None, 0.0, width, esp)
+            DRAW['_draw_vav_boxes'](None, None, 0.0, width, vav)
+            cols = DRAW['_sheet_columns'](heads, [0.05, 0.1, 0.5], width, flagged)
+            DRAW['_draw_system_corrections'](None, None, 0.0, width, cols, flagged,
+                                             (0, 2), [])
+        finally:
+            rd._styled_table = real
+        self.assertEqual(len(drawn), 6)
+        for ox, columns, rows, kw in drawn:
+            self.assertTrue(kw.get('fit'))
+            needs, band = rd.column_needs([c[0] for c in columns], rows,
+                                          kw.get('totals_row', False))
+            for (h, w), n in zip(columns, needs):
+                self.assertGreaterEqual(w + 1e-9, n, h)
+            right = ox + sum(c[1] for c in columns)
+            self.assertLessEqual(right, width + 1e-9)
+            self.assertGreaterEqual(sum(c[1] for c in columns) + 1e-9, band)
+        # the full width tables span the sheet exactly
+        for ox, columns, rows, kw in drawn:
+            if 'System' not in [c[0] for c in columns] and ox == 0.0 and \
+                    'Diffuser/Grille type' not in [c[0] for c in columns]:
+                self.assertAlmostEqual(sum(c[1] for c in columns), width)
+        for value in self.rec.values():
+            self.assertNotIn('...', value)
+        for text in [r[0] for r in long_rows] + ['Darcy-Weisbach, in the fan system effect',
+                                                 LONG_TERMINAL]:
+            self.assertIn(text, self.rec.values())
 
     def test_vav_boxes(self):
         rep = {'basis': 'MP supply 1500 FPM, 0.10 in. wc per 100 ft', 'minimum': 0.5,

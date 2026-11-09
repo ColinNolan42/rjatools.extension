@@ -5274,8 +5274,98 @@ _SHEET_TAKEOFF_COLS = (0.34, 0.24, 0.14, 0.12, 0.16)
 _SHEET_VAV_COLS = (0.22, 0.14, 0.16, 0.16, 0.18, 0.14)
 
 
-def _sheet_columns(headers, fractions, width):
-    return [(h, width * f) for h, f in zip(headers, fractions)]
+_SHEET_PAIR_W = _SHEET_CLASS_W + _SHEET_TYPES_W   # the rest is the gap
+_LEGEND_SWATCH = 0.014
+_LEGEND_TEXT_X = _LEGEND_SWATCH + rja_drafting.PAD * 3.0
+
+
+def _sheet_columns(headers, fractions, width, rows=(), totals_row=False):
+    """[(header, width)] sharing width by fractions, every column at least
+    as wide as its longest text (rja_drafting.fit_widths). No cell on the
+    sheet is clipped or wrapped: a long text widens its column, and the
+    sheet width is set by _sheet_width so the table still spans it (Colin,
+    2026-11-09: always widen)."""
+    needs, band_need = rja_drafting.column_needs(headers, rows, totals_row)
+    widths = rja_drafting.fit_widths(needs, fractions, width)
+    short = band_need - sum(widths, 0.0)
+    if short > 0 and widths:
+        widths[-1] += short
+    return list(zip(headers, widths))
+
+
+def _pair_columns(rep, words, width):
+    """(class columns, types columns) for the by system class and diffuser
+    types tables drawn side by side in width, fitted as one set so the two
+    fill their shares and each column holds its text."""
+    cls_h = ['System', 'CFM', words['count']]
+    typ_h = [words['types'], 'Count', 'CFM']
+    cls_rows = rep.get('by_class') or []
+    typ_rows = rep.get('types') or []
+    if cls_rows and typ_rows:
+        cn, _ = rja_drafting.column_needs(cls_h, cls_rows)
+        tn, _ = rja_drafting.column_needs(typ_h, typ_rows)
+        fr = ([_SHEET_CLASS_W * f for f in _SHEET_CLASS_COLS] +
+              [_SHEET_TYPES_W * f for f in _SHEET_TYPES_COLS])
+        w = rja_drafting.fit_widths(cn + tn, fr, width * _SHEET_PAIR_W)
+        return list(zip(cls_h, w[:3])), list(zip(typ_h, w[3:]))
+    cls = _sheet_columns(cls_h, _SHEET_CLASS_COLS, width * _SHEET_CLASS_W, cls_rows)
+    typ = _sheet_columns(typ_h, _SHEET_TYPES_COLS, width * _SHEET_TYPES_W, typ_rows)
+    return cls, typ
+
+
+def _esp_table_rows(unit):
+    """(rows, has totals row) of one unit's External Static Pressure table."""
+    rows, total_row = duct_perf_console.esp_unit_rows(unit, sheet=True)
+    if total_row is not None:
+        rows.append(total_row)
+    return rows, total_row is not None
+
+
+def _legend_lines(rep, show_r_marker_note=False):
+    """The NOTE LEGEND text lines, in order: one per colour, then the (R)
+    line when shown."""
+    words = rep.get('words')
+    lines = ['{}: {}'.format(k.title(), m) for k, m in _legend_rows(words)]
+    if show_r_marker_note:
+        lines.append('(R): Most restrictive {}. It ends the index run that sets '
+                     'the required external static pressure for its equipment '
+                     'or system.'.format(
+                         (words or duct_perf_console.scope_words('rtu'))['one']))
+    return lines
+
+
+def _sheet_width(base_w, rep, esp_rec, vav_rep, headers, rows, legend_lines):
+    """Sheet table width: the flagged duct table's own width, widened until
+    every table and legend line holds its longest text (Colin, 2026-11-09:
+    always widen, never clip, never wrap)."""
+    need = rja_drafting.table_need
+    w = base_w
+    words = rep.get('words') or duct_perf_console.scope_words('rtu')
+    if rep.get('equipment'):
+        heads = duct_perf_console.equipment_headers(words)
+        w = max(w, need(heads, [list(r[:len(heads)]) for r in rep['equipment']]))
+    pair = 0.0
+    if rep.get('by_class'):
+        pair += need(['System', 'CFM', words['count']], rep['by_class'])
+    if rep.get('types'):
+        pair += need([words['types'], 'Count', 'CFM'], rep['types'])
+    if rep.get('by_class') and rep.get('types'):
+        w = max(w, pair / _SHEET_PAIR_W)
+    elif pair:
+        w = max(w, pair / (_SHEET_CLASS_W if rep.get('by_class') else _SHEET_TYPES_W))
+    for unit in (esp_rec or {}).get('units') or []:
+        if unit.get('classes'):
+            t_rows, totals = _esp_table_rows(unit)
+            w = max(w, need(duct_perf_console.TAKEOFF_HEADERS, t_rows, totals))
+    if vav_rep is not None:
+        v_rows = duct_perf_console.vav_rows(vav_rep, sheet=True)
+        if v_rows:
+            w = max(w, need(duct_perf_console.VAV_HEADERS, v_rows))
+    if rows:
+        w = max(w, need(headers, rows))
+    for line in legend_lines:
+        w = max(w, _LEGEND_TEXT_X + rja_drafting.text_width(line))
+    return w
 
 
 def _draw_system_summary(st, view, y, total_w, rep):
@@ -5289,30 +5379,27 @@ def _draw_system_summary(st, view, y, total_w, rep):
     if rep.get('equipment'):
         heads = duct_perf_console.equipment_headers(words)
         four = len(heads) == 4
+        eq_rows = [list(r[:len(heads)]) for r in rep['equipment']]
         y = draft._styled_table(
             st, view, 0.0, y, _sheet_columns(
-                heads, _SHEET_EQUIP_COLS if four else _SHEET_EQUIP_COLS_3, total_w),
-            [list(r[:len(heads)]) for r in rep['equipment']],
-            left_cols=(0, 3) if four else (0,), clip=True)
+                heads, _SHEET_EQUIP_COLS if four else _SHEET_EQUIP_COLS_3, total_w,
+                eq_rows),
+            eq_rows, left_cols=(0, 3) if four else (0,), fit=True)
         y -= draft.GAP
     if rep.get('caution'):
         # VAV Box scope with external static (Colin, 2026-11-09).
         y = draft._note_panel(st, view, 0.0, y, total_w, [rep['caution']])
         y -= draft.GAP
     bottoms = []
+    cls_cols, typ_cols = _pair_columns(rep, words, total_w)
     if rep.get('by_class'):
-        w = total_w * _SHEET_CLASS_W
         bottoms.append(draft._styled_table(
-            st, view, 0.0, y, _sheet_columns(['System', 'CFM', words['count']],
-                                             _SHEET_CLASS_COLS, w),
-            rep['by_class'], clip=True))
+            st, view, 0.0, y, cls_cols, rep['by_class'], fit=True))
     if rep.get('types'):
-        w = total_w * _SHEET_TYPES_W
+        w = sum([c[1] for c in typ_cols], 0.0)
         ox = total_w - w if rep.get('by_class') else 0.0
         bottoms.append(draft._styled_table(
-            st, view, ox, y, _sheet_columns([words['types'], 'Count', 'CFM'],
-                                            _SHEET_TYPES_COLS, w),
-            rep['types'], clip=True))
+            st, view, ox, y, typ_cols, rep['types'], fit=True))
     if bottoms:
         y = min(bottoms) - draft.GAP
     return y
@@ -5325,19 +5412,17 @@ def _draw_external_static(st, view, y, total_w, esp_rec):
     SYSTEM CORRECTIONS. The rows come from duct_perf_console.esp_unit_rows,
     the same rows the console table shows. Returns the y under it."""
     draft = rja_drafting
-    cols = _sheet_columns(duct_perf_console.TAKEOFF_HEADERS, _SHEET_TAKEOFF_COLS,
-                          total_w)
     for unit in esp_rec.get('units') or []:
         y = draft._band(st, view, 0.0, y, total_w,
                         'EXTERNAL STATIC PRESSURE - ' + unit['label'], None,
                         draft.SUB_BAND_H)
         if unit.get('classes'):
-            rows, total_row = duct_perf_console.esp_unit_rows(unit, sheet=True)
-            if total_row is not None:
-                rows.append(total_row)
+            rows, totals = _esp_table_rows(unit)
+            cols = _sheet_columns(duct_perf_console.TAKEOFF_HEADERS,
+                                  _SHEET_TAKEOFF_COLS, total_w, rows, totals)
             y = draft._styled_table(st, view, 0.0, y, cols, rows,
-                                    totals_row=total_row is not None,
-                                    left_cols=(0, 1), clip=True)
+                                    totals_row=totals,
+                                    left_cols=(0, 1), fit=True)
         notes = duct_perf_console.sheet_lines(
             duct_perf_console.esp_unit_notes(unit, sheet=True))
         if notes:
@@ -5367,8 +5452,8 @@ def _draw_vav_boxes(st, view, y, total_w, vav_rep):
                     draft.SUB_BAND_H)
     y = draft._styled_table(
         st, view, 0.0, y, _sheet_columns(duct_perf_console.VAV_HEADERS,
-                                         _SHEET_VAV_COLS, total_w),
-        rows, left_cols=(0, 1), clip=True)
+                                         _SHEET_VAV_COLS, total_w, rows),
+        rows, left_cols=(0, 1), fit=True)
     notes = duct_perf_console.sheet_lines(duct_perf_console.vav_notes(vav_rep, sheet=True))
     if notes:
         y = draft._note_panel(st, view, 0.0, y, total_w, notes)
@@ -5388,7 +5473,8 @@ def _draw_system_corrections(st, view, y, total_w, columns, rows, left_cols,
                     draft.SUB_BAND_H)
     groups = duct_perf_console.corrections_sheet(corrections)
     if rows:
-        y = draft._styled_table(st, view, 0.0, y, columns, rows, left_cols=left_cols)
+        y = draft._styled_table(st, view, 0.0, y, columns, rows, left_cols=left_cols,
+                                fit=True)
     else:
         y = draft._note_panel(st, view, 0.0, y, total_w, [
             duct_perf_console.NO_FLAGGED if groups
@@ -5433,10 +5519,20 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
         # Columns come from the shared _COLUMN_DEFS, filtered to the user's
         # selection: same list, same order, same headers as the console table.
         cols = _selected_columns(selected_cols)
-        columns = [(c[1], c[2]) for c in cols]
         # sum(..., 0.0) forces float: sum([]) returns int 0 in Python 2.7
-        total_w = sum([c[2] for c in cols], 0.0)
+        base_w = sum([c[2] for c in cols], 0.0)
         left = tuple(i for i, c in enumerate(cols) if c[0] in _LEFT_COLUMNS)
+        # '#' is this table's own row index: it matches the numbered
+        # keynote circle placed on the same duct in the plan view.
+        rows = [[str(ri + 1) if c[0] == 'num' else cells.get(c[0], '')
+                 for c in cols] for ri, cells in enumerate(flagged_rows)]
+        legend_lines = _legend_lines(rep, show_r_marker_note)
+        # Every table widens to its longest text and the sheet with it, no
+        # cell is clipped (Colin, 2026-11-09).
+        headers = [c[1] for c in cols]
+        total_w = _sheet_width(base_w, rep, esp_rec, vav_rep, headers, rows,
+                               legend_lines)
+        columns = _sheet_columns(headers, [c[2] for c in cols], total_w, rows)
 
         y = rja_drafting._band(
             st, sched_view, 0.0, 0.0, total_w,
@@ -5459,10 +5555,6 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
                                        draw.__name__, ex)
                 y -= rja_drafting.GAP
 
-        # '#' is this table's own row index: it matches the numbered
-        # keynote circle placed on the same duct in the plan view.
-        rows = [[str(ri + 1) if c[0] == 'num' else cells.get(c[0], '')
-                 for c in cols] for ri, cells in enumerate(flagged_rows)]
         y = _draw_system_corrections(st, sched_view, y, total_w, columns, rows,
                                      left, corrections)
 
@@ -5473,25 +5565,20 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
         legend_top = y
         row_h = rja_drafting.ROW_H
         pad = rja_drafting.PAD
-        swatch = 0.014
-        for color_key, meaning in _legend_rows(rep.get('words')):
+        swatch = _LEGEND_SWATCH
+        legend = _legend_rows(rep.get('words'))
+        for (color_key, _m), line in zip(legend, legend_lines):
             if st.region_type_id is not None:
                 rja_drafting._legend_swatch(
                     doc, sched_view, st.region_type_id, pad * 2.0,
                     y - swatch - (row_h - swatch) / 2.0, swatch,
                     _COLOR_MAP[color_key], fill_id)
-            rja_drafting._t(st, sched_view, swatch + pad * 3.0, y,
-                            '{}: {}'.format(color_key.title(), meaning))
+            rja_drafting._t(st, sched_view, _LEGEND_TEXT_X, y, line)
             y -= row_h
         if show_r_marker_note:
             # Starts in the swatch column so '(R)' lines up with the colour
             # squares above it.
-            rja_drafting._t(st, sched_view, pad * 2.0, y,
-                            '(R): Most restrictive {}. It ends the index '
-                            'run that sets the required external static '
-                            'pressure for its equipment or system.'.format(
-                                (rep.get('words') or
-                                 duct_perf_console.scope_words('rtu'))['one']))
+            rja_drafting._t(st, sched_view, pad * 2.0, y, legend_lines[-1])
             y -= row_h
         rja_drafting._outline(st, sched_view, 0.0, legend_top, total_w, y)
 

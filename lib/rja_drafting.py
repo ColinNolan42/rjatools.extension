@@ -174,20 +174,71 @@ def _outline(st, view, x0, top, x1, bottom):
         _line(st, view, a[0], a[1], b[0], b[1], OUTER_WEIGHT)
 
 
-def _clip(text, width, bold=False):
-    """text cut to fit a cell width wide (feet), ending in '...' when cut.
-    Drafting view TextNotes do not wrap inside a cell, so a long value would
-    run over the next column. The character width is an average, on the
-    generous side, so a value that fits is never cut."""
-    text = str(text)
-    chars = int((width - 2.0 * PAD) / (BOLD_CHAR_W if bold else CHAR_W))
-    if chars < 4 or len(text) <= chars:
-        return text
-    return text[:chars - 3].rstrip() + "..."
+def text_width(text, bold=False):
+    """Estimated width (feet) of a cell holding text: its characters at the
+    average width, on the generous side, plus the inset on both sides."""
+    return len(str(text)) * (BOLD_CHAR_W if bold else CHAR_W) + 2.0 * PAD
+
+
+def column_needs(headers, rows, totals_row=False):
+    """(needs, band_need): the width each column needs for its longest text
+    (header in bold, bold and totals rows in bold), and the width a heading
+    row ({'band': text}) needs across the whole table."""
+    needs = [text_width(h, True) for h in headers]
+    band_need = 0.0
+    last = len(rows) - 1
+    for r, row in enumerate(rows):
+        bold = totals_row and r == last
+        if isinstance(row, dict):
+            if "band" in row:
+                if row.get("band"):
+                    band_need = max(band_need, text_width(row["band"], True))
+                continue
+            bold = bold or bool(row.get("bold"))
+            row = row.get("cells") or []
+        for c, value in enumerate(row):
+            if c < len(needs) and value:
+                needs[c] = max(needs[c], text_width(value, bold))
+    return needs, band_need
+
+
+def table_need(headers, rows, totals_row=False):
+    """Narrowest table width that holds every text of the table."""
+    needs, band_need = column_needs(headers, rows, totals_row)
+    return max(sum(needs, 0.0), band_need)
+
+
+def fit_widths(needs, fractions, target):
+    """Column widths that hold each column's need (feet), sharing target
+    out by fractions (Colin, 2026-11-09: widen, never clip, never wrap).
+
+    A column whose share is under its need gets its need, and the rest of
+    target is shared again by fractions over the others, until every column
+    holds its text. When the needs add up past target the table is just
+    their sum, so it widens instead."""
+    n = len(needs)
+    total_f = float(sum(fractions)) or 1.0
+    fixed = [False] * n
+    while True:
+        left = target - sum([needs[i] for i in range(n) if fixed[i]], 0.0)
+        free_f = sum([fractions[i] for i in range(n) if not fixed[i]], 0.0)
+        widths = []
+        grew = False
+        for i in range(n):
+            if fixed[i]:
+                widths.append(needs[i])
+                continue
+            share = left * fractions[i] / free_f if free_f > 0 else 0.0
+            if share < needs[i] - 1e-12:
+                fixed[i] = True
+                grew = True
+            widths.append(share)
+        if not grew:
+            return widths
 
 
 def _styled_table(st, view, ox, top, columns, rows, groups=None,
-                  totals_row=False, left_cols=(0,), clip=False):
+                  totals_row=False, left_cols=(0,), fit=False):
     """A gridded table in the RJA look.
 
     columns: [(header, width)]. rows: [[cell, ...]]. groups: optional
@@ -201,9 +252,18 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
                                       the banding of the rows under it
                                       starts again
       {'cells': [...], 'bold': True}  a body row drawn in bold
-    clip True cuts every cell (and band text) to its width, see _clip.
+    fit True widens any column narrower than its longest text, and the last
+    column when a heading row is longer than the table, so no text runs
+    over its cell (Colin, 2026-11-09: no cell is ever clipped).
     """
     widths = [c[1] for c in columns]
+    if fit:
+        needs, band_need = column_needs([c[0] for c in columns], rows,
+                                        totals_row)
+        widths = [max(w, n) for w, n in zip(widths, needs)]
+        short = band_need - sum(widths, 0.0)
+        if short > 0 and widths:
+            widths[-1] += short
     xs = [ox]
     for w in widths:
         xs.append(xs[-1] + w)
@@ -265,7 +325,7 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
     _outline(st, view, ox, top, right, bottom)
 
     for c, column in enumerate(columns):
-        header = _clip(column[0], widths[c], True) if clip else column[0]
+        header = column[0]
         if c in left_cols:
             _t(st, view, xs[c], head_top, header, "bold")
         else:
@@ -274,8 +334,6 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
     for r, row in enumerate(rows):
         if band[r]:
             text = row.get("band")
-            if clip and text:
-                text = _clip(text, right - ox, True)
             _t(st, view, ox, row_tops[r], text, "bold")
             continue
         bold = (totals_row and r == last)
@@ -288,8 +346,6 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
                 break
             if not value:   # TextNote.Create rejects an empty string
                 continue
-            if clip:
-                value = _clip(value, widths[c], bold)
             if c in left_cols:
                 _t(st, view, xs[c], row_tops[r], value, kind)
             else:
