@@ -2919,6 +2919,20 @@ check("case80 RTU return inlet, same geometry: connection velocity (500 fpm), no
       and not any('priced at the default fan velocity' in t
                   for _k, t in rtu80.get('fse_notes', ())),
       "rows %r" % (_rr80,))
+# The cabinet inlet NOTE says why (Colin, 2026-11-09), once, only where a
+# fan system effect is priced, and not on the 'connection' basis.
+_cab80 = [t for _k, t in rtu80.get('fse_notes', ()) if 'cabinet inlet' in t]
+check("case80 RTU return inlet: the cabinet inlet NOTE, once",
+      _cab80 == ['NOTE: fan system effect at the return inlet at element 4601 priced at '
+                 'the connection velocity, 500 fpm: cabinet inlet, the fan sits past the '
+                 'filter and coil.'], "notes %r" % (rtu80.get('fse_notes'),))
+check("case80 inline exhaust fan inlet: no cabinet inlet NOTE",
+      not any('cabinet inlet' in t for _k, t in ef80.get('fse_notes', ())))
+_rc80 = _fse_run(_nr, _cr, _dr80, _tr, 4600, fan=dict(FSE80, velocity_basis='connection'),
+                 cls='Return Air')
+check("case80 'connection' basis: no cabinet inlet NOTE, same loss",
+      not any('cabinet inlet' in t for _k, t in _rc80.get('fse_notes', ()))
+      and abs(_rc80.get('fse_inwc', -1) - rtu80.get('fse_inwc', -2)) < 1e-12)
 _c80r = (_rows80[0][3] / hvac_graph.velocity_pressure_inwg(2000.0)) if _rows80 else None
 _c80c = (_rr80[0][3] / hvac_graph.velocity_pressure_inwg(500.0)) if _rr80 else None
 check("case80 same ED7-2 C either way, only Pv changes",

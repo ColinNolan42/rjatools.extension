@@ -89,7 +89,8 @@ RJA DECISIONS (Colin, 2026-11-03):
     Outlets, and the inlet of an inline or roof exhaust fan, whose duct
     right at the inlet runs at about the fan's speed (Colin, 2026-11-09). A
     cabinet unit's inlet (RTU, AHU, furnace, fan coil) uses its connection
-    velocity (Colin, 2026-11-04).
+    velocity, the fan sits past the filter and coil (Colin, 2026-11-04,
+    reconfirmed 2026-11-09), and its NOTE says so (cabinet_inlet_text).
   - Straight duct check, RED for the engineer, still priced as above
     (Colin, 2026-11-03, .claude/docs/Duct Velocity/FAN_SYSTEM_EFFECT_PLAN.md
     section C): an elbow under OUTLET_RED_RATIO x Le of a unit OUTLET (Le
@@ -614,6 +615,14 @@ def velocity_text(where, v_used, v_conn):
                 where, float(v_used), float(v_conn)))
 
 
+def cabinet_inlet_text(where, v_conn):
+    """The NOTE at a cabinet unit inlet (RTU, AHU, furnace, fan coil) priced
+    at its connection velocity, and why (Colin, 2026-11-09)."""
+    return ('NOTE: fan system effect at the %s priced at the connection velocity, '
+            '%.0f fpm: cabinet inlet, the fan sits past the filter and coil.'
+            % (where, float(v_conn)))
+
+
 def transition_text(eid, l_ft, where, v_used):
     """The NOTE for a transition priced at the fan velocity. Not printed
     since 2026-11-04 (the group charged once replaced the fan velocity
@@ -733,9 +742,10 @@ def method_lines(settings):
     if settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
         method += (' Velocity at an outlet: the larger of the fan velocity, '
                    '%.0f fpm, and the connection velocity (cfm over the unit connector '
-                   'area). At an inlet: the connection velocity, except on exhaust '
-                   'fans (inline, roof): the larger of the fan velocity and the '
-                   'connection velocity.'
+                   'area). At an inlet: the connection velocity on a cabinet unit '
+                   '(RTU, AHU, furnace, fan coil), the fan sits past the filter and '
+                   'coil; on exhaust fans (inline, roof), where the duct meets the '
+                   'fan, the larger of the fan velocity and the connection velocity.'
                    % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
     else:
         method += (' Velocity: the connection velocity, cfm over the unit connector '

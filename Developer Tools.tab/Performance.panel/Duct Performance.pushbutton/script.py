@@ -916,7 +916,8 @@ def _show_velocity_settings_xaml(use_theme):
                               'of the fan velocity (default by the Scope, 1500 fpm '
                               'Exhaust System, 2000 fpm otherwise) and the connection '
                               'velocity; at a cabinet unit inlet (RTU, AHU, furnace, '
-                              'fan coil) the connection velocity. Added before the '
+                              'fan coil) the connection velocity, the fan sits past '
+                              'the filter and coil. Added before the '
                               'safety factor. Transitions are priced as fittings, '
                               'taps flagged, not priced. An elbow under 0.5 Le of an '
                               'outlet, or under 2 D of an inlet, is red with the '
@@ -3575,11 +3576,22 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
         else:
             v, fan_gov = v_conn, False
-        # Said only when a fan system effect is priced at this connection
+        # Either NOTE is said only when a fan system effect is priced here
         # (Colin, 2026-11-09): with no elbow inside the window nothing is
         # priced at the fan velocity. Put back in its place below.
         vel_note = ((len(notes), ('note', fan_system_effect.velocity_text(where, v, v_conn)))
                     if fan_gov else None)
+        # A cabinet unit inlet says why it keeps the connection velocity
+        # (Colin, 2026-11-09): the fan sits past the filter and coil. Not on
+        # the 'connection' basis, where every connection uses it, and not at
+        # a VAV box root, which has no fan.
+        if (vel_note is None and role_here != fan_system_effect.OUTLET
+                and root_id not in inline_fan_roots and root_id not in box_ids
+                and (fse_set or {}).get('velocity_basis',
+                                        fan_system_effect.DEFAULT_VELOCITY_BASIS)
+                == 'default'):
+            vel_note = (len(notes), ('note', fan_system_effect.cabinet_inlet_text(
+                where, v_conn)))
         # D for the 5 D check and the inlet window: the larger of the unit
         # opening and the first duct. An outlet already has its fallback NOTE
         # above, so its size notes are not repeated.
