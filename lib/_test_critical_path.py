@@ -1224,7 +1224,7 @@ _it31 = _fse_items(on31)
 check("case31 one 0.000 take-off row 'Fan system effect, supply outlet', none: no elbow within Le",
       len(_it31) == 1 and _it31[0][3] == 0.0
       and _it31[0][4][0] == 'Fan system effect, supply outlet'
-      and _it31[0][4][1].startswith('none: no elbow within Le (5.7 ft)'),
+      and _it31[0][4][1].startswith('none: no elbow within Le (5.8 ft)'),
       "items %r" % (_it31,))
 check("case31 fan system effect off: no fan system effect row at all",
       not _fse_items(off31), "items %r" % (_fse_items(off31),))
@@ -1251,7 +1251,7 @@ check("case32 added before the safety factor: total = (subtotal incl. FSE) x 1.1
 _it32 = _fse_items(sa32)
 check("case32 one take-off line 'Fan system effect, supply outlet', SR7-11, C 3.80",
       len(_it32) == 1 and _it32[0][4][0] == 'Fan system effect, supply outlet'
-      and _it32[0][4][1].startswith('Fan system effect: SR7-11 pos C, L 0.0 / Le 5.7')
+      and _it32[0][4][1].startswith('Fan system effect: SR7-11 pos C, L 0.0 / Le 5.8')
       and abs(_it32[0][4][2] - 3.80) < 1e-9, "items %r" % (_it32,))
 check("case32 the index run items still add up to the subtotal",
       abs(_items_sum(sa32) - sa32['subtotal_inwc']) < 1e-9)
@@ -1505,7 +1505,7 @@ check("case38b mitered inlet elbow on a duct pick: ER7-1 r/H 1.0, L/H 0.5, not r
                                      _c38b * pv(1000.0)))
 check("case38b the mitered NOTE names the elbow and its distance",
       ('note', 'NOTE: elbow 2101, 1.0 ft from the return inlet, is mitered: ER7-1 read '
-               'on the r/H 1.0 row (Colin, 2026-11-02).') in ra38b.get('fse_notes', ())
+               'on the r/H 1.0 row.') in ra38b.get('fse_notes', ())
       and any('duct 2100, taken as the unit inlet' in t
               for _k, t in ra38b.get('fse_notes', ())),
       "notes %r" % (ra38b.get('fse_notes'),))
@@ -2161,10 +2161,10 @@ check("case60 a NOTE names the fan velocity over the connection's",
           for k, t in sa60.get('fse_notes', ())), "notes %r" % (sa60.get('fse_notes'),))
 check("case60 1.48 in. wc is GRAY",
       sa60.get('fse_gray_ids') == {921}, "gray %r" % (sa60.get('fse_gray_ids'),))
-check("case60 elbow at 0 ft is RED under 0.5 Le (Le 5.7 ft, Eq. 37) and drawn red",
+check("case60 elbow at 0 ft is RED under 0.5 Le (Le 5.71 ft shown 5.8, as 1.0 Le) and drawn red",
       sa60.get('fse_red_ids') == {921}
       and any(k == 'red' and t.startswith('RED: Elbow 921 is 0.0 ft from the supply outlet, '
-                                          'L/Le 0.00 (Le 5.7 ft, Eq. 37). Recommended: at least '
+                                          'L/Le 0.00 (Le 5.8 ft, Eq. 37). Recommended: at least '
                                           '2.9 ft of straight duct; 5.8 ft (1.0 Le) removes '
                                           'the system effect.')
               for k, t in sa60.get('fse_notes', ())),
@@ -2723,7 +2723,8 @@ check("case74 a fire damper 1.0 ft from a supply outlet (Le 5.7 ft): one WARNING
           'Rectangular 742 at 1.0 ft is inside Le (%.1f ft). The fan system effect counts '
           'straight duct only, so the damper\'s length is not part of L, and the damper\'s '
           'added loss this close to the fan is not priced, so the true loss is higher than '
-          'shown. Best practice: place dampers past Le from a fan connection.' % LE24),
+          'shown. Best practice: place dampers past Le from a fan connection.'
+          % FSE._ceil_step(LE24)),
       "notes %r" % (_fd74.get('fse_notes'),))
 check("case74 the WARNING is Action required, not RED; L and the fan system effect unchanged",
       duct_perf_console.correction('warn', _dmp(_fd74)[0] if _dmp(_fd74) else '')[0]

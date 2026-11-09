@@ -89,7 +89,11 @@ class OutletTest(unittest.TestCase):
         self.assertAlmostEqual(r['loss'], 3.80 * (1000.0 / 4005.0) ** 2)
         self.assertFalse(r['high'])
         self.assertIsNone(r['fix_ft'])
-        self.assertEqual(F.basis_text(r), 'SR7-11 pos C, L 0.0 / Le 5.7 ft')
+        # Le 5.71 ft is shown rounded up like the lengths asked for (5.8)
+        self.assertEqual(F.basis_text(r), 'SR7-11 pos C, L 0.0 / Le 5.8 ft')
+        # one round up, a 0.01 ft tolerance (TB-M01: Le 4.206 -> 4.2, half 2.103 -> 2.1)
+        self.assertEqual((F._ceil_step(4.206), F._ceil_step(2.103), F._ceil_step(2.12)),
+                         (4.2, 2.1, 2.2))
 
     def test_outlet_effect_high_and_fix_length(self):
         # 2000 fpm: 3.80 x 0.2494 = 0.948 in. wc, GRAY. The fix is where the

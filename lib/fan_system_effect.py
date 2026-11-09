@@ -119,6 +119,7 @@ log = logging.getLogger(__name__)
 FINAL = 'the engineer has final say where space does not allow.'
 HIGH_LOSS_INWC = 0.5         # a fan system effect loss at or above this is GRAY
 LENGTH_STEP_FT = 0.1         # the "increase length of duct to" figure, rounded up
+LENGTH_TOL_FT = 0.01         # within this of a step rounds DOWN to it (1/8 in., TB-M01 Le 4.206)
 MITERED_R_OVER_H = 1.0       # ER7-1 row a rect mitered inlet elbow is read on
 ER7_1_SQUARE_ASSUMPTION = ('ASSUMPTION: ER7-1 is printed for square elbows; the '
                            'rectangular elbow is read with H = the side in the plane '
@@ -336,10 +337,13 @@ def c_limit(pv_inwc):
 
 
 def _ceil_step(ft):
-    """ft rounded UP to LENGTH_STEP_FT, so the figure given is past the edge.
-    Any length above zero is at least one step: a loss of exactly
-    HIGH_LOSS_INWC at L 0 needs some straight duct, never '0.0 ft'."""
-    n = math.ceil(float(ft) / LENGTH_STEP_FT - 1e-9)
+    """ft rounded UP to LENGTH_STEP_FT, once, so the figure given is past
+    the edge. A length within LENGTH_TOL_FT above a step takes that step
+    (TB-M01, 2026-11-09: Le 4.206 ft reads 4.2, half Le 2.103 reads 2.1, not
+    4.3 / 2.2 for 0.04 in.). Any length above zero is at least one step: a
+    loss of exactly HIGH_LOSS_INWC at L 0 needs some straight duct, never
+    '0.0 ft'."""
+    n = math.ceil((float(ft) - LENGTH_TOL_FT) / LENGTH_STEP_FT - 1e-9)
     if float(ft) > 0.0:
         n = max(n, 1)
     return round(n * LENGTH_STEP_FT, 6)
@@ -632,7 +636,7 @@ def damper_window_text(where, acc_id, family, l_ft, win_ft, win_name):
             'so the damper\'s length is not part of L, and the damper\'s added loss '
             'this close to the fan is not priced, so the true loss is higher than '
             'shown. Best practice: place dampers past %s from a fan connection.'
-            % (where, family or '?', acc_id, float(l_ft), win_name, float(win_ft),
+            % (where, family or '?', acc_id, float(l_ft), win_name, _ceil_step(win_ft),
                win_name))
 
 
@@ -661,7 +665,7 @@ def le_text(where, eid, l_ft, le_ft, eq, curb_ft=0.0):
     ratio = float(l_ft) / float(le_ft) if le_ft else 0.0
     return ('RED: Elbow %s is %s, L/Le %.2f (Le %.1f ft, %s). Recommended: at '
             'least %s; %.1f ft (1.0 Le%s) removes the system effect. Priced as drawn; '
-            '%s' % (eid, from_text(where, l_ft, curb_ft), ratio, float(le_ft), eq,
+            '%s' % (eid, from_text(where, l_ft, curb_ft), ratio, _ceil_step(le_ft), eq,
                     need_text(outlet_red_ft(le_ft), curb_ft, 'of straight duct'),
                     _ceil_step(le_ft), '', FINAL))
 
@@ -835,7 +839,7 @@ def basis_text(rec):
     curb = rec.get('curb_ft') or 0.0
     if rec['side'] == 'outlet':
         return '%s pos %s, L %s / Le %.1f ft' % (
-            rec['table'], rec['position'], l_text(rec['l_ft'], curb), rec['le_ft'])
+            rec['table'], rec['position'], l_text(rec['l_ft'], curb), _ceil_step(rec['le_ft']))
     dim = 'D' if rec['table'] == INLET_ROUND else 'H'
     return '%s r/%s %.2f, L %s, %s %.0f in' % (
         rec['table'], dim, rec['r_ratio'], l_text(rec['l_ft'], curb, unit=True), dim,
@@ -854,7 +858,8 @@ def high_text(rec, where, eid):
         fix = 'recommended: increase length of duct to %s' % need_text(
             rec['fix_ft'], rec.get('curb_ft') or 0.0)
     if rec['side'] == 'outlet':
-        basis = '%s, worst of positions A to D, Le %.1f ft' % (rec['table'], rec['le_ft'])
+        basis = '%s, worst of positions A to D, Le %.1f ft' % (rec['table'],
+                                                              _ceil_step(rec['le_ft']))
     else:
         basis = '%s r/%s %.2f' % (rec['table'], 'D' if rec['table'] == INLET_ROUND
                                   else 'H', rec['r_ratio'])
@@ -870,7 +875,7 @@ def disruption_text(kind, eid, where, l_ft, limit_ft, limit_name):
     'the inlet window'."""
     return ('WARNING: %s %s, %.1f ft from the %s, inside %s (%.1f ft). A fan system '
             'effect disruption with no 2001 table, not priced.' % (
-                kind, eid, float(l_ft), where, limit_name, float(limit_ft)))
+                kind, eid, float(l_ft), where, limit_name, _ceil_step(limit_ft)))
 
 
 def method_lines(settings):

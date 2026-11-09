@@ -3514,7 +3514,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if not r_in and 'miter' in fam and 'radius' not in fam:
                 r_in = fan_system_effect.MITERED_R_OVER_H * g['w_in']
                 notes.append(('note', 'NOTE: elbow %s, %.1f ft from the %s, is mitered: '
-                              'ER7-1 read on the r/H %.1f row (Colin, 2026-11-02).'
+                              'ER7-1 read on the r/H %.1f row.'
                               % (did, float(l_ft), where,
                                  fan_system_effect.MITERED_R_OVER_H)))
             return False, g['w_in'], r_in
@@ -3868,7 +3868,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         curb_ft)))
                     tap_warned = role is not None
         if role is None:
-            rec['none'] = 'no elbow within %s (%.1f ft)' % (win_short, win)
+            rec['none'] = 'no elbow within %s (%.1f ft)' % (
+                win_short, fan_system_effect._ceil_step(win))
             # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
             notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
             return rec
