@@ -259,6 +259,21 @@ class SettingsTest(unittest.TestCase):
         self.assertFalse(hasattr(F, 'RED_C'))
         self.assertFalse(hasattr(F, 'WINDOW_FT'))    # fixed window dropped
 
+    def test_scope_fan_velocity(self):
+        # Colin, 2026-11-09: Exhaust System 1500 fpm, every other Scope 2000
+        self.assertEqual(F.scope_fan_fpm('exhaust'), 1500.0)
+        for sc in ('rtu', 'vav', 'vavbox', None):
+            self.assertEqual(F.scope_fan_fpm(sc), 2000.0)
+        self.assertEqual(F.default_settings('exhaust')['fan_fpm'], 1500.0)
+        self.assertEqual(F.default_settings('rtu')['fan_fpm'], 2000.0)
+
+    def test_method_prints_the_fan_velocity_used(self):
+        m, _a = F.method_lines(F.default_settings('exhaust'))
+        self.assertIn('the larger of the fan velocity, 1500 fpm, and the connection', m)
+        m, _a = F.method_lines(dict(F.default_settings(), fan_fpm=1750.0))
+        self.assertIn('the larger of the fan velocity, 1750 fpm, and the connection', m)
+        self.assertNotIn('default fan velocity, 2000', m)
+
     def test_inlet_window_is_the_floor_distance(self):
         # every ED7-2 / ER7-1 row floors at the 5.0 column: 5 D, 5 H
         self.assertAlmostEqual(F.inlet_window_ft(True, 24.0), 10.0)
@@ -306,7 +321,7 @@ class SettingsTest(unittest.TestCase):
         # Colin, 2026-11-03: no duct pick; 5 D RED and the velocity basis named
         self.assertNotIn('duct pick', m.lower())
         self.assertIn('under 2 D', m)
-        self.assertIn('default fan velocity, 2000 fpm', m)   # basis missing: default
+        self.assertIn('the larger of the fan velocity, 2000 fpm', m)   # basis missing: default
         m4, _a4 = F.method_lines(dict(F.default_settings(), velocity_basis='connection'))
         self.assertIn('the connection velocity, cfm over the unit connector', m4)
         self.assertNotIn('default fan velocity', m4)
@@ -582,6 +597,31 @@ class DialogTest(unittest.TestCase):
         order = [e.get(xn) for e in fse.iter() if e.get(xn)]
         self.assertLess(order.index('rb_fan_swsi'), order.index('rb_fan_dwdi'))
         self.assertIn("fan_effect['velocity_basis'] = 'default'", self.src)
+
+    def test_scope_switch_sets_fan_velocity(self):
+        # Colin, 2026-11-09: switching the Scope resets the fan velocity box
+        # to its default, with the fan type; a value typed after holds.
+        import textwrap
+        m = re.search(r'^    def _scope_fan_type\(.*?(?=^    \S)', self.src, re.S | re.M)
+        self.assertIsNotNone(m)
+
+        class Box(object):
+            IsChecked = False
+            Text = ''
+        ns = {'fan_system_effect': F}
+        for n in ('rb_scope_exhaust', 'rb_fan_swsi', 'rb_fan_dwdi', 'tb_fan_fpm'):
+            ns[n] = Box()
+        exec(textwrap.dedent(m.group(0)), ns)
+        ns['rb_scope_exhaust'].IsChecked = True
+        ns['_scope_fan_type']()
+        self.assertEqual((ns['tb_fan_fpm'].Text, ns['rb_fan_swsi'].IsChecked), ('1500', True))
+        ns['rb_scope_exhaust'].IsChecked = False
+        ns['_scope_fan_type']()
+        self.assertEqual((ns['tb_fan_fpm'].Text, ns['rb_fan_dwdi'].IsChecked), ('2000', True))
+        # the plain fallback dialog takes the Scope's default too
+        self.assertIsNotNone(re.search(
+            r"fan_system_effect\.default_settings\(\s+'exhaust' if bool\(rb_exhaust\.IsChecked\)",
+            self.src))
 
     def test_scope_is_one_choice(self):
         # Colin, 2026-11-03: Scope is RTU, VAV System or Exhaust System, one

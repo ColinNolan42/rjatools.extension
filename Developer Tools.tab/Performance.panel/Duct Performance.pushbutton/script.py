@@ -312,11 +312,11 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Fan velocity, fpm. Must be greater than 0."/>
+                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System, 2000 fpm RTU, VAV System and VAV Box."/>
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="The unit connection velocity (cfm over the connector area) is used when it is higher."/>
+                                       Text="Set by the Scope: 1500 fpm Exhaust System, 2000 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
@@ -911,9 +911,12 @@ def _show_velocity_settings_xaml(use_theme):
                               '(SWSI tables, an assumption for DWDI), at r/D and L/D. '
                               'The straight duct, any transition on it and the first '
                               'elbow are charged once, the larger of the fan system '
-                              'effect and their own losses. Velocity: the '
-                              'larger of the default fan velocity and the connection '
-                              'velocity, or the connection alone. Added before the '
+                              'effect and their own losses. Velocity at an outlet, '
+                              'and at an inline or roof exhaust fan inlet: the larger '
+                              'of the fan velocity (default by the Scope, 1500 fpm '
+                              'Exhaust System, 2000 fpm otherwise) and the connection '
+                              'velocity; at a cabinet unit inlet (RTU, AHU, furnace, '
+                              'fan coil) the connection velocity. Added before the '
                               'safety factor. Transitions are priced as fittings, '
                               'taps flagged, not priced. An elbow under 0.5 Le of an '
                               'outlet, or under 2 D of an inlet, is red with the '
@@ -979,13 +982,16 @@ def _show_velocity_settings_xaml(use_theme):
         cb.Unchecked += sync_enable
     sync_enable()
 
-    # Fan type follows the Scope (Colin, 2026-11-03): RTU and VAV System
-    # DWDI, Exhaust System SWSI. Set only when the Scope changes, so a manual
-    # pick holds until the Scope changes again.
+    # Fan type and fan velocity follow the Scope (Colin, 2026-11-03 and
+    # 2026-11-09): RTU and VAV System DWDI at 2000 fpm, Exhaust System SWSI
+    # at 1500 fpm. Set only when the Scope changes, so a value typed after
+    # the switch holds for the run.
     def _scope_fan_type(s=None, e=None):
         swsi = bool(rb_scope_exhaust.IsChecked)
         rb_fan_swsi.IsChecked = swsi
         rb_fan_dwdi.IsChecked = not swsi
+        tb_fan_fpm.Text = '%g' % fan_system_effect.scope_fan_fpm(
+            'exhaust' if swsi else None)
     for rb in (rb_scope_rtu, rb_scope_vav, rb_scope_vavbox, rb_scope_exhaust):
         rb.Checked += _scope_fan_type
 
@@ -1807,7 +1813,9 @@ def _show_velocity_settings_dialog_legacy():
                                          # no fan fields here: the fan type
                                          # follows the Scope (Colin, 2026-11-03)
                                          fan_effect=dict(
-                                             fan_system_effect.default_settings(),
+                                             fan_system_effect.default_settings(
+                                                 'exhaust' if bool(rb_exhaust.IsChecked)
+                                                 else None),
                                              fan_type='SWSI' if bool(rb_exhaust.IsChecked)
                                              else 'DWDI'),
                                          exhaust_cap=ext_static and bool(cb_exh_cap.IsChecked),

@@ -127,6 +127,7 @@ BLAST_RATIO_MAX = 1.0
 VELOCITY_BASES = ('default', 'connection')
 DEFAULT_VELOCITY_BASIS = 'default'
 DEFAULT_FAN_FPM = 2000.0     # default fan velocity, firm value (Colin, 2026-11-03)
+EXHAUST_FAN_FPM = 1500.0     # Exhaust System Scope default (Colin, 2026-11-09)
 OUTLET_RED_RATIO = 0.5       # an elbow under 0.5 Le of a unit outlet is RED
 INLET_RED_D = 2.0            # an elbow under 2 D of a unit inlet is RED
 INLET_FLOOR_D = 5.0          # where the inlet tables stop falling (the note)
@@ -181,12 +182,19 @@ def where_text(sys_class, role):
     return '%s %s' % (_CLASS_WORD.get(sys_class, (sys_class or '').lower()), role)
 
 
-def default_settings():
+def scope_fan_fpm(scope=None):
+    """The fan velocity default for a Duct Performance Scope (Colin,
+    2026-11-09): EXHAUST_FAN_FPM on Exhaust System, DEFAULT_FAN_FPM on RTU,
+    VAV System and VAV Box."""
+    return EXHAUST_FAN_FPM if scope == 'exhaust' else DEFAULT_FAN_FPM
+
+
+def default_settings(scope=None):
     """The dialog defaults: on, DWDI, blast area ratio 0.5, the default fan
-    velocity basis at DEFAULT_FAN_FPM."""
+    velocity basis at the Scope's fan velocity (scope_fan_fpm)."""
     return {'on': True, 'fan_type': DEFAULT_FAN_TYPE,
             'blast_ratio': DEFAULT_BLAST_RATIO,
-            'velocity_basis': DEFAULT_VELOCITY_BASIS, 'fan_fpm': DEFAULT_FAN_FPM}
+            'velocity_basis': DEFAULT_VELOCITY_BASIS, 'fan_fpm': scope_fan_fpm(scope)}
 
 
 def parse_fan_fpm(text):
@@ -723,7 +731,7 @@ def method_lines(settings):
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
                   MITERED_R_OVER_H))
     if settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
-        method += (' Velocity at an outlet: the larger of the default fan velocity, '
+        method += (' Velocity at an outlet: the larger of the fan velocity, '
                    '%.0f fpm, and the connection velocity (cfm over the unit connector '
                    'area). At an inlet: the connection velocity, except on exhaust '
                    'fans (inline, roof): the larger of the fan velocity and the '
