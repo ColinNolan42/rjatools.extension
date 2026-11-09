@@ -609,22 +609,21 @@ def cabinet_warn_ft(size_in):
     return CABINET_WARN_D * float(size_in) / 12.0
 
 
-def cabinet_warn_text(where, eid, l_ft, size_in, is_round=True, source=None,
-                      source_short=None):
+def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn):
     """The WARNING for an elbow under CABINET_WARN_D x D of a cabinet unit
     inlet (RTU, AHU, furnace, fan coil), past the 2 D RED line (Colin,
-    2026-11-09): the connection velocity it is priced at holds only with 3 D
-    of straight duct. Same D / H and source as inlet_red_text."""
+    2026-11-09): under 3 D the elbow causes a fan system effect the tool does
+    not price, since the inlet is priced at its connection (opening)
+    velocity, so the external static shown is low. Same D / H as
+    inlet_red_text; v_conn the connection velocity, fpm."""
     dim = 'D' if is_round else 'H'
-    of = (', ' + source) if source else ''
-    of_short = (' of ' + source_short) if source_short else ''
-    return ('%s%s, %.1f ft from the %s, %.1f %s (%s %.0f in.%s). Provide at least %.1f ft '
-            'of straight duct (%.0f %s%s). A cabinet inlet is priced at its connection '
-            'velocity, not the fan velocity, only with %.0f %s of straight duct or more.'
+    return ('%s%s is %.1f ft from the %s; provide at least %.1f ft of straight duct '
+            '(%.0f %s, %s %.0f in.). Under %.0f %s the elbow causes a fan system effect '
+            'that is not priced (the inlet is priced at its %.0f fpm opening velocity), '
+            'so the external static shown is low until the elbow is moved.'
             % (CABINET_WARN_PREFIX, eid, float(l_ft), where,
-               float(l_ft) * 12.0 / float(size_in), dim, dim, float(size_in), of,
-               _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, dim, of_short,
-               CABINET_WARN_D, dim))
+               _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, dim, dim,
+               float(size_in), CABINET_WARN_D, dim, float(v_conn)))
 
 
 def straight_duct_reason(eid, l_ft, role, dim='D'):
@@ -683,13 +682,19 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
     head = ('NOTE: %s, elbow %s at %.1f ft%s: fan system effect %.3f in. wc, %s %.3f '
             'in. wc. ' % (where, eid, float(l_ft), ratio, float(fse_inwc), group,
                           float(own_inwc)))
-    tail = ('; under %.0f %s, see the WARNING.' % (CABINET_WARN_D, warn_dim)
-            if warn_dim else '.')
+    if warn_dim:
+        # the cabinet inlet 3 D WARNING fired on this elbow (Colin, 2026-11-09)
+        under = '%.0f %s' % (CABINET_WARN_D, warn_dim)
+        if fse_wins:
+            return head + ('Fan system effect charged at the opening velocity, the %s are '
+                           'not charged again; under %s the full fan system effect is not '
+                           'priced, see the WARNING.' % (group, under))
+        return head + ('%s charged at their own losses; the fan system effect under %s is '
+                       'not priced, see the WARNING.' % (group[0].upper() + group[1:], under))
     if fse_wins:
-        return head + ('Fan system effect charged, the %s are not charged again%s'
-                       % (group, tail))
-    return head + ('%s charged at their own losses, no fan system effect%s'
-                   % (group[0].upper() + group[1:], tail))
+        return head + 'Fan system effect charged, the %s are not charged again.' % group
+    return head + ('%s charged at their own losses, no fan system effect.'
+                   % (group[0].upper() + group[1:]))
 
 
 # ── report text ──────────────────────────────────────────────────────────────
@@ -775,8 +780,9 @@ def method_lines(settings):
                    '%.0f fpm, and the connection velocity (cfm over the unit connector '
                    'area). At an inlet: the connection velocity on a cabinet unit '
                    '(RTU, AHU, furnace, fan coil), the fan sits past the filter and '
-                   'coil, with at least 3 D of straight duct before the first elbow '
-                   '(a WARNING when less); on exhaust fans (inline, roof), where the duct meets the '
+                   'coil, with at least 3 D of straight duct before the first elbow; '
+                   'closer, the elbow\'s fan system effect is not priced and a WARNING '
+                   'says so; on exhaust fans (inline, roof), where the duct meets the '
                    'fan, the larger of the fan velocity and the connection velocity.'
                    % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
     else:

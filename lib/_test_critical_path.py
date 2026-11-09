@@ -2992,16 +2992,36 @@ def _w81(leaf):
 
 _r81 = _run81(2.4)
 check("case81 cabinet inlet elbow at 2.4 ft (2 H 2.0, 3 H 3.0): the 3 H WARNING, not RED",
-      _w81(_r81) == ["WARNING: Elbow 4702, 2.4 ft from the return inlet, 2.4 H (H 12 in., "
-                     "the elbow's side in the plane of its turn). Provide at least 3.0 ft of "
-                     "straight duct (3 H of the elbow). A cabinet inlet is priced at its "
-                     "connection velocity, not the fan velocity, only with 3 H of straight "
-                     "duct or more."]
+      _w81(_r81) == ["WARNING: Elbow 4702 is 2.4 ft from the return inlet; provide at least "
+                     "3.0 ft of straight duct (3 H, H 12 in.). Under 3 H the elbow causes a "
+                     "fan system effect that is not priced (the inlet is priced at its 800 "
+                     "fpm opening velocity), so the external static shown is low until the "
+                     "elbow is moved."]
       and not _r81.get('fse_red_ids'), "notes %r red %r" % (_r81.get('fse_notes'),
                                                              _r81.get('fse_red_ids')))
 _g81 = [t for _k, t in _r81.get('fse_gov_notes', ())]
 check("case81 the governs NOTE points to the WARNING",
-      len(_g81) == 1 and _g81[0].endswith('; under 3 H, see the WARNING.'), "gov %r" % (_g81,))
+      len(_g81) == 1 and (
+          _g81[0].endswith('charged at their own losses; the fan system effect under 3 H is '
+                           'not priced, see the WARNING.')
+          or _g81[0].endswith('Fan system effect charged at the opening velocity, the '
+                              'straight duct and elbow are not charged again; under 3 H the '
+                              'full fan system effect is not priced, see the WARNING.')),
+      "gov %r" % (_g81,))
+# both governs wordings, straight from the text builder
+_gw = FSE.governs_text(True, 1, 2.4, 'return inlet', 0.05, 0.01, 5.0, '5 H',
+                       transition=True, warn_dim='H')
+_go = FSE.governs_text(False, 1, 2.4, 'return inlet', 0.01, 0.05, 5.0, '5 H',
+                       transition=True, warn_dim='D')
+check("case81 governs wordings with the WARNING",
+      _gw.endswith('Fan system effect charged at the opening velocity, the straight duct, '
+                   'transition and elbow are not charged again; under 3 H the full fan '
+                   'system effect is not priced, see the WARNING.')
+      and _go.endswith('Straight duct, transition and elbow charged at their own losses; the '
+                       'fan system effect under 3 D is not priced, see the WARNING.')
+      and FSE.governs_text(False, 1, 2.4, 'return inlet', 0.01, 0.05, 5.0, '5 H')
+      .endswith('charged at their own losses, no fan system effect.'),
+      "%r / %r" % (_gw, _go))
 _r81r = _run81(1.9)
 check("case81 elbow at 1.9 ft: RED only, no WARNING; Reason says 2 H",
       not _w81(_r81r) and 4702 in (_r81r.get('fse_red_ids') or set())

@@ -3661,7 +3661,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         if (cabinet_in and e_r == first_elbow
                                 and l_r < fan_system_effect.cabinet_warn_ft(size_e) - 1e-9):
                             notes.append(('warn', fan_system_effect.cabinet_warn_text(
-                                where, e_r, l_r, size_e, is_round_c, src_l, src_s)))
+                                where, e_r, l_r, size_e, is_round_c, v_conn)))
                             rec['warn3'] = (e_r, 'D' if is_round_c else 'H')
                         continue
                     notes.append(('red', fan_system_effect.inlet_red_text(

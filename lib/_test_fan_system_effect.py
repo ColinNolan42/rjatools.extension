@@ -302,8 +302,8 @@ class SettingsTest(unittest.TestCase):
         self.assertIn('charged once, as the larger of the fan system effect', m)
         self.assertIn('At an inlet: the connection velocity on a cabinet unit (RTU, AHU, '
                       'furnace, fan coil), the fan sits past the filter and coil, with at '
-                      'least 3 D of straight duct before the first elbow (a WARNING when '
-                      'less); on '
+                      'least 3 D of straight duct before the first elbow; closer, the '
+                      "elbow's fan system effect is not priced and a WARNING says so; on "
                       'exhaust fans (inline, roof), where the duct meets the fan, the larger '
                       'of the fan velocity and the connection velocity.', m)
         self.assertEqual(F.cabinet_inlet_text('return inlet at element 7', 812.4),
