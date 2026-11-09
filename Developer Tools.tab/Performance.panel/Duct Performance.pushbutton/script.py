@@ -2616,15 +2616,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         tapafter_cache[duct_id] = after
         return tapflow_cache[duct_id]
 
-    def _floor_return(loss, sys_class, what):
-        """(loss, notes). ASHRAE prints negative converging junction C for
-        the slower stream, a credit. On return and exhaust a tap loss is
-        floored at zero for external static, a conservative estimate (Colin,
-        2026-10-23); the report names each one floored."""
-        if loss < 0.0 and not vav_checks.is_supply_class(sys_class):
-            return 0.0, ['%s %.3f in. wc from the 2001 table, floored at 0'
-                         % (what, loss)]
-        return loss, []
+    def _tap_c_positive(c_table, c_ws, table, what):
+        """(C used, FALLBACK text or None). A tap never reduces the system
+        and always carries some loss (Colin, 2026-11-09): a 2001 table C of
+        0 or less (ASHRAE prints negative junction C for the slower stream,
+        supply or return) is replaced by the RJA worksheet C for the same
+        case, applied at the same Pv. A positive table C stays as read.
+        Replaces the 2026-10-23 floor at 0 on return and exhaust."""
+        if c_table > 0.0:
+            return c_table, None
+        return c_ws, ('FALLBACK: %s, 2001 %s %.2f is not positive; RJA worksheet C '
+                      '%.2f used' % (what, table, c_table, c_ws))
 
     tapprice_cache = {}
     def _tap_turn(tap_id):
@@ -2636,7 +2638,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         at the Ab/Ac the table was read at (Eq. 34), so ER5-2 / ER5-3 keep
         their printed Ab/Ac 0.5 geometry; the loss is Cc,b x the main's Pv
         (Colin, 2026-10-23: mains are designed at 600 fpm return and 800 fpm
-        supply, low pressure). Return and exhaust losses floor at zero."""
+        supply, low pressure). A Cc,b of 0 or less takes the RJA worksheet C
+        instead (_tap_c_positive, Colin, 2026-11-09)."""
         if tap_id in tapprice_cache:
             return tapprice_cache[tap_id]
         res = None
@@ -2688,12 +2691,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     main_d_in=_round_d_in(dr))
                 if cb is not None:
                     vc = qc / dr.area_ft2
-                    loss, fl = _floor_return(
-                        cb * hvac_graph.velocity_pressure_inwg(vc), dr.sys_class,
-                        'tap %s branch loss' % tap_id)
-                    res = (loss, '%s at main %.0f fpm' % (label, vc),
+                    c_use, fb = _tap_c_positive(
+                        cb, fitting_tables.takeoff_c(dr.sys_class, c=c_values),
+                        label.split(' ')[0] + ' Cc,b',
+                        'tap %s into branch off duct %s' % (tap_id, main))
+                    if fb is None:
+                        detail = '%s at main %.0f fpm' % (label, vc)
+                    else:
+                        # The worksheet C is the one the take-off reads
+                        # (_takeoff_key: 'RJA worksheet', C from 'C x.xx').
+                        detail = ('RJA worksheet tap into branch, C %.2f at main %.0f fpm'
+                                  % (c_use, vc))
+                    res = (c_use * hvac_graph.velocity_pressure_inwg(vc), detail,
                            _located('tap %s on main %s (%s %s)' % (
-                               tap_id, main, dr.sys_class, getattr(dr, 'size', '')), notes) + fl)
+                               tap_id, main, dr.sys_class, getattr(dr, 'size', '')), notes)
+                           + ([fb] if fb else []))
         tapprice_cache[tap_id] = res
         return res
 
@@ -2733,10 +2745,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 ab / dr.area_ft2 if ab else None, main_d_in=_round_d_in(dr))
             if cs is not None:
                 vc = qc / dr.area_ft2
-                one, fl = _floor_return(
-                    cs * hvac_graph.velocity_pressure_inwg(vc), dr.sys_class,
-                    'tap %s straight-through loss' % t)
-                res = (one, lbl.split(' ')[0] + ' Cc,s', cs, fl, None)
+                c_use, fb = _tap_c_positive(
+                    cs, fitting_tables.takeoff_main_c(dr.sys_class, c_values),
+                    lbl.split(' ')[0] + ' Cc,s', 'tap %s passed on duct %s' % (t, duct_id))
+                res = (c_use * hvac_graph.velocity_pressure_inwg(vc),
+                       'RJA worksheet' if fb else lbl.split(' ')[0] + ' Cc,s', c_use, [], fb)
         if res is None:
             c_ws = fitting_tables.takeoff_main_c(dr.sys_class, c_values)
             one = c_ws * hvac_graph.velocity_pressure_inwg(dr.fpm)
@@ -3002,7 +3015,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if role == 'takeoff' and nid is not None:
             t = _tap_turn(nid)
             if t is not None:
-                return t[0], 1, _notes_text(t[2]), None, t[1]
+                # A FALLBACK line leads, so it is an Action required line
+                # (duct_perf_console.correction_group reads the lead).
+                fbs = [n for n in t[2] if n and n.startswith('FALLBACK')]
+                rest = _notes_text([n for n in t[2] if n and not n.startswith('FALLBACK')])
+                text = '; '.join(fbs + ([rest] if rest else [])) or None
+                return t[0], 1, text, None, t[1]
         reversed_walk = against_flow != fitting_tables.flows_toward_unit(sys_class)
         if role in ('elbow', 'transition') and not (role == 'transition' and reversed_walk):
             a = _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area,
@@ -6429,9 +6447,11 @@ def main():
                    'at the section o Pv; taps SR5/SD5/ER5/ED5, printed Cb and Cs '
                    'converted to the main Pv at the geometry each table was read at, '
                    'Eq. 34, ER5-2 and ER5-3 at their printed Ab/Ac 0.5). Unbroken '
-                   'main: As/Ac read on the 0.9 row. Return and exhaust tap losses '
-                   'floored at 0. RJA SP_LOSS_WORKSHEET C where geometry is '
-                   'unreadable (FALLBACK).'.format(
+                   'main: As/Ac read on the 0.9 row. A tap C of 0 or less from the '
+                   '2001 tables is replaced by the RJA worksheet C (FALLBACK). The '
+                   '2001 book has no round shoe (boot) table on a round main; ED5-2 / '
+                   'SD5-1 (45 deg wye) stand in for it. RJA SP_LOSS_WORKSHEET C where '
+                   'geometry is unreadable (FALLBACK).'.format(
                        calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                        calc_basis['air_density']))
         _fse_method, _fse_assume = fan_system_effect.method_lines(fan_effect)

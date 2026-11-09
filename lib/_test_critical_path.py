@@ -1084,10 +1084,12 @@ check("case28 and costs Cc,s x main Pv (1000 fpm), about 0.04 in. wc, not 3.2",
 
 
 # 29: ER5-3 at its printed geometry (Ab/Ac 0.5), whatever the real branch,
-#     and return tap losses floored at zero (Colin, 2026-10-23).
+#     and a tap C of 0 or less replaced by the RJA worksheet C (Colin,
+#     2026-11-09, was floored at zero).
 #   Small grille branch: 300 of 3000 cfm (Qb/Qc 0.1) through a 0.35 ft2 branch
 #   on a 4 ft2 return main (real Ab/Ac 0.09). Printed Cb -18.00 at Qb/Qc 0.1;
-#   at the printed Ab/Ac 0.5, Cc,b = -18 x (0.1/0.5)^2 = -0.72, floored to 0.
+#   at the printed Ab/Ac 0.5, Cc,b = -18 x (0.1/0.5)^2 = -0.72, so the
+#   worksheet exhaust_tap_branch 0.76 x the main Pv is charged instead.
 ccb29, _l, _n = A.tap_branch_c(False, 'rect', 'rect', True, 0.09, 0.1)
 check("case29 ER5-3 is read at its printed Ab/Ac 0.5: Cc,b -0.72, not -18 x (0.1/0.09)^2",
       abs(ccb29 - (-18.0 * (0.1 / 0.5) ** 2)) < 1e-9, "got %r" % ccb29)
@@ -1102,10 +1104,16 @@ d29 = build([(500, 0.0, 10.0, 750.0, 4.0, 'Return Air'),
              (511, 0.0, 5.0, 857.0, 0.35, 'Return Air')])
 t29 = {521: (300.0, 'Return Air', 'RG-1')}
 ra29 = crit([499], ch29, d29, t29, n29).get(499, {}).get('Return Air', {})
-check("case29 the negative return tap loss is floored at 0 and named in the report",
-      abs(ra29.get('fitting_inwc', -1)) < 1e-12
-      and any('floored at 0' in u for u in ra29.get('unpriced', ())),
-      "fit %r notes %r" % (ra29.get('fitting_inwc'), ra29.get('unpriced')))
+check("case29 a negative return tap Cc,b takes the worksheet C 0.76 x the main Pv",
+      abs(ra29.get('fitting_inwc', -1)
+          - fitting_tables.DEFAULT_C['exhaust_tap_branch'] * pv(750.0)) < 1e-12,
+      "fit %r" % (ra29.get('fitting_inwc'),))
+check("case29 FALLBACK line names the tap, the table value and the worksheet C",
+      any(u.startswith('FALLBACK: tap 501 into branch off duct 500, 2001 ER5-3 Cc,b '
+                       '-0.72 is not positive; RJA worksheet C 0.76 used')
+          for u in ra29.get('unpriced', ()))
+      and not any('floored' in u for u in ra29.get('unpriced', ())),
+      "notes %r" % (ra29.get('unpriced'),))
 
 # 30: a main that ends in a tap is a turn into the branch (Colin, 2026-10-26):
 #     priced as a 90 degree CR3-1 elbow (r/W 1.5, H/W as drawn) at the main's Pv,
@@ -2822,6 +2830,64 @@ check("case78 inlet governs NOTE: L/5 H on the elbow's own H (16 in.): 0.21",
       and '(L/5 H 0.21)' in _g78[0], "gov %r" % (_g78,))
 check("case78 the RED line names the same 5 H, 6.7 ft",
       any('6.7 ft (5 H)' in t for t in _red78), "red %r" % (_red78,))
+
+# 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
+#     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round
+#     main), 100 of 1000 cfm off it. The run carrying on past it (Qs/Qc 0.9,
+#     made the index run by a long duct after the tap) reads a negative
+#     ED5-2 Cc,s: the worksheet exhaust_tap_main 0.60 x the main Pv is
+#     charged, FALLBACK said. The branch side reads a negative Cc,b too and
+#     takes exhaust_tap_branch 0.76. A supply run through the same geometry
+#     reads a positive SD5-1 Cc,s, kept as read.
+RD12A = math.pi * 0.25
+ch79 = {799: [700], 700: [701, 702], 701: [711], 711: [721], 702: [722]}
+n79 = {700: Elem(kind='duct', tap_pos={701: 2.0}),
+       701: Elem(kind='tap', family_name='Round Takeoff - Shoe', is_round=True),
+       711: Elem(kind='duct'), 702: Elem(kind='duct')}
+
+
+def _run79(cls, branch=False):
+    d = build([(700, 0.0, 10.0, 1000.0 / RD12A, RD12A, cls),
+               (711, 2.0 if branch else 0.0, 5.0, 100.0 / 0.2, 0.2, cls),
+               (702, 0.0 if branch else 2.0, 10.0, 900.0 / RD12A, RD12A, cls)])
+    for _dr in d.values():
+        _dr.size = '12"dia' if _dr.element_id != 711 else '6"dia'
+    t = {721: (100.0, cls, 'G-79a'), 722: (900.0, cls, 'G-79b')}
+    return crit([799], ch79, d, t, n79).get(799, {}).get(cls, {})
+
+
+ra79 = _run79('Return Air')
+_tp79 = [i for i in ra79.get('items', ()) if i[0] == 'Tap passed']
+_fb79 = [u for u in ra79.get('unpriced', ())
+         if re.match(r'FALLBACK: tap 701 passed on duct 700, 2001 ED5-2 Cc,s -\d+\.\d\d '
+                     r'is not positive; RJA worksheet C 0\.60 used$', u)]
+check("case79 return, run past the tap: the worksheet 0.60 x main Pv, not the credit",
+      ra79.get('terminal_id') == 722 and len(_tp79) == 1
+      and abs(_tp79[0][3] - fitting_tables.DEFAULT_C['exhaust_tap_main']
+              * pv(1000.0 / RD12A)) < 1e-12
+      and _tp79[0][4][1] == 'RJA worksheet' and abs(_tp79[0][4][2] - 0.60) < 1e-12,
+      "end %r tap rows %r" % (ra79.get('terminal_id'), _tp79))
+check("case79 FALLBACK: tap 701 passed on duct 700, 2001 ED5-2 Cc,s <negative> is not "
+      "positive; RJA worksheet C 0.60 used", len(_fb79) == 1,
+      "notes %r" % (ra79.get('unpriced'),))
+rb79 = _run79('Return Air', branch=True)
+check("case79 return, run through the branch: negative ED5-2 Cc,b takes the worksheet "
+      "0.76, FALLBACK said",
+      rb79.get('terminal_id') == 721
+      and any(re.match(r'FALLBACK: tap 701 into branch off duct 700, 2001 ED5-2 Cc,b '
+                       r'-\d+\.\d\d is not positive; RJA worksheet C 0\.76 used$', u)
+              for u in rb79.get('unpriced', ()))
+      and abs(rb79['fitting_inwc'] - fitting_tables.DEFAULT_C['exhaust_tap_branch']
+              * pv(1000.0 / RD12A)) < 1e-12,
+      "fit %r notes %r" % (rb79.get('fitting_inwc'), rb79.get('unpriced')))
+sa79 = _run79('Supply Air')
+_tps79 = [i for i in sa79.get('items', ()) if i[0] == 'Tap passed']
+check("case79 supply, a positive SD5-1 Cc,s stays as read, no FALLBACK",
+      len(_tps79) == 1 and _tps79[0][4][1].startswith('SD5-1')
+      and _tps79[0][4][2] > 0.0
+      and abs(_tps79[0][3] - _tps79[0][4][2] * pv(1000.0 / RD12A)) < 1e-12
+      and not any(u.startswith('FALLBACK: tap 701') for u in sa79.get('unpriced', ())),
+      "tap rows %r notes %r" % (_tps79, sa79.get('unpriced')))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
