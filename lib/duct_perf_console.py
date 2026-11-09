@@ -463,7 +463,7 @@ def corrections_sheet(entries):
 def summary_band_text(rec):
     """The System Summary grand totals as one line for the right end of the
     sheet's SYSTEM SUMMARY band, e.g. 'Supply CFM 5,250 | Return CFM 1,200 |
-    Diffusers 14 | Ducts 60'."""
+    Total Diffusers/Grilles 18 | Ducts 60'."""
     return ' | '.join('{} {}'.format(label, value)
                       for label, value in rec.get('grand') or [])
 
