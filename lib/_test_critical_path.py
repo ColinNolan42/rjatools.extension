@@ -2872,6 +2872,59 @@ check("case78c own losses govern: basis 'L 1.3 / 5 D 3.3 ft (D 8 in., the elbow)
       and _f78c[0][4][1].endswith(', L 1.3 / 5 D 3.3 ft (D 8 in., the elbow)'),
       "rows %r" % (_f78c,))
 
+# 80: exhaust fan inlets take the fan velocity basis (Colin, 2026-11-09):
+#     an inline exhaust fan, 12 in. round intake connection, 500 cfm (500
+#     fpm at the connection as this harness reads it), a 12 in. round elbow
+#     at L/D 2 (2.0 ft). Priced
+#     at Pv(2000 fpm) with the fan velocity NOTE. An RTU return inlet of the
+#     same geometry stays at its connection velocity, no NOTE.
+RD12 = {'round': True, 'area_ft2': math.pi / 4.0, 'd_in': 12.0, 'w_in': None, 'h_in': None}
+FSE80 = dict(FSE_ON, fan_type='SWSI', velocity_basis='default', fan_fpm=2000.0)
+
+
+def _net80(cls):
+    n = {4600: _unit({4601: RD12, 4602: RD12}),
+         4603: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                    geom={'round': True, 'd_in': 12.0, 'r_in': 18.0, 'w_in': None,
+                          'h_in': None, 'angle': 90.0})}
+    c = {4600: [4601, 4602], 4601: [4603], 4603: [4604], 4604: [4610], 4602: [4605],
+         4605: []}
+    d = build([(4601, 0.0, 2.0, 500.0, math.pi / 4.0, cls),
+               (4604, 0.0, 10.0, 500.0, math.pi / 4.0, cls),
+               (4602, 0.0, 10.0, 0.0, math.pi / 4.0, cls)])
+    for _r in d.values():
+        _r.d_h_in = 12.0
+    return n, c, d, {4610: (500.0, cls, 'G-80')}
+
+
+_n80, _c80, _d80, _t80 = _net80('Exhaust Air')
+ef80 = crit([4600], _c80, _d80, _t80, _n80, 10.0, fan_effect=FSE80,
+            inline_fan_roots={4600})[4600]['Exhaust Air']
+_rows80 = _fse_items(ef80)
+_vn80 = [t for _k, t in ef80.get('fse_notes', ()) if 'priced at the default fan velocity' in t]
+check("case80 inline exhaust fan inlet elbow at L/D 2: priced at Pv(2000 fpm)",
+      any(abs((i[2] or 0) - 2000.0) < 1e-6 for i in _rows80)
+      and abs(ef80.get('fse_inwc', 0.0) -
+              max(i[3] for i in _rows80)) < 1e-12,
+      "rows %r fse %r" % (_rows80, ef80.get('fse_inwc')))
+check("case80 inline exhaust fan inlet: the fan velocity NOTE, 2000 fpm over 500 fpm",
+      len(_vn80) == 1 and _vn80[0] == 'NOTE: fan system effect at the exhaust inlet at '
+      'element 4601 priced at the default fan velocity, 2000 fpm, greater than the '
+      'connection velocity of 500 fpm.', "notes %r" % (_vn80,))
+_nr, _cr, _dr80, _tr = _net80('Return Air')
+rtu80 = _fse_run(_nr, _cr, _dr80, _tr, 4600, fan=FSE80, cls='Return Air')
+_rr80 = _fse_items(rtu80)
+check("case80 RTU return inlet, same geometry: connection velocity (500 fpm), no fan NOTE",
+      _rr80 and all(abs((i[2] or 0) - 500.0) < 1e-6 for i in _rr80)
+      and not any('priced at the default fan velocity' in t
+                  for _k, t in rtu80.get('fse_notes', ())),
+      "rows %r" % (_rr80,))
+_c80r = (_rows80[0][3] / hvac_graph.velocity_pressure_inwg(2000.0)) if _rows80 else None
+_c80c = (_rr80[0][3] / hvac_graph.velocity_pressure_inwg(500.0)) if _rr80 else None
+check("case80 same ED7-2 C either way, only Pv changes",
+      _c80r is not None and _c80c is not None and abs(_c80r - _c80c) < 1e-9,
+      "C %r vs %r" % (_c80r, _c80c))
+
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round
 #     main), 100 of 1000 cfm off it. The run carrying on past it (Qs/Qc 0.9,

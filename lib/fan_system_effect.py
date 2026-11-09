@@ -86,8 +86,10 @@ RJA DECISIONS (Colin, 2026-11-03):
     'connection': the connection velocity alone. The velocity sets Pv, the
     loss, the GRAY check and the outlet Le. The transitions passed between
     the unit and the first disruption are priced at the same velocity.
-    Outlets only (Colin, 2026-11-04): an inlet always uses its connection
-    velocity.
+    Outlets, and the inlet of an inline or roof exhaust fan, whose duct
+    right at the inlet runs at about the fan's speed (Colin, 2026-11-09). A
+    cabinet unit's inlet (RTU, AHU, furnace, fan coil) uses its connection
+    velocity (Colin, 2026-11-04).
   - Straight duct check, RED for the engineer, still priced as above
     (Colin, 2026-11-03, .claude/docs/Duct Velocity/FAN_SYSTEM_EFFECT_PLAN.md
     section C): an elbow under OUTLET_RED_RATIO x Le of a unit OUTLET (Le
@@ -723,7 +725,9 @@ def method_lines(settings):
     if settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
         method += (' Velocity at an outlet: the larger of the default fan velocity, '
                    '%.0f fpm, and the connection velocity (cfm over the unit connector '
-                   'area). At an inlet: the connection velocity.'
+                   'area). At an inlet: the connection velocity, except on exhaust '
+                   'fans (inline, roof): the larger of the fan velocity and the '
+                   'connection velocity.'
                    % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
     else:
         method += (' Velocity: the connection velocity, cfm over the unit connector '

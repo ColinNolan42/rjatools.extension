@@ -3555,11 +3555,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                           % (where, getattr(flow, 'size', '?'))))
         # Velocity basis (Colin, 2026-11-03): the larger of the default fan
         # velocity and the connection's, or the connection's alone. It sets
-        # Pv, the outlet Le and the transitions passed below. Outlets only
-        # (Colin, 2026-11-04): an inlet is priced at its own connection
-        # velocity, cfm over the connection area.
+        # Pv, the outlet Le and the transitions passed below. Outlets, and
+        # the inlet of an inline or roof exhaust fan, whose duct right at the
+        # inlet runs at about the fan's speed (Colin, 2026-11-09). A cabinet
+        # unit's inlet (RTU, AHU, furnace, fan coil: filter and coil before
+        # the fan) is priced at its own connection velocity, cfm over the
+        # connection area (Colin, 2026-11-04).
         v_conn = cfm / area
-        if role_here == fan_system_effect.OUTLET:
+        if (role_here == fan_system_effect.OUTLET
+                or root_id in inline_fan_roots):
             v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
         else:
             v, fan_gov = v_conn, False

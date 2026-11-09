@@ -285,7 +285,9 @@ class SettingsTest(unittest.TestCase):
         m, a = F.method_lines({'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5})
         self.assertIn('SR7-9 to SR7-12', m)
         self.assertIn('charged once, as the larger of the fan system effect', m)
-        self.assertIn('At an inlet: the connection velocity', m)
+        self.assertIn('At an inlet: the connection velocity, except on exhaust fans '
+                      '(inline, roof): the larger of the fan velocity and the connection '
+                      'velocity.', m)
         self.assertIn('in the plane of the turn', m)
         self.assertEqual(len(a), 1)
         self.assertTrue(a[0].startswith('ASSUMPTION'))
