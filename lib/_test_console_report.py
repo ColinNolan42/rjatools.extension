@@ -337,6 +337,53 @@ class DuctPerfSectionTests(unittest.TestCase):
         self.assertNotIn('Diffuser types', html)
         self.assertIn('RTU-1 (id 1)', html)
 
+    def test_grand_rows_per_system(self):
+        """Colin, 2026-11-09: one CFM line per system present, never summed,
+        then Total Diffusers/Grilles and Ducts."""
+        rows = dpc.grand_rows({'Return Air': 1200.0, 'Supply Air': 5250.0,
+                               'Outside Air': 0.0}, 18, 60)
+        self.assertEqual(rows, [('Supply CFM', '5,250'), ('Return CFM', '1,200'),
+                                ('Total Diffusers/Grilles', '18'), ('Ducts', '60')])
+        self.assertEqual(dpc.grand_rows({'Exhaust Air': 700.0}, 5, 9)[0],
+                         ('Exhaust CFM', '700'))
+        self.assertIn(('Transfer Air CFM', '150'),
+                      dpc.grand_rows({'Supply Air': 900.0, 'Transfer Air': 150.0}, 4, 6))
+        self.assertEqual(dpc.summary_band_text({'grand': rows}),
+                         'Supply CFM 5,250 | Return CFM 1,200 | '
+                         'Total Diffusers/Grilles 18 | Ducts 60')
+
+    def test_scope_wording(self):
+        """Colin, 2026-11-09: labels follow the Scope; an exhaust run never
+        reads Supply or Diffusers, and drops the other air column."""
+        legend = {'limits': [], 'legend': [['Red', '1', '0', 'x']]}
+        exp = {'rtu': ('Supply CFM', 'Terminals'), 'vav': ('Supply CFM', 'Terminals'),
+               'vavbox': ('Box discharge CFM', 'Diffusers'),
+               'exhaust': ('Exhaust CFM', 'Grilles')}
+        for scope, (air, count) in exp.items():
+            w = dpc.scope_words(scope)
+            row = ['EF-1 (id 1)', '700', '5', '700 CFM Exhaust Air']
+            html = dpc.system_summary({'grand': [], 'equipment': [row], 'words': w})
+            self.assertIn(air, html)
+            self.assertIn(count, html)
+            self.assertIn('Fittings, Accessories &amp; ' + count,
+                          dpc.limits_and_legend(dict(legend, words=w)))
+            if scope == 'exhaust':
+                self.assertNotIn('Supply', html)
+                self.assertNotIn('Diffuser', html)
+                self.assertNotIn('700 CFM Exhaust Air', html)
+                self.assertEqual(len(shape(html).rows[0]), 3)
+            else:
+                self.assertEqual(len(shape(html).rows[0]), 4)
+        self.assertEqual(dpc.scope_words('nonsense'), dpc.scope_words('rtu'))
+
+    def test_esp_header_basis(self):
+        """Colin, 2026-11-09: the 2001 tables by geometry, the worksheet only
+        as the fallback."""
+        html = dpc.external_static({'units': []})
+        self.assertIn('2001 ASHRAE Fundamentals Ch. 34 by geometry', html)
+        self.assertIn('SP_LOSS_WORKSHEET as fallback', html)
+        self.assertNotIn('per RJA SP_LOSS_WORKSHEET', html)
+
     def test_summary_and_legend_and_sheets(self):
         rec = {'grand': [('Grand total airflow', '5,250 CFM')],
                'equipment': [['RTU-1 (id 1)', '950', '3', '-']]}

@@ -47,6 +47,7 @@ import console_report as cr
 # Relative column widths per table kind. Every table of one kind is built with
 # the same widths (fixed layout), so stacked tables line up column for column.
 W_EQUIPMENT = [40, 18, 12, 30]
+W_EQUIPMENT_3 = [56, 24, 20]       # Exhaust System: no "other air" column
 W_TAKEOFF = [24, 42, 12, 10, 12]
 W_VAV = [22, 14, 16, 16, 18, 14]
 W_LIMITS = [50, 25, 25]
@@ -60,15 +61,89 @@ def _f3(value):
     return '{:.3f}'.format(float(value))
 
 
+# ── wording per Scope (Colin, 2026-11-09) ───────────────────────────────────
+# Every label that names the air or the terminals follows the Scope that was
+# picked, so an exhaust run never reads "Supply" or "Diffusers". RTU and VAV
+# System count every terminal the unit reaches, return grilles included.
+_SCOPE_WORDS = {
+    'rtu': {'airflow': 'Supply CFM', 'count': 'Terminals',
+            'other': 'Return / other air', 'types': 'Terminal type',
+            'one': 'terminal', 'many': 'terminals', 'discharge': 'supply',
+            'tables': 'diffuser and grille'},
+    'vavbox': {'airflow': 'Box discharge CFM', 'count': 'Diffusers',
+               'other': 'Other air', 'types': 'Diffuser type',
+               'one': 'diffuser', 'many': 'diffusers', 'discharge': 'box discharge',
+               'tables': 'diffuser'},
+    'exhaust': {'airflow': 'Exhaust CFM', 'count': 'Grilles',
+                'other': None, 'types': 'Grille type',
+                'one': 'grille', 'many': 'grilles', 'discharge': 'exhaust',
+                'tables': 'grille'},
+}
+_SCOPE_WORDS['vav'] = _SCOPE_WORDS['rtu']
+
+
+def scope_words(scope):
+    """The label set for a Scope ('rtu', 'vav', 'vavbox', 'exhaust'); RTU's
+    for anything else. 'other' is None when the Equipment table drops its
+    last column (Exhaust System: it repeated the exhaust cfm)."""
+    return dict(_SCOPE_WORDS.get(scope) or _SCOPE_WORDS['rtu'])
+
+
+# The count line of the System Summary, the same on every Scope (Colin,
+# 2026-11-09).
+TOTAL_COUNT_LABEL = 'Total Diffusers/Grilles'
+_CLASS_CFM_ORDER = ('Supply Air', 'Return Air', 'Exhaust Air', 'Outside Air',
+                    'Transfer Air')
+_CLASS_CFM_LABEL = {'Supply Air': 'Supply CFM', 'Return Air': 'Return CFM',
+                    'Exhaust Air': 'Exhaust CFM', 'Outside Air': 'Outside Air CFM',
+                    'Transfer Air': 'Transfer Air CFM'}
+
+
+def grand_rows(class_cfm, terminal_count, duct_count):
+    """The top of the System Summary as [(label, value)] (Colin, 2026-11-09):
+    one CFM line per system present (Supply, Return, then Exhaust, Outside
+    Air, Transfer Air, then any other), never summed, only when above 0;
+    then Total Diffusers/Grilles and Ducts. class_cfm: {system class: cfm}."""
+    rows = []
+    rest = sorted(k for k in class_cfm if k not in _CLASS_CFM_ORDER)
+    for cls in list(_CLASS_CFM_ORDER) + rest:
+        cfm = float(class_cfm.get(cls) or 0.0)
+        if cfm > 0:
+            rows.append((_CLASS_CFM_LABEL.get(cls, '{} CFM'.format(cls)),
+                         '{:,.0f}'.format(cfm)))
+    rows.append((TOTAL_COUNT_LABEL, str(terminal_count)))
+    rows.append(('Ducts', str(duct_count)))
+    return rows
+
+
+def equipment_headers(words):
+    """Equipment table headers for a Scope's words; three columns when
+    words['other'] is None."""
+    heads = ['Equipment', words['airflow'], words['count']]
+    if words.get('other'):
+        heads.append(words['other'])
+    return heads
+
+
+def legend_fittings_header(words):
+    return 'Fittings, Accessories & ' + words['count']
+
+
 def system_summary(rec):
-    """Section a: System Summary. rec['caution'], when present (VAV Box
-    scope with external static), is said under the equipment table."""
+    """Section a: System Summary. rec['words'] is the Scope's label set
+    (scope_words). rec['caution'], when present (VAV Box scope with
+    external static), is said under the equipment table."""
+    words = rec.get('words') or scope_words('rtu')
     out = [cr.section('System Summary')]
     out.append(cr.keyvalue(rec.get('grand') or []))
     if rec.get('equipment'):
-        out.append(cr.table(
-            ['Equipment', 'Supply discharge CFM', 'Diffusers', 'Other air feeding it'],
-            rec['equipment'], align=['l', 'r', 'r', 'l'], widths=W_EQUIPMENT))
+        heads = equipment_headers(words)
+        rows = [list(r[:len(heads)]) for r in rec['equipment']]
+        if len(heads) == 4:
+            align, widths = ['l', 'r', 'r', 'l'], W_EQUIPMENT
+        else:
+            align, widths = ['l', 'r', 'r'], W_EQUIPMENT_3
+        out.append(cr.table(heads, rows, align=align, widths=widths))
     if rec.get('caution'):
         out.append(cr.callout(rec['caution'], 'warn'))
     return ''.join(out)
@@ -387,17 +462,23 @@ def corrections_sheet(entries):
 
 def summary_band_text(rec):
     """The System Summary grand totals as one line for the right end of the
-    sheet's SYSTEM SUMMARY band, e.g. 'Grand total airflow 5,250 CFM |
+    sheet's SYSTEM SUMMARY band, e.g. 'Supply CFM 5,250 | Return CFM 1,200 |
     Diffusers 14 | Ducts 60'."""
     return ' | '.join('{} {}'.format(label, value)
                       for label, value in rec.get('grand') or [])
 
 
+# The basis named in the External Static Pressure header (Colin, 2026-11-09):
+# the 2001 tables by geometry since 2026-10-23, the worksheet only as the
+# fallback.
+ESP_BASIS = ('index run, fittings per 2001 ASHRAE Fundamentals Ch. 34 by geometry, '
+             'RJA SP_LOSS_WORKSHEET as fallback')
+
+
 def external_static(rec):
     """Section b: External Static Pressure, one combined table per equipment,
     then any picked duct pairing."""
-    out = [cr.section('External Static Pressure',
-                      'index run, per RJA SP_LOSS_WORKSHEET')]
+    out = [cr.section('External Static Pressure', ESP_BASIS)]
     for unit in rec.get('units') or []:
         out.append(cr.subsection(unit['label']))
         if unit.get('classes'):
@@ -507,7 +588,8 @@ def limits_and_legend(rec):
         out.append(cr.keyvalue(rec['vav_basis']))
     for lead, text in rec.get('notes') or []:
         out.append(cr.paragraph(text, lead))
-    out.append(cr.table(['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
+    words = rec.get('words') or scope_words('rtu')
+    out.append(cr.table(['Color', 'Ducts', legend_fittings_header(words), 'Meaning'],
                         rec.get('legend') or [], align=['l', 'r', 'r', 'l'],
                         swatch_col=0, caption='Note legend', widths=W_LEGEND))
     if rec.get('clearance'):

@@ -1700,11 +1700,12 @@ def _show_velocity_settings_dialog_legacy():
     _info_row('Duct roughness:',  u'ε = 0.0003 ft galvanized, 0.003 ft flex '
                                   u'(detected by category, ASHRAE Table 1-2). '
                                   u'Editable under Advanced settings.')
-    _info_row('Fitting losses:',  u'C × Pv, C from RJA SP_LOSS_WORKSHEET '
-                                  u'(1985 ASHRAE fitting numbers), plus one flex '
-                                  u'bend (C 3.3) per flex run. Return and exhaust '
-                                  u'transitions priced in the airflow direction. '
-                                  u'Editable above')
+    _info_row('Fitting losses:',  u'C × Pv, C per fitting from the 2001 ASHRAE '
+                                  u'Fundamentals Ch. 34 tables by its geometry, '
+                                  u'RJA SP_LOSS_WORKSHEET as fallback (editable '
+                                  u'above), plus one flex bend (C 3.3) per flex run. '
+                                  u'Return and exhaust transitions priced in the '
+                                  u'airflow direction.')
     _info_row('External static:', 'the single most restrictive run (index run) from '
                                   'the unit to a terminal, supply path + return path')
     _info_row('  includes:',      'duct friction, fittings (elbows, take-offs, '
@@ -5136,16 +5137,21 @@ def _row_cells(label, dr, reason, role, branch_res,
 
 # Color key + meaning shown in the legend, in display order.
 # Wording covers both check methods, since one view mixes mains and branches.
-_LEGEND_ROWS = [
-    ('GREEN',  'Main: within limit. Branch: diffuser and duct both correctly sized.'),
-    ('PURPLE', 'Main only: oversized, a smaller standard size is available.'),
-    ('YELLOW', 'Main only: approaching the limit.'),
-    ('RED',    'Main: exceeds the limit. Branch: diffuser or duct undersized. '
-               'Either: fails the diffuser/duct height clearance (see Reason).'),
-    ('GRAY',   'No airflow data: no CFM reaches this element (broken or '
-               'disconnected system). Or an elbow at a unit connection whose fan '
-               'system effect is too high (see External Static Pressure).'),
-]
+def _legend_rows(words=None):
+    """[(color key, meaning)] for the sheet legend, the branch wording
+    from the Scope's words (Colin, 2026-11-09). The clearance wording is the
+    Reason column's name and stays."""
+    one = (words or duct_perf_console.scope_words('rtu'))['one']
+    return [
+        ('GREEN',  'Main: within limit. Branch: {} and duct both correctly sized.'.format(one)),
+        ('PURPLE', 'Main only: oversized, a smaller standard size is available.'),
+        ('YELLOW', 'Main only: approaching the limit.'),
+        ('RED',    'Main: exceeds the limit. Branch: {} or duct undersized. '
+                   'Either: fails the diffuser/duct height clearance (see Reason).'.format(one)),
+        ('GRAY',   'No airflow data: no CFM reaches this element (broken or '
+                   'disconnected system). Or an elbow at a unit connection whose fan '
+                   'system effect is too high (see External Static Pressure).'),
+    ]
 
 # Columns read best left aligned; the rest are centred.
 _LEFT_COLUMNS = ('reason', 'role')
@@ -5153,6 +5159,7 @@ _LEFT_COLUMNS = ('reason', 'role')
 
 # Sheet column proportions of the table width (the flagged duct table's).
 _SHEET_EQUIP_COLS = (0.34, 0.16, 0.12, 0.38)
+_SHEET_EQUIP_COLS_3 = (0.56, 0.24, 0.20)    # Exhaust System, no other air column
 _SHEET_CLASS_W = 0.40       # by system class table, left of the types table
 _SHEET_TYPES_W = 0.56       # diffuser types table, right of it
 _SHEET_CLASS_COLS = (0.50, 0.30, 0.20)
@@ -5172,12 +5179,15 @@ def _draw_system_summary(st, view, y, total_w, rep):
     draft = rja_drafting
     y = draft._band(st, view, 0.0, y, total_w, 'SYSTEM SUMMARY',
                     duct_perf_console.summary_band_text(rep), draft.SUB_BAND_H)
+    words = rep.get('words') or duct_perf_console.scope_words('rtu')
     if rep.get('equipment'):
+        heads = duct_perf_console.equipment_headers(words)
+        four = len(heads) == 4
         y = draft._styled_table(
             st, view, 0.0, y, _sheet_columns(
-                ['Equipment', 'Supply CFM', 'Diffusers', 'Other air feeding it'],
-                _SHEET_EQUIP_COLS, total_w),
-            rep['equipment'], left_cols=(0, 3), clip=True)
+                heads, _SHEET_EQUIP_COLS if four else _SHEET_EQUIP_COLS_3, total_w),
+            [list(r[:len(heads)]) for r in rep['equipment']],
+            left_cols=(0, 3) if four else (0,), clip=True)
         y -= draft.GAP
     if rep.get('caution'):
         # VAV Box scope with external static (Colin, 2026-11-09).
@@ -5187,14 +5197,14 @@ def _draw_system_summary(st, view, y, total_w, rep):
     if rep.get('by_class'):
         w = total_w * _SHEET_CLASS_W
         bottoms.append(draft._styled_table(
-            st, view, 0.0, y, _sheet_columns(['System', 'CFM', 'Diffusers'],
+            st, view, 0.0, y, _sheet_columns(['System', 'CFM', words['count']],
                                              _SHEET_CLASS_COLS, w),
             rep['by_class'], clip=True))
     if rep.get('types'):
         w = total_w * _SHEET_TYPES_W
         ox = total_w - w if rep.get('by_class') else 0.0
         bottoms.append(draft._styled_table(
-            st, view, ox, y, _sheet_columns(['Diffuser type', 'Count', 'CFM'],
+            st, view, ox, y, _sheet_columns([words['types'], 'Count', 'CFM'],
                                             _SHEET_TYPES_COLS, w),
             rep['types'], clip=True))
     if bottoms:
@@ -5358,7 +5368,7 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
         row_h = rja_drafting.ROW_H
         pad = rja_drafting.PAD
         swatch = 0.014
-        for color_key, meaning in _LEGEND_ROWS:
+        for color_key, meaning in _legend_rows(rep.get('words')):
             if st.region_type_id is not None:
                 rja_drafting._legend_swatch(
                     doc, sched_view, st.region_type_id, pad * 2.0,
@@ -5371,9 +5381,11 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
             # Starts in the swatch column so '(R)' lines up with the colour
             # squares above it.
             rja_drafting._t(st, sched_view, pad * 2.0, y,
-                            '(R): Most restrictive diffuser. It ends the index '
+                            '(R): Most restrictive {}. It ends the index '
                             'run that sets the required external static '
-                            'pressure for its equipment or system.')
+                            'pressure for its equipment or system.'.format(
+                                (rep.get('words') or
+                                 duct_perf_console.scope_words('rtu'))['one']))
             y -= row_h
         rja_drafting._outline(st, sched_view, 0.0, legend_top, total_w, y)
 
@@ -5933,7 +5945,6 @@ def main():
         duct_roles[eid] = _duct_role_label(True, kind)
 
     # 4b. System summary — total flow to each equipment, diffuser counts/types
-    grand_total_cfm = sum(cfm for cfm, _, _ in all_terminals.values())
     sys_totals = {}    # sys_class -> [total_cfm, count]
     type_totals = {}   # family_name -> [count, total_cfm]
     for cfm, sys_class, family in all_terminals.values():
@@ -5950,34 +5961,42 @@ def main():
     # records for the themed console sections (lib/duct_perf_console.py) and
     # the drafting view tables. Every number below is worked out once and
     # handed to both.
-    rep = {'grand': [], 'equipment': [], 'by_class': [], 'types': []}
+    # Labels follow the Scope that was picked (Colin, 2026-11-09): an
+    # exhaust run reads Exhaust CFM and Grilles, never Supply or Diffusers.
+    words = duct_perf_console.scope_words(scope)
+    rep = {'grand': [], 'equipment': [], 'by_class': [], 'types': [], 'words': words}
     esp_rec = None       # External Static Pressure records, when computed
     vav_rep = None       # VAV Boxes records, when VAV is on with boxes
     summary_lines = ['SYSTEM SUMMARY']
     for name, aid, discharge_cfm, term_count, other_class_cfm in ahu_totals:
-        summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM supply air discharge ({} diffusers)'.format(
-            name, aid, discharge_cfm, term_count))
+        summary_lines.append('Equipment: {} (id {})  -  {:.0f} CFM {} ({} {})'.format(
+            name, aid, discharge_cfm, words['discharge'], term_count, words['many']))
         others = []
-        for cls in sorted(other_class_cfm.keys()):
+        # Exhaust System has no other air column: the exhaust cfm is the
+        # airflow column already (it was listed twice).
+        for cls in (sorted(other_class_cfm.keys()) if words['other'] else ()):
             if not other_class_cfm[cls] or other_class_cfm[cls] <= 0:
                 continue   # '0 CFM Unknown' says nothing (Colin, 2026-11-02)
             summary_lines.append('    + {:.0f} CFM {} feeding this equipment (not counted in discharge total)'.format(
                 other_class_cfm[cls], cls))
             others.append('{:,.0f} CFM {}'.format(float(other_class_cfm[cls]), cls))
-        rep['equipment'].append([
-            '{} (id {})'.format(name, aid), '{:,.0f}'.format(float(discharge_cfm)),
-            str(term_count), ', '.join(others) if others else '-'])
-    summary_lines.append('Grand Total Airflow: {:.0f} CFM  |  {} Diffusers  |  {} Ducts'.format(
-        grand_total_cfm, len(all_terminals), len(all_duct_results)))
-    rep['grand'] = [
-        ('Grand total airflow', '{:,.0f} CFM'.format(float(grand_total_cfm))),
-        ('Diffusers', str(len(all_terminals))),
-        ('Ducts', str(len(all_duct_results)))]
+        row = ['{} (id {})'.format(name, aid), '{:,.0f}'.format(float(discharge_cfm)),
+               str(term_count)]
+        if words['other']:
+            row.append(', '.join(others) if others else '-')
+        rep['equipment'].append(row)
+    # One CFM line per system present, never summed, then the counts
+    # (Colin, 2026-11-09).
+    rep['grand'] = duct_perf_console.grand_rows(
+        dict((k, v[0]) for k, v in sys_totals.items()),
+        len(all_terminals), len(all_duct_results))
+    summary_lines.append('  |  '.join('{}: {}'.format(k, v) for k, v in rep['grand']))
     for sys_class in sorted(sys_totals.keys()):
         s_cfm, s_cnt = sys_totals[sys_class]
-        summary_lines.append('  {}: {:.0f} CFM  ({} diffusers)'.format(sys_class, s_cfm, s_cnt))
+        summary_lines.append('  {}: {:.0f} CFM  ({} {})'.format(sys_class, s_cfm, s_cnt,
+                                                              words['many']))
         rep['by_class'].append([sys_class, '{:,.0f}'.format(float(s_cfm)), str(s_cnt)])
-    summary_lines.append('Diffuser Types:')
+    summary_lines.append(words['types'] + 's:')
     for family in sorted(type_totals.keys()):
         t_cnt, t_cfm = type_totals[family]
         summary_lines.append('  {}  x{}  ({:.0f} CFM)'.format(family, t_cnt, t_cfm))
@@ -6051,7 +6070,7 @@ def main():
             # Inline exhaust fans: every exhaust fan but a ceiling one.
             inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()))
         summary_lines.append(
-            'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
+            'TOTAL EXTERNAL STATIC PRESSURE ({})'.format(duct_perf_console.ESP_BASIS))
         if box_root_ids:
             summary_lines.append(duct_perf_console.VAVBOX_ESP_CAUTION)
             rep['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION
@@ -6333,16 +6352,27 @@ def main():
         # run has no return path (Colin, 2026-11-04).
         _return_priced = any('Return Air' in (_pc or {})
                              for _pc in (critical or {}).values())
-        if filter_inwc > 0.0 and _return_priced:
+        # Worded per Scope (Colin, 2026-11-09): the roof cap clause on
+        # Exhaust System only, an exhaust fan's own housing in place of the
+        # coil and cabinet, a VAV box's own drop and what feeds it.
+        if scope == 'exhaust':
+            _not_inc = ("NOT INCLUDED: the fan's own housing losses, already in its "
+                        'published fan curve.')
+        elif scope == 'vavbox':
+            _not_inc = ('NOT INCLUDED: the VAV box drop and everything upstream of the '
+                        'box outlet (see the caution above).')
+        elif filter_inwc > 0.0 and _return_priced:
             _not_inc = ('NOT INCLUDED: coil and cabinet, already in the published ESP. '
                         'Return filter IS included as a {:.3f} in. wc known drop.'.format(
                             filter_inwc))
         else:
             _not_inc = ('NOT INCLUDED: filter, coil and cabinet, already in the published '
                         'ESP.')
-        _not_inc += (' Exhaust roof / wall cap IS included on every exhaust run.' if exhaust_cap
-                     else ' Exhaust roof / wall cap not included (upblast roof fan, or '
-                          'Include roof / wall cap unticked).')
+        if scope == 'exhaust':
+            _not_inc += (' Exhaust roof / wall cap IS included on every exhaust run.'
+                         if exhaust_cap
+                         else ' Exhaust roof / wall cap not included (upblast roof fan, '
+                              'or Include roof / wall cap unticked).')
         if exhaust_on:
             _not_inc += (' A backdraft damper IS added to an exhaust fan run with none '
                          'modeled (not a ceiling exhaust fan, built in).' if exh_backdraft
@@ -6909,13 +6939,13 @@ def main():
         vav_basis = list(vav_checks.basis_rows(vav_set))
     legend_rows = [
         ['Green', str(counts.get('GREEN', 0)), str(fitting_counts.get('GREEN', 0)),
-         'Main: within limit. Branch: diffuser and duct both correctly sized'],
+         'Main: within limit. Branch: {} and duct both correctly sized'.format(words['one'])],
         ['Purple', str(counts.get('PURPLE', 0)), str(fitting_counts.get('PURPLE', 0)),
          'Main only: oversized (low velocity, review for cost)'],
         ['Yellow', str(counts.get('YELLOW', 0)), str(fitting_counts.get('YELLOW', 0)),
          'Main only: approaching limit'],
         ['Red', str(counts.get('RED', 0)), str(fitting_counts.get('RED', 0)),
-         'Main: exceeds limit. Branch: diffuser or duct undersized'],
+         'Main: exceeds limit. Branch: {} or duct undersized'.format(words['one'])],
         ['Gray', str(counts.get('GRAY', 0)), str(fitting_counts.get('GRAY', 0)),
          'No airflow data: broken or disconnected system (not in the flagged table)'],
     ]
@@ -6930,8 +6960,9 @@ def main():
         'limits': limit_rows,
         'vav_basis': vav_basis,
         'notes': [
-            ('Branch ducts are checked against the diffuser sizing tables '
-             '(MEP Design Standards, section 1), not against velocity or friction.',
+            ('Branch ducts are checked against the {} sizing tables '
+             '(MEP Design Standards, section 1), not against velocity or '
+             'friction.'.format(words['tables']),
              'An auto-sizing diffuser is selected on static pressure and NC rather '
              'than duct velocity, so velocity-checking a run that feeds only that one '
              'diffuser is redundant. Two things are checked instead: whether the '
@@ -6947,6 +6978,7 @@ def main():
              '(no Sizing Warning parameter) get the main velocity/friction check.'),
         ],
         'legend': legend_rows,
+        'words': words,
         'clearance': (clearance_count > 0,
                       'Diffuser/duct height clearance issues (flagged Red): {}'.format(
                           clearance_count)),
@@ -6964,7 +6996,7 @@ def main():
         for lead, text in legend_rec['notes']:
             output.print_md('**{}** {}'.format(lead, text))
         output.print_md(console_report.markdown_table(
-            ['Color', 'Ducts', 'Fittings, Accessories & Diffusers', 'Meaning'],
+            ['Color', 'Ducts', duct_perf_console.legend_fittings_header(words), 'Meaning'],
             legend_rows))
         output.print_md('**{}**'.format(legend_rec['clearance'][1]))
 

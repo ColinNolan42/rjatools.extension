@@ -283,11 +283,36 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertFalse(any('Flow = 0' in v for v in vals))
         self.assertLess(y, 0.0)
         # by class and types side by side: same top, inside the width
-        heads = [t for t in self.rec.texts if t[2] in ('System', 'Diffuser type')]
+        # RTU wording by default (Colin, 2026-11-09): every terminal counted
+        heads = [t for t in self.rec.texts if t[2] in ('System', 'Terminal type')]
         self.assertEqual(len(heads), 2)
         self.assertAlmostEqual(heads[0][1], heads[1][1])
         for x0, _t, x1, _b, _c in self.rec.fills:
             self.assertLessEqual(x1, TOTAL_W + 1e-9)
+
+    def test_exhaust_scope_wording_sheet(self):
+        # Colin, 2026-11-09: an Exhaust System sheet reads Exhaust CFM and
+        # Grilles, with no other air column and no Supply or Diffuser text.
+        rep = {'grand': dpc.grand_rows({'Exhaust Air': 700.0}, 5, 9),
+               'equipment': [['EF-1 (id 1)', '700', '5', '700 CFM Exhaust Air']],
+               'by_class': [['Exhaust Air', '700', '5']],
+               'types': [['RJA - Exhaust Grille', '5', '700']],
+               'words': dpc.scope_words('exhaust')}
+        DRAW['_draw_system_summary'](None, None, 0.0, TOTAL_W, rep)
+        vals = self.rec.values()
+        for v in ('Exhaust CFM', 'Grilles', 'Grille type'):
+            self.assertIn(v, vals)
+        self.assertIn('Exhaust CFM 700 | Total Diffusers/Grilles 5 | Ducts 9', vals)
+        self.assertFalse(any('Supply' in v or 'Diffuser type' in v for v in vals), vals)
+        self.assertNotIn('700 CFM Exhaust Air', vals)
+        for x0, _t, x1, _b, _c in self.rec.fills:
+            self.assertLessEqual(x1, TOTAL_W + 1e-9)
+        src = io.open(SCRIPT, encoding='utf-8').read().replace('\r\n', '\n')
+        m = re.search(r'^def _legend_rows\(.*?\n    \]\n', src, re.S | re.M)
+        ns = {'duct_perf_console': dpc}
+        exec(m.group(0), ns)
+        legend = ns['_legend_rows'](dpc.scope_words('exhaust'))
+        self.assertIn('Branch: grille and duct both correctly sized.', legend[0][1])
 
     def test_vav_box_caution_sheet(self):
         # VAV Box scope (Colin, 2026-11-09): the total is labelled as after
