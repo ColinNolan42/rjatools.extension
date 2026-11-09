@@ -138,6 +138,9 @@ INLET_RED_D = 2.0            # an elbow under 2 D of a unit inlet is RED
 INLET_FLOOR_D = 5.0          # where the inlet tables stop falling (the note)
 CABINET_WARN_D = 3.0         # a cabinet unit inlet elbow under 3 D: WARNING (Colin, 2026-11-09)
 CABINET_WARN_PREFIX = 'WARNING: Elbow '
+OUTLET_TAP_D = 3.0           # a tap under 3 D of a cabinet unit supply outlet: WARNING (Colin, 2026-11-09)
+OUTLET_TAP_MARK = 'acts like an elbow at the outlet'
+TAP_ROLES = ('takeoff', 'split', 'tee', 'wye', 'cross')
 LE_SPLIT_MPS = 13.0          # Eq. 36 above this outlet velocity, Eq. 37 at or below
 SWIRL_DH = 6.0               # inlet swirl window, hydraulic diameters (p. 34.11)
 SWIRL_SAME_PLANE = 0.1       # |n1 x n2| under this: two turn planes are the same
@@ -711,6 +714,36 @@ def cabinet_warn_text(where, eid, l_ft, size_in, is_round, v_conn, curb_ft=0.0):
                float(size_in), curb, CABINET_WARN_D, dim, float(v_conn)))
 
 
+def outlet_tap_ft(size_in):
+    """OUTLET_TAP_D x D, ft: a tap closer than this to a cabinet unit supply
+    outlet is a WARNING."""
+    return OUTLET_TAP_D * float(size_in) / 12.0
+
+
+def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0):
+    """The WARNING for a tap, branch, tee, wye or cross close to a cabinet
+    unit's supply outlet (Colin, 2026-11-09): a tap this close disturbs the
+    outlet velocity profile almost like an elbow, a system effect not
+    priced. req_ft: the straight duct asked for (the larger of 3 D and Le),
+    basis its words ('3 D, D 24 in.' or '1.0 Le, Le 5.7 ft'). l_ft and req_ft
+    count a roof curb."""
+    curb = ''
+    if curb_ft:
+        curb = ', the %s curb included (%.1f ft of duct past the curb)' % (
+            curb_in_text(curb_ft), _ceil_step(max(float(req_ft) - float(curb_ft), 0.0)))
+    return ('WARNING: %s %s is %s; provide at least %.1f ft of straight duct to the first '
+            'tap (%s)%s. A tap this close to the fan %s; its system effect is not priced, '
+            'so the external static shown is low until the tap is moved.'
+            % (str(kind)[:1].upper() + str(kind)[1:], eid, from_text(where, l_ft, curb_ft),
+               _ceil_step(req_ft), basis, curb, OUTLET_TAP_MARK))
+
+
+def is_check_warning(text):
+    """A straight duct WARNING that prints with the fan system effect off
+    too: the cabinet inlet 3 D WARNING and the supply outlet tap WARNING."""
+    return text.startswith(CABINET_WARN_PREFIX) or OUTLET_TAP_MARK in text
+
+
 def straight_duct_reason(eid, l_ft, role, dim='D', curb_ft=0.0):
     """The flagged table Reason for a straight duct RED with its elbow. dim:
     'H' when a rect inlet elbow was judged on H (Colin, 2026-11-09).
@@ -879,6 +912,8 @@ def method_lines(settings):
     else:
         method += (' Velocity: the connection velocity, cfm over the unit connector '
                    'area (the first duct when unreadable).')
+    method += (' A tap within 3 D of a cabinet unit\'s supply outlet is a WARNING '
+               '(system effect not priced).')
     if float(settings.get('curb_in') or 0.0) > 0.0:
         method += (' A roof curb (dialog, default %.0f in.; %g in. this run) is counted '
                    'as straight duct at RTU connections, length only.'

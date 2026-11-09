@@ -952,6 +952,12 @@ def _show_velocity_settings_xaml(use_theme):
                       'system effect, the straight duct RED, the 3 D WARNING and the '
                       'swirl and damper checks. Never modeled, so no friction or fitting '
                       'loss is priced for it.'),
+        ('Tap near a supply outlet', 'A tap, branch, tee or wye within 3 D of a '
+                                     'cabinet unit\'s supply outlet (D the larger of the '
+                                     'unit opening and the first duct; L with the roof '
+                                     'curb) is a WARNING: it disturbs the outlet like an '
+                                     'elbow, a system effect not priced. Not at exhaust '
+                                     'fans or VAV boxes.'),
     ] + _dialog_vav_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
@@ -3808,15 +3814,55 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where,
                                                             passed=passed, ducts=grp_ducts, l0=curb_ft)
         notes.extend(wnotes)
+        # A tap close to a cabinet unit's supply outlet (Colin, 2026-11-09):
+        # a WARNING when the first tap, branch, tee, wye or cross on the main
+        # sits under 3 D (D the larger of the unit opening and the first
+        # duct, a rect one's larger side), with the curb counted. Merged with
+        # the tap inside Le flag: one WARNING, the window the larger of the
+        # two. Not at an exhaust fan, a VAV box root or an inlet.
+        tap_out = (role_here == fan_system_effect.OUTLET and pick is None
+                   and root_id not in inline_fan_roots
+                   and root_id not in discharge_roots and root_id not in box_ids
+                   and size_c is not None)
+        tap_ft = fan_system_effect.outlet_tap_ft(size_c) if tap_out else 0.0
+        if tap_out and tap_ft >= win:
+            tap_req, tap_basis = tap_ft, '%.0f D, D %.0f in.' % (
+                fan_system_effect.OUTLET_TAP_D, size_c)
+        else:
+            tap_req, tap_basis = win, '1.0 Le, Le %.1f ft' % win
+        tap_warned = False
+        if tap_out and role in fan_system_effect.TAP_ROLES:
+            notes.append(('warn', fan_system_effect.outlet_tap_text(
+                _FSE_KIND_TEXT.get(role, role), did, where, l_ft, tap_req, tap_basis,
+                curb_ft)))
+            tap_warned = True
+        elif tap_out:
+            # Nothing but elbows (or nothing) inside Le: walked on past the
+            # elbows to the first tap inside 3 D.
+            if pick is not None:
+                t_role, t_l, t_id, _tn = _fse_first_disruption(
+                    root_id, first, tap_ft, where, prev=pick[0], seen=set(pick[1]),
+                    collect=[], l0=curb_ft)
+            else:
+                t_role, t_l, t_id, _tn = _fse_first_disruption(
+                    root_id, first, tap_ft, where, collect=[], l0=curb_ft)
+            fan_system_effect.log.info('supply outlet tap check: %s, 3 D %.2f ft, first %r '
+                                       '%s at %.2f ft', where, tap_ft, t_role, t_id, t_l)
+            if t_role in fan_system_effect.TAP_ROLES and t_l < tap_ft:
+                notes.append(('warn', fan_system_effect.outlet_tap_text(
+                    _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, tap_ft,
+                    '%.0f D, D %.0f in.' % (fan_system_effect.OUTLET_TAP_D, size_c),
+                    curb_ft)))
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (win_short, win)
             # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
             notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
             return rec
         if role != 'elbow':
-            notes.append(('warn', fan_system_effect.disruption_text(
-                _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft - curb_ft, win,
-                win_name)))
+            if not tap_warned:
+                notes.append(('warn', fan_system_effect.disruption_text(
+                    _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft - curb_ft, win,
+                    win_name)))
             rec['none'] = '%s %s at %s inside %s, flagged, not priced' % (
                 _FSE_KIND_TEXT.get(role, role), did,
                 fan_system_effect.l_text(l_ft, curb_ft, unit=True), win_short)
@@ -3921,7 +3967,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['assumptions'] = []
         rec['none'] = None
         rec['notes'] = [n for n in rec['notes'] if n[0] == 'red' or (
-            n[0] == 'warn' and n[1].startswith(fan_system_effect.CABINET_WARN_PREFIX))]
+            n[0] == 'warn' and fan_system_effect.is_check_warning(n[1]))]
         return rec
 
     def _fse_root(root_id):
@@ -6417,8 +6463,8 @@ def main():
                 continue
             _leaf = per_class[sorted(per_class.keys())[0]]
             for _kind, _text in _leaf.get('fse_notes', ()):
-                if _kind == 'red' or (_kind == 'warn' and _text.startswith(
-                        fan_system_effect.CABINET_WARN_PREFIX)):
+                if _kind == 'red' or (_kind == 'warn'
+                                      and fan_system_effect.is_check_warning(_text)):
                     # the cabinet inlet 3 D WARNING runs with them (Colin,
                     # 2026-11-09)
                     _correct(_kind, _text, root_labels.get(root_id, 'id {}'.format(root_id)))

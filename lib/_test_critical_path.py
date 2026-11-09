@@ -1362,9 +1362,11 @@ d34b = build([(981, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
               (983, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
 t34b = {990: (1000.0, 'Supply Air', 'SD-a'), 991: (3000.0, 'Supply Air', 'SD-b')}
 sa34b = _fse_run(n34b, c34b, d34b, t34b, 980)
-check("case34 tap 3 ft along the outlet duct: flagged as a tap, not priced",
+check("case34 tap 3 ft along the outlet duct: flagged as a tap (the 3 D supply tap WARNING), not priced",
       sa34b.get('fse_inwc') == 0.0
-      and any(k == 'warn' and t.startswith('WARNING: tap 982, 3.0 ft from the supply outlet')
+      and any(k == 'warn' and t.startswith('WARNING: Tap 982 is 3.0 ft from the supply outlet; '
+                                           'provide at least 6.0 ft of straight duct to the '
+                                           'first tap (3 D, D 24 in.).')
               for k, t in sa34b.get('fse_notes', ())),
       "notes %r" % (sa34b.get('fse_notes'),))
 
@@ -2305,7 +2307,7 @@ check("case65 tap at 1 ft, elbows at 2.0 and 2.5 ft (0.5 Le 2.86 ft): both RED w
       "red %r notes %r" % (sa65.get('fse_red_ids'), _red65))
 check("case65 the tap is still the priced window's first disruption (WARNING, no fse)",
       sa65.get('fse_inwc') == 0.0
-      and any(k == 'warn' and t.startswith('WARNING: tap 3002') for k, t in
+      and any(k == 'warn' and t.startswith('WARNING: Tap 3002 is ') for k, t in
               sa65.get('fse_notes', ())), "notes %r" % (sa65.get('fse_notes'),))
 n65t = {3100: _unit({3101: SQ24}),
         3102: Elem(kind='transition', family_name='Rectangular Transition - Length',
@@ -3118,6 +3120,56 @@ check("case82 METHOD names the curb used",
       'A roof curb (dialog, default 14 in.; 14 in. this run) is counted as straight duct '
       'at RTU connections, length only.' in FSE.method_lines(_curb(14))[0]
       and 'roof curb' not in FSE.method_lines(FSE_ON)[0])
+
+# 83: a tap near a cabinet unit's supply outlet (Colin, 2026-11-09): a
+#     24x24 outlet, D 24 in., 3 D 6.0 ft (Le 5.7 ft at the connection basis).
+def _run83(tap_at, fan=None, **kw):
+    n = {4800: _unit({4801: SQ24}), 4801: Elem(kind='duct', tap_pos={4802: tap_at}),
+         4802: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+         4803: Elem(kind='duct')}
+    c = {4800: [4801], 4801: [4802, 4803], 4802: [4810], 4803: [4811]}
+    d = build([(4801, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
+               (4803, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
+    t = {4810: (1000.0, 'Supply Air', 'SD-83a'), 4811: (3000.0, 'Supply Air', 'SD-83b')}
+    return _fse_run(n, c, d, t, 4800, fan=fan or FSE_ON, **kw)
+
+
+def _tw83(leaf):
+    return [t for k, t in leaf.get('fse_notes', ()) if k == 'warn'
+            and FSE.OUTLET_TAP_MARK in t]
+
+
+_t83 = _run83(4.0)
+check("case83 tap at 2 D (4.0 ft): the supply outlet tap WARNING, exact text, nothing priced",
+      _tw83(_t83) == ['WARNING: Tap 4802 is 4.0 ft from the supply outlet; provide at least '
+                      '6.0 ft of straight duct to the first tap (3 D, D 24 in.). A tap this '
+                      'close to the fan acts like an elbow at the outlet; its system effect is '
+                      'not priced, so the external static shown is low until the tap is moved.']
+      and _t83.get('fse_inwc') == 0.0 and not _t83.get('fse_red_ids')
+      and not any(t.startswith('WARNING: tap 4802,') for t in _notes(_t83)),
+      "notes %r" % (_notes(_t83),))
+_t83f = _run83(6.2)
+check("case83 tap at 3.1 D (6.2 ft): no WARNING", not _tw83(_t83f)
+      and not any('4802' in t for t in _notes(_t83f, 'warn')), "notes %r" % (_notes(_t83f),))
+_t83c = _run83(5.0, fan=_curb(14))
+check("case83 tap at 5.0 ft + 14 in. curb (6.17 ft): past 3 D, no WARNING",
+      not _tw83(_t83c) and _tw83(_run83(5.0)), "notes %r" % (_notes(_t83c),))
+_t83k = _run83(4.0, fan=_curb(14))
+check("case83 tap at 4.0 ft + 14 in. curb: the WARNING names the curb and the duct past it",
+      len(_tw83(_t83k)) == 1 and _tw83(_t83k)[0].startswith(
+          'WARNING: Tap 4802 is 4.0 ft from the supply outlet (plus a 14 in. roof curb); '
+          'provide at least 6.0 ft of straight duct to the first tap (3 D, D 24 in.), the '
+          '14 in. curb included (4.9 ft of duct past the curb).'), "notes %r" % (_tw83(_t83k),))
+_t83e = _run83(4.0, inline_fan_roots={4800})
+_t83b = _run83(4.0, vav_box_ids={4800})
+check("case83 exhaust fan and VAV box roots: no supply outlet tap WARNING",
+      not _tw83(_t83e) and not _tw83(_t83b),
+      "exh %r box %r" % (_notes(_t83e), _notes(_t83b)))
+_t83o = _run83(4.0, fan=dict(FSE_ON, on=False))
+check("case83 fan system effect unticked: the WARNING still prints (a straight duct check)",
+      len(_tw83(_t83o)) == 1, "notes %r" % (_notes(_t83o),))
+check("case83 METHOD line", "A tap within 3 D of a cabinet unit's supply outlet is a WARNING "
+      '(system effect not priced).' in FSE.method_lines(FSE_ON)[0])
 
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round
