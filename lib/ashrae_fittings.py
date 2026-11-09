@@ -400,6 +400,13 @@ def tap_branch_c(is_supply, tap_shape, main_shape, is_45_entry,
     cb, notes = _call(kb, t, ratios)
     if cb is None:
         return None, 'no 2001 table for this tap', notes
+    # Qb/Qc past the highest column is the last tap before an end cap, all
+    # the remaining air turning into it: the highest column is read, without
+    # a NOTE (Colin, 2026-11-09: it adds nothing, about 0.002 in. wc). Every
+    # other clamp NOTE stays.
+    notes = [n for n in notes
+             if not (n.startswith(kb + ': Qb/Qc ')
+                     and "is above the table's highest value" in n)]
     read_ab = _ratio_read_at(t, 'Ab/Ac', ab_ac)
     q_read = min(max(float(qb_qc), 0.1), 1.0)
     ccb = _to_common(cb, q_read, read_ab)

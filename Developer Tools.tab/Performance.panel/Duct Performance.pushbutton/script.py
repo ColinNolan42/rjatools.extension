@@ -316,7 +316,7 @@ _SETTINGS_XAML = '''
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Set by the Scope: 1500 fpm Exhaust System, 2000 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
+                                       Text="Set by the Scope: 1500 fpm Exhaust System, 2000 fpm otherwise; fan coils, about 1500 fpm. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>

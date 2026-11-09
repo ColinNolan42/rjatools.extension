@@ -1096,6 +1096,26 @@ check("case29 ER5-3 is read at its printed Ab/Ac 0.5: Cc,b -0.72, not -18 x (0.1
 ccb29b, _l, _n = A.tap_branch_c(False, 'rect', 'rect', True, 0.09, 0.5)
 check("case29 ER5-3 at Qb/Qc 0.5: Cc,b = 0.76 x (0.5/0.5)^2 = 0.76",
       abs(ccb29b - 0.76) < 1e-9, "got %r" % ccb29b)
+# 29c: the last tap before an end cap, Qb/Qc 1.00 past the highest printed
+#      column (0.90): the 0.90 column is read with no clamp NOTE (Colin,
+#      2026-11-09, TB-M15 FCU-1 tap 3724988); the price is as before. Other
+#      clamp NOTEs (Ab/Ac past its range) stay.
+for _sup29, _tap29, _main29, _45 in ((True, 'round', 'rect', False),
+                                     (False, 'round', 'round', True)):
+    _c10, _lb10, _n10 = A.tap_branch_c(_sup29, _tap29, _main29, _45, 0.5, 1.0)
+    _key29 = _lb10.split(' ')[0]
+    _cb09, _nb = A._call(_key29 + '_Cb', A.table(_key29 + '_Cb'),
+                         {'Ab/Ac': 0.5, 'Qb/Qc': 0.9, 'As/Ac': 1.0, 'Qs/Qc': 0.1})
+    _read_ab29 = A._ratio_read_at(A.table(_key29 + '_Cb'), 'Ab/Ac', 0.5)
+    check("case29c %s Qb/Qc 1.00: no Qb/Qc clamp NOTE, highest column read, price unchanged"
+          % _key29,
+          not any('Qb/Qc' in n and 'highest' in n for n in _n10)
+          and abs(_c10 - A._to_common(_cb09, 1.0, _read_ab29)) < 1e-12,
+          "C %r notes %r" % (_c10, _n10))
+_cab29, _l, _nab29 = A.tap_branch_c(True, 'round', 'rect', False, 0.95, 1.0)
+check("case29c an Ab/Ac clamp NOTE still prints",
+      any(n.startswith('SR5-11_Cb: Ab/Ac 0.95 is above') for n in _nab29)
+      and not any('Qb/Qc' in n for n in _nab29), "notes %r" % (_nab29,))
 ch29 = {499: [500], 500: [501], 501: [511], 511: [521]}
 n29 = {500: Elem(kind='duct', tap_pos={501: 2.0}),
        501: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
