@@ -3695,7 +3695,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # Which one governs is said once the path is known (_fse_group_max,
         # Colin, 2026-11-09), not here.
         rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': win, 'win_short': win_short,
-                      'transition': bool(passed)}
+                      'transition': bool(passed), 'transitions': sorted(passed)}
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])
         if r['high']:
@@ -3968,10 +3968,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         its: the take-off items of the path, or of a discharge chain.
         Returns (items, fse charged, friction removed, fittings removed,
         fse item or None, governs NOTE or None). The fan system effect wins a
-        tie: its group items stay listed at 0. The group wins: the fan system
-        effect line stays listed at 0, not charged, and the individual losses
-        are charged (Colin, 2026-11-09). The NOTE and the fan system effect
-        row both say which governed."""
+        tie. Whichever governs, its value is charged on the fan system effect
+        row and the group items are listed at 0.000 'in the fan system
+        effect' (Colin, 2026-11-09); the row's Table / basis reads 'Fan system
+        effect: <table>' or 'Duct losses: straight duct and elbow (<table>),
+        L / Le' with C '-'. 'fse charged' is that row's value, so the
+        subtotal is the same either way. The NOTE says which governed."""
         if rec is None or rec.get('item') is None or not rec.get('group'):
             item = (rec or {}).get('item')
             if item is None and rec and rec.get('none') and rec.get('where_item'):
@@ -3992,6 +3994,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             else:
                 g_fit += it[3] or 0.0
         group = g_fric + g_fit
+        hit_items = [its[i] for i in hits]     # before they are listed at 0
         fse = rec['loss']
         fan_system_effect.log.info('fan system effect group: %s, fse %.4f vs duct and '
                                    'fittings %.4f (%d items)', rec.get('where'), fse,
@@ -4004,15 +4007,72 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 fse >= group, gov['eid'], gov['l_ft'], rec.get('where'), fse, group,
                 gov.get('win'), gov.get('win_short', 'Le'),
                 transition=gov.get('transition', False))
-        if fse >= group:
-            its = tuple(
-                (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, it[4])
-                if i in hits else it for i, it in enumerate(its))
-            # The row stays as is; the NOTE says it governed (Colin, 2026-11-09).
-            return its, fse, g_fric, g_fit, item, note
-        item = (item[0], '{}; not charged, the straight duct and elbow price higher '
-                '({:.4f} in. wc)'.format(item[1], group), item[2], 0.0, item[4])
-        return its, 0.0, 0.0, 0.0, item, note
+        # The group's charge always sits on the fan system effect row, whichever
+        # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
+        # ', in the fan system effect' on their Table / basis, so the take-off
+        # groups them apart and the 0.000 reads as covered, not free. The
+        # subtotal is the same either way: the group's friction and fittings
+        # come out, the governing value goes in on this row.
+        fse_wins = fse >= group
+        its = tuple(_in_group(it) if i in hits else it for i, it in enumerate(its))
+        if fse_wins:
+            charged = fse
+            name, basis, c, ft = item[4]
+            row = (name, 'Fan system effect: ' + basis, c, ft)
+            detail = item[1]
+        else:
+            charged = group
+            name, _basis, _c, ft = item[4]
+            row = (name, _own_loss_basis(rec, hit_items), None, ft)
+            detail = '{}; {} at own losses ({:.4f} in. wc)'.format(
+                item[1], _group_words(gov), group)
+        item = (item[0], detail, item[2], charged, row)
+        return its, charged, g_fric, g_fit, item, note
+
+    def _in_group(it):
+        """A group item listed at 0.000, its basis marked as in the fan system
+        effect row (the take-off groups on name, Table / basis and C)."""
+        t4 = it[4]
+        if t4 is not None:
+            t4 = (t4[0], '{}, in the fan system effect'.format(t4[1] or '-'), t4[2], t4[3])
+        return (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, t4)
+
+    def _group_words(gov):
+        return ('straight duct, transition and elbow' if (gov or {}).get('transition')
+                else 'straight duct and elbow')
+
+    def _table_of(it):
+        """The ASHRAE table id of a priced fitting item ('CR3-1'), else its
+        own Table / basis ('RJA worksheet' for a fallback), or None."""
+        t4 = (it[4] or (None, None))[1]
+        for text in (t4, it[1]):
+            m = _TABLE_ID.match(text or '')
+            if m:
+                return m.group(1)
+        return t4 or None
+
+    def _own_loss_basis(rec, group_items):
+        """The FSE row's Table / basis when the group's own losses govern
+        (Colin, 2026-11-09): 'Duct losses: straight duct and elbow (CR3-1),
+        L 3.4 / Le 3.5 ft', the transition and its table named when one is in
+        the group."""
+        gov = rec.get('gov') or {}
+        by_id = {}
+        for it in group_items:
+            m = _GROUP_ITEM.match(it[0])
+            if m is not None:
+                by_id[int(m.group(2))] = it
+        tables = [_table_of(by_id[t]) for t in gov.get('transitions', ()) if t in by_id]
+        elbow = by_id.get(gov.get('eid'))
+        tables.append(_table_of(elbow) if elbow is not None else None)
+        tables = [t for t in tables if t]
+        text = 'Duct losses: ' + _group_words(gov)
+        if tables:
+            text += ' (%s)' % ', '.join(tables)
+        if gov.get('win'):
+            text += ', L %.1f / %s %.1f ft' % (float(gov['l_ft']), gov.get('win_short', 'Le'),
+                                             float(gov['win']))
+        return text
 
     best = {}              # root_id -> {sys_class: {...}}
     box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
@@ -6155,7 +6215,9 @@ def main():
                                      'known drop, Include Return Filter'))
                 if c.get('fse_inwc', 0.0) > 0.0:
                     esp_rows.append(('Fan system effect', c['fse_inwc'],
-                                     'unit connection, 2001 Fundamentals Eq. 38'))
+                                     'unit connection group, the fan system effect '
+                                     '(2001 Fundamentals Eq. 38) or its own duct '
+                                     'losses, whichever governs'))
                 for _item, _val, _det in esp_rows:
                     summary_lines.append(_esp_text_line(_item, _val, _det))
                 # Every line said about this run goes to System Corrections

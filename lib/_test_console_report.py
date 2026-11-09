@@ -405,6 +405,36 @@ class DuctPerfSectionTests(unittest.TestCase):
         self.assertIn('Terminal/duct height clearance', html)
         self.assertNotIn('slot', html)
 
+    def test_takeoff_group_rows_read_as_covered(self):
+        """Colin, 2026-11-09: the group's straight duct and elbow print as
+        their own 0.000 rows marked 'in the fan system effect', apart from the
+        other straight duct and elbows, and the FSE row carries the value."""
+        items = [
+            ('Duct 1', '?, 5.0 ft, in the fan system effect', 1000.0, 0.0,
+             ('Straight duct', 'Darcy-Weisbach, in the fan system effect', None, 5.0)),
+            ('Duct 3', '?, 10.0 ft', 1000.0, 0.010,
+             ('Straight duct', 'Darcy-Weisbach', None, 10.0)),
+            ('Fitting 2', 'x, in the fan system effect', 1000.0, 0.0,
+             ('Rect radius elbow, 90 deg', 'CR3-1, in the fan system effect', 0.25, None)),
+            ('Fitting 4', 'x', 1000.0, 0.0156,
+             ('Rect radius elbow, 90 deg', 'CR3-1', 0.25, None)),
+            ('Fan system effect 2', 'x', 1000.0, 0.316,
+             ('Fan system effect, supply outlet',
+              'Duct losses: straight duct and elbow (CR3-1), L 5.1 / Le 5.7 ft', None, None)),
+        ]
+        rows, losses = dpc.takeoff_rows(items)
+        by = dict(((r[0], r[1]), r) for r in rows)
+        self.assertEqual(by[('Straight duct', 'Darcy-Weisbach')][4], '0.010')
+        self.assertEqual(by[('Straight duct', 'Darcy-Weisbach, in the fan system effect')][4],
+                         '0.000')
+        self.assertEqual(by[('Rect radius elbow, 90 deg', 'CR3-1')][4], '0.016')
+        self.assertEqual(
+            by[('Rect radius elbow, 90 deg', 'CR3-1, in the fan system effect')][4], '0.000')
+        fse = by[('Fan system effect, supply outlet',
+                  'Duct losses: straight duct and elbow (CR3-1), L 5.1 / Le 5.7 ft')]
+        self.assertEqual((fse[3], fse[4]), ('-', '0.316'))
+        self.assertAlmostEqual(sum(losses), 0.010 + 0.0156 + 0.316)
+
     def test_esp_header_basis(self):
         """Colin, 2026-11-09: the 2001 tables by geometry, the worksheet only
         as the fallback."""
