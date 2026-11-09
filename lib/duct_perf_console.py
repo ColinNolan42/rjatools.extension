@@ -61,14 +61,27 @@ def _f3(value):
 
 
 def system_summary(rec):
-    """Section a: System Summary."""
+    """Section a: System Summary. rec['caution'], when present (VAV Box
+    scope with external static), is said under the equipment table."""
     out = [cr.section('System Summary')]
     out.append(cr.keyvalue(rec.get('grand') or []))
     if rec.get('equipment'):
         out.append(cr.table(
             ['Equipment', 'Supply discharge CFM', 'Diffusers', 'Other air feeding it'],
             rec['equipment'], align=['l', 'r', 'r', 'l'], widths=W_EQUIPMENT))
+    if rec.get('caution'):
+        out.append(cr.callout(rec['caution'], 'warn'))
     return ''.join(out)
+
+
+# VAV Box scope (Colin, 2026-11-09): external static runs from the box outlet
+# to the worst diffuser only. Said wherever its total prints.
+VAVBOX_ESP_LABEL = 'EXTERNAL STATIC AFTER VAV BOX'
+VAVBOX_ESP_CAUTION = (
+    'EXTERNAL STATIC AFTER THE VAV BOX ONLY. NOT THE TOTAL SYSTEM LOSS. Low '
+    'pressure ductwork downstream of the box assumed; the medium pressure duct to '
+    "the box inlet, the box drop and the unit's return and external static are not "
+    'included.')
 
 
 TAKEOFF_HEADERS = ['Item', 'Table / basis', 'Qty', 'C', 'in. wc']
@@ -179,7 +192,8 @@ def esp_unit_rows(unit, sheet=False):
         rows.extend(_class_rows(cls, counted, sheet))
     total_row = None
     if unit.get('esp_total') is not None:
-        total_row = ['TOTAL EXTERNAL STATIC PRESSURE', ' + '.join(sides or []),
+        total_row = [VAVBOX_ESP_LABEL if unit.get('caution')
+                     else 'TOTAL EXTERNAL STATIC PRESSURE', ' + '.join(sides or []),
                      '', '', _f3(unit['esp_total'])]
     return rows, total_row
 
@@ -200,6 +214,9 @@ def esp_unit_notes(unit, sheet=False):
     which the sheet table leaves out of its total row. Every correction,
     warning and note is in System Corrections instead (Colin, 2026-11-02)."""
     out = []
+    if unit.get('caution'):
+        # VAV Box scope: first, ahead of everything (Colin, 2026-11-09).
+        out.append(('warn', unit['caution']))
     if sheet:
         for cls in unit.get('classes') or []:
             if cls.get('total_detail'):

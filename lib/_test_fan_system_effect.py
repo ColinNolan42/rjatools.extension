@@ -667,7 +667,12 @@ class DialogTest(unittest.TestCase):
         # themed dialog and the legacy fallback alike.
         self.assertEqual(len(re.findall(r'^\s*cb_filter\.IsChecked = True', self.src,
                                         re.M)), 2)
-        self.assertNotIn('cb_filter.IsChecked = False', self.src)
+        # The one untick is VAV Box scope's (Colin, 2026-11-09), after the
+        # tick is saved to be given back on leaving VAV Box.
+        self.assertEqual(self.src.count('cb_filter.IsChecked = False'), 1)
+        self.assertIn("filter_state['tick'] = bool(cb_filter.IsChecked)\n"
+                      "            cb_filter.IsChecked = False",
+                      self.src.replace('\r\n', '\n'))
 
     def test_settings_result_defaults_for_legacy_dialog(self):
         m = re.search(r"^def _settings_result\(.*?\n    }\n", self.src, re.S | re.M)
@@ -695,15 +700,48 @@ class DialogTest(unittest.TestCase):
                                     False, vav_checks.default_settings(), scope='vavbox')
         self.assertEqual(r5['scope'], 'vavbox')
 
-    def test_vav_box_has_no_external_static(self):
-        # Colin, 2026-11-03: greyed out in the dialog, forced off in both
-        # dialogs and in main()
-        self.assertIn('cb_static.IsEnabled = not box', self.src)
-        self.assertIn('ext_static = bool(cb_static.IsChecked) and not '
-                      'bool(rb_scope_vavbox.IsChecked)', self.src)
-        self.assertIn('ext_static = bool(cb_static.IsChecked) and not '
-                      'bool(rb_vavbox.IsChecked)', self.src)
-        self.assertIn("and dialog_result.get('scope') != 'vavbox')", self.src)
+    def test_vav_box_external_static(self):
+        # Colin, 2026-11-09 (replaces the 2026-11-03 block): VAV Box scope
+        # computes external static from the box outlet, with no fan checks
+        # at the box and no return filter.
+        self.assertNotIn('cb_static.IsEnabled = not box', self.src)
+        self.assertNotIn('and not bool(rb_scope_vavbox.IsChecked)\n', self.src)
+        self.assertNotIn('ext_static = bool(cb_static.IsChecked) and not', self.src)
+        self.assertNotIn("dialog_result.get('scope') != 'vavbox'", self.src)
+        # the picked boxes are walked as boxes, in both walks
+        self.assertIn("box_root_ids = set(all_root_ids) if scope == 'vavbox' else set()",
+                      self.src)
+        self.assertEqual(self.src.count('vav_box_ids=walk_box_ids'), 2)
+        # return filter greyed out and off, in both dialogs and in main()
+        self.assertIn('cb_filter.IsEnabled = not box', self.src)
+        self.assertIn('not bool(rb_exhaust.IsChecked) and not bool(rb_vavbox.IsChecked)',
+                      self.src)
+        self.assertIn("if dialog_result.get('scope') == 'vavbox':\n"
+                      "        # No return path after a VAV box (Colin, 2026-11-09).\n"
+                      "        filter_inwc = 0.0", self.src.replace('\r\n', '\n'))
+        # the caution is wired to the unit block and the System Summary
+        self.assertIn("unit_rec['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION",
+                      self.src)
+        self.assertIn("rep['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION", self.src)
+
+    def test_vav_box_caution_console(self):
+        import duct_perf_console as dpc
+        self.assertTrue(dpc.VAVBOX_ESP_CAUTION.startswith(
+            'EXTERNAL STATIC AFTER THE VAV BOX ONLY. NOT THE TOTAL SYSTEM LOSS.'))
+        unit = {'label': 'VAV-1', 'classes': [
+            {'sys_class': 'Supply Air', 'rows': [], 'subtotal': 0.3, 'safety': 0.03,
+             'total': 0.33}], 'esp_total': 0.33, 'esp_sides': ['Supply Air'],
+            'caution': dpc.VAVBOX_ESP_CAUTION}
+        self.assertEqual(dpc.esp_unit_notes(unit)[0], ('warn', dpc.VAVBOX_ESP_CAUTION))
+        _rows, total = dpc.esp_unit_rows(unit)
+        self.assertEqual(total[0], dpc.VAVBOX_ESP_LABEL)
+        self.assertIn('NOT THE TOTAL SYSTEM LOSS', dpc.external_static({'units': [unit]}))
+        self.assertIn('NOT THE TOTAL SYSTEM LOSS', dpc.system_summary(
+            {'grand': [], 'equipment': [], 'caution': dpc.VAVBOX_ESP_CAUTION}))
+        # an RTU keeps its plain total and no caution
+        rtu = dict(unit, caution=None)
+        self.assertEqual(dpc.esp_unit_rows(rtu)[1][0], 'TOTAL EXTERNAL STATIC PRESSURE')
+        self.assertNotIn('NOT THE TOTAL', dpc.external_static({'units': [rtu]}))
 
 
 if __name__ == '__main__':

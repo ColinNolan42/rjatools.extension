@@ -226,9 +226,9 @@ _SETTINGS_XAML = '''
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
                            Text="Lists units only (RTU, AHU). Boxes are found by position: supply equipment entered through its inlet. Medium pressure limits are under Main duct limits."/>
                 <RadioButton x:Name="rb_scope_vavbox" GroupName="scope" Content="VAV Box" Margin="0,8,0,0"
-                             ToolTip="One VAV box: the low pressure supply after the box, checked like an RTU's supply side. No medium pressure, box or external static checks."/>
+                             ToolTip="One VAV box: the low pressure supply after the box, checked like an RTU's supply side, with external static from the box outlet to the worst diffuser. No medium pressure checks and no fan system effect."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Lists VAV boxes only. The box slows the air, so only the low pressure ductwork after it is checked. External static is off."/>
+                           Text="Lists VAV boxes only. Only the low pressure ductwork after the box is checked. External static runs from the box outlet only, not the total system loss."/>
                 <RadioButton x:Name="rb_scope_exhaust" GroupName="scope" Content="Exhaust System" Margin="0,8,0,0"
                              ToolTip="Lists exhaust fans only, and reads a ceiling exhaust fan (its only duct connection is Exhaust Air, out)."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -930,18 +930,29 @@ def _show_velocity_settings_xaml(use_theme):
         _put(grid_ref, v, 1, r)
 
     # ── grey out the external static group until its checkbox is ticked ─────
+    filter_state = {'was_box': False, 'tick': None}
+
     def sync_enable(s=None, e=None):
         master = bool(cb_static.IsChecked)
-        # VAV Box: no external static (Colin, 2026-11-03), greyed out.
+        # VAV Box: external static from the box outlet only (Colin,
+        # 2026-11-09). No return path, so the return filter is greyed out
+        # and off, its tick given back on leaving VAV Box; no fan system
+        # effect at a box, so its box is greyed out too.
         box = bool(rb_scope_vavbox.IsChecked)
-        if box and bool(cb_static.IsChecked):
-            cb_static.IsChecked = False
-        cb_static.IsEnabled = not box
-        master = master and not box
+        if box and not filter_state['was_box']:
+            filter_state['was_box'] = True
+            filter_state['tick'] = bool(cb_filter.IsChecked)
+            cb_filter.IsChecked = False
+        elif not box and filter_state['was_box']:
+            filter_state['was_box'] = False
+            if filter_state['tick'] is not None:
+                cb_filter.IsChecked = filter_state['tick']
+        cb_filter.IsEnabled = not box
+        cb_fse.IsEnabled = not box
         pnl_static.IsEnabled = master
         pnl_static.Opacity = 1.0 if master else 0.55
-        tb_filter.IsEnabled = bool(cb_filter.IsChecked)
-        fse_on = master and bool(cb_fse.IsChecked)
+        tb_filter.IsEnabled = bool(cb_filter.IsChecked) and not box
+        fse_on = master and bool(cb_fse.IsChecked) and not box
         pnl_fse.IsEnabled = fse_on
         pnl_fse.Opacity = 1.0 if fse_on else 0.55
         # VAV box and static fields appear only with VAV and external static
@@ -1011,7 +1022,7 @@ def _show_velocity_settings_xaml(use_theme):
             if max_fpm is not None and max_fric is not None:
                 out[sys_class] = (max_fpm, max_fric)
 
-        ext_static = bool(cb_static.IsChecked) and not bool(rb_scope_vavbox.IsChecked)
+        ext_static = bool(cb_static.IsChecked)
         if ext_static:
             safety_pct = num(tb_sf, 'Safety factor', 'pct')
         else:
@@ -1041,9 +1052,11 @@ def _show_velocity_settings_xaml(use_theme):
                 calc_basis[k] = v
 
         filter_inwc = 0.0
-        # Exhaust System: no return path, the hidden filter box is ignored.
+        # Exhaust System and VAV Box: no return path, the filter box is
+        # ignored (VAV Box, Colin, 2026-11-09).
         if (ext_static and bool(cb_filter.IsChecked)
-                and not bool(rb_scope_exhaust.IsChecked)):
+                and not bool(rb_scope_exhaust.IsChecked)
+                and not bool(rb_scope_vavbox.IsChecked)):
             f = num(tb_filter, 'Return filter drop', 'nonneg')
             if f is not None:
                 filter_inwc = f
@@ -1282,8 +1295,9 @@ def _show_velocity_settings_dialog_legacy():
     rb_vav = _scope_radio('VAV System.  Lists units only. The full system: supply mains '
                           'between the unit and the box inlets are checked as medium '
                           'pressure (MP).')
-    rb_vavbox = _scope_radio('VAV Box.  Lists VAV boxes only. The low pressure ductwork '
-                             'after the box; no external static.')
+    rb_vavbox = _scope_radio('VAV Box.  Lists VAV boxes only. Only the low pressure '
+                             'ductwork after the box is checked. External static runs '
+                             'from the box outlet only, not the total system loss.')
     # Exhaust System (Colin, 2026-11-02): lists exhaust fans; the backdraft
     # drop is in the component drops below.
     rb_exhaust = _scope_radio('Exhaust System.  Lists exhaust fans only.')
@@ -1506,14 +1520,15 @@ def _show_velocity_settings_dialog_legacy():
     filt_panel.Children.Add(filt_suffix)
     outer.Children.Add(filt_panel)
 
-    # Exhaust System: no return path, so the return filter is not asked for
-    # (Colin, 2026-11-04).
+    # Exhaust System and VAV Box: no return path, so the return filter is not
+    # asked for (Colin, 2026-11-04; VAV Box 2026-11-09).
     def _sync_filter(s=None, e=None):
-        on = not bool(rb_exhaust.IsChecked)
+        on = not bool(rb_exhaust.IsChecked) and not bool(rb_vavbox.IsChecked)
         cb_filter.IsEnabled = on
         tb_filter.IsEnabled = on
-    rb_exhaust.Checked += _sync_filter
-    rb_exhaust.Unchecked += _sync_filter
+    for _rb in (rb_exhaust, rb_vavbox):
+        _rb.Checked += _sync_filter
+        _rb.Unchecked += _sync_filter
     _sync_filter()
 
     # The roof or wall cap on an inline exhaust fan's discharge (Colin,
@@ -1744,7 +1759,7 @@ def _show_velocity_settings_dialog_legacy():
                     vav_settings[key] = v
             selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
             full_diag = bool(cb_full_diag.IsChecked)
-            ext_static = bool(cb_static.IsChecked) and not bool(rb_vavbox.IsChecked)
+            ext_static = bool(cb_static.IsChecked)
             safety_pct = float(tb_sf.Text)
             if safety_pct < 0 or safety_pct > 100:
                 forms.alert('Safety factor must be between 0 and 100.',
@@ -1775,7 +1790,8 @@ def _show_velocity_settings_dialog_legacy():
                     return
                 calc_basis[k] = v
             filter_inwc = 0.0
-            if bool(cb_filter.IsChecked) and not bool(rb_exhaust.IsChecked):
+            if (bool(cb_filter.IsChecked) and not bool(rb_exhaust.IsChecked)
+                    and not bool(rb_vavbox.IsChecked)):
                 filter_inwc = float(tb_filter.Text)
                 if filter_inwc < 0:
                     forms.alert('The return filter drop cannot be negative.',
@@ -5127,6 +5143,10 @@ def _draw_system_summary(st, view, y, total_w, rep):
                 _SHEET_EQUIP_COLS, total_w),
             rep['equipment'], left_cols=(0, 3), clip=True)
         y -= draft.GAP
+    if rep.get('caution'):
+        # VAV Box scope with external static (Colin, 2026-11-09).
+        y = draft._note_panel(st, view, 0.0, y, total_w, [rep['caution']])
+        y -= draft.GAP
     bottoms = []
     if rep.get('by_class'):
         w = total_w * _SHEET_CLASS_W
@@ -5513,14 +5533,17 @@ def main():
     tol_pct       = dialog_result['tol_pct']
     selected_cols = dialog_result['selected_cols']
     full_diag     = dialog_result['full_diag']
-    # VAV Box: no external static (Colin, 2026-11-03), whatever the box says.
-    ext_static    = (dialog_result['ext_static']
-                     and dialog_result.get('scope') != 'vavbox')
+    # VAV Box: external static from the box outlet to the worst diffuser
+    # (Colin, 2026-11-09), low pressure ductwork after the box only.
+    ext_static    = dialog_result['ext_static']
     safety_pct    = dialog_result['safety_pct']
     c_values      = dialog_result['c_values']
     comp_values   = dialog_result['comp_values']
     calc_basis    = dialog_result['calc_basis']
     filter_inwc   = dialog_result['filter_inwc']
+    if dialog_result.get('scope') == 'vavbox':
+        # No return path after a VAV box (Colin, 2026-11-09).
+        filter_inwc = 0.0
     exhaust_cap   = dialog_result.get('exhaust_cap', False)
     exhaust_on    = dialog_result.get('exhaust', False)
     exh_set       = dialog_result.get('exhaust_settings') or {}
@@ -5769,6 +5792,12 @@ def main():
         inlet_runout_ids |= vs.inlet_runout_ids
     for dr in all_duct_results.values():
         dr.is_mp = dr.element_id in mp_ids
+    # VAV Box scope: the picked boxes are walked as boxes, so no fan checks of
+    # any kind at the box root (Colin, 2026-11-09): no fan system effect, no
+    # straight duct or swirl RED, no damper window WARNING. A root is never
+    # charged its own box drop (nid != root_id in the walker).
+    box_root_ids = set(all_root_ids) if scope == 'vavbox' else set()
+    walk_box_ids = vav_box_ids | box_root_ids
 
     # int duct id -> RED reason: a diffuser on an MP main. Applied after the
     # normal label, so it overrides it (an installation fault, like the
@@ -5956,7 +5985,7 @@ def main():
         _chk = _critical_path_loss(
             all_root_ids, all_children, all_duct_results, all_terminals,
             all_nodes, 0.0, c_values, comp_values,
-            duct_rooted_ids=duct_rooted_ids, vav_box_ids=vav_box_ids,
+            duct_rooted_ids=duct_rooted_ids, vav_box_ids=walk_box_ids,
             fan_effect=dict(fan_effect or fan_system_effect.default_settings(), on=False),
             discharge_roots=discharge_roots,
             inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()))
@@ -5976,7 +6005,7 @@ def main():
             all_root_ids, all_children, all_duct_results, all_terminals,
             all_nodes, safety_pct, c_values, comp_values,
             duct_rooted_ids=duct_rooted_ids, return_filter_inwc=filter_inwc,
-            vav_box_ids=vav_box_ids,
+            vav_box_ids=walk_box_ids,
             vav_box_drop_inwc=vav_set['box_drop'] if vav_on else None,
             fan_effect=fan_effect, discharge_roots=discharge_roots,
             exhaust_cap=exhaust_cap,
@@ -5987,6 +6016,9 @@ def main():
             inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()))
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE (index run, per RJA SP_LOSS_WORKSHEET)')
+        if box_root_ids:
+            summary_lines.append(duct_perf_console.VAVBOX_ESP_CAUTION)
+            rep['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION
         esp_rec = {'units': [], 'combined': [],
                    'method': None, 'not_included': None}
         esp_by_root = {}
@@ -6146,13 +6178,21 @@ def main():
                 worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
                 unit_total += worst_c['total_inwc']
                 sides.append(worst_k)
-            if (root_id in discharge_roots or root_id in exhaust_fan_roots) and sides:
+            if (root_id in discharge_roots or root_id in exhaust_fan_roots
+                    or root_id in box_root_ids) and sides:
                 # An exhaust fan has one side and that is the whole system.
-                # No rated static check (Colin, 2026-11-03).
+                # No rated static check (Colin, 2026-11-03). A VAV box root
+                # is its low pressure supply alone, never the total
+                # (Colin, 2026-11-09).
                 _sides = ' + '.join(sides)
+                _is_box = root_id in box_root_ids
                 summary_lines.append(
-                    '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
-                        unit_total, _sides))
+                    '    {} = {:.3f} in. wc   ({})'.format(
+                        duct_perf_console.VAVBOX_ESP_LABEL if _is_box
+                        else 'EXTERNAL STATIC PRESSURE', unit_total, _sides))
+                if _is_box:
+                    summary_lines.append('    ' + duct_perf_console.VAVBOX_ESP_CAUTION)
+                    unit_rec['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION
                 unit_rec['esp'] = _esp_console_text(unit_total, _sides)
                 unit_rec['esp_total'] = unit_total
                 unit_rec['esp_sides'] = list(sides)

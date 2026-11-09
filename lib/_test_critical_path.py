@@ -1727,6 +1727,33 @@ check("case50 VAV box root: fse 0 even with an elbow on it, 'VAV box' noted",
       and any('VAV box' in t for _k, t in sa50.get('fse_notes', ())),
       "notes %r" % (sa50.get('fse_notes'),))
 
+# 50b: VAV Box scope (Colin, 2026-11-09): the picked box root is walked as a
+#      box. External static is charged from the box outlet (the elbow on it
+#      priced as a fitting), with NO fan checks of any kind: no fan system
+#      effect, no straight duct or swirl RED, no damper window WARNING.
+#      Case 32's graph: as a unit it prices FSE and draws the elbow RED.
+check("case50b control: case 32 as a unit prices FSE and flags the elbow RED",
+      sa32.get('fse_inwc', 0.0) > 0.0 and 921 in set(sa32.get('fse_red_ids', ())),
+      "fse %r red %r" % (sa32.get('fse_inwc'), sa32.get('fse_red_ids')))
+for _lbl50b, _fan50b in (('FSE ticked', FSE_ON),
+                         ('checks only walk', dict(FSE_ON, on=False))):
+    sa50b = _fse_run(n32, c32, d32, t32, 920, fan=_fan50b, vav_box_ids={920})
+    check("case50b box root, %s: ESP charged, elbow priced, fse 0, no FSE row" % _lbl50b,
+          sa50b.get('total_inwc', 0.0) > 0.0
+          and sa50b.get('fse_inwc') == 0.0 and not _fse_items(sa50b)
+          and any(i[0] == 'Fitting 921' for i in sa50b.get('items', ()))
+          and abs(_items_sum(sa50b) - sa50b['subtotal_inwc']) < 1e-9,
+          "leaf %r" % (sa50b,))
+    check("case50b box root, %s: no straight duct, swirl or damper window flag" % _lbl50b,
+          not sa50b.get('fse_red_ids') and not sa50b.get('fse_red_ducts')
+          and not sa50b.get('fse_gray_ids')
+          and not any(k in ('red', 'warn', 'gray')
+                      for k, _t in sa50b.get('fse_notes', ())),
+          "notes %r red %r" % (sa50b.get('fse_notes'), sa50b.get('fse_red_ids')))
+    check("case50b box root, %s: never charged its own box drop" % _lbl50b,
+          not any(i[0].startswith('VAV box') for i in sa50b.get('items', ())),
+          "items %r" % (sa50b.get('items'),))
+
 # 51: friction along an unbroken main with taps (Colin, 2026-11-02). The main
 #     keeps one size but its flow drops at each tap, so its friction is the
 #     sum of its pieces at their own flow, and a run leaving through a tap is

@@ -289,6 +289,28 @@ class SheetLayoutTests(unittest.TestCase):
         for x0, _t, x1, _b, _c in self.rec.fills:
             self.assertLessEqual(x1, TOTAL_W + 1e-9)
 
+    def test_vav_box_caution_sheet(self):
+        # VAV Box scope (Colin, 2026-11-09): the total is labelled as after
+        # the box, and the caution prints under the ESP table and the
+        # System Summary equipment table.
+        box = dict(_unit(), label='VAV-1 (id 5)', classes=[_cls('Supply Air', 0.30)],
+                   checks=[], esp_total=0.33, esp_sides=['Supply Air'],
+                   caution=dpc.VAVBOX_ESP_CAUTION)
+        DRAW['_draw_external_static'](None, None, 0.0, TOTAL_W, {'units': [box]})
+        vals = self.rec.values()
+        self.assertIn(dpc.VAVBOX_ESP_LABEL, vals)
+        self.assertNotIn('TOTAL EXTERNAL STATIC PRESSURE', vals)
+        text = ' '.join(' '.join(vals).split())
+        self.assertIn('EXTERNAL STATIC AFTER THE VAV BOX ONLY. NOT THE TOTAL SYSTEM LOSS.',
+                      text)
+        self.assertNotIn('WARNING: EXTERNAL STATIC AFTER', text)
+        self.rec.texts = []
+        rep = {'grand': [], 'equipment': [['VAV-1 (id 5)', '800', '4', '-']],
+               'by_class': [], 'types': [], 'caution': dpc.VAVBOX_ESP_CAUTION}
+        DRAW['_draw_system_summary'](None, None, 0.0, TOTAL_W, rep)
+        text = ' '.join(' '.join(self.rec.values()).split())
+        self.assertIn('NOT THE TOTAL SYSTEM LOSS', text)
+
     def test_external_static_one_table_per_unit(self):
         esp = {'units': [_unit()],
                'combined': [{'title': 'Duct 3 + Duct 4',
