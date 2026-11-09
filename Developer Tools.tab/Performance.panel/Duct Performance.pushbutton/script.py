@@ -952,12 +952,13 @@ def _show_velocity_settings_xaml(use_theme):
                       'system effect, the straight duct RED, the 3 D WARNING and the '
                       'swirl and damper checks. Never modeled, so no friction or fitting '
                       'loss is priced for it.'),
-        ('Tap near a supply outlet', 'A tap, branch, tee or wye within 3 D of a '
-                                     'cabinet unit\'s supply outlet (D the larger of the '
-                                     'unit opening and the first duct; L with the roof '
-                                     'curb) is a WARNING: it disturbs the outlet like an '
-                                     'elbow, a system effect not priced. Not at exhaust '
-                                     'fans or VAV boxes.'),
+        ('Tap near a supply outlet', "A tap, branch, tee or wye within 3 D of a cabinet "
+                                     "unit's supply outlet is a WARNING: it disturbs the "
+                                     'outlet like an elbow, a system effect not priced. D '
+                                     'is the equivalent diameter De of the main the tap '
+                                     'sits on (rect 1.30 (ab)^0.625 / (a + b)^0.25), L '
+                                     'with the roof curb; the walk stops at the first '
+                                     'elbow. Not at exhaust fans or VAV boxes.'),
     ] + _dialog_vav_rows()
     for r, (lab, val) in enumerate(ref_rows):
         _add_row_def(grid_ref)
