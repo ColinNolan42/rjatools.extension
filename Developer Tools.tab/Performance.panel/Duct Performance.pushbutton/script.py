@@ -221,14 +221,14 @@ _SETTINGS_XAML = '''
                              ToolTip="A constant volume rooftop or packaged unit with supply and return. The roof curb is counted. VAV boxes and exhaust fans are not listed."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
                            Text="Lists units only, no VAV boxes or exhaust fans."/>
-                <RadioButton x:Name="rb_scope_fancoil" GroupName="scope" Content="Fan Coil" Margin="0,8,0,0"
-                             ToolTip="An indoor unit with supply and return (fan coil, furnace, indoor AHU), checked like an RTU with no roof curb and a 1500 fpm fan velocity."/>
+                <RadioButton x:Name="rb_scope_fancoil" GroupName="scope" Content="Indoor System" Margin="0,8,0,0"
+                             ToolTip="An indoor unit with supply and return: fan coil, furnace, indoor AHU. Checked like an RTU."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Lists units only. Indoor unit: no roof curb, fan velocity 1500 fpm."/>
+                           Text="Lists units only: fan coil, furnace, indoor AHU."/>
                 <RadioButton x:Name="rb_scope_vav" GroupName="scope" Content="VAV System" Margin="0,8,0,0"
                              ToolTip="The full system from the unit: supply mains to the VAV box inlets checked as medium pressure (MP), the boxes, low pressure after them and the return, with external static."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Lists units only (RTU, AHU). Boxes are found by position: supply equipment entered through its inlet. Medium pressure limits are under Main duct limits."/>
+                           Text="Lists units only (RTU, AHU). Boxes are found by position: supply equipment entered through its inlet. "/>
                 <RadioButton x:Name="rb_scope_vavbox" GroupName="scope" Content="VAV Box" Margin="0,8,0,0"
                              ToolTip="One VAV box: the low pressure supply after the box, checked like an RTU's supply side, with external static from the box outlet to the worst diffuser. No medium pressure checks and no fan system effect."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -328,11 +328,11 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System and Fan Coil, 2000 fpm RTU, VAV System and VAV Box."/>
+                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System and Indoor System, 2000 fpm RTU, VAV System and VAV Box."/>
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Set by the Scope: 1500 fpm Exhaust System and Fan Coil, 2000 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
+                                       Text="Set by the Scope: 1500 fpm Exhaust System and Indoor System, 2000 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
@@ -948,7 +948,7 @@ def _show_velocity_settings_xaml(use_theme):
                               'straight duct before it.'),
         ('Roof curb', "Counted as straight duct at the unit's own supply and return "
                       'connections, length only (RTU and VAV System, default 14 in.; off '
-                      'for Fan Coil, VAV Box and Exhaust System). It sets L for the fan '
+                      'for Indoor System, VAV Box and Exhaust System). It sets L for the fan '
                       'system effect, the straight duct RED, the 3 D WARNING and the '
                       'swirl and damper checks. Never modeled, so no friction or fitting '
                       'loss is priced for it.'),
@@ -1016,8 +1016,8 @@ def _show_velocity_settings_xaml(use_theme):
 
     # Fan type, fan velocity and roof curb follow the Scope (Colin,
     # 2026-11-03 and 2026-11-09): RTU and VAV System DWDI at 2000 fpm with
-    # the curb on, Fan Coil DWDI at 1500 fpm, Exhaust System SWSI at 1500
-    # fpm, the curb off and greyed out on Fan Coil, VAV Box and Exhaust
+    # the curb on, Indoor System DWDI at 1500 fpm, Exhaust System SWSI at
+    # 1500 fpm, the curb off and greyed out on Indoor System, VAV Box and Exhaust
     # System. Set only when the Scope changes, so a value typed after the
     # switch holds for the run.
     def _dialog_scope():
@@ -1355,8 +1355,8 @@ def _show_velocity_settings_dialog_legacy():
 
     rb_rtu = _scope_radio('RTU.  Lists units only, no VAV boxes or exhaust fans. Roof '
                           'curb %g in. counted.' % fan_system_effect.DEFAULT_CURB_IN, True)
-    rb_fancoil = _scope_radio('Fan Coil.  Lists units only. Indoor unit: no roof curb, fan '
-                              'velocity 1500 fpm.')
+    rb_fancoil = _scope_radio('Indoor System.  Lists units only: fan coil, furnace, indoor '
+                              'AHU.')
     rb_vav = _scope_radio('VAV System.  Lists units only. The full system: supply mains '
                           'between the unit and the box inlets are checked as medium '
                           'pressure (MP).')
@@ -2164,7 +2164,7 @@ def _show_system_picker_legacy(display_names, scope_label):
 # ── helpers ────────────────────────────────────────────────────────────────────
 # Scope (Colin, 2026-11-03): one choice, one unit per run. Each lists only
 # its kinds of equipment; a VAV box can still be picked alone under VAV System.
-_SCOPE_LABEL = {'rtu': 'RTU', 'fancoil': 'Fan Coil', 'vav': 'VAV System',
+_SCOPE_LABEL = {'rtu': 'RTU', 'fancoil': 'Indoor System', 'vav': 'VAV System',
                 'vavbox': 'VAV Box',
                 'exhaust': 'Exhaust System'}
 # Exhaust fan type as read from its connections (Colin, 2026-11-03).
@@ -2181,7 +2181,7 @@ _EXHAUST_FAN_KIND_TEXT = {
 _SCOPE_LISTS = {'rtu': ('unit',), 'fancoil': ('unit',), 'vav': ('unit',),
                 'vavbox': ('VAV box',),
                 'exhaust': ('exhaust fan',)}
-_KIND_SCOPE = {'unit': 'RTU, Fan Coil or VAV System', 'VAV box': 'VAV Box',
+_KIND_SCOPE = {'unit': 'RTU, Indoor System or VAV System', 'VAV box': 'VAV Box',
                'exhaust fan': 'Exhaust System'}
 
 

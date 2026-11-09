@@ -608,7 +608,7 @@ class DialogTest(unittest.TestCase):
     def test_scope_switch_sets_fan_velocity(self):
         # Colin, 2026-11-09: switching the Scope resets the fan velocity box
         # and the roof curb to its defaults, with the fan type; a value typed
-        # after holds. Fan Coil: 1500 fpm, curb off and greyed out.
+        # after holds. Indoor System: 1500 fpm, curb off and greyed out.
         import textwrap
         m = re.search(r'^    def _dialog_scope\(.*?(?=^    for rb in)', self.src, re.S | re.M)
         self.assertIsNotNone(m)
@@ -640,10 +640,14 @@ class DialogTest(unittest.TestCase):
         self.assertEqual(pick('rb_scope_vavbox'), ('2000', False, False, False, '14'))
         self.assertEqual(ns['_dialog_scope'](), 'vavbox')
         # the plain fallback dialog takes the Scope's fan velocity and curb,
-        # Fan Coil included
+        # Indoor System included
         self.assertIn('fan_system_effect.default_settings(fb_scope)', self.src)
         self.assertIn('curb_in=fan_system_effect.scope_curb_in(fb_scope)', self.src)
-        self.assertIn("rb_fancoil = _scope_radio('Fan Coil.", self.src)
+        self.assertIn("rb_fancoil = _scope_radio('Indoor System.  Lists units only: fan coil, "
+                      "furnace, indoor '", self.src)
+        self.assertNotIn('Fan Coil', self.src)
+        self.assertNotIn('Medium pressure limits are under Main duct limits', self.src)
+        self.assertIn('Lists units only: fan coil, furnace, indoor AHU.', self.src)
         self.assertIn('bool(rb_exhaust.IsChecked), bool(rb_fancoil.IsChecked))', self.src)
 
     def test_curb_dialog_and_settings(self):
@@ -681,7 +685,7 @@ class DialogTest(unittest.TestCase):
                       if e.tag.endswith('RadioButton') and e.get('GroupName') == 'scope')
         self.assertEqual(sorted(radios), ['rb_scope_exhaust', 'rb_scope_fancoil',
                                           'rb_scope_rtu', 'rb_scope_vav', 'rb_scope_vavbox'])
-        self.assertEqual(radios['rb_scope_fancoil'].get('Content'), 'Fan Coil')
+        self.assertEqual(radios['rb_scope_fancoil'].get('Content'), 'Indoor System')
         self.assertEqual(radios['rb_scope_vavbox'].get('Content'), 'VAV Box')
         self.assertEqual(radios['rb_scope_rtu'].get('Content'), 'RTU')
         names = set(e.get(xn) for e in root.iter() if e.get(xn))
