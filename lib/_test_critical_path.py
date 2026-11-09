@@ -2218,7 +2218,7 @@ check("case63 12x12 return opening into a 24x24 duct: 2 H on 24 in., elbow at 3 
                                           'first duct); 10.0 ft (5 H) is where the loss '
                                           'stops falling.')
               for k, t in sa63.get('fse_notes', ()))
-      and sa63.get('fse_red_ducts') == {941: ('Straight duct: elbow 942 at 3.0 ft, under 2 D',
+      and sa63.get('fse_red_ducts') == {941: ('Straight duct: elbow 942 at 3.0 ft, under 2 H',
                                               'Straight duct 4.0 ft')},
       "red %r notes %r" % (sa63.get('fse_red_ids'), sa63.get('fse_notes')))
 
@@ -2941,23 +2941,80 @@ check("case80 RTU return inlet, same geometry: connection velocity (500 fpm), no
       "rows %r" % (_rr80,))
 # The cabinet inlet NOTE says why (Colin, 2026-11-09), once, only where a
 # fan system effect is priced, and not on the 'connection' basis.
-_cab80 = [t for _k, t in rtu80.get('fse_notes', ()) if 'cabinet inlet' in t]
+_cab80 = [t for _k, t in rtu80.get('fse_notes', ()) if t.startswith('NOTE') and 'cabinet inlet' in t]
 check("case80 RTU return inlet: the cabinet inlet NOTE, once",
       _cab80 == ['NOTE: fan system effect at the return inlet at element 4601 priced at '
                  'the connection velocity, 500 fpm: cabinet inlet, the fan sits past the '
                  'filter and coil.'], "notes %r" % (rtu80.get('fse_notes'),))
 check("case80 inline exhaust fan inlet: no cabinet inlet NOTE",
       not any('cabinet inlet' in t for _k, t in ef80.get('fse_notes', ())))
+check("case80 inline exhaust fan inlet: no 3 D WARNING",
+      not any(t.startswith('WARNING: Elbow') for _k, t in ef80.get('fse_notes', ())))
 _rc80 = _fse_run(_nr, _cr, _dr80, _tr, 4600, fan=dict(FSE80, velocity_basis='connection'),
                  cls='Return Air')
 check("case80 'connection' basis: no cabinet inlet NOTE, same loss",
-      not any('cabinet inlet' in t for _k, t in _rc80.get('fse_notes', ()))
+      not any(t.startswith('NOTE') and 'cabinet inlet' in t for _k, t in _rc80.get('fse_notes', ()))
       and abs(_rc80.get('fse_inwc', -1) - rtu80.get('fse_inwc', -2)) < 1e-12)
 _c80r = (_rows80[0][3] / hvac_graph.velocity_pressure_inwg(2000.0)) if _rows80 else None
 _c80c = (_rr80[0][3] / hvac_graph.velocity_pressure_inwg(500.0)) if _rr80 else None
 check("case80 same ED7-2 C either way, only Pv changes",
       _c80r is not None and _c80c is not None and abs(_c80r - _c80c) < 1e-9,
       "C %r vs %r" % (_c80r, _c80c))
+
+# 81: the cabinet inlet 3 D WARNING (Colin, 2026-11-09, TB-M15 FCU-2 elbow
+#     3726300): a 12x12 return inlet, rect radius elbow turning on its 12 in.
+#     side. Under 2 H: RED only. 2 H to 3 H: a WARNING, no color, nothing
+#     priced differently; the governs NOTE points to it. Past 3 H: nothing.
+#     The same layout on an exhaust fan inlet: no WARNING.
+RC1212R = {'round': False, 'area_ft2': 1.0, 'd_in': None, 'w_in': 12.0, 'h_in': 12.0}
+
+
+def _run81(l_ft, inline=False):
+    n = {4700: _unit({4701: RC1212R}),
+         4702: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
+                    geom={'round': False, 'd_in': None, 'r_in': 18.0, 'w_in': 12.0,
+                          'h_in': 12.0, 'angle': 90.0})}
+    c = {4700: [4701], 4701: [4702], 4702: [4703], 4703: [4710]}
+    cls = 'Exhaust Air' if inline else 'Return Air'
+    d = build([(4701, 0.0, l_ft, 800.0, 1.0, cls), (4703, 0.0, 10.0, 800.0, 1.0, cls)])
+    for _r in d.values():
+        _r.d_h_in = 12.0
+    t = {4710: (800.0, cls, 'RG-81')}
+    if inline:
+        return crit([4700], c, d, t, n, 10.0, fan_effect=FSE_ON,
+                    inline_fan_roots={4700})[4700][cls]
+    return _fse_run(n, c, d, t, 4700, cls=cls)
+
+
+def _w81(leaf):
+    return [t for k, t in leaf.get('fse_notes', ()) if k == 'warn' and t.startswith('WARNING: Elbow')]
+
+
+_r81 = _run81(2.4)
+check("case81 cabinet inlet elbow at 2.4 ft (2 H 2.0, 3 H 3.0): the 3 H WARNING, not RED",
+      _w81(_r81) == ["WARNING: Elbow 4702, 2.4 ft from the return inlet, 2.4 H (H 12 in., "
+                     "the elbow's side in the plane of its turn). Provide at least 3.0 ft of "
+                     "straight duct (3 H of the elbow). A cabinet inlet is priced at its "
+                     "connection velocity, not the fan velocity, only with 3 H of straight "
+                     "duct or more."]
+      and not _r81.get('fse_red_ids'), "notes %r red %r" % (_r81.get('fse_notes'),
+                                                             _r81.get('fse_red_ids')))
+_g81 = [t for _k, t in _r81.get('fse_gov_notes', ())]
+check("case81 the governs NOTE points to the WARNING",
+      len(_g81) == 1 and _g81[0].endswith('; under 3 H, see the WARNING.'), "gov %r" % (_g81,))
+_r81r = _run81(1.9)
+check("case81 elbow at 1.9 ft: RED only, no WARNING; Reason says 2 H",
+      not _w81(_r81r) and 4702 in (_r81r.get('fse_red_ids') or set())
+      and (_r81r.get('fse_red_ducts') or {}).get(4701, ('',))[0]
+      == 'Straight duct: elbow 4702 at 1.9 ft, under 2 H',
+      "notes %r ducts %r" % (_r81r.get('fse_notes'), _r81r.get('fse_red_ducts')))
+_r81p = _run81(3.0)
+check("case81 elbow at 3.0 ft: no WARNING, and the governs NOTE does not point to one",
+      not _w81(_r81p) and not any('see the WARNING' in t for _k, t in _r81p.get('fse_gov_notes', ())),
+      "notes %r" % (_r81p.get('fse_notes'),))
+_r81e = _run81(2.4, inline=True)
+check("case81 exhaust fan inlet, same layout: no WARNING",
+      not _w81(_r81e), "notes %r" % (_r81e.get('fse_notes'),))
 
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round

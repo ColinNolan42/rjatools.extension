@@ -3615,19 +3615,29 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # inlet, is RED with the straight duct before it, still priced below.
         # Elbows only, every one inside the line, walked past taps on the
         # main and past the other elbows, up to a split or another fitting.
+        # A cabinet unit inlet (RTU, AHU, furnace, fan coil) also draws a
+        # WARNING for the first elbow under 3 D and past the 2 D RED (Colin,
+        # 2026-11-09): its connection velocity pricing holds only with 3 D
+        # of straight duct. The walk reaches out to 3 D for it.
+        cabinet_in = (role_here != fan_system_effect.OUTLET
+                      and root_id not in inline_fan_roots and root_id not in box_ids)
+        warn_done = [False]
         if role_here == fan_system_effect.OUTLET or size_c is not None:
             if role_here == fan_system_effect.OUTLET:
                 red_ft = fan_system_effect.outlet_red_ft(win)
             else:
                 red_ft = fan_system_effect.inlet_red_ft(size_c)
+            walk_ft = (max(red_ft, fan_system_effect.cabinet_warn_ft(size_c))
+                       if cabinet_in else red_ft)
             elbows_r, ducts_r = [], []
             if pick is not None:
-                _fse_first_disruption(root_id, first, red_ft, where, prev=pick[0],
+                _fse_first_disruption(root_id, first, walk_ft, where, prev=pick[0],
                                       seen=set(pick[1]), collect=elbows_r,
                                       through_taps=True, ducts=ducts_r)
             else:
-                _fse_first_disruption(root_id, first, red_ft, where, collect=elbows_r,
+                _fse_first_disruption(root_id, first, walk_ft, where, collect=elbows_r,
                                       through_taps=True, ducts=ducts_r)
+            first_elbow = min(elbows_r, key=lambda x: x[1])[0] if elbows_r else None
             fan_system_effect.log.info('straight duct check: %s, RED line %.2f ft, '
                                        'elbows %r, ducts %r', where, red_ft, elbows_r,
                                        ducts_r)
@@ -3642,13 +3652,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     # turn (Colin, 2026-11-04).
                     h_e = _fse_turn_plane_h(e_r, conn) if not is_round_c else None
                     size_e = h_e if h_e else size_c
+                    src_l, src_s = _inlet_size_source(size_e, conn, flow,
+                                                      e_r if h_e else None)
                     if l_r >= fan_system_effect.inlet_red_ft(size_e) - 1e-9:
                         fan_system_effect.log.info(
                             'straight duct check: elbow %s at %.2f ft is past 2 H '
                             '(H %.1f in., turn plane), not RED', e_r, l_r, size_e)
+                        if (cabinet_in and e_r == first_elbow
+                                and l_r < fan_system_effect.cabinet_warn_ft(size_e) - 1e-9):
+                            notes.append(('warn', fan_system_effect.cabinet_warn_text(
+                                where, e_r, l_r, size_e, is_round_c, src_l, src_s)))
+                            rec['warn3'] = (e_r, 'D' if is_round_c else 'H')
                         continue
-                    src_l, src_s = _inlet_size_source(size_e, conn, flow,
-                                                      e_r if h_e else None)
                     notes.append(('red', fan_system_effect.inlet_red_text(
                         where, e_r, l_r, size_e, is_round_c, src_l, src_s)))
                     need = fan_system_effect.inlet_red_ft(size_e)
@@ -3657,7 +3672,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     if at < l_r - 1e-9 and d_r not in rec['red_ducts']:
                         rec['red'].add(d_r)
                         rec['red_ducts'][d_r] = (
-                            fan_system_effect.straight_duct_reason(e_r, l_r, role_here),
+                            fan_system_effect.straight_duct_reason(
+                                e_r, l_r, role_here, 'D' if is_round_c else 'H'),
                             'Straight duct %.1f ft' % fan_system_effect._ceil_step(need))
         passed = {}     # transitions inside the pricing window (win)
         # Two elbows turning in different planes within 6 Dh of the
@@ -3791,7 +3807,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                       'elbow' if g_own else 'inlet collar')
         rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': g_win, 'win_short': g_short,
                       'transition': bool(passed), 'transitions': sorted(passed),
-                      'size': g_size}
+                      'size': g_size,
+                      'warn3': (rec.get('warn3') or (None, None))[1]
+                      if (rec.get('warn3') or (None,))[0] == did else None}
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])
         if r['high']:
@@ -4103,7 +4121,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 fse >= group, gov['eid'], gov['l_ft'], rec.get('where'), fse, group,
                 gov.get('win'), gov.get('win_short', 'Le'),
                 transition=gov.get('transition', False),
-                size_note=('%s %s' % gov['size']) if gov.get('size') else None)
+                size_note=('%s %s' % gov['size']) if gov.get('size') else None,
+                warn_dim=gov.get('warn3'))
         # The group's charge always sits on the fan system effect row, whichever
         # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
         # ', in the fan system effect' on their Table / basis, so the take-off
@@ -6312,8 +6331,11 @@ def main():
                 continue
             _leaf = per_class[sorted(per_class.keys())[0]]
             for _kind, _text in _leaf.get('fse_notes', ()):
-                if _kind == 'red':
-                    _correct('red', _text, root_labels.get(root_id, 'id {}'.format(root_id)))
+                if _kind == 'red' or (_kind == 'warn' and _text.startswith(
+                        fan_system_effect.CABINET_WARN_PREFIX)):
+                    # the cabinet inlet 3 D WARNING runs with them (Colin,
+                    # 2026-11-09)
+                    _correct(_kind, _text, root_labels.get(root_id, 'id {}'.format(root_id)))
             fse_red_ids.update(_leaf.get('fse_red_ids', ()))
             for _d, _v in (_leaf.get('fse_red_ducts') or {}).items():
                 fse_red_ducts.setdefault(_d, _v)

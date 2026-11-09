@@ -132,6 +132,8 @@ EXHAUST_FAN_FPM = 1500.0     # Exhaust System Scope default (Colin, 2026-11-09)
 OUTLET_RED_RATIO = 0.5       # an elbow under 0.5 Le of a unit outlet is RED
 INLET_RED_D = 2.0            # an elbow under 2 D of a unit inlet is RED
 INLET_FLOOR_D = 5.0          # where the inlet tables stop falling (the note)
+CABINET_WARN_D = 3.0         # a cabinet unit inlet elbow under 3 D: WARNING (Colin, 2026-11-09)
+CABINET_WARN_PREFIX = 'WARNING: Elbow '
 LE_SPLIT_MPS = 13.0          # Eq. 36 above this outlet velocity, Eq. 37 at or below
 SWIRL_DH = 6.0               # inlet swirl window, hydraulic diameters (p. 34.11)
 SWIRL_SAME_PLANE = 0.1       # |n1 x n2| under this: two turn planes are the same
@@ -601,11 +603,36 @@ def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
                 of_short, _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim))
 
 
-def straight_duct_reason(eid, l_ft, role):
-    """The flagged table Reason for a straight duct RED with its elbow."""
+def cabinet_warn_ft(size_in):
+    """CABINET_WARN_D x D, ft: a cabinet unit inlet elbow closer than this,
+    and not already RED, is a WARNING."""
+    return CABINET_WARN_D * float(size_in) / 12.0
+
+
+def cabinet_warn_text(where, eid, l_ft, size_in, is_round=True, source=None,
+                      source_short=None):
+    """The WARNING for an elbow under CABINET_WARN_D x D of a cabinet unit
+    inlet (RTU, AHU, furnace, fan coil), past the 2 D RED line (Colin,
+    2026-11-09): the connection velocity it is priced at holds only with 3 D
+    of straight duct. Same D / H and source as inlet_red_text."""
+    dim = 'D' if is_round else 'H'
+    of = (', ' + source) if source else ''
+    of_short = (' of ' + source_short) if source_short else ''
+    return ('%s%s, %.1f ft from the %s, %.1f %s (%s %.0f in.%s). Provide at least %.1f ft '
+            'of straight duct (%.0f %s%s). A cabinet inlet is priced at its connection '
+            'velocity, not the fan velocity, only with %.0f %s of straight duct or more.'
+            % (CABINET_WARN_PREFIX, eid, float(l_ft), where,
+               float(l_ft) * 12.0 / float(size_in), dim, dim, float(size_in), of,
+               _ceil_step(cabinet_warn_ft(size_in)), CABINET_WARN_D, dim, of_short,
+               CABINET_WARN_D, dim))
+
+
+def straight_duct_reason(eid, l_ft, role, dim='D'):
+    """The flagged table Reason for a straight duct RED with its elbow. dim:
+    'H' when a rect inlet elbow was judged on H (Colin, 2026-11-09)."""
     return 'Straight duct: elbow %s at %.1f ft, under %s' % (
         eid, float(l_ft), '%.1f Le' % OUTLET_RED_RATIO if role == OUTLET
-        else '%.0f D' % INLET_RED_D)
+        else '%.0f %s' % (INLET_RED_D, dim))
 
 
 def velocity_text(where, v_used, v_conn):
@@ -641,13 +668,14 @@ def no_effect_text(where, why):
 
 
 def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short,
-                 transition=False, size_note=None):
+                 transition=False, size_note=None, warn_dim=None):
     """The NOTE saying which was charged for the group at one connection
     (Colin, 2026-11-09): the two values side by side, then the outcome.
     Near the end of the window (L close to Le) the fan system effect falls
     toward 0 and the group's own losses govern. transition: a transition is
     in the group, so it is named. size_note: at an inlet, the size the
-    window was read at, e.g. 'D 8 in. elbow' (Colin, 2026-11-09)."""
+    window was read at, e.g. 'D 8 in. elbow' (Colin, 2026-11-09). warn_dim:
+    'D' or 'H' when the elbow drew the cabinet inlet 3 D WARNING."""
     group = 'straight duct, transition and elbow' if transition else 'straight duct and elbow'
     ratio = (' (L/%s %.2f%s)' % (win_short, float(l_ft) / float(win_ft),
                                  (', ' + size_note) if size_note else '')
@@ -655,10 +683,13 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
     head = ('NOTE: %s, elbow %s at %.1f ft%s: fan system effect %.3f in. wc, %s %.3f '
             'in. wc. ' % (where, eid, float(l_ft), ratio, float(fse_inwc), group,
                           float(own_inwc)))
+    tail = ('; under %.0f %s, see the WARNING.' % (CABINET_WARN_D, warn_dim)
+            if warn_dim else '.')
     if fse_wins:
-        return head + 'Fan system effect charged, the %s are not charged again.' % group
-    return head + ('%s charged at their own losses, no fan system effect.'
-                   % (group[0].upper() + group[1:]))
+        return head + ('Fan system effect charged, the %s are not charged again%s'
+                       % (group, tail))
+    return head + ('%s charged at their own losses, no fan system effect%s'
+                   % (group[0].upper() + group[1:], tail))
 
 
 # ── report text ──────────────────────────────────────────────────────────────
@@ -744,7 +775,8 @@ def method_lines(settings):
                    '%.0f fpm, and the connection velocity (cfm over the unit connector '
                    'area). At an inlet: the connection velocity on a cabinet unit '
                    '(RTU, AHU, furnace, fan coil), the fan sits past the filter and '
-                   'coil; on exhaust fans (inline, roof), where the duct meets the '
+                   'coil, with at least 3 D of straight duct before the first elbow '
+                   '(a WARNING when less); on exhaust fans (inline, roof), where the duct meets the '
                    'fan, the larger of the fan velocity and the connection velocity.'
                    % float(settings.get('fan_fpm', DEFAULT_FAN_FPM)))
     else:
