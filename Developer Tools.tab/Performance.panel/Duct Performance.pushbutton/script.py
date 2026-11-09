@@ -3694,7 +3694,20 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['group'] = set(d for d, _at in grp_ducts) | set(passed) | set([did])
         # Which one governs is said once the path is known (_fse_group_max,
         # Colin, 2026-11-09), not here.
-        rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': win, 'win_short': win_short,
+        # The ratio said in the NOTE and the Duct losses basis is on the same
+        # size the table was read at (Colin, 2026-11-09, TB-M10 3652084): an
+        # outlet's Le; an inlet's 5 x the elbow's own D or H (the side in the
+        # plane of its turn, as ER7-1 / ED7-2 and the RED line read it), not
+        # the search window, which uses the larger of the opening and the
+        # first duct.
+        if role_here == fan_system_effect.OUTLET:
+            g_win, g_short = win, win_short
+        else:
+            g_win = fan_system_effect.inlet_floor_ft(r['size_in'])
+            g_short = '%g %s' % (fan_system_effect.INLET_FLOOR_D,
+                                 'D' if r.get('table') == fan_system_effect.INLET_ROUND
+                                 else 'H')
+        rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': g_win, 'win_short': g_short,
                       'transition': bool(passed), 'transitions': sorted(passed)}
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])

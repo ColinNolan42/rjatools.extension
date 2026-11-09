@@ -2797,6 +2797,32 @@ check("case77 elbow priced at L 0: the fan velocity NOTE is said once",
       _elb77.get('fse_inwc', 0.0) > 0.0 and len(_vel_notes(_elb77)) == 1,
       "notes %r" % (_elb77.get('fse_notes'),))
 
+# 78: the governs NOTE's ratio is on the size the inlet table was read at
+#     (Colin, 2026-11-09, TB-M10 return inlet elbow 3652084): an 18 x 16
+#     opening, the elbow's side in the plane of its turn H 16 in., L 1.4 ft.
+#     ER7-1 reads L/H on 16 in., the RED line says 5 H = 6.7 ft, so the NOTE
+#     shall read L/5 H 1.4 / 6.67 = 0.21, not a ratio on the search window
+#     (the larger of the opening and the first duct, 18 in.).
+RC1816 = {'round': False, 'area_ft2': 2.0, 'd_in': None, 'w_in': 18.0, 'h_in': 16.0}
+n78 = {1150: _unit({1151: RC1816}),
+       1152: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False,
+                  geom={'round': False, 'd_in': None, 'r_in': 24.0, 'w_in': 16.0,
+                        'h_in': 18.0, 'angle': 90.0})}
+c78 = {1150: [1151], 1151: [1152], 1152: [1153], 1153: [1160]}
+d78 = build([(1151, 0.001, 1.4, 1000.0, 2.0, 'Return Air'),
+             (1153, 0.0, 10.0, 1000.0, 2.0, 'Return Air')])
+for _dr in d78.values():
+    _dr.size = '18x16"'
+ra78 = _fse_run(n78, c78, d78, {1160: (2000.0, 'Return Air', 'RG-78')}, 1150,
+                cls='Return Air')
+_g78 = [t for _k, t in ra78.get('fse_gov_notes', ())]
+_red78 = [t for k, t in ra78.get('fse_notes', ()) if k == 'red']
+check("case78 inlet governs NOTE: L/5 H on the elbow's own H (16 in.): 0.21",
+      len(_g78) == 1 and '(L/5 H %.2f)' % (1.4 / (5.0 * 16.0 / 12.0)) in _g78[0]
+      and '(L/5 H 0.21)' in _g78[0], "gov %r" % (_g78,))
+check("case78 the RED line names the same 5 H, 6.7 ft",
+      any('6.7 ft (5 H)' in t for t in _red78), "red %r" % (_red78,))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)
