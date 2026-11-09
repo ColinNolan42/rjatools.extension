@@ -2193,9 +2193,10 @@ sa63 = _fse_run(n63, c33, d63, {950: (4000.0, 'Return Air', 'RG-63')}, 940,
 check("case63 12x12 return opening into a 24x24 duct: 2 H on 24 in., elbow at 3 ft RED with its duct",
       sa63.get('fse_red_ids') == {941, 942}
       and any(k == 'red' and t.startswith('RED: Elbow 942, 3.0 ft from the return inlet, '
-                                          '1.5 H (H 24 in.). Provide at least 4.0 ft of '
-                                          'straight duct (2 H); 10.0 ft (5 H) is where the '
-                                          'loss stops falling.')
+                                          '1.5 H (H 24 in., the first duct, 24x24). Provide '
+                                          'at least 4.0 ft of straight duct (2 H of the '
+                                          'first duct); 10.0 ft (5 H) is where the loss '
+                                          'stops falling.')
               for k, t in sa63.get('fse_notes', ()))
       and sa63.get('fse_red_ducts') == {941: ('Straight duct: elbow 942 at 3.0 ft, under 2 D',
                                               'Straight duct 4.0 ft')},
@@ -2214,9 +2215,10 @@ for _shape63, _conn63, _dim63 in (('rect', SQ24, 'H'), ('round', RD24, 'D')):
         check("case63b %s inlet elbow at %.1f ft (2 %s 4.0 ft): %s" % (
                   _shape63, _l63, _dim63, 'RED with its duct' if _red63 else 'not RED'),
               ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1
-                and '(%s 24 in.)' % _dim63 in _txt[0]
-                and '4.0 ft of straight duct (2 %s); 10.0 ft (5 %s)' % (_dim63, _dim63)
-                in _txt[0])
+                and '(%s 24 in., the %s inlet collar)' % (
+                    _dim63, '24x24' if _dim63 == 'H' else '24 in. round') in _txt[0]
+                and '4.0 ft of straight duct (2 %s of the collar); 10.0 ft (5 %s)' % (
+                    _dim63, _dim63) in _txt[0])
                if _red63 else not _r.get('fse_red_ids')),
               "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
 
@@ -2499,8 +2501,8 @@ for _w69, _l69, _red69 in ((12.0, 3.0, False), (12.0, 1.9, True), (24.0, 3.0, Tr
     check("case69 24x12 inlet, elbow turning on its %s in. side at %.1f ft: %s" % (
               _h, _l69, 'RED (H %s in.)' % _h if _red69 else 'not RED'),
           ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1
-            and '(H %s in.)' % _h in _txt[0]
-            and '%.1f ft of straight duct (2 H)' % (2 * _w69 / 12.0) in _txt[0])
+            and "(H %s in., the elbow's side in the plane of its turn)" % _h in _txt[0]
+            and '%.1f ft of straight duct (2 H of the elbow)' % (2 * _w69 / 12.0) in _txt[0])
            if _red69 else not _r.get('fse_red_ids')),
           "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
 
@@ -2521,7 +2523,9 @@ for _l69b, _red69b in ((2.0, False), (1.5, True)):
     _txt = [t for k, t in _r.get('fse_notes', ()) if k == 'red']
     check("case69b 36x8 inlet, 10 in. round elbow at %.1f ft (2 H 1.7 ft): %s" % (
               _l69b, 'RED (H 10 in.)' if _red69b else 'not RED'),
-          ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1 and '(H 10 in.)' in _txt[0])
+          ((_r.get('fse_red_ids') == {941, 942} and len(_txt) == 1
+            and '(H 10 in., the 10 in. round elbow)' in _txt[0]
+            and '(2 H of the elbow)' in _txt[0])
            if _red69b else not _r.get('fse_red_ids')),
           "red %r notes %r" % (_r.get('fse_red_ids'), _txt))
 
@@ -2826,10 +2830,47 @@ ra78 = _fse_run(n78, c78, d78, {1160: (2000.0, 'Return Air', 'RG-78')}, 1150,
 _g78 = [t for _k, t in ra78.get('fse_gov_notes', ())]
 _red78 = [t for k, t in ra78.get('fse_notes', ()) if k == 'red']
 check("case78 inlet governs NOTE: L/5 H on the elbow's own H (16 in.): 0.21",
-      len(_g78) == 1 and '(L/5 H %.2f)' % (1.4 / (5.0 * 16.0 / 12.0)) in _g78[0]
-      and '(L/5 H 0.21)' in _g78[0], "gov %r" % (_g78,))
+      len(_g78) == 1 and '(L/5 H %.2f, ' % (1.4 / (5.0 * 16.0 / 12.0)) in _g78[0]
+      and '(L/5 H 0.21, H 16 in. elbow)' in _g78[0], "gov %r" % (_g78,))
 check("case78 the RED line names the same 5 H, 6.7 ft",
       any('6.7 ft (5 H)' in t for t in _red78), "red %r" % (_red78,))
+
+# 78b: TB-M12 L1 inline fan 3720082 (Colin, 2026-11-09): a 12x12 exhaust
+#      inlet collar, an 8 in. round elbow at 1.3 ft. The straight duct RED
+#      reads H 12 in. off the collar (the opening's smaller side governs over
+#      the 8 in. elbow); the fan system effect reads ED7-2 on the elbow's own
+#      D 8 in. Each names its size so the two do not read as a contradiction.
+RC1212 = {'round': False, 'area_ft2': 1.0, 'd_in': None, 'w_in': 12.0, 'h_in': 12.0}
+n78b = {1170: _unit({1171: RC1212}),
+        1172: Elem(kind='elbow', family_name='Round Elbow', is_round=True,
+                   geom={'round': True, 'd_in': 8.0, 'r_in': 12.0, 'w_in': None,
+                         'h_in': None, 'angle': 90.0})}
+c78b = {1170: [1171], 1171: [1172], 1172: [1173], 1173: [1180]}
+d78b = build([(1171, 0.0, 1.3, 400.0, 0.35, 'Exhaust Air'),
+              (1173, 0.0, 10.0, 400.0, 0.35, 'Exhaust Air')])
+ea78b = _fse_run(n78b, c78b, d78b, {1180: (400.0, 'Exhaust Air', 'EG-78b')}, 1170,
+                 cls='Exhaust Air')
+_red78b = [t for k, t in ea78b.get('fse_notes', ()) if k == 'red']
+_g78b = [t for _k, t in ea78b.get('fse_gov_notes', ())]
+check("case78b RED names the collar: (H 12 in., the 12x12 inlet collar), 2 H of the collar",
+      len(_red78b) == 1 and '1.3 H (H 12 in., the 12x12 inlet collar)' in _red78b[0]
+      and '2.0 ft of straight duct (2 H of the collar); 5.0 ft (5 H)' in _red78b[0],
+      "red %r" % (_red78b,))
+check("case78b governs NOTE names the elbow: (L/5 D 0.39, D 8 in. elbow)",
+      len(_g78b) == 1 and '(L/5 D %.2f, D 8 in. elbow)' % (1.3 / (40.0 / 12.0)) in _g78b[0],
+      "gov %r" % (_g78b,))
+
+# 78c: the same with a lossy straight duct, so its own losses govern: the
+#      FSE row's Duct losses basis names the elbow's D (Colin, 2026-11-09).
+d78c = build([(1171, 0.50, 1.3, 400.0, 0.35, 'Exhaust Air'),
+              (1173, 0.0, 10.0, 400.0, 0.35, 'Exhaust Air')])
+ea78c = _fse_run(n78b, c78b, d78c, {1180: (400.0, 'Exhaust Air', 'EG-78c')}, 1170,
+                 cls='Exhaust Air')
+_f78c = _fse_items(ea78c)
+check("case78c own losses govern: basis 'L 1.3 / 5 D 3.3 ft (D 8 in., the elbow)'",
+      len(_f78c) == 1 and _f78c[0][4][1].startswith('Duct losses: ')
+      and _f78c[0][4][1].endswith(', L 1.3 / 5 D 3.3 ft (D 8 in., the elbow)'),
+      "rows %r" % (_f78c,))
 
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round

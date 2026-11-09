@@ -377,6 +377,16 @@ class FiveDTest(unittest.TestCase):
                             'Provide at least 3.4 ft of straight duct (2 D); 8.4 ft (5 D) is '
                             'where the loss stops falling.')
         self.assertIn('(H 20 in.)', F.inlet_red_text('return inlet', 456, 0.8, 20.0, False))
+        # the size named (Colin, 2026-11-09, TB-M12 3720096)
+        t = F.inlet_red_text('exhaust inlet', 3720096, 1.3, 12.0, False,
+                             'the 12x12 inlet collar', 'the collar')
+        self.assertIn('1.3 H (H 12 in., the 12x12 inlet collar). Provide at least 2.0 ft of '
+                      'straight duct (2 H of the collar); 5.0 ft (5 H) is where', t)
+        g = F.governs_text(True, 3720096, 1.3, 'exhaust inlet', 0.1, 0.05, 40.0 / 12.0,
+                           '5 D', size_note='D 8 in. elbow')
+        self.assertIn('(L/5 D 0.39, D 8 in. elbow)', g)
+        self.assertIn('(L/Le 0.50)', F.governs_text(True, 1, 1.0, 'supply outlet', 0.1,
+                                                     0.05, 2.0, 'Le'))
         o = F.le_text('supply outlet', 123, 1.2, 3.9, 'Eq. 37')
         self.assertEqual(o, 'RED: Elbow 123, 1.2 ft from the supply outlet, L/Le 0.31 (Le 3.9 '
                             'ft, Eq. 37). Provide at least 2.0 ft of straight duct; 3.9 ft '

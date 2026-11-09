@@ -3394,6 +3394,37 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         fan_system_effect.log.info('turn plane H: elbow %s, %.1f in.', eid, h)
         return h
 
+    def _inlet_size_source(size, conn, flow, elbow=None):
+        """(long, short) naming what an inlet D or H was read from, for the
+        RED line (Colin, 2026-11-09, TB-M12 3720096: the RED line read the
+        12x12 collar, the fan system effect row the 8 in. elbow, and they
+        read as a contradiction): the unit's inlet collar, else the first
+        duct, else the elbow (its side in the plane of its turn). elbow: the
+        elbow id at a rect inlet, where H is the elbow's side in the plane
+        of its turn when that governs (_fse_turn_plane_h); named first."""
+        def _same(a):
+            return bool(a) and abs(float(a) - float(size)) < 0.05
+        if elbow is not None:
+            g = hvac_graph.elbow_geometry(all_nodes.get(elbow))
+            if g is not None and g.get('round') and _same(g.get('d_in')):
+                return ('the %.0f in. round elbow' % g['d_in'], 'the elbow')
+            if g is not None and not g.get('round') and _same(g.get('w_in')):
+                return ("the elbow's side in the plane of its turn", 'the elbow')
+        if conn is not None:
+            if conn.get('round') and _same(conn.get('d_in')):
+                return ('the %.0f in. round inlet collar' % conn['d_in'], 'the collar')
+            w, h = conn.get('w_in'), conn.get('h_in')
+            if w and h and (_same(w) or _same(h)):
+                return ('the %.0fx%.0f inlet collar' % (w, h), 'the collar')
+        dc = _duct_conn(flow)
+        if dc is not None:
+            if _same(dc.get('d_in')):
+                return ('the first duct, %.0f in. round' % dc['d_in'], 'the first duct')
+            w, h = dc.get('w_in'), dc.get('h_in')
+            if w and h and (_same(w) or _same(h)):
+                return ('the first duct, %.0fx%.0f' % (w, h), 'the first duct')
+        return ("the elbow's side in the plane of its turn", 'the elbow')
+
     def _fse_inlet_size(elem, conn, flow, notes, did=None, l_ft=0.0, where='inlet'):
         """(is_round, D or H in., r in. or None) for the inlet elbow. H is
         the side in the plane of the turn (hvac_graph.elbow_geometry swaps
@@ -3592,8 +3623,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             'straight duct check: elbow %s at %.2f ft is past 2 H '
                             '(H %.1f in., turn plane), not RED', e_r, l_r, size_e)
                         continue
+                    src_l, src_s = _inlet_size_source(size_e, conn, flow,
+                                                      e_r if h_e else None)
                     notes.append(('red', fan_system_effect.inlet_red_text(
-                        where, e_r, l_r, size_e, is_round_c)))
+                        where, e_r, l_r, size_e, is_round_c, src_l, src_s)))
                     need = fan_system_effect.inlet_red_ft(size_e)
                 rec['red'].add(e_r)
                 for d_r, at in ducts_r:
@@ -3718,15 +3751,23 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # plane of its turn, as ER7-1 / ED7-2 and the RED line read it), not
         # the search window, which uses the larger of the opening and the
         # first duct.
+        g_size = None
         if role_here == fan_system_effect.OUTLET:
             g_win, g_short = win, win_short
         else:
             g_win = fan_system_effect.inlet_floor_ft(r['size_in'])
-            g_short = '%g %s' % (fan_system_effect.INLET_FLOOR_D,
-                                 'D' if r.get('table') == fan_system_effect.INLET_ROUND
-                                 else 'H')
+            g_dim = 'D' if r.get('table') == fan_system_effect.INLET_ROUND else 'H'
+            g_short = '%g %s' % (fan_system_effect.INLET_FLOOR_D, g_dim)
+            # Named, so it does not read against the RED line, which reads
+            # the inlet collar (Colin, 2026-11-09, TB-M12 3720096). An
+            # unreadable elbow took the collar's size (its own NOTE says so).
+            g_geo = hvac_graph.elbow_geometry(all_nodes.get(did))
+            g_own = g_geo is not None and bool(g_geo.get('d_in') or g_geo.get('w_in'))
+            g_size = ('%s %.0f in.' % (g_dim, r['size_in']),
+                      'elbow' if g_own else 'inlet collar')
         rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': g_win, 'win_short': g_short,
-                      'transition': bool(passed), 'transitions': sorted(passed)}
+                      'transition': bool(passed), 'transitions': sorted(passed),
+                      'size': g_size}
         notes.extend(('note', 'NOTE: elbow %s, %.1f ft from the %s: %s' % (did, l_ft, where, n))
                      for n in r['notes'])
         if r['high']:
@@ -4037,7 +4078,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             note = fan_system_effect.governs_text(
                 fse >= group, gov['eid'], gov['l_ft'], rec.get('where'), fse, group,
                 gov.get('win'), gov.get('win_short', 'Le'),
-                transition=gov.get('transition', False))
+                transition=gov.get('transition', False),
+                size_note=('%s %s' % gov['size']) if gov.get('size') else None)
         # The group's charge always sits on the fan system effect row, whichever
         # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
         # ', in the fan system effect' on their Table / basis, so the take-off
@@ -4103,6 +4145,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if gov.get('win'):
             text += ', L %.1f / %s %.1f ft' % (float(gov['l_ft']), gov.get('win_short', 'Le'),
                                              float(gov['win']))
+            if gov.get('size'):
+                # inlet: the size the window was read at (Colin, 2026-11-09)
+                text += ' (%s, the %s)' % gov['size']
         return text
 
     best = {}              # root_id -> {sys_class: {...}}

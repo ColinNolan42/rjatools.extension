@@ -572,16 +572,22 @@ def le_text(where, eid, l_ft, le_ft, eq):
                          _ceil_step(outlet_red_ft(le_ft)), _ceil_step(le_ft)))
 
 
-def inlet_red_text(where, eid, l_ft, size_in, is_round=True):
+def inlet_red_text(where, eid, l_ft, size_in, is_round=True, source=None,
+                   source_short=None):
     """The RED line for an elbow under INLET_RED_D x D of a unit inlet, in
-    the Duct Performance reason style. H for a rectangular inlet."""
+    the Duct Performance reason style. H for a rectangular inlet. source
+    names what D or H was read from, e.g. 'the 12x12 inlet collar' (short
+    'the collar'), so it does not read against the fan system effect row,
+    which reads the elbow's own size (Colin, 2026-11-09, TB-M12 3720096)."""
     dim = 'D' if is_round else 'H'
-    return ('RED: Elbow %s, %.1f ft from the %s, %.1f %s (%s %.0f in.). Provide at least '
-            '%.1f ft of straight duct (%.0f %s); %.1f ft (%.0f %s) is where the loss '
+    of = (', ' + source) if source else ''
+    of_short = (' of ' + source_short) if source_short else ''
+    return ('RED: Elbow %s, %.1f ft from the %s, %.1f %s (%s %.0f in.%s). Provide at least '
+            '%.1f ft of straight duct (%.0f %s%s); %.1f ft (%.0f %s) is where the loss '
             'stops falling.' % (
                 eid, float(l_ft), where, float(l_ft) * 12.0 / float(size_in), dim, dim,
-                float(size_in), _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim,
-                _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim))
+                float(size_in), of, _ceil_step(inlet_red_ft(size_in)), INLET_RED_D, dim,
+                of_short, _ceil_step(inlet_floor_ft(size_in)), INLET_FLOOR_D, dim))
 
 
 def straight_duct_reason(eid, l_ft, role):
@@ -616,14 +622,17 @@ def no_effect_text(where, why):
 
 
 def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short,
-                 transition=False):
+                 transition=False, size_note=None):
     """The NOTE saying which was charged for the group at one connection
     (Colin, 2026-11-09): the two values side by side, then the outcome.
     Near the end of the window (L close to Le) the fan system effect falls
     toward 0 and the group's own losses govern. transition: a transition is
-    in the group, so it is named."""
+    in the group, so it is named. size_note: at an inlet, the size the
+    window was read at, e.g. 'D 8 in. elbow' (Colin, 2026-11-09)."""
     group = 'straight duct, transition and elbow' if transition else 'straight duct and elbow'
-    ratio = (' (L/%s %.2f)' % (win_short, float(l_ft) / float(win_ft))) if win_ft else ''
+    ratio = (' (L/%s %.2f%s)' % (win_short, float(l_ft) / float(win_ft),
+                                 (', ' + size_note) if size_note else '')
+             if win_ft else '')
     head = ('NOTE: %s, elbow %s at %.1f ft%s: fan system effect %.3f in. wc, %s %.3f '
             'in. wc. ' % (where, eid, float(l_ft), ratio, float(fse_inwc), group,
                           float(own_inwc)))
