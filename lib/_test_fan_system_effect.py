@@ -660,6 +660,27 @@ class DialogTest(unittest.TestCase):
         self.assertIn('Lists units only: fan coil, furnace, indoor AHU.', self.src)
         self.assertIn('bool(rb_exhaust.IsChecked), bool(rb_fancoil.IsChecked))', self.src)
 
+    def test_ranked_run_dialog(self):
+        # Colin, 2026-11-10: Ranked run under external static, default off on
+        # every Scope, Supply and Return rank boxes default 2, Exhaust System
+        # greys Supply rank, VAV Box greys Return rank.
+        import duct_perf_console as dpc
+        m = re.search(r"^_SETTINGS_XAML = '{3}(.*?)'{3}", self.src, re.S | re.M)
+        root = ET.fromstring(m.group(1).replace('@@RESOURCES@@', '').replace('@@HEADER@@', ''))
+        xn = '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
+        pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
+        inner = [e.get(xn) for e in pnl.iter() if e.get(xn)]
+        self.assertTrue({'cb_rank', 'pnl_rank', 'tb_rank_sup', 'tb_rank_ret',
+                         'lbl_rank_ret'} <= set(inner))
+        self.assertLess(inner.index('pnl_exh_static'), inner.index('cb_rank'))
+        self.assertIn('cb_rank.IsChecked = False', self.src)
+        self.assertIn('tb_rank_sup.IsEnabled = rank_on and not bool(rb_scope_exhaust.IsChecked)',
+                      self.src)
+        self.assertIn('tb_rank_ret.IsEnabled = rank_on and not box', self.src)
+        self.assertEqual(dpc.DEFAULT_RANK, 2)
+        self.assertIn("'ranked':        dict(ranked) if ranked else None,", self.src)
+        self.assertIn('keep_runs=bool(ranked_set))', self.src)
+
     def test_curb_dialog_and_settings(self):
         # Colin, 2026-11-09: roof curb box, default on at 14 in., outside the
         # external static group, validated 0 to 48 in.
@@ -866,13 +887,13 @@ class DialogTest(unittest.TestCase):
             'caution': dpc.VAVBOX_ESP_CAUTION}
         self.assertEqual(dpc.esp_unit_notes(unit)[0], ('warn', dpc.VAVBOX_ESP_CAUTION))
         _rows, total = dpc.esp_unit_rows(unit)
-        self.assertEqual(total[0], dpc.VAVBOX_ESP_LABEL)
+        self.assertEqual(total[0], dpc.VAVBOX_ESP_LABEL + ' (MR)')
         self.assertIn('NOT THE TOTAL SYSTEM LOSS', dpc.external_static({'units': [unit]}))
         self.assertIn('NOT THE TOTAL SYSTEM LOSS', dpc.system_summary(
             {'grand': [], 'equipment': [], 'caution': dpc.VAVBOX_ESP_CAUTION}))
         # an RTU keeps its plain total and no caution
         rtu = dict(unit, caution=None)
-        self.assertEqual(dpc.esp_unit_rows(rtu)[1][0], 'TOTAL EXTERNAL STATIC PRESSURE')
+        self.assertEqual(dpc.esp_unit_rows(rtu)[1][0], dpc.MR_LABEL)
         self.assertNotIn('NOT THE TOTAL', dpc.external_static({'units': [rtu]}))
 
 

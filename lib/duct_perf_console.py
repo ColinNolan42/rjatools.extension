@@ -201,6 +201,53 @@ VAVBOX_ESP_CAUTION = (
     'included.')
 
 
+# ── Ranked run (Colin, 2026-11-10) ──────────────────────────────────────────
+# A sanity check for the engineer: print the take-off of the Nth most
+# restrictive run instead of the first, while the most restrictive (MR) total
+# still prints and stays the design ESP.
+DEFAULT_RANK = 2
+MR_LABEL = 'TOTAL EXTERNAL STATIC PRESSURE (MR)'
+RANKED_TOTAL_LABEL = 'Ranked runs total'
+RANKED_TOTAL_NOTE = 'sanity check, not the design ESP'
+MR_LEGEND = ('MR',
+             'most restrictive run: on each side, the run from the unit to one '
+             'terminal with the highest external static. Supply MR plus return MR '
+             'is the design external static pressure.')
+
+
+def parse_rank(text):
+    """(rank int, None) or (None, error text) for a Ranked run box: a whole
+    number, 2 or higher, no fixed top (a rank above the terminal count is a
+    run time WARNING, see pick_ranked)."""
+    try:
+        v = float(str(text).strip())
+    except (ValueError, TypeError):
+        return None, 'must be a whole number'
+    if v != v or v in (float('inf'), float('-inf')) or v != int(v):
+        return None, 'must be a whole number'
+    if v < 2:
+        return None, 'must be 2 or higher (1 is the most restrictive run, always printed)'
+    return int(v), None
+
+
+def pick_ranked(runs, rank):
+    """(run, rank used, run count, over) from a class leaf's sorted 'runs'.
+    over is True when rank is above the run count; the last (least
+    restrictive) run is then used. (None, 0, 0, False) with no runs."""
+    n = len(runs or ())
+    if n == 0:
+        return None, 0, 0, False
+    over = rank > n
+    used = n if over else max(1, int(rank))
+    return runs[used - 1], used, n, over
+
+
+def rank_over_text(side, rank, count):
+    """The WARNING when a Ranked run box is above the terminals on a side."""
+    return ('{} rank {} is above the {} diffuser(s)/grille(s) on this system; '
+            'run {} (the least restrictive) is shown.'.format(side, rank, count, count))
+
+
 TAKEOFF_HEADERS = ['Item', 'Table / basis', 'Qty', 'C', 'in. wc']
 
 # Row order in the take-off: duct first, fittings, taps passed, components.
@@ -277,6 +324,9 @@ def _class_rows(cls, counted, sheet=False):
     head = cls['sys_class']
     if cls.get('airflow'):
         head = '{}, {}'.format(head, cls['airflow'])
+    if cls.get('rank_text'):
+        # Ranked run (Colin, 2026-11-10): which run this take-off is.
+        head = '{}, {}'.format(head, cls['rank_text'])
     if not counted:
         head += '  (not counted, the larger return side governs)'
     rows = [{'band': head}]
@@ -289,7 +339,8 @@ def _class_rows(cls, counted, sheet=False):
     rows.append(['Subtotal', '', '', '', _f3(cls['subtotal'])])
     rows.append(['Safety factor', cls.get('safety_detail') or '', '', '',
                  _f3(cls['safety'])])
-    total = ['{} total'.format(cls['sys_class']),
+    total = ['{} total{}'.format(cls['sys_class'],
+                                 ', run #{}'.format(cls['rank']) if cls.get('rank') else ''),
              '' if sheet else (cls.get('total_detail') or ''),
              '', '', _f3(cls['total'])]
     rows.append({'cells': total, 'bold': True} if sheet else total)
@@ -301,7 +352,13 @@ def esp_unit_rows(unit, sheet=False):
     (_esp_unit_table) and the drafting view: (rows, total_row). rows holds
     TAKEOFF_HEADERS lists and {'band': text} class headings (sheet True:
     see _class_rows). total_row is the TOTAL EXTERNAL STATIC PRESSURE row, or
-    None when only one side was traced."""
+    None when only one side was traced.
+
+    The total row is the most restrictive (MR) total, the design ESP, marked
+    MR (Colin, 2026-11-10). With Ranked run on (unit['ranked']), the classes
+    hold the ranked runs: their own total goes in a 'Ranked runs total' row
+    just above it, and the MR row carries unit['mr_total'] and the terminal
+    each MR run ends at (unit['mr_text'])."""
     sides = unit.get('esp_sides')
     rows = []
     for cls in unit.get('classes') or []:
@@ -309,9 +366,17 @@ def esp_unit_rows(unit, sheet=False):
         rows.extend(_class_rows(cls, counted, sheet))
     total_row = None
     if unit.get('esp_total') is not None:
-        total_row = [VAVBOX_ESP_LABEL if unit.get('caution')
-                     else 'TOTAL EXTERNAL STATIC PRESSURE', ' + '.join(sides or []),
-                     '', '', _f3(unit['esp_total'])]
+        mr_label = (VAVBOX_ESP_LABEL + ' (MR)' if unit.get('caution') else MR_LABEL)
+        if unit.get('ranked'):
+            ranked = [RANKED_TOTAL_LABEL, '{}, {}'.format(
+                unit.get('ranked_text') or ' + '.join(sides or []), RANKED_TOTAL_NOTE),
+                '', '', _f3(unit['esp_total'])]
+            rows.append({'cells': ranked, 'bold': True} if sheet else ranked)
+            total_row = [mr_label, unit.get('mr_text') or ' + '.join(sides or []),
+                         '', '', _f3(unit.get('mr_total'))]
+        else:
+            total_row = [mr_label, ' + '.join(sides or []),
+                         '', '', _f3(unit['esp_total'])]
     return rows, total_row
 
 

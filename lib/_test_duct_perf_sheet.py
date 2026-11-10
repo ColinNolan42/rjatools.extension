@@ -231,7 +231,7 @@ class SheetRowTests(unittest.TestCase):
         sheet, total2 = dpc.esp_unit_rows(unit, sheet=True)
         self.assertEqual(total, total2)
         self.assertEqual(len(console), len(sheet))
-        self.assertEqual(total[0], 'TOTAL EXTERNAL STATIC PRESSURE')
+        self.assertEqual(total[0], dpc.MR_LABEL)
         self.assertEqual(total[4], '0.850')
         for c, s in zip(console, sheet):
             if isinstance(s, dict) and 'cells' in s:
@@ -346,8 +346,8 @@ class SheetLayoutTests(unittest.TestCase):
                    caution=dpc.VAVBOX_ESP_CAUTION)
         DRAW['_draw_external_static'](None, None, 0.0, TOTAL_W, {'units': [box]})
         vals = self.rec.values()
-        self.assertIn(dpc.VAVBOX_ESP_LABEL, vals)
-        self.assertNotIn('TOTAL EXTERNAL STATIC PRESSURE', vals)
+        self.assertIn(dpc.VAVBOX_ESP_LABEL + ' (MR)', vals)
+        self.assertNotIn(dpc.MR_LABEL, vals)
         text = ' '.join(' '.join(vals).split())
         self.assertIn('EXTERNAL STATIC AFTER THE VAV BOX ONLY. NOT THE TOTAL SYSTEM LOSS.',
                       text)
@@ -369,7 +369,7 @@ class SheetLayoutTests(unittest.TestCase):
         vals = self.rec.values()
         self.assertEqual(vals.count('Item'), 1)          # one table header
         self.assertIn('EXTERNAL STATIC PRESSURE - RTU-1 (id 123456)', vals)
-        self.assertIn('TOTAL EXTERNAL STATIC PRESSURE', vals)
+        self.assertIn(dpc.MR_LABEL, vals)
         self.assertIn('Supply Air total', vals)
         self.assertNotIn('worst run ends at ' + LONG_TERMINAL, vals)
         self.assertIn('EXTERNAL STATIC PRESSURE - Duct 3 + Duct 4', vals)
@@ -379,7 +379,7 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertNotIn('NOT INCLUDED: coil and cabinet', vals)
         self.assertNotIn('EXTERNAL STATIC TAKE-OFF', ' '.join(vals))
         self.assertFalse(any('UNPRICED' in v or 'WARNING' in v for v in vals))
-        total = [t for t in self.rec.texts if t[2] == 'TOTAL EXTERNAL STATIC PRESSURE'][0]
+        total = [t for t in self.rec.texts if t[2] == dpc.MR_LABEL][0]
         self.assertEqual(total[3], 'bold')
         self.assertLess(y, 0.0)
 

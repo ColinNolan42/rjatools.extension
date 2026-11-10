@@ -362,6 +362,19 @@ _SETTINGS_XAML = '''
                                 <TextBlock Text="in. wc, added once to every exhaust run" VerticalAlignment="Center"/>
                             </StackPanel>
                         </StackPanel>
+                        <!-- Ranked run (Colin, 2026-11-10) -->
+                        <CheckBox x:Name="cb_rank" Content="Ranked run" Margin="0,10,0,0"
+                                  ToolTip="Prints the take-off of a lesser run (2 = the second most restrictive) as a sanity check. The most restrictive run (MR) total still prints and stays the design ESP."/>
+                        <StackPanel x:Name="pnl_rank" Orientation="Horizontal" Margin="20,4,0,0">
+                            <TextBlock Text="Supply rank" VerticalAlignment="Center"/>
+                            <TextBox x:Name="tb_rank_sup" Width="56" Margin="8,0,16,0"
+                                     ToolTip="Which supply run to print, 2 or higher (2 = the second most restrictive)."/>
+                            <TextBlock x:Name="lbl_rank_ret" Text="Return rank" VerticalAlignment="Center"/>
+                            <TextBox x:Name="tb_rank_ret" Width="56" Margin="8,0,6,0"
+                                     ToolTip="Which return or exhaust run to print, 2 or higher (2 = the second most restrictive)."/>
+                        </StackPanel>
+                        <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,2,0,0"
+                                   Text="2 = the second most restrictive run. The MR total still prints as the design ESP."/>
                     </StackPanel>
                 </Border>
 
@@ -488,7 +501,8 @@ def _scope_of(vav, vavbox, exhaust, fancoil=False):
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
                      vav, vav_settings, fan_effect=None, exhaust_cap=False,
-                     exhaust=False, exhaust_settings=None, scope=None):
+                     exhaust=False, exhaust_settings=None, scope=None,
+                     ranked=None):
     """The settings dialog's answer, a dict, built in ONE place for both the
     themed and the legacy dialog so main() reads the same keys from either.
 
@@ -501,6 +515,8 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
     'backdraft' is taken as off in main() (Colin, 2026-11-03).
     'scope': 'rtu', 'fancoil', 'vav', 'vavbox' or 'exhaust' (Colin, 2026-11-03: one
     Scope choice). None derives it from vav / exhaust (no VAV Box).
+    'ranked': None (Ranked run off, the legacy dialog too) or {'supply': n,
+    'return': n}, n 2 or higher (Colin, 2026-11-10).
     """
     limits = dict(limits)
     if vav:
@@ -524,6 +540,7 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
         'scope':         scope or _scope_of(vav, False, exhaust),
         'vav_settings':  vav_settings,
         'fan_effect':    dict(fan_effect or fan_system_effect.default_settings()),
+        'ranked':        dict(ranked) if ranked else None,
     }
 
 
@@ -582,6 +599,11 @@ def _show_velocity_settings_xaml(use_theme):
     rb_fan_swsi = N('rb_fan_swsi')
     tb_blast = N('tb_blast')
     tb_fan_fpm = N('tb_fan_fpm')
+    cb_rank = N('cb_rank')
+    pnl_rank = N('pnl_rank')
+    tb_rank_sup = N('tb_rank_sup')
+    tb_rank_ret = N('tb_rank_ret')
+    lbl_rank_ret = N('lbl_rank_ret')
     exp_adv = N('exp_adv')
     exp_c = N('exp_c')
     exp_comp = N('exp_comp')
@@ -641,8 +663,11 @@ def _show_velocity_settings_xaml(use_theme):
     cb_curb.IsChecked = True     # RTU, the default Scope (Colin, 2026-11-09)
     tb_backdraft.Text = '%.2f' % fitting_tables.component_of('backdraft')
     tb_exh_cap.Text = '%.2f' % fitting_tables.component_of('cap')
+    tb_rank_sup.Text = str(duct_perf_console.DEFAULT_RANK)
+    tb_rank_ret.Text = str(duct_perf_console.DEFAULT_RANK)
+    cb_rank.IsChecked = False        # default off on every Scope (Colin, 2026-11-10)
     for b in (tb_tol, tb_sf, tb_filter, tb_blast, tb_fan_fpm, tb_backdraft, tb_exh_cap,
-              tb_curb):
+              tb_curb, tb_rank_sup, tb_rank_ret):
         ui_helpers.rja_attach_clear_on_edit(b)
         all_boxes.append(b)
     cb_full_diag.IsChecked = False
@@ -990,6 +1015,15 @@ def _show_velocity_settings_xaml(use_theme):
         pnl_fse.IsEnabled = fse_on
         pnl_fse.Opacity = 1.0 if fse_on else 0.55
         tb_curb.IsEnabled = bool(cb_curb.IsEnabled) and bool(cb_curb.IsChecked)
+        # Ranked run: Exhaust System has the exhaust side only, VAV Box the
+        # supply after the box only (Colin, 2026-11-10).
+        rank_on = master and bool(cb_rank.IsChecked)
+        pnl_rank.IsEnabled = rank_on
+        pnl_rank.Opacity = 1.0 if rank_on else 0.55
+        tb_rank_sup.IsEnabled = rank_on and not bool(rb_scope_exhaust.IsChecked)
+        tb_rank_ret.IsEnabled = rank_on and not box
+        lbl_rank_ret.Text = ('Exhaust rank' if bool(rb_scope_exhaust.IsChecked)
+                             else 'Return rank')
         # VAV box and static fields appear only with VAV and external static
         # both ticked (Colin, 2026-10-22).
         both = master and bool(rb_scope_vav.IsChecked)
@@ -1007,7 +1041,7 @@ def _show_velocity_settings_xaml(use_theme):
         for el in mp_row:
             el.Visibility = vis
     for cb in (cb_static, cb_filter, cb_fse, rb_scope_rtu, rb_scope_vav, rb_scope_vavbox,
-               rb_scope_exhaust, rb_scope_fancoil, cb_curb):
+               rb_scope_exhaust, rb_scope_fancoil, cb_curb, cb_rank):
         cb.Checked += sync_enable
         cb.Unchecked += sync_enable
     sync_enable()
@@ -1167,6 +1201,22 @@ def _show_velocity_settings_xaml(use_theme):
                 else:
                     vav_settings[key] = v
 
+        # Ranked run (Colin, 2026-11-10): 2 or higher, no fixed top; a rank
+        # above the terminal count is a WARNING at run time, not an error here.
+        ranked = None
+        if ext_static and bool(cb_rank.IsChecked):
+            ranked = {'supply': duct_perf_console.DEFAULT_RANK,
+                      'return': duct_perf_console.DEFAULT_RANK}
+            for key, box, label in (('supply', tb_rank_sup, 'Supply rank'),
+                                    ('return', tb_rank_ret, lbl_rank_ret.Text)):
+                if not box.IsEnabled:
+                    continue
+                v, err = duct_perf_console.parse_rank(box.Text)
+                if err:
+                    errors.append((box, label + ' ' + err + '.', ()))
+                else:
+                    ranked[key] = v
+
         selected_cols = set(k for k, cb in col_boxes.items() if bool(cb.IsChecked))
         full_diag = bool(cb_full_diag.IsChecked)
         values = _settings_result(out, gpct, selected_cols, full_diag,
@@ -1175,7 +1225,7 @@ def _show_velocity_settings_xaml(use_theme):
                                   fan_effect,
                                   ext_static and exhaust and bool(cb_exh_cap.IsChecked),
                                   exhaust, exhaust_settings,
-                                  scope=scope_key)
+                                  scope=scope_key, ranked=ranked)
         return errors, values
 
     def on_ok(s, e):
@@ -2376,8 +2426,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         duct_rooted_ids=None, return_filter_inwc=0.0,
                         vav_box_ids=None, vav_box_drop_inwc=None,
                         fan_effect=None, discharge_roots=None, exhaust_cap=False,
-                        backdraft_roots=None, inline_fan_roots=None):
+                        backdraft_roots=None, inline_fan_roots=None,
+                        keep_runs=False):
     """Worst fan-to-terminal path per system class: the index run, with fittings.
+
+    keep_runs (Ranked run, Colin 2026-11-10): every class leaf also carries
+    'runs', each terminal's own worst run priced the same way, sorted by
+    total high to low, ties by terminal id, so runs[0] is the index run.
 
     Total external static pressure is a PATH, not a sum. Air leaving the fan
     takes one route to one terminal and the fan has to beat the worst route;
@@ -4339,6 +4394,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return text
 
     best = {}              # root_id -> {sys_class: {...}}
+    runs = {}              # root_id -> {sys_class: {terminal id: {...}}} (keep_runs)
     box_reach = {}         # root_id -> {box id: worst MP loss to the box inlet}
     truncated_roots = set()  # PER ROOT: one unit truncating must not label the
                              # others, now that results print per equipment.
@@ -4351,6 +4407,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
     for root_id in all_root_ids:
         best_here = {}     # this equipment's own per-system-class winners
+        runs_here = {}     # sys_class -> {terminal id: its own worst run} (keep_runs)
         boxes_here = {}    # box id -> worst MP loss reaching its inlet
         # Fan system effect per unit connection, charged to the paths that
         # leave the unit through that connection.
@@ -4648,10 +4705,20 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     current['friction_inwc'] + current['fitting_inwc'] +
                     current['component_inwc'] + current['filter_inwc'] +
                     current['fse_inwc'])
-                if (current is None or _tot_here > _tot_cur + 1e-12 or
-                        (abs(_tot_here - _tot_cur) <= 1e-12 and
-                         nid < current['terminal_id'])):
-                    best_here[key] = {
+                _better_best = (current is None or _tot_here > _tot_cur + 1e-12 or
+                                (abs(_tot_here - _tot_cur) <= 1e-12 and
+                                 nid < current['terminal_id']))
+                _better_term = False
+                if keep_runs:
+                    # This terminal's own worst run (a terminal reached by
+                    # two routes keeps the lossier one).
+                    _tr = runs_here.setdefault(key, {}).get(nid)
+                    _better_term = _tr is None or _tot_here > (
+                        _tr['friction_inwc'] + _tr['fitting_inwc'] +
+                        _tr['component_inwc'] + _tr['filter_inwc'] +
+                        _tr['fse_inwc']) + 1e-12
+                if _better_best or _better_term:
+                    _rec = {
                         'friction_inwc':    fric_l,
                         'fitting_inwc':     fit_l,
                         'component_inwc':   comp_here,
@@ -4698,6 +4765,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                             (hvac_graph.CAP_LABEL, 'known drop', None, None)),)
                             if roof_cap else ()),
                     }
+                    if _better_best:
+                        best_here[key] = _rec
+                    if _better_term:
+                        runs_here[key][nid] = _rec
 
             for child_id in all_children.get(nid, []):
                 # Per-PATH loop guard, not a global visited set. A single shared
@@ -4817,6 +4888,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
         if best_here:
             best[root_id] = best_here
+        if runs_here:
+            runs[root_id] = runs_here
         if boxes_here:
             box_reach[root_id] = boxes_here
 
@@ -4826,7 +4899,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         out = {}
         boxes = dict((bid, (v, v * sf))
                      for bid, v in box_reach.get(root_id, {}).items())
-        for sys_class, b in per_class.items():
+        def _finish(b):
             # Fan system effect is in the subtotal, so the safety factor
             # applies to it like every other fitting (Colin, 2026-10-29).
             sub = (b['friction_inwc'] + b['fitting_inwc'] + b['component_inwc'] +
@@ -4835,6 +4908,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             b['total_inwc']    = sub * sf
             b['truncated']     = root_id in truncated_roots
             b['boxes']         = boxes
+        for sys_class, b in per_class.items():
+            _finish(b)
+            if keep_runs:
+                ranked = list(runs.get(root_id, {}).get(sys_class, {}).values())
+                for r in ranked:
+                    if r is not b:
+                        _finish(r)
+                ranked.sort(key=lambda r: (-r['total_inwc'], r['terminal_id']))
+                b['runs'] = ranked
             out[sys_class]     = b
         result[root_id] = out
     return result
@@ -5564,6 +5646,11 @@ def _legend_lines(rep, show_r_marker_note=False):
                      'the required external static pressure for its equipment '
                      'or system.'.format(
                          (words or duct_perf_console.scope_words('rtu'))['one']))
+        # The MR mark of the external static table (Colin, 2026-11-10);
+        # (R) shows exactly when external static ran.
+        lines.append('{}: {}{}'.format(duct_perf_console.MR_LEGEND[0],
+                                       duct_perf_console.MR_LEGEND[1][0].upper(),
+                                       duct_perf_console.MR_LEGEND[1][1:]))
     return lines
 
 
@@ -5808,10 +5895,10 @@ def _build_summary_view(doc, rep, esp_rec, vav_rep, flagged_rows, selected_cols,
                     _COLOR_MAP[color_key], fill_id)
             rja_drafting._t(st, sched_view, _LEGEND_TEXT_X, y, line)
             y -= row_h
-        if show_r_marker_note:
-            # Starts in the swatch column so '(R)' lines up with the colour
-            # squares above it.
-            rja_drafting._t(st, sched_view, pad * 2.0, y, legend_lines[-1])
+        for line in legend_lines[len(legend):]:
+            # The (R) and MR lines start in the swatch column so they line
+            # up with the colour squares above them.
+            rja_drafting._t(st, sched_view, pad * 2.0, y, line)
             y -= row_h
         rja_drafting._outline(st, sched_view, 0.0, legend_top, total_w, y)
 
@@ -6015,6 +6102,8 @@ def main():
     comp_values   = dialog_result['comp_values']
     calc_basis    = dialog_result['calc_basis']
     filter_inwc   = dialog_result['filter_inwc']
+    # Ranked run (Colin, 2026-11-10): None when off.
+    ranked_set    = dialog_result.get('ranked') if ext_static else None
     if dialog_result.get('scope') == 'vavbox':
         # No return path after a VAV box (Colin, 2026-11-09).
         filter_inwc = 0.0
@@ -6497,7 +6586,8 @@ def main():
             backdraft_roots=(set(exhaust_fan_roots) - set(discharge_roots or ())
                              if exh_backdraft else None),
             # Inline exhaust fans: every exhaust fan but a ceiling one.
-            inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()))
+            inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()),
+            keep_runs=bool(ranked_set))
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE ({})'.format(duct_perf_console.ESP_BASIS))
         if box_root_ids:
@@ -6525,9 +6615,30 @@ def main():
 
             airflow = _root_class_airflow(root_id, all_children, all_terminals)
 
+            # Ranked run (Colin, 2026-11-10): the take-off shows the Nth run
+            # on each side; per_class stays the most restrictive (MR) run,
+            # the design ESP.
+            shown = {}
+            rank_of = {}       # sys_class -> (rank used, run count)
+            for sys_class in per_class:
+                c0 = per_class[sys_class]
+                shown[sys_class] = c0
+                if not ranked_set:
+                    continue
+                want = (ranked_set['supply'] if vav_checks.is_supply_class(sys_class)
+                        else ranked_set['return'])
+                rec, used, n_runs, over = duct_perf_console.pick_ranked(
+                    c0.get('runs') or [c0], want)
+                if rec is not None:
+                    shown[sys_class] = rec
+                    rank_of[sys_class] = (used, n_runs)
+                if over:
+                    _correct('warn', duct_perf_console.rank_over_text(
+                        sys_class.split(' ')[0], want, n_runs), unit_label)
+
             for sys_class in sorted(per_class.keys()):
-                c = per_class[sys_class]
-                restrictive_terminal_ids.add(c['terminal_id'])
+                c = shown[sys_class]
+                restrictive_terminal_ids.add(per_class[sys_class]['terminal_id'])
                 summary_lines.append(
                     '    {}:'.format(sys_class))
                 a_cfm, a_cnt = airflow.get(sys_class, (0.0, 0))
@@ -6582,8 +6693,13 @@ def main():
                                  sys_class, c['unit_side_fittings']), unit_label)
                 safety_inwc = c['total_inwc'] - c['subtotal_inwc']
                 safety_det = '+{:.0f}%'.format(safety_pct)
-                total_det = 'worst run ends at {}'.format(
-                    c.get('terminal_label') or c['terminal_name'])
+                if sys_class in rank_of:
+                    total_det = 'run {} of {} ends at {}'.format(
+                        rank_of[sys_class][0], rank_of[sys_class][1],
+                        c.get('terminal_label') or c['terminal_name'])
+                else:
+                    total_det = 'worst run ends at {}'.format(
+                        c.get('terminal_label') or c['terminal_name'])
                 summary_lines.append(_esp_text_line('Subtotal', c['subtotal_inwc']))
                 summary_lines.append(_esp_text_line('Safety factor', safety_inwc, safety_det))
                 summary_lines.append(_esp_text_line('TOTAL', c['total_inwc'], total_det))
@@ -6620,6 +6736,9 @@ def main():
                     'takeoff': _to_rows, 'filter': _filt,
                     'safety': safety_inwc, 'safety_detail': safety_det,
                     'total': c['total_inwc'], 'total_detail': total_det,
+                    'rank': rank_of[sys_class][0] if sys_class in rank_of else None,
+                    'rank_text': ('run {} of {}'.format(*rank_of[sys_class])
+                                  if sys_class in rank_of else None),
                     'notes': [], 'warnings': []})
 
             # Fan system effect notes belong to the unit, not to a class:
@@ -6660,15 +6779,43 @@ def main():
                             sys_class, a_cfm, a_cnt))
                 _correct('warn', _msg.replace(':  ', ': ', 1), unit_label)
 
+            # unit_total: the runs the take-off shows (the MR runs, or the
+            # ranked runs with Ranked run on). mr_total: always the MR runs,
+            # the design ESP (Colin, 2026-11-10).
             unit_total = 0.0
+            mr_total = 0.0
             sides = []
+            mr_parts = []
+            rk_parts = []
+
+            def _mr_part(side, leaf):
+                return '{} {:.3f} ({})'.format(
+                    side, float(leaf['total_inwc']),
+                    leaf.get('terminal_label') or leaf['terminal_name'])
             if supply is not None:
-                unit_total += supply['total_inwc']
+                unit_total += shown['Supply Air']['total_inwc']
+                mr_total += supply['total_inwc']
                 sides.append('Supply Air')
+                mr_parts.append(_mr_part('Supply Air', supply))
+                rk_parts.append('Supply Air #{}'.format(
+                    rank_of.get('Supply Air', (1, 0))[0]))
             if returns:
+                # The larger return side by its MR run; the same side is
+                # shown ranked, so the two totals never mix sides.
                 worst_k, worst_c = max(returns, key=lambda kv: kv[1]['total_inwc'])
-                unit_total += worst_c['total_inwc']
+                unit_total += shown[worst_k]['total_inwc']
+                mr_total += worst_c['total_inwc']
                 sides.append(worst_k)
+                mr_parts.append(_mr_part(worst_k, worst_c))
+                rk_parts.append('{} #{}'.format(worst_k, rank_of.get(worst_k, (1, 0))[0]))
+            if ranked_set and sides:
+                unit_rec['ranked'] = True
+                unit_rec['ranked_text'] = ' + '.join(rk_parts)
+                unit_rec['mr_total'] = mr_total
+                unit_rec['mr_text'] = ' + '.join(mr_parts)
+                summary_lines.append('    {} = {:.3f} in. wc   ({}, {})'.format(
+                    duct_perf_console.RANKED_TOTAL_LABEL.upper(), unit_total,
+                    unit_rec['ranked_text'], duct_perf_console.RANKED_TOTAL_NOTE))
             if (root_id in discharge_roots or root_id in exhaust_fan_roots
                     or root_id in box_root_ids) and sides:
                 # An exhaust fan has one side and that is the whole system.
@@ -6680,11 +6827,11 @@ def main():
                 summary_lines.append(
                     '    {} = {:.3f} in. wc   ({})'.format(
                         duct_perf_console.VAVBOX_ESP_LABEL if _is_box
-                        else 'EXTERNAL STATIC PRESSURE', unit_total, _sides))
+                        else 'EXTERNAL STATIC PRESSURE (MR)', mr_total, _sides))
                 if _is_box:
                     summary_lines.append('    ' + duct_perf_console.VAVBOX_ESP_CAUTION)
                     unit_rec['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION
-                unit_rec['esp'] = _esp_console_text(unit_total, _sides)
+                unit_rec['esp'] = _esp_console_text(mr_total, _sides)
                 unit_rec['esp_total'] = unit_total
                 unit_rec['esp_sides'] = list(sides)
                 # The fan type read from its connections (Colin, 2026-11-03).
@@ -6696,21 +6843,21 @@ def main():
                     summary_lines.append('    ' + unit_rec['fan_type'])
             elif supply is not None and returns:
                 summary_lines.append(
-                    '    EXTERNAL STATIC PRESSURE = {:.3f} in. wc   ({})'.format(
-                        unit_total, ' + '.join(sides)))
-                unit_rec['esp'] = _esp_console_text(unit_total, ' + '.join(sides))
+                    '    EXTERNAL STATIC PRESSURE (MR) = {:.3f} in. wc   ({})'.format(
+                        mr_total, ' + '.join(sides)))
+                unit_rec['esp'] = _esp_console_text(mr_total, ' + '.join(sides))
                 unit_rec['esp_total'] = unit_total
                 unit_rec['esp_sides'] = list(sides)
             elif sides:
                 # One side only. Held back, not warned about yet: whether it is
                 # half of a system depends on what else was selected.
-                one_sided.append((root_id, unit_total, sides, supply is not None))
+                one_sided.append((root_id, mr_total, sides, supply is not None))
             if (vav_on and sides and vav_set.get('unit_max_esp') is not None
                     and root_id in vav_by_root and vav_by_root[root_id].is_vav):
                 _umax = float(vav_set['unit_max_esp'])
-                _ok = unit_total <= _umax + 1e-9
+                _ok = mr_total <= _umax + 1e-9
                 _msg = ('Unit max external static {:.3f} in. wc: computed {:.3f} in. wc '
-                        '({}), {}.'.format(_umax, unit_total, ' + '.join(sides),
+                        '({}), {}.'.format(_umax, mr_total, ' + '.join(sides),
                                            'within it' if _ok else 'EXCEEDS IT'))
                 if _ok:
                     # A pass is a result of the take-off and stays with it.
@@ -7394,7 +7541,8 @@ def main():
         'vav_basis': vav_basis,
         # Terminal wording (Colin, 2026-11-09), the auto-sizing diffuser and
         # slot notes left out on Exhaust System, where they cannot apply.
-        'notes': duct_perf_console.branch_notes(words),
+        'notes': duct_perf_console.branch_notes(words) + (
+            [duct_perf_console.MR_LEGEND] if critical else []),
         'legend': legend_rows,
         'words': words,
         'clearance': (clearance_count > 0,

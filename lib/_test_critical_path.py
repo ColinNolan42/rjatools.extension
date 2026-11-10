@@ -3335,6 +3335,56 @@ _d85 = _dmp(_run85(6.0))
 check("case85 backdraft at 6.0 ft: the WARNING names the inlet window, 5 H (7.5 ft)",
       len(_d85) == 1 and 'is inside the inlet window, 5 H (7.5 ft).' in _d85[0], "warn %r" % (_d85,))
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# Case 86: Ranked run (Colin, 2026-11-10). keep_runs keeps every terminal's
+#          own worst run, sorted high to low, runs[0] the index run; off,
+#          the leaf has no 'runs' and its numbers do not change.
+# ══════════════════════════════════════════════════════════════════════════
+#   root(0) -> 1 -> 2 -> T10            (0.10 + 0.20        = 0.30)
+#                \-> 3 -> 4 -> T11      (0.10 + 0.05 + 0.40 = 0.55)  index
+#                       \-> 5 -> T12    (0.10 + 0.05 + 0.30 = 0.45)
+#   T11 is also reached by a second, cheaper route (0 -> 6 -> T11, 0.25):
+#   its own run keeps the lossier 0.55.
+children86 = {0: [1, 6], 1: [2, 3], 2: [10], 3: [4, 5], 4: [11], 5: [12], 6: [11]}
+ducts86 = build([
+    (1, 0.10, 20.0, 900.0, 1.0, 'Supply Air'),
+    (2, 0.20, 30.0, 900.0, 1.0, 'Supply Air'),
+    (3, 0.05, 10.0, 900.0, 1.0, 'Supply Air'),
+    (4, 0.40, 60.0, 900.0, 1.0, 'Supply Air'),
+    (5, 0.30, 40.0, 900.0, 1.0, 'Supply Air'),
+    (6, 0.25, 30.0, 900.0, 1.0, 'Supply Air'),
+])
+terms86 = {10: (100.0, 'Supply Air', 'SD-A'), 11: (100.0, 'Supply Air', 'SD-B'),
+           12: (100.0, 'Supply Air', 'SD-C')}
+_off86 = crit([0], children86, ducts86, terms86, {}, safety_pct=10.0)[0]['Supply Air']
+_on86 = crit([0], children86, ducts86, terms86, {}, safety_pct=10.0,
+             keep_runs=True)[0]['Supply Air']
+_r86 = _on86.get('runs') or []
+check("case86 keep_runs off: no 'runs' on the leaf", 'runs' not in _off86)
+check("case86 the index run is the same with keep_runs on and off",
+      _on86['terminal_id'] == _off86['terminal_id'] == 11
+      and abs(_on86['total_inwc'] - _off86['total_inwc']) < 1e-12,
+      "on %r off %r" % (_on86['terminal_id'], _off86['terminal_id']))
+check("case86 one run per terminal, three terminals",
+      [r['terminal_id'] for r in _r86] == [11, 12, 10],
+      "got %r" % ([r['terminal_id'] for r in _r86],))
+# components on each run: diffuser 0.05 + the assumed balancing damper 0.25
+_cmp86 = (fitting_tables.component_of('diffuser') +
+          fitting_tables.component_of('damper'))
+check("case86 runs sorted high to low, safety factor on each ((0.55, 0.45, 0.30) + 0.30, x 1.10)",
+      all(abs(r['total_inwc'] - (t + _cmp86) * 1.10) < 1e-9
+          for r, t in zip(_r86, (0.55, 0.45, 0.30))),
+      "got %r" % ([round(r['total_inwc'], 4) for r in _r86],))
+check("case86 rank 1 is the index run's own numbers",
+      bool(_r86) and abs(_r86[0]['total_inwc'] - _on86['total_inwc']) < 1e-12
+      and _r86[0]['terminal_id'] == _on86['terminal_id'])
+check("case86 a terminal reached two ways keeps its lossier run (T11 0.55, not 0.25)",
+      bool(_r86) and abs(_r86[0]['friction_inwc'] - 0.55) < 1e-9,
+      "got %r" % (_r86[0]['friction_inwc'] if _r86 else None,))
+check("case86 every ranked run's items add up to its subtotal",
+      all(abs(sum(i[3] or 0.0 for i in r['items']) - r['subtotal_inwc']) < 1e-9 for r in _r86))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

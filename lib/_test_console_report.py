@@ -258,8 +258,8 @@ class DuctPerfSectionTests(unittest.TestCase):
         self.assertEqual([r[0] for r in body[1:]],
                          ['Supply Air, 950 CFM, 3 terminals', 'Duct friction',
                           'Fitting losses', 'Components', 'Subtotal', 'Safety factor',
-                          'Supply Air total', 'TOTAL EXTERNAL STATIC PRESSURE'])
-        self.assertEqual(body[-1], ['TOTAL EXTERNAL STATIC PRESSURE', 'Supply Air',
+                          'Supply Air total', dpc.MR_LABEL])
+        self.assertEqual(body[-1], [dpc.MR_LABEL, 'Supply Air',
                                     '', '', '0.894'])
         html = dpc.external_static(_sample_esp())
         self.assertIn('colspan="5"', html)
@@ -286,8 +286,54 @@ class DuctPerfSectionTests(unittest.TestCase):
         self.assertIn('Exhaust Air  (not counted, the larger return side governs)', html)
         self.assertNotIn('Return Air  (not counted', html)
         body = [[c[2] for c in r] for r in shape(html).rows]
-        self.assertEqual(body[-1], ['TOTAL EXTERNAL STATIC PRESSURE',
+        self.assertEqual(body[-1], [dpc.MR_LABEL,
                                     'Supply Air + Return Air', '', '', '0.800'])
+
+    def test_ranked_run_rows(self):
+        """Ranked run (Colin, 2026-11-10): the classes are the ranked runs,
+        their total sits in a 'Ranked runs total' row, and the last row is
+        still the MR total, the design ESP, naming where each MR run ends."""
+        def cls(name, total, rank):
+            return {'sys_class': name, 'rows': [('Duct friction', total / 1.1, '')],
+                    'subtotal': total / 1.1, 'safety': total - total / 1.1,
+                    'total': total, 'total_detail': '', 'rank': rank,
+                    'rank_text': 'run {} of 12'.format(rank)}
+        unit = {'label': 'RTU-1',
+                'classes': [cls('Supply Air', 0.419, 2), cls('Return Air', 0.300, 3)],
+                'esp_total': 0.719, 'esp_sides': ['Supply Air', 'Return Air'],
+                'ranked': True, 'ranked_text': 'Supply Air #2 + Return Air #3',
+                'mr_total': 0.739,
+                'mr_text': 'Supply Air 0.427 (D-4) + Return Air 0.312 (RG-1)'}
+        html = dpc.external_static({'units': [unit]})
+        body = [[c[2] for c in r] for r in shape(html).rows]
+        self.assertIn('Supply Air, run 2 of 12', html)
+        self.assertIn(['Supply Air total, run #2', '', '', '', '0.419'], body)
+        self.assertEqual(body[-2], [dpc.RANKED_TOTAL_LABEL,
+                                    'Supply Air #2 + Return Air #3, ' + dpc.RANKED_TOTAL_NOTE,
+                                    '', '', '0.719'])
+        self.assertEqual(body[-1], [dpc.MR_LABEL,
+                                    'Supply Air 0.427 (D-4) + Return Air 0.312 (RG-1)',
+                                    '', '', '0.739'])
+        # the sheet form draws both totals bold, the same cells
+        rows, total = dpc.esp_unit_rows(unit, sheet=True)
+        self.assertEqual(rows[-1], {'cells': body[-2], 'bold': True})
+        self.assertEqual(total, body[-1])
+
+    def test_rank_helpers(self):
+        self.assertEqual(dpc.parse_rank('3'), (3, None))
+        self.assertEqual(dpc.parse_rank(' 12 '), (12, None))
+        for bad in ('1', '0', '-2', '2.5', 'x', ''):
+            v, err = dpc.parse_rank(bad)
+            self.assertIsNone(v)
+            self.assertTrue(err)
+        runs = ['r1', 'r2', 'r3']
+        self.assertEqual(dpc.pick_ranked(runs, 2), ('r2', 2, 3, False))
+        self.assertEqual(dpc.pick_ranked(runs, 3), ('r3', 3, 3, False))
+        self.assertEqual(dpc.pick_ranked(runs, 7), ('r3', 3, 3, True))
+        self.assertEqual(dpc.pick_ranked([], 2), (None, 0, 0, False))
+        self.assertEqual(dpc.rank_over_text('Supply', 7, 3),
+                         'Supply rank 7 is above the 3 diffuser(s)/grille(s) on this '
+                         'system; run 3 (the least restrictive) is shown.')
 
     def test_one_sided_unit_has_no_grand_total(self):
         unit = {'label': 'Duct 9', 'classes': [{'sys_class': 'Supply Air', 'rows': [],
