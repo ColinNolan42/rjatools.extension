@@ -44,6 +44,7 @@ IronPython 2.7: no f-strings; floats are cast with float() before '{:.3f}'.
 
 import re
 
+import ashrae_fittings
 import console_report as cr
 
 
@@ -604,6 +605,124 @@ def correction(kind, text, unit=None, group=None):
     return (group, unit, kind, text)
 
 
+# ── grouped report lines (Colin, 2026-11-11) ────────────────────────────────
+# One line per (table, reason) for the tap FALLBACKs of a unit, one NOTE for
+# every lookup read at a table edge, one for every blank cell. Lines that
+# say the same thing once.
+_SEG_SPLIT = re.compile(r'; (?=(?:FALLBACK|NOTE): )')
+_FB_NOT_POS = re.compile(r'^FALLBACK: tap (\d+) (?:passed on|into branch off) duct (\d+), '
+                         r'(2001 \S+ Cc,[bs]) -?\d+(?:\.\d+)? is not positive; '
+                         r'(RJA worksheet C \d+(?:\.\d+)? used)$')
+_FB_WHY = re.compile(r'^FALLBACK: tap (\d+) passed on duct (\d+), '
+                     r'(RJA worksheet C \d+(?:\.\d+)?) \((.+)\)$')
+_PART_SPLIT = re.compile(r'; (?=(?:transition|elbow|tap|tee|cross|wye|split|fitting|'
+                         r'offset|duct) \d)')
+_LOCATED = re.compile(r'^(\w+ \d+)[^:;]*: (.+)$')
+EDGE_LEAD = 'NOTE: read at the table edge: '
+BLANK_LEAD = 'NOTE: read next to a blank cell, nearest printed value used: '
+
+
+def _fallback_line(tail, pairs):
+    """'FALLBACK: taps 1, 2 (duct 9), 3 (duct 8): <tail>'."""
+    ducts, taps = [], {}
+    for duct, tap in pairs:
+        if duct not in ducts:
+            ducts.append(duct)
+        if tap not in taps.setdefault(duct, []):
+            taps[duct].append(tap)
+    n = sum(len(v) for v in taps.values())
+    named = ', '.join('%s (duct %s)' % (', '.join(sorted(taps[d], key=int)), d)
+                      for d in ducts)
+    return 'FALLBACK: %s %s: %s' % ('taps' if n > 1 else 'tap', named, tail)
+
+
+def group_lines(lines):
+    """The report lines of one unit with repeats grouped: the tap FALLBACKs
+    one line per (table, reason), every table edge read in one NOTE, every
+    blank cell in one NOTE, a line said twice once. A line holding a
+    FALLBACK and a NOTE is split into the two. Order: where each first
+    appears."""
+    slots, fb, edges, blanks = [], {}, [], []
+
+    def _slot(key):
+        if key not in slots:
+            slots.append(key)
+    for line in lines:
+        for seg in _SEG_SPLIT.split((line or '').strip()):
+            seg = seg.strip()
+            if not seg:
+                continue
+            m = _FB_NOT_POS.match(seg)
+            if m:
+                key = ('fb', '%s not positive; %s' % (m.group(3), m.group(4)))
+                fb.setdefault(key, []).append((m.group(2), m.group(1)))
+                _slot(key)
+                continue
+            m = _FB_WHY.match(seg)
+            if m:
+                key = ('fb', '%s (%s)' % (m.group(3), m.group(4)))
+                fb.setdefault(key, []).append((m.group(2), m.group(1)))
+                _slot(key)
+                continue
+            if seg.startswith('NOTE: '):
+                rest = []
+                for part in _PART_SPLIT.split(seg[len('NOTE: '):]):
+                    lm = _LOCATED.match(part)
+                    if lm and part.endswith(ashrae_fittings.EDGE_TAG):
+                        item = '%s %s' % (lm.group(1),
+                                          lm.group(2)[:-len(ashrae_fittings.EDGE_TAG)])
+                        if item not in edges:
+                            edges.append(item)
+                        _slot(('edge',))
+                    elif lm and part.endswith(ashrae_fittings.BLANK_TAG):
+                        item = '%s %s' % (lm.group(1),
+                                          lm.group(2)[:-len(ashrae_fittings.BLANK_TAG)])
+                        if item not in blanks:
+                            blanks.append(item)
+                        _slot(('blank',))
+                    else:
+                        rest.append(part)
+                if not rest:
+                    continue
+                seg = 'NOTE: ' + '; '.join(rest)
+            _slot(seg)
+    out = []
+    for key in slots:
+        if key == ('edge',):
+            out.append(EDGE_LEAD + '; '.join(edges))
+        elif key == ('blank',):
+            out.append(BLANK_LEAD + '; '.join(blanks))
+        elif isinstance(key, tuple):
+            out.append(_fallback_line(key[1], fb[key]))
+        else:
+            out.append(key)
+    return out
+
+
+def _grouped_entries(ordered):
+    """correction entries, already in report order, with each unit's lines
+    grouped (group_lines). An unchanged line keeps its own group and kind;
+    a grouped or split one is classified again."""
+    out, i = [], 0
+    while i < len(ordered):
+        unit = ordered[i][1]
+        j = i
+        while j < len(ordered) and ordered[j][1] == unit:
+            j += 1
+        block = ordered[i:j]
+        first = {}
+        for e in block:
+            first.setdefault((e[3] or '').strip(), e)
+        for text in group_lines([e[3] for e in block]):
+            e = first.get(text)
+            if e is None:
+                kind = 'warn' if text.startswith(('FALLBACK', 'UNPRICED')) else 'note'
+                e = (correction_group(kind, text), unit, kind, text)
+            out.append(e)
+        i = j
+    return out
+
+
 def correction_lines(entries):
     """The entries as {ACTION: [(kind, line)], NOTES: [(kind, line)]}.
 
@@ -621,8 +740,9 @@ def correction_lines(entries):
     prefix = len([u for u in units if u]) > 1
     out = {ACTION: [], NOTES: []}
     seen = set()
-    ordered = sorted(enumerate(entries), key=lambda it: (rank[it[1][1]], it[0]))
-    for _i, (group, unit, kind, text) in ordered:
+    ordered = [e for _i, e in sorted(enumerate(entries),
+                                     key=lambda it: (rank[it[1][1]], it[0]))]
+    for group, unit, kind, text in _grouped_entries(ordered):
         text = (text or '').strip()
         if not text:
             continue

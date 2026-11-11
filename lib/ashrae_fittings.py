@@ -155,21 +155,24 @@ _AXIS_TEXT = {
 }
 
 
+# Tags the report groups on (duct_perf_console.group_lines, Colin,
+# 2026-11-11): every table edge read and every blank cell of a unit is said
+# in one NOTE each.
+EDGE_TAG = ' (table edge)'
+BLANK_TAG = ' next to a blank cell'
+
+
 def _clamp_text(key, axis, x):
-    """One plain sentence for a value past the printed axis, or None:
-    'SR4-1: angle 7.6 deg is below the table's lowest column, 10 deg; the
-    10 deg column was used'."""
+    """A value past the printed axis, read at the edge, or None:
+    'SR4-1 angle 7.6 deg at 10.0 deg (table edge)'."""
     xs = axis['values']
     x = float(x)
     if xs[0] <= x <= xs[-1]:
         return None
     name, unit, fmt = _AXIS_TEXT.get(axis['name'], (axis['name'], '', '%.2f'))
-    low = x < xs[0]
-    edge = xs[0] if low else xs[-1]
-    e = (fmt % edge) + unit
-    return ('%s: %s %s is %s the table\'s %s value, %s; the %s value was used'
-            % (key, name, (fmt % x) + unit, 'below' if low else 'above',
-               'lowest' if low else 'highest', e, e))
+    edge = xs[0] if x < xs[0] else xs[-1]
+    return '%s %s %s at %s%s' % (key.split('_')[0], name, (fmt % x) + unit,
+                                 (fmt % edge) + unit, EDGE_TAG)
 
 
 def lookup(key, *args):
@@ -190,7 +193,7 @@ def lookup(key, *args):
         a, b = t['C'][i0], t['C'][i1]
         if a is None or b is None:
             a = b = (a if a is not None else b)
-            notes.append('%s: next to a blank cell' % key)
+            notes.append(key.split('_')[0] + BLANK_TAG)
         if cl:
             notes.append(_clamp_text(key, t['x'], args[0]))
         return _lerp(a, b, f), notes
@@ -214,7 +217,7 @@ def lookup(key, *args):
             if n:
                 notes.append(n)
     if blank:
-        notes.append('%s: blank cell in the book, nearest printed value used' % key)
+        notes.append(key.split('_')[0] + BLANK_TAG)
     return v, notes
 
 
@@ -234,7 +237,7 @@ def round_elbow_c(d_in, r_over_d, angle_deg):
     Returns (C, label, notes)."""
     c90, notes = lookup('CD3-1', float(d_in) * MM_PER_IN)
     # The last CD3-1 column is printed "250 mm and up": not a clamp.
-    notes = [n for n in notes if not n.startswith('CD3-1:')
+    notes = [n for n in notes if not n.startswith('CD3-1 diameter ')
              or float(d_in) * MM_PER_IN < 75.0]
     label = 'CD3-1 r/D 1.5, D %.0f in.' % float(d_in)
     if r_over_d and abs(float(r_over_d) - RJA_ROUND_ELBOW_R_D) > 0.05:
@@ -444,9 +447,12 @@ def tap_branch_c(is_supply, tap_shape, main_shape, is_45_entry,
     # the remaining air turning into it: the highest column is read, without
     # a NOTE (Colin, 2026-11-09: it adds nothing, about 0.002 in. wc). Every
     # other clamp NOTE stays.
-    notes = [n for n in notes
-             if not (n.startswith(kb + ': Qb/Qc ')
-                     and "is above the table's highest value" in n)]
+    q_top = max([t[a]['values'][-1] for a in ('layers', 'rows', 'cols', 'x')
+                 if a in t and t[a]['name'] == 'Qb/Qc'] or [None])
+    if q_top is not None and float(qb_qc) > q_top:
+        notes = [n for n in notes
+                 if not (n.startswith(kb.split('_')[0] + ' Qb/Qc ')
+                         and n.endswith(EDGE_TAG))]
     notes = notes + _printed_geometry_notes(kb, t, {'Ab/Ac': ab_ac, 'As/Ac': as_ac})
     read_ab = _ratio_read_at(t, 'Ab/Ac', ab_ac)
     q_read = min(max(float(qb_qc), 0.1), 1.0)

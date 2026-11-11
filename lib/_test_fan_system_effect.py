@@ -155,7 +155,7 @@ class InletTest(unittest.TestCase):
 
     def test_mitered_radius_clamps_with_note(self):
         _c, _k, _r, notes = F.inlet_c(False, 0.1, 0.0)
-        self.assertTrue(any('lowest value' in n and 'was used' in n for n in notes))
+        self.assertTrue(any(n.endswith('(table edge)') for n in notes), notes)
 
     def test_floor_ratio(self):
         self.assertEqual(F.floor_ratio('ED7-2', 1.0), 5.0)
@@ -312,10 +312,11 @@ class SettingsTest(unittest.TestCase):
                       'so; on '
                       'exhaust fans (inline, roof), where the duct meets the fan, the larger '
                       'of the fan velocity and the connection velocity.', m)
-        self.assertEqual(F.cabinet_inlet_text('return inlet at element 7', 812.4),
-                         'NOTE: fan system effect at the return inlet at element 7 priced at '
-                         'the connection velocity, 812 fpm: cabinet inlet, the fan sits past '
-                         'the filter and coil.')
+        self.assertEqual(F.velocity_clause(812.4, 812.4, False, cabinet=True),
+                         'at the 812 fpm connection velocity (cabinet inlet, the fan sits past '
+                         'the filter and coil)')
+        # the tap caveat once in METHOD (Colin, 2026-11-11)
+        self.assertEqual(m.count(F.TAP_AS_ELBOW_CAVEAT), 1)
         self.assertIn('in the plane of the turn', m)
         self.assertEqual(len(a), 1)
         self.assertTrue(a[0].startswith('ASSUMPTION'))
@@ -413,11 +414,15 @@ class FiveDTest(unittest.TestCase):
                              'the 12x12 inlet collar', 'the collar')
         self.assertIn('1.3 H (H 12 in., the 12x12 inlet collar). Recommended: at least 2.0 ft of '
                       'straight duct (2 H of the collar); 5.0 ft (5 H) is where', t)
-        g = F.governs_text(True, 3720096, 1.3, 'exhaust inlet', 0.1, 0.05, 40.0 / 12.0,
-                           '5 D', size_note='D 8 in. elbow')
-        self.assertIn('(L/5 D 0.39, D 8 in. elbow)', g)
-        self.assertIn('(L/Le 0.50)', F.governs_text(True, 1, 1.0, 'supply outlet', 0.1,
-                                                     0.05, 2.0, 'Le'))
+        g = F.run_note('exhaust inlet', 'EG-1, id 5', via={
+            'kind': 'elbow', 'id': 3720096, 'l_ft': 1.3, 'win_short': '5 D',
+            'win_ft': 40.0 / 12.0, 'size': ('D 8 in.', 'elbow')}, priced={
+            'table': 'ED7-2', 'vel': 'at the 2000 fpm fan velocity (connection 500 fpm)',
+            'fse': 0.1, 'own': 0.05, 'fse_wins': True})
+        self.assertEqual(g, 'NOTE: exhaust inlet, most restrictive run (EG-1, id 5): first '
+                            'elbow 3720096 at 1.3 ft, inside 5 D 3.4 ft (D 8 in., the elbow); '
+                            'ED7-2 at the 2000 fpm fan velocity (connection 500 fpm), 0.100 '
+                            'in. wc, charged over the straight duct and elbow 0.050.')
         o = F.le_text('supply outlet', 123, 1.2, 3.9, 'Eq. 37')
         self.assertEqual(o, 'RED: Elbow 123 is 1.2 ft from the supply outlet, L/Le 0.31 (Le 3.9 '
                             'ft, Eq. 37). Recommended: at least 2.0 ft of straight duct; 3.9 ft '
@@ -439,11 +444,55 @@ class FiveDTest(unittest.TestCase):
         self.assertAlmostEqual(le * 12.0 / (2.0 * (4.0 * 144.0 / 3.14159265) ** 0.5), 2.53, 2)
 
     def test_note_builders(self):
-        v = F.velocity_text('supply outlet', 2500.0, 1031.0)
-        self.assertTrue(v.startswith('NOTE: '))
-        self.assertIn('2500 fpm, greater than the connection velocity of 1031 fpm', v)
-        tr = F.transition_text(950, 1.5, 'supply outlet', 2500.0)
-        self.assertTrue(tr.startswith('NOTE: transition 950, 1.5 ft from the supply outlet'))
+        # One run NOTE per connection (Colin, 2026-11-11): the velocity only
+        # where a fan system effect is priced.
+        v = F.velocity_clause(2500.0, 1031.0, True)
+        self.assertEqual(v, 'at the 2500 fpm fan velocity (connection 1031 fpm)')
+        self.assertEqual(F.velocity_clause(2500.0, 1031.0, False),
+                         'at the 1031 fpm connection velocity')
+        for gone in ('velocity_text', 'cabinet_inlet_text', 'transition_text',
+                     'tap_passed_text', 'tap_main_text', 'drop_text', 'tap_turn_text',
+                     'governs_text', 'no_effect_text', 'no_effect_run_text', 'curb_note'):
+            self.assertFalse(hasattr(F, gone), gone)
+        priced = F.run_note('supply outlet', 'D-3.2, id 3764693', via={
+            'kind': 'tap', 'id': 3764399, 'l_ft': 2.7, 'win_short': 'Le', 'win_ft': 6.4},
+            priced={'table': 'SR7-11', 'vel': v.replace('2500', '2000').replace('1031', '798'),
+                    'fse': 0.342, 'own': 0.031, 'fse_wins': True}, curb_ft=14.0 / 12.0)
+        self.assertEqual(priced, 'NOTE: supply outlet, most restrictive run (D-3.2, id '
+                                 '3764693): leaves through tap 3764399 at 2.7 ft incl. 14 in. '
+                                 'curb, inside Le 6.4 ft; tap priced as an elbow, SR7-11 at the '
+                                 '2000 fpm fan velocity (connection 798 fpm), 0.342 in. wc, '
+                                 'charged over the straight duct and tap 0.031.')
+        own = F.run_note('supply outlet', 'id 7', via={
+            'kind': 'elbow', 'id': 123, 'l_ft': 2.0, 'win_short': 'Le', 'win_ft': 6.4},
+            priced={'table': 'SR7-11', 'vel': 'at the 800 fpm connection velocity',
+                    'fse': 0.059, 'own': 0.063, 'fse_wins': False})
+        self.assertEqual(own, 'NOTE: supply outlet, most restrictive run (id 7): first elbow 123 '
+                              'at 2.0 ft, inside Le 6.4 ft; SR7-11 at the 800 fpm connection '
+                              'velocity; straight duct and elbow charged at their own losses '
+                              '0.063, over the fan system effect 0.059.')
+        none = F.run_note('return inlet', 'RG-1.3, id 3764543', passed=[(3764402, 3.2)],
+                          none='no elbow within 5 H (6.7 ft)',
+                          own=('straight duct and transition', 0.006), curb_ft=14.0 / 12.0)
+        self.assertEqual(none, 'NOTE: return inlet, most restrictive run (RG-1.3, id 3764543): '
+                               'stays on the main past tap 3764402 (3.2 ft incl. curb); no elbow '
+                               'within 5 H (6.7 ft), no fan system effect; straight duct and '
+                               'transition at their own losses, 0.006 in. wc.')
+        self.assertNotIn('fpm', none)
+        drop = F.run_note('supply outlet', 'id 8', via={
+            'kind': 'drop', 'id': 5, 'l_ft': 1.5, 'drop_duct': 4, 'win_short': 'Le',
+            'win_ft': 5.8}, priced={'table': 'SR7-11', 'vel': 'at the 750 fpm connection '
+                                    'velocity', 'fse': 0.075, 'own': 0.028, 'fse_wins': True})
+        self.assertIn('duct 4 is a drop (capped); the run leaves through tap 5 at 1.5 ft, '
+                      'inside Le 5.8 ft; tap priced as an elbow, ', drop)
+        turn = F.run_note('supply outlet', 'id 8', via={
+            'kind': 'tap_turn', 'id': 5, 'l_ft': 0.5, 'win_short': 'Le', 'win_ft': 5.8},
+            priced={'table': 'SR7-11', 'vel': 'at the 750 fpm connection velocity',
+                    'fse': 0.1, 'own': 0.01, 'fse_wins': True})
+        self.assertIn('the unit duct tees into the main through tap 5 at 0.5 ft', turn)
+        self.assertTrue(F.run_note('supply outlet', 'id 8', none='x', run='run 2')
+                        .startswith('NOTE: supply outlet, run 2 (id 8): x, no fan system '
+                                    'effect.'))
 
     def test_no_adapter_rule(self):
         # Colin, 2026-11-02: every transition in the window is passed, its

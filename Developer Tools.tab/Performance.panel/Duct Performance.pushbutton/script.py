@@ -2901,16 +2901,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 passed = [t for t in taps if t != child_id and flows[t][3] < mine]
             else:
                 passed = [t for t in taps if t != child_id]
-                notes.append('NOTE: tap order on duct %s unreadable, every tap '
-                             'priced at the full duct flow' % duct_id)
+                notes.append(_tap_order_text(duct_id))
         else:
             passed = list(taps)
         loss, parts = 0.0, []
         for t in passed:
-            one, table, c, n, fb = _tap_pass(duct_id, t)
+            one, table, c, _n, fb = _tap_pass(duct_id, t)
             loss += one
             parts.append((table, c, one))
-            notes.extend(['NOTE: ' + x for x in n])
             if fb:
                 notes.append(fb)
         return loss, len(passed), parts, notes
@@ -2935,8 +2933,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         dr = dr_by_int_id[duct_id]
         if not _taps(duct_id) or not dr.area_ft2 or _tap_flows(duct_id)[1]:
             return None
-        return ('NOTE: tap positions on duct %s unreadable, friction charged over '
-                'its whole length at its unit end cfm' % duct_id)
+        return _tap_order_text(duct_id)
+
+    def _tap_order_text(duct_id):
+        """One NOTE per duct whose tap positions cannot be read (Colin,
+        2026-11-11): the tap pricing and the friction said together, so the
+        two cases print as one line (System Corrections drops repeats)."""
+        return ('NOTE: tap positions on duct %s unreadable: every tap priced at the '
+                'full duct flow, friction charged over its whole length at its unit '
+                'end cfm' % duct_id)
 
     def _seg_friction(duct_id, child_id):
         """(friction in. wc, feet charged) on an unbroken main with taps, or
@@ -3211,16 +3216,52 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     _located(where, notes), eo[0])
         return None
 
-    def _terminal_label(nid):
-        """'D-6 (id 3639741)': the terminal's Mark and id, so the end of the
-        index run can be found on the plan. Id alone when there is no Mark."""
+    def _terminal_mark(nid):
+        """The terminal's Mark, or None (logged)."""
         mark = None
         try:
             p = all_nodes.get(nid).LookupParameter('Mark')
             mark = p.AsString() if p is not None else None
         except Exception:
-            pass
+            fan_system_effect.log.info('terminal %s Mark NOT FOUND', nid)
+        return mark
+
+    def _terminal_label(nid):
+        """'D-6 (id 3639741)': the terminal's Mark and id, so the end of the
+        index run can be found on the plan. Id alone when there is no Mark."""
+        mark = _terminal_mark(nid)
         return '%s (id %s)' % (mark, nid) if mark else 'id %s' % nid
+
+    def _run_note(rec, facts, nid):
+        """The one NOTE for the unit connection a run leaves through (Colin,
+        2026-11-11), or None. rec: the connection's record (or the tap sub
+        record the run leaves through); facts: what _fse_group_max found
+        (priced values, or own losses with none priced); nid: the run's
+        terminal. A connection not checked keeps its own NOTE instead."""
+        if rec is None or not rec.get('where_item'):
+            return None
+        facts = facts or {}
+        priced = facts.get('priced') if rec.get('item') is not None else None
+        none = rec.get('none')
+        if priced is None and (not none or none.startswith('not checked')):
+            return None
+        via = rec.get('via')
+        if via is not None:
+            via = dict(via)
+            if priced is not None and facts.get('win_ft'):
+                # the window the table was read at (an inlet: 5 x the
+                # elbow's own D or H)
+                via['win_ft'] = facts['win_ft']
+                via['win_short'] = facts.get('win_short') or via.get('win_short')
+                via['size'] = facts.get('size')
+            elif priced is None and none and str(via.get('id')) in none:
+                via['bare'] = True
+        mark = _terminal_mark(nid)
+        term = '%s, id %s' % (mark, nid) if mark else 'id %s' % nid
+        return fan_system_effect.run_note(
+            rec['where'], term, passed=rec.get('passed') or (), via=via,
+            priced=priced, none=none, own=facts.get('own') if priced is None else None,
+            curb_ft=rec.get('curb_ft') or 0.0)
 
     def _size_text(is_round, d_in, w_in, h_in):
         """'16x12"' or '10"dia' for a report note."""
@@ -3982,22 +4023,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             v, fan_gov = fan_system_effect.design_velocity(fse_set, v_conn)
         else:
             v, fan_gov = v_conn, False
-        # Either NOTE is said only when a fan system effect is priced here
-        # (Colin, 2026-11-09): with no elbow inside the window nothing is
-        # priced at the fan velocity. Put back in its place below.
-        vel_note = ((len(notes), ('note', fan_system_effect.velocity_text(where, v, v_conn)))
-                    if fan_gov else None)
-        # A cabinet unit inlet says why it keeps the connection velocity
-        # (Colin, 2026-11-09): the fan sits past the filter and coil. Not on
-        # the 'connection' basis, where every connection uses it, and not at
-        # a VAV box root, which has no fan.
-        if (vel_note is None and role_here != fan_system_effect.OUTLET
-                and root_id not in inline_fan_roots and root_id not in box_ids
-                and (fse_set or {}).get('velocity_basis',
-                                        fan_system_effect.DEFAULT_VELOCITY_BASIS)
-                == 'default'):
-            vel_note = (len(notes), ('note', fan_system_effect.cabinet_inlet_text(
-                where, v_conn)))
+        # The velocity basis is said in the run NOTE, only on a run that
+        # carries a fan system effect (Colin, 2026-11-11). A cabinet unit
+        # inlet says why it keeps the connection velocity (the fan sits past
+        # the filter and coil); not on the 'connection' basis, where every
+        # connection uses it, and not at a VAV box root, which has no fan.
+        vel_clause = fan_system_effect.velocity_clause(
+            v, v_conn, fan_gov,
+            cabinet=(not fan_gov and role_here != fan_system_effect.OUTLET
+                     and root_id not in inline_fan_roots and root_id not in box_ids
+                     and (fse_set or {}).get('velocity_basis',
+                                             fan_system_effect.DEFAULT_VELOCITY_BASIS)
+                     == 'default'))
         # The inlet search reach (internal, never printed): every side of
         # the opening and the first duct. An outlet already has its fallback
         # NOTE above, so its size notes are not repeated.
@@ -4181,7 +4218,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # 0.5 Le), past Le nothing. The 3 D outlet tap rule (2026-11-09) is
         # gone; it contradicted Le.
         tap_warned = False
-        def _price_at(rec, notes, did, l_ft, kind='elbow', insert_vel=True):
+        def _price_at(rec, notes, did, l_ft, kind='elbow'):
             """Price the fan system effect at did, L l_ft from the unit, into
             rec: an elbow, or a tap acting as one (kind 'tap', Colin
             2026-11-11). Returns rec."""
@@ -4212,11 +4249,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                                'is past %.2f ft, priced as a fitting',
                                                did, l_ft, r['floor_ft'])
                     _lt = fan_system_effect.l_text(l_ft, curb_ft, unit=True)
+                    # Said in the run NOTE (Colin, 2026-11-11).
                     rec['none'] = ('%s %s at %s, past %.1f ft, priced as a fitting'
                                    % (kind, did, _lt, r['floor_ft']))
-                    notes.append(('note', fan_system_effect.no_effect_text(
-                        where, '%s %s at %s is past %.1f ft, where the inlet table '
-                        'floors' % (kind, did, _lt, r['floor_ft']))))
                     return rec
                 for _k, _t in enotes:
                     if _k == 'assume':
@@ -4255,7 +4290,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                           'size': g_size,
                           'warn3': (rec.get('warn3') or (None, None))[1]
                           if (rec.get('warn3') or (None,))[0] == did else None,
-                          'curb': curb_ft, 'kind': kind}
+                          'curb': curb_ft, 'kind': kind,
+                          # the run NOTE (Colin, 2026-11-11)
+                          'table': r.get('table') or '-', 'vel': vel_clause}
             notes.extend(('note', 'NOTE: %s %s, %s: %s' % (
                 kind, did, fan_system_effect.from_text(where, l_ft, curb_ft), n)) for n in r['notes'])
             if r['high']:
@@ -4270,8 +4307,6 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if kind == 'tap':
                 basis += ', tap as elbow'
             rec['loss'] = loss
-            if vel_note is not None and insert_vel:
-                notes.insert(min(vel_note[0], len(notes)), vel_note[1])
             rec['item'] = ('Fan system effect {}'.format(did), basis, r['v_fpm'], loss,
                            (name, basis, r['c'], None))
             return rec
@@ -4299,6 +4334,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     where, tid, lt, line, line_name, best, best_name, curb_ft)))
 
 
+        def _sub_rec(rec, via):
+            """An empty record for a run leaving through one tap."""
+            return {'loss': 0.0, 'item': None, 'where': rec['where'], 'notes': [],
+                    'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
+                    'red_ducts': {}, 'assumptions': [], 'group': set(),
+                    'where_item': where_item, 'none': None, 'curb_ft': curb_ft,
+                    'via': dict(via, win_short=win_short, win_ft=win)}
+
         def _tap_subs(rec):
             """Taps off a continuing main inside the window (Colin,
             2026-11-11): a run that leaves through one turns there, so it
@@ -4306,21 +4349,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             on the main keeps rec (the first elbow, or none)."""
             if not taps_in:
                 return rec
-            notes.append(('note', fan_system_effect.tap_main_text(
-                where, [(tid, lt) for tid, lt, _d in taps_in],
-                did if role == 'elbow' else None, l_ft if role == 'elbow' else None,
-                win_short, curb_ft)))
+            # The run that stays on the main names the taps it passes in its
+            # run NOTE (Colin, 2026-11-11).
+            rec['passed'] = [(tid, lt) for tid, lt, _d in taps_in]
             subs = rec.get('by_tap') or {}
             for tid, lt, _d in taps_in:
-                sub = {'loss': 0.0, 'item': None, 'where': rec['where'], 'notes': [],
-                       'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
-                       'red_ducts': {}, 'assumptions': [], 'group': set(),
-                       'where_item': where_item, 'none': None}
+                sub = _sub_rec(rec, {'kind': 'tap', 'id': tid, 'l_ft': lt})
                 _tap_close(notes, tid, lt)
-                _price_at(sub, sub['notes'], tid, lt, 'tap', insert_vel=False)
-                if (sub.get('item') is not None and vel_note is not None
-                        and vel_note[1] not in notes):
-                    notes.insert(min(vel_note[0], len(notes)), vel_note[1])
+                _price_at(sub, sub['notes'], tid, lt, 'tap')
                 for n in sub['notes']:
                     if n not in notes:
                         notes.append(n)
@@ -4357,17 +4393,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             rec['win_short'] = win_short
             rec['none_group'] = bool(_gd)
             rec['none_trans'] = bool(_gt)
-            # Said in place of the fan velocity NOTE (Colin, 2026-11-09). With
-            # taps inside the window a run through a tap does carry one: then
-            # it is said for the most restrictive run only, when that run
-            # stays on the main (Colin, 2026-11-11).
-            if taps_in:
-                rec['none_run_note'] = fan_system_effect.no_effect_run_text(
-                    where, [(tid, lt) for tid, lt, _d in taps_in],
-                    'there is no elbow within %s (%.1f ft)' % (
-                        win_short, fan_system_effect._ceil_step(win)), curb_ft)
-            else:
-                notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
+            # Said in the run NOTE, for the index run only (Colin, 2026-11-11).
             return _tap_subs(rec)
         if role not in ('elbow', 'tap_turn', 'drop'):
             if not tap_warned:
@@ -4380,32 +4406,24 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return _tap_subs(rec)
 
         if role == 'tap_turn':
-            notes.append(('note', fan_system_effect.tap_turn_text(where, did, l_ft, curb_ft)))
+            rec['via'] = {'kind': 'tap_turn', 'id': did, 'l_ft': l_ft,
+                          'win_short': win_short, 'win_ft': win}
             _tap_close(notes, did, l_ft)
             return _tap_subs(_price_at(rec, notes, did, l_ft, 'tap'))
         if role == 'drop':
             # Each tap off the drop acts as an elbow, per run (Colin,
             # 2026-11-11): a run picks the record of the tap it passes.
-            notes.append(('note', fan_system_effect.drop_text(
-                where, drop_info['duct'], drop_info['taps'], curb_ft)))
             rec['by_tap'] = rec.get('by_tap') or {}
-            vel_done = False
             for tid, lt in drop_info['taps']:
-                sub = {'loss': 0.0, 'item': None, 'where': rec['where'], 'notes': [],
-                       'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
-                       'red_ducts': {}, 'assumptions': [], 'group': set(),
-                       'where_item': where_item, 'none': None}
+                sub = _sub_rec(rec, {'kind': 'drop', 'id': tid, 'l_ft': lt,
+                                     'drop_duct': drop_info['duct']})
                 if lt >= win - 1e-9:
                     sub['none'] = 'tap %s at %s, past %s (%.1f ft)' % (
                         tid, fan_system_effect.l_text(lt, curb_ft, unit=True),
                         win_short, fan_system_effect._ceil_step(win))
                 else:
                     _tap_close(notes, tid, lt)
-                    _price_at(sub, sub['notes'], tid, lt, 'tap', insert_vel=False)
-                    if (sub.get('item') is not None and not vel_done
-                            and vel_note is not None):
-                        notes.insert(min(vel_note[0], len(notes)), vel_note[1])
-                        vel_done = True
+                    _price_at(sub, sub['notes'], tid, lt, 'tap')
                 for n in sub['notes']:
                     if n not in notes:
                         notes.append(n)
@@ -4417,6 +4435,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 rec['loss'] = max(rec['loss'], sub['loss'])
             rec['none'] = 'drop %s, priced per tap' % drop_info['duct']
             return _tap_subs(rec)
+        rec['via'] = {'kind': 'elbow', 'id': did, 'l_ft': l_ft,
+                      'win_short': win_short, 'win_ft': win}
         return _tap_subs(_price_at(rec, notes, did, l_ft, 'elbow'))
 
     def _checks_only(rec):
@@ -4506,9 +4526,6 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                       cfm_in=dis_cfm if d == 'out' else None)
                 if rec is not None:
                     recs[first] = rec
-            _curb = max([r.get('curb_ft') or 0.0 for r in recs.values()] or [0.0])
-            if _curb:
-                rnotes.append(('note', fan_system_effect.curb_note(_curb)))
         return recs, rnotes
 
     # ── inline exhaust fans (Colin, 2026-11-03) ──────────────────────────────
@@ -4680,13 +4697,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
         its: the take-off items of the path, or of a discharge chain.
         Returns (items, fse charged, friction removed, fittings removed,
-        fse item or None, governs NOTE or None). The fan system effect wins a
+        fse item or None, run NOTE facts or None: _run_note). The fan system effect wins a
         tie. Whichever governs, its value is charged on the fan system effect
         row and the group items are listed at 0.000 'in the fan system
         effect' (Colin, 2026-11-09); the row's Table / basis reads 'Fan system
         effect: <table>' or 'Duct losses: straight duct and elbow (<table>),
         L / Le' with C '-'. 'fse charged' is that row's value, so the
-        subtotal is the same either way. The NOTE says which governed."""
+        subtotal is the same either way. The run NOTE says which governed."""
         if (rec is not None and rec.get('item') is None and rec.get('none_group')
                 and rec.get('where_item') and rec.get('none')):
             return _none_group(rec, its)
@@ -4717,15 +4734,15 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                    group, len(hits))
         item = rec['item']
         gov = rec.get('gov') or {}
+        # What the run NOTE says (_run_note, Colin, 2026-11-11).
         note = None
         if gov:
-            note = fan_system_effect.governs_text(
-                fse >= group, gov['eid'], gov['l_ft'], rec.get('where'), fse, group,
-                gov.get('win'), gov.get('win_short', 'Le'),
-                transition=gov.get('transition', False),
-                size_note=('%s %s' % gov['size']) if gov.get('size') else None,
-                warn_dim=gov.get('warn3'), curb_ft=gov.get('curb') or 0.0,
-                kind=gov.get('kind') or 'elbow')
+            note = {'priced': {'table': gov.get('table') or '-', 'vel': gov.get('vel') or '',
+                               'fse': fse, 'own': group, 'fse_wins': fse >= group,
+                               'transition': gov.get('transition', False),
+                               'warn_dim': gov.get('warn3')},
+                    'win_ft': gov.get('win'), 'win_short': gov.get('win_short'),
+                    'size': gov.get('size')}
         # The group's charge always sits on the fan system effect row, whichever
         # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
         # ', in the fan system effect' on their Table / basis, so the take-off
@@ -4785,7 +4802,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         basis = 'none: %s; duct losses: %s' % (rec['none'], words)
         item = ('Fan system effect (none)', '%s at own losses (%.4f in. wc)' % (basis, group),
                 None, group, (name, basis, None, None))
-        return its, group, g_fric, g_fit, item, None
+        return its, group, g_fric, g_fit, item, {'own': (words, group)}
 
     def _in_group(it):
         """A group item listed at 0.000, its basis marked as in the fan system
@@ -5139,9 +5156,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 items_l, fse_loss, _gfr, _gft, _fitem, _gnote = _fse_group_max(
                     fse_rec, items)
                 fse_items = (_fitem,) if _fitem is not None else ()
-                gov_notes = (('note', _gnote),) if _gnote else ()
-                if fse_rec is not None and fse_rec.get('none_run_note'):
-                    gov_notes = gov_notes + (('note', fse_rec['none_run_note']),)
+                # The run NOTE per connection on this run, written below only
+                # for a run that is kept (Colin, 2026-11-11).
+                _gov_src = ((fse_rec, _gnote),)
                 fric_l, fit_l, dis_items = fric - _gfr, fit - _gft, ()
                 n_d, n_f, len_l, unpriced_l = dcount, fcount, dlen, unpriced
                 if dis_here is not None:
@@ -5154,8 +5171,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 break
                     dis_items, _dl, _dfr, _dft, _ditem, _dnote = _fse_group_max(
                         _drec, dis_here['items'])
-                    if _dnote:
-                        gov_notes = gov_notes + (('note', _dnote),)
+                    _gov_src = _gov_src + ((_drec, _dnote),)
                     fric_l += dis_here['fric'] - _dfr
                     fit_l += dis_here['fit'] - _dft
                     n_d += dis_here['n_duct']
@@ -5188,6 +5204,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         _tr['component_inwc'] + _tr['filter_inwc'] +
                         _tr['fse_inwc']) + 1e-12
                 if _better_best or _better_term:
+                    gov_notes = tuple(('note', _t) for _t in (
+                        _run_note(_gr, _gf, nid) for _gr, _gf in _gov_src) if _t)
                     _rec = {
                         'friction_inwc':    fric_l,
                         'fitting_inwc':     fit_l,
@@ -7548,10 +7566,16 @@ def main():
                         fse_extra_assume.append(_text)
                 else:
                     _correct(_kind, _text, unit_label)
-            # Which governed at each index run's connection: per class, since
-            # supply and return leave through different connections.
+            # The run NOTE for each connection the shown run leaves through:
+            # per class, since supply and return leave through different
+            # connections. A ranked take-off says its own run, 'run N'
+            # (Colin, 2026-11-11).
             for _cls in sorted(per_class.keys()):
-                for _kind, _text in per_class[_cls].get('fse_gov_notes', ()):
+                _shown = shown.get(_cls) or per_class[_cls]
+                for _kind, _text in _shown.get('fse_gov_notes', ()):
+                    if _cls in rank_of:
+                        _text = _text.replace(fan_system_effect.MR_RUN,
+                                              'run {}'.format(rank_of[_cls][0]), 1)
                     _correct(_kind, _text, unit_label)
             fse_gray_ids.update(_fse_leaf.get('fse_gray_ids', ()))
             fse_red_ids.update(_fse_leaf.get('fse_red_ids', ()))

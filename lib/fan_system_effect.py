@@ -46,7 +46,7 @@ RJA DECISIONS (Colin, 2026-10-29):
     first elbow are one group, charged as the LARGER of the fan system effect
     and their own duct and fitting losses. Own losses generally govern only
     near Le, where the fan system effect is small. A NOTE says which governed
-    (governs_text).
+    (run_note, one NOTE per connection on the index run).
   - ED7-2 and ER7-1 are printed for SWSI fans. With DWDI selected they are
     used as a stated ASSUMPTION (method_lines). Inlet swirl, FSE1,sw, has no
     coefficient in the book (p. 34.13: inlet spin changes the fan curve
@@ -261,12 +261,6 @@ def need_text(need_ft, curb_ft=0.0, noun=''):
     total that includes any curb (Colin, 2026-11-09); curb_ft is kept for
     the callers."""
     return ('%.1f ft' % _ceil_step(need_ft)) + ((' ' + noun) if noun else '')
-
-
-def curb_note(curb_ft):
-    """One NOTE per unit when a curb is counted."""
-    return ('NOTE: roof curb %s counted as straight duct at the unit connections (not '
-            'modeled).' % curb_in_text(curb_ft))
 
 
 def default_settings(scope=None):
@@ -744,80 +738,106 @@ def straight_duct_reason(eid, l_ft, role, dim='D', curb_ft=0.0):
         else '%.0f %s' % (INLET_RED_D, dim))
 
 
-def velocity_text(where, v_used, v_conn):
-    """The NOTE when the default fan velocity governs at a connection."""
-    return ('NOTE: fan system effect at the %s priced at the default fan velocity, '
-            '%.0f fpm, greater than the connection velocity of %.0f fpm.' % (
-                where, float(v_used), float(v_conn)))
+MR_RUN = 'most restrictive run'
+TAP_KINDS = ('tap', 'tap_turn', 'drop')
 
 
-def cabinet_inlet_text(where, v_conn):
-    """The NOTE at a cabinet unit inlet (RTU, AHU, furnace, fan coil) priced
-    at its connection velocity, and why (Colin, 2026-11-09)."""
-    return ('NOTE: fan system effect at the %s priced at the connection velocity, '
-            '%.0f fpm: cabinet inlet, the fan sits past the filter and coil.'
-            % (where, float(v_conn)))
+def velocity_clause(v_used, v_conn, fan_gov, cabinet=False):
+    """The velocity a priced fan system effect was read at, for the run
+    NOTE (Colin, 2026-11-11: said only when one is priced on the run).
+    fan_gov: the default fan velocity governs; cabinet: a cabinet unit
+    inlet at its connection velocity."""
+    if fan_gov:
+        return 'at the %.0f fpm fan velocity (connection %.0f fpm)' % (
+            float(v_used), float(v_conn))
+    if cabinet:
+        return ('at the %.0f fpm connection velocity (cabinet inlet, the fan sits past '
+                'the filter and coil)' % float(v_conn))
+    return 'at the %.0f fpm connection velocity' % float(v_conn)
 
 
-def transition_text(eid, l_ft, where, v_used):
-    """The NOTE for a transition priced at the fan velocity. Not printed
-    since 2026-11-04 (the group charged once replaced the fan velocity
-    transition; its NOTE is governs_text)."""
-    return ('NOTE: transition %s, %.1f ft from the %s, priced at the default fan '
-            'velocity, %.0f fpm at the unit end.' % (eid, float(l_ft), where, float(v_used)))
+def at_text(l_ft, curb_ft=0.0):
+    """'2.7 ft incl. 14 in. curb' (one total, the curb named), or '2.7 ft'."""
+    if not curb_ft:
+        return '%.1f ft' % float(l_ft)
+    return '%.1f ft incl. %s curb' % (float(l_ft), curb_in_text(curb_ft))
 
 
-def no_effect_run_text(where, taps, why, curb_ft=0.0):
-    """The NOTE for the most restrictive run when it stays on a main that has
-    taps inside the window (Colin, 2026-11-11): a run through a tap does carry
-    a fan system effect, so the NOTE says which run has none and why.
-    taps: [(tap id, L ft)]."""
-    named = ', '.join('tap %s (%s)' % (tid, l_text(l, curb_ft, unit=True)) for tid, l in taps)
-    return ('NOTE: no fan system effect on the most restrictive run at the %s: it stays on '
-            'the main past %s and %s; the straight duct and fittings are priced at their own '
-            'losses.' % (where, named, why))
+def group_words(kind='elbow', transition=False):
+    """'straight duct and elbow', 'straight duct, transition and tap'."""
+    return ('straight duct, transition and %s' % kind if transition
+            else 'straight duct and %s' % kind)
 
 
-def no_effect_text(where, why):
-    """The NOTE when no fan system effect is used at a connection (Colin,
-    2026-11-09): no elbow inside the window, so the straight duct and
-    fittings are priced at their own losses. Said in place of the fan
-    velocity NOTE."""
-    return ('NOTE: no fan system effect at the %s: %s; the straight duct and fittings '
-            'are priced at their own losses.' % (where, why))
+def run_note(where, terminal, passed=(), via=None, priced=None, none=None, own=None,
+             curb_ft=0.0, run=MR_RUN):
+    """The one NOTE for a unit connection, about the run it is printed for
+    (Colin, 2026-11-11): the most restrictive run, or 'run N' for a ranked
+    take-off. Replaces the velocity, no effect, taps in the window, drop,
+    tap turn, governs and curb NOTEs.
 
-
-def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short,
-                 transition=False, size_note=None, warn_dim=None, curb_ft=0.0,
-                 kind='elbow'):
-    """The NOTE saying which was charged for the group at one connection
-    (Colin, 2026-11-09): the two values side by side, then the outcome.
-    Near the end of the window (L close to Le) the fan system effect falls
-    toward 0 and the group's own losses govern. transition: a transition is
-    in the group, so it is named. size_note: at an inlet, the size the
-    window was read at, e.g. 'D 8 in. elbow' (Colin, 2026-11-09). warn_dim:
-    'D' or 'H' when the elbow drew the cabinet inlet 3 D WARNING."""
-    group = ('straight duct, transition and %s' % kind if transition
-             else 'straight duct and %s' % kind)
-    ratio = (' (L/%s %.2f%s)' % (win_short, float(l_ft) / float(win_ft),
-                                 (', ' + size_note) if size_note else '')
-             if win_ft else '')
-    head = ('NOTE: %s, %s %s at %s%s: fan system effect %.3f in. wc, %s %.3f '
-            'in. wc. ' % (where, kind, eid, l_text(l_ft, curb_ft, unit=True), ratio,
-                          float(fse_inwc), group, float(own_inwc)))
-    if warn_dim:
-        # the cabinet inlet 3 D WARNING fired on this elbow (Colin, 2026-11-09)
-        under = '%.0f %s' % (CABINET_WARN_D, warn_dim)
-        if fse_wins:
-            return head + ('Fan system effect charged at the opening velocity, the %s are '
-                           'not charged again; under %s it may be understated, see the '
-                           'WARNING.' % (group, under))
-        return head + ('%s charged at their own losses; under %s the fan system effect may '
-                       'be understated, see the WARNING.' % (group[0].upper() + group[1:], under))
-    if fse_wins:
-        return head + 'Fan system effect charged, the %s are not charged again.' % group
-    return head + ('%s charged at their own losses, no fan system effect.'
-                   % (group[0].upper() + group[1:]))
+    where: 'supply outlet'; terminal: 'D-3.2, id 3764693'.
+    passed: [(tap id, L ft)] taps off the main the run stays on past.
+    via: {'kind': 'elbow' | 'tap' | 'tap_turn' | 'drop', 'id', 'l_ft',
+          'drop_duct', 'win_short', 'win_ft', 'size' ('H 16 in.', 'elbow')
+          or None, 'bare': the none reason already names the element}, or
+          None.
+    priced: {'table', 'vel', 'fse', 'own', 'fse_wins', 'transition',
+             'warn_dim'} when a fan system effect is priced on the run; the
+             velocity is said only then.
+    none: why none is priced; own: (words, in. wc) charged at own losses."""
+    clauses = []
+    if passed:
+        clauses.append('stays on the main past ' + ', '.join(
+            'tap %s (%s)' % (tid, l_text(l, curb_ft, unit=True)) for tid, l in passed))
+    if via:
+        kind = via['kind']
+        if priced is None:
+            if kind == 'drop':
+                clauses.append('duct %s is a drop (capped)' % via.get('drop_duct'))
+            elif kind == 'tap_turn':
+                clauses.append('the unit duct tees into the main')
+            elif kind == 'tap' and not via.get('bare'):
+                clauses.append('leaves through tap %s at %s' % (
+                    via['id'], at_text(via['l_ft'], curb_ft)))
+        else:
+            inside = 'inside %s %.1f ft%s' % (
+                via.get('win_short') or 'Le', _ceil_step(via.get('win_ft') or 0.0),
+                (' (%s, the %s)' % tuple(via['size'])) if via.get('size') else '')
+            at = at_text(via['l_ft'], curb_ft)
+            if kind == 'elbow':
+                clauses.append('first elbow %s at %s, %s' % (via['id'], at, inside))
+            elif kind == 'tap_turn':
+                clauses.append('the unit duct tees into the main through tap %s at %s, %s'
+                               % (via['id'], at, inside))
+            elif kind == 'drop':
+                clauses.append('duct %s is a drop (capped); the run leaves through tap %s '
+                               'at %s, %s' % (via.get('drop_duct'), via['id'], at, inside))
+            else:
+                clauses.append('leaves through tap %s at %s, %s' % (via['id'], at, inside))
+    if priced is not None:
+        is_tap = via is not None and via.get('kind') in TAP_KINDS
+        head = '%s%s %s' % ('tap priced as an elbow, ' if is_tap else '',
+                            priced['table'], priced['vel'])
+        words = group_words('tap' if is_tap else 'elbow', priced.get('transition'))
+        if priced['fse_wins']:
+            tail = '%s, %.3f in. wc, charged over the %s %.3f.' % (
+                head, float(priced['fse']), words, float(priced['own']))
+        else:
+            clauses.append(head)
+            tail = '%s charged at their own losses %.3f, over the fan system effect %.3f.' % (
+                words, float(priced['own']), float(priced['fse']))
+        if priced.get('warn_dim'):
+            tail += (' Under %.0f %s the fan system effect may be understated, see the '
+                     'WARNING.' % (CABINET_WARN_D, priced['warn_dim']))
+    else:
+        tail = '%s, no fan system effect' % (none or 'not priced')
+        if own is not None:
+            tail += '; %s at %s own losses, %.3f in. wc' % (
+                own[0], 'their' if ' and ' in own[0] else 'its', float(own[1]))
+        tail += '.'
+    clauses.append(tail)
+    return 'NOTE: %s, %s (%s): %s' % (where, run, terminal, '; '.join(clauses))
 
 
 # ── report text ──────────────────────────────────────────────────────────────
@@ -866,63 +886,11 @@ def high_text(rec, where, eid, kind='elbow'):
 # ends capped, every bit of air leaves through its taps): each tap acts as an
 # elbow, priced per run. A unit duct that tees into the side of a main through
 # a tap: that tap acts as an elbow. Taps are never RED.
-TAP_AS_ELBOW_CAVEAT = ('a tap is not in the 2001 tables, so the true loss may be '
-                       'higher (a straight 90 deg tap guides the air less than an '
-                       'elbow) or lower (a 45 deg entry tap)')
+# Said once in METHOD (Colin, 2026-11-11), not on each tap.
+TAP_AS_ELBOW_CAVEAT = ('A tap is not in the 2001 tables, so the true loss through a tap '
+                       'priced as an elbow may be higher (a straight 90 deg tap guides the '
+                       'air less than an elbow) or lower (a 45 deg entry tap).')
 TAP_CLOSE_PREFIX = 'WARNING: Tap '
-
-
-def tap_passed_text(where, tid, l_ft, win_ft, win_short, eid=None, l_e=None,
-                    curb_ft=0.0, stop=None):
-    """The WARNING for a tap off a continuing main inside the window: walked
-    past, the fan system effect priced at the first elbow (eid at l_e), or
-    none when no elbow is inside the window."""
-    if stop:
-        at = stop
-    elif eid is not None:
-        at = 'priced at elbow %s (%s)' % (eid, l_text(l_e, curb_ft, unit=True))
-    else:
-        at = 'not priced, no elbow inside %s' % win_short
-    return ('WARNING: Tap %s is %s, inside %s (%.1f ft). The fan system effect is %s; '
-            "the tap's own system effect is not priced, so the true loss through the "
-            'first few feet of duct is higher than shown. The engineer has final say '
-            'where space does not allow.' % (
-                tid, from_text(where, l_ft, curb_ft), win_short, _ceil_step(win_ft), at))
-
-
-def tap_main_text(where, taps, eid=None, l_e=None, win_short='Le', curb_ft=0.0):
-    """The NOTE for taps off a continuing main inside the window (Colin,
-    2026-11-11): a run through a tap carries it as an elbow at its own L; a
-    run that continues on the main is priced at the first elbow (eid at l_e)
-    or carries none. taps: [(tap id, L ft)]."""
-    named = ', '.join('tap %s at %s' % (tid, l_text(l, curb_ft, unit=True))
-                      for tid, l in taps)
-    rest = ('at elbow %s (%s)' % (eid, l_text(l_e, curb_ft, unit=True)) if eid is not None
-            else 'with no fan system effect (no elbow inside %s)' % win_short)
-    return ('NOTE: the main at the %s has taps inside the fan system effect window (%s): a '
-            'run that leaves through a tap turns there and carries the tap as an elbow at its '
-            'own distance; a run that continues on the main is priced %s; %s.' % (
-                where, named, rest, TAP_AS_ELBOW_CAVEAT))
-
-
-def drop_text(where, duct_id, taps, curb_ft=0.0):
-    """The NOTE for a drop: the duct from the unit ends capped, so each tap
-    off it acts as an elbow for the fan system effect, per run. taps:
-    [(tap id, L ft)]."""
-    named = ', '.join('tap %s at %s' % (t, l_text(l, curb_ft, unit=True))
-                      for t, l in taps)
-    return ('NOTE: duct %s at the %s is a drop (capped, no turn): each tap off it acts as '
-            "an elbow for the fan system effect, priced per run at the tap's distance "
-            'from the unit (%s); %s.' % (duct_id, where, named,
-                                         TAP_AS_ELBOW_CAVEAT))
-
-
-def tap_turn_text(where, tid, l_ft, curb_ft=0.0):
-    """The NOTE for a unit duct that tees into the side of a main through a
-    tap: the air turns through it, priced as an elbow."""
-    return ('NOTE: tap %s, %s: the air from the unit turns through it into the main, so '
-            'the fan system effect prices it as an elbow; %s.' % (
-                tid, from_text(where, l_ft, curb_ft), TAP_AS_ELBOW_CAVEAT))
 
 
 def tap_close_text(where, tid, l_ft, line_ft, line_name, best_ft, best_name,
@@ -969,7 +937,7 @@ def method_lines(settings):
               'it, priced at the tap\'s own L; a run that continues on the main passes '
               'it. A drop (the duct from the unit capped, its air leaving through '
               'taps): each tap acts as an elbow, priced per run at its own L; a unit '
-              'duct teed into the side of a main: that tap acts as an elbow. A tap is '
+              'duct teed into the side of a main: that tap acts as an elbow. %s A tap is '
               'never RED; under the straight duct line it is a WARNING. Tees, wyes and '
               'splits inside the window are flagged, not priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
               'row. An elbow under 0.5 Le of a unit outlet, or under 2 H of an inlet '
@@ -984,6 +952,7 @@ def method_lines(settings):
               'its added loss is not priced.' % (
                   fan, tables[0][1], tables[-1][1],
                   float(settings.get('blast_ratio', DEFAULT_BLAST_RATIO)), HIGH_LOSS_INWC,
+                  TAP_AS_ELBOW_CAVEAT,
                   MITERED_R_OVER_H))
     if settings.get('velocity_basis', DEFAULT_VELOCITY_BASIS) == 'default':
         method += (' Velocity at an outlet: the larger of the fan velocity, '

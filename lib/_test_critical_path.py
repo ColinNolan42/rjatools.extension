@@ -1117,12 +1117,12 @@ for _sup29, _tap29, _main29, _45 in ((True, 'round', 'rect', False),
     _read_ab29 = A._ratio_read_at(A.table(_key29 + '_Cb'), 'Ab/Ac', 0.5)
     check("case29c %s Qb/Qc 1.00: no Qb/Qc clamp NOTE, highest column read, price unchanged"
           % _key29,
-          not any('Qb/Qc' in n and 'highest' in n for n in _n10)
+          not any('Qb/Qc' in n and n.endswith(A.EDGE_TAG) for n in _n10)
           and abs(_c10 - A._to_common(_cb09, 1.0, _read_ab29)) < 1e-12,
           "C %r notes %r" % (_c10, _n10))
 _cab29, _l, _nab29 = A.tap_branch_c(True, 'round', 'rect', False, 0.95, 1.0)
 check("case29c an Ab/Ac clamp NOTE still prints",
-      any(n.startswith('SR5-11_Cb: Ab/Ac 0.95 is above') for n in _nab29)
+      any(n == 'SR5-11 Ab/Ac 0.95 at 0.90 (table edge)' for n in _nab29)
       and not any('Qb/Qc' in n for n in _nab29), "notes %r" % (_nab29,))
 ch29 = {499: [500], 500: [501], 501: [511], 511: [521]}
 n29 = {500: Elem(kind='duct', tap_pos={501: 2.0}),
@@ -1395,20 +1395,16 @@ sa34b = _fse_run(n34b, c34b, d34b, t34b, 980, keep_runs=True)
 _r34b = dict((r['terminal_id'], r) for r in sa34b.get('runs', ()))
 check("case34 tap 3 ft along the continuing outlet duct: the run that continues passes it, no elbow inside Le (2026-11-11)",
       _none_only(_r34b.get(991, {}))
-      and any(k == 'note' and t.startswith('NOTE: the main at the supply outlet has taps inside')
-              and 'tap 982 at 3.0 ft' in t and 'no elbow inside Le' in t
-              for k, t in sa34b.get('fse_notes', ()))
+      and not any(k == 'note' for k, t in sa34b.get('fse_notes', ()))
       and not any(k == 'warn' and t.startswith('WARNING: Tap 982')
                   for k, t in sa34b.get('fse_notes', ())),
       "notes %r" % (sa34b.get('fse_notes'),))
 _g34 = [t for k, t in (_r34b.get(991, {}).get('fse_gov_notes') or ())]
 check("case34 the no fan system effect NOTE is said for a run that stays on the main, naming the tap it passes (2026-11-11)",
       sa34b.get('terminal_id') == 990
-      and any(k == 'note' and t.startswith('NOTE: no fan system effect on the most restrictive run '
-                                           'at the supply outlet: it stays on the main past tap 982 (3.0 ft)')
-              for k, t in (_r34b.get(991, {}).get('fse_gov_notes') or ()))
-      and not any(t.startswith('NOTE: no fan system effect at the supply outlet')
-                  for k, t in sa34b.get('fse_notes', ())),
+      and _g34 == ['NOTE: supply outlet, most restrictive run (id 991): stays on the main past '
+                   'tap 982 (3.0 ft); no elbow within Le (5.8 ft), no fan system effect; '
+                   'straight duct inside Le at its own losses, 0.003 in. wc.'],
       "gov %r notes %r" % (_r34b.get(991, {}).get('fse_gov_notes'), sa34b.get('fse_notes')))
 check("case34 the run that leaves through tap 982 carries it as an elbow",
       _r34b.get(990, {}).get('fse_inwc', 0.0) > 0.0
@@ -1652,8 +1648,11 @@ check("case42 the take-off lists the elbow at 0, inside the fan system effect li
 check("case42 items add up to the subtotal",
       abs(_items_sum(ra35) - ra35['subtotal_inwc']) < 1e-9)
 check("case42 the report says the group is charged once",
-      any('elbow 1002' in t and 'Fan system effect charged, the straight duct' in t
-          for _k, t in ra35.get('fse_gov_notes', ())), "gov %r" % (ra35.get('fse_gov_notes'),))
+      [t for _k, t in ra35.get('fse_gov_notes', ())] == [
+          'NOTE: return inlet, most restrictive run (id 1010): first elbow 1002 at 1.0 ft, '
+          'inside 5 D 10.0 ft (D 24 in., the elbow); ED7-2 at the 1000 fpm connection '
+          'velocity, 0.066 in. wc, charged over the straight duct and elbow 0.008.'],
+      "gov %r" % (ra35.get('fse_gov_notes'),))
 check("case42 outlet: the elbow on the unit is in the group too (fitting 0, fan system effect wins)",
       abs(sa32['fitting_inwc']) < 1e-12 and sa32.get('fse_inwc', 0) > 0.0,
       "fit %r fse %r" % (sa32['fitting_inwc'], sa32.get('fse_inwc')))
@@ -2203,9 +2202,11 @@ sa60 = _fse_run(n32, c32, d32, t32, 920, fan=FSE_DEF)
 check("case60 default basis: FSE2 = 3.80 x Pv(2500), not Pv(1000)",
       abs(sa60.get('fse_inwc', -1) - 3.80 * pv(2500.0)) < 1e-9,
       "got %r" % sa60.get('fse_inwc'))
-check("case60 a NOTE names the fan velocity over the connection's",
-      any(k == 'note' and '2500 fpm, greater than the connection velocity of 1000 fpm' in t
-          for k, t in sa60.get('fse_notes', ())), "notes %r" % (sa60.get('fse_notes'),))
+check("case60 the run NOTE names the fan velocity over the connection's (2026-11-11)",
+      any(k == 'note' and 'SR7-11 at the 2500 fpm fan velocity (connection 1000 fpm), ' in t
+          for k, t in sa60.get('fse_gov_notes', ()))
+      and not any(k == 'note' for k, t in sa60.get('fse_notes', ())),
+      "gov %r" % (sa60.get('fse_gov_notes'),))
 check("case60 1.48 in. wc is GRAY",
       sa60.get('fse_gray_ids') == {921}, "gray %r" % (sa60.get('fse_gray_ids'),))
 check("case60 elbow at 0 ft is RED under 0.5 Le (Le 5.71 ft shown 5.8, as 1.0 Le) and drawn red",
@@ -2318,14 +2319,15 @@ check("case64 default basis: the transition is in the group, at the model veloci
       and 'at 667 fpm' in _t64f[0][1],
       "conn %r fan %r" % (_t64c, _t64f))
 check("case64 a NOTE names the group, no fan velocity transition NOTE",
-      any(k == 'note' and 'Fan system effect charged, the straight duct' in t
+      any(k == 'note' and 'charged over the straight duct' in t
           and 'supply outlet' in t for k, t in f64.get('fse_gov_notes', ()))
       and not any(t.startswith('NOTE: transition') for _k, t in f64.get('fse_notes', ())),
       "notes %r" % (f64.get('fse_notes'),))
 check("case64 a transition in the group is named: 'straight duct, transition and elbow'",
-      any(t.endswith('Fan system effect charged, the straight duct, transition and '
-                     'elbow are not charged again.')
-          for _k, t in f64.get('fse_gov_notes', ())),
+      [t for _k, t in f64.get('fse_gov_notes', ())] == [
+          'NOTE: supply outlet, most restrictive run (id 970): first elbow 964 at 3.5 ft, '
+          'inside Le 5.8 ft; SR7-11 at the 2500 fpm fan velocity (connection 1000 fpm), '
+          '0.302 in. wc, charged over the straight duct, transition and elbow 0.015.'],
       "gov %r" % (f64.get('fse_gov_notes'),))
 check("case64 the group's own losses are left out of friction and fittings",
       abs(f64['fitting_inwc']) < 1e-12 and f64.get('fse_inwc', 0) > 0.0,
@@ -2361,8 +2363,14 @@ check("case65 the run on the main passes the tap, priced at elbow 3003; the run 
       and 'tap as elbow' in _fse_basis(_r65.get(3010, {}))
       and _r65.get(3011, {}).get('fse_inwc', 0.0) > 0.0
       and 'tap as elbow' not in _fse_basis(_r65.get(3011, {}))
-      and any(k == 'note' and 'tap 3002 at 1.0 ft' in t and 'at elbow 3003' in t
-              for k, t in sa65.get('fse_notes', ())), "notes %r" % (sa65.get('fse_notes'),))
+      and any(t.startswith('NOTE: supply outlet, most restrictive run (id 3010): leaves '
+                           'through tap 3002 at 1.0 ft, inside Le 5.8 ft; tap priced as an '
+                           'elbow, SR7-11 at the 1000 fpm connection velocity, ')
+              for k, t in sa65.get('fse_gov_notes', ()))
+      and any(t.startswith('NOTE: supply outlet, most restrictive run (id 3011): stays on '
+                           'the main past tap 3002 (1.0 ft); first elbow 3003 at 2.0 ft, ')
+              for k, t in _r65.get(3011, {}).get('fse_gov_notes', ())),
+      "gov %r / %r" % (sa65.get('fse_gov_notes'), _r65.get(3011, {}).get('fse_gov_notes')))
 n65t = {3100: _unit({3101: SQ24}),
         3102: Elem(kind='transition', family_name='Rectangular Transition - Length',
                    is_round=False,
@@ -2493,7 +2501,7 @@ check("case67 discharge transition at the default basis: in the outlet group, ne
       and _t67f[0][1].endswith('in the fan system effect') and _t67f[0][3] == 0.0,
       "conn %r fan %r" % (_t67c, _t67f))
 check("case67 the group NOTE names the discharge elbow, no transition NOTE",
-      any('elbow 4105' in t and 'Fan system effect charged, the straight duct' in t
+      any('first elbow 4105' in t and 'charged over the straight duct' in t
           for _k, t in f67r.get('fse_gov_notes', ()))
       and not any(t.startswith('NOTE: transition 4103') for _k, t in f67r.get('fse_notes', ())))
 
@@ -2845,15 +2853,16 @@ check("case76 subtotal unchanged: the same as with the fan system effect off",
 check("case76 items add up to the subtotal",
       abs(_items_sum(sa76) - sa76['subtotal_inwc']) < 1e-9)
 check("case76 NOTE: individual losses charged instead, with L/Le 0.90 and both values",
-      len(_g76) == 1 and _g76[0].startswith('NOTE: supply outlet, elbow 3502 at ')
-      and _g76[0].endswith('Straight duct and elbow charged at their own losses, '
-                           'no fan system effect.')
-      and '(L/Le 0.90)' in _g76[0]
-      and ('straight duct and elbow %.3f in. wc.' % _own76) in _g76[0],
+      len(_g76) == 1 and _g76[0].startswith(
+          'NOTE: supply outlet, most restrictive run (id 3510): first elbow 3502 at 5.1 ft, '
+          'inside Le 5.8 ft; SR7-11 at the 1000 fpm connection velocity; ')
+      and _g76[0].endswith('straight duct and elbow charged at their own losses %.3f, over '
+                           'the fan system effect 0.012.' % _own76),
       "gov %r" % (_g76,))
 check("case76 control: case 32 (elbow at L 0) says the fan system effect is charged, "
       "and its row keeps its plain basis (the NOTE is enough, Colin 2026-11-09)",
-      any('Fan system effect charged, the straight duct' in t and '(L/Le 0.00)' in t
+      any('first elbow 921 at 0.0 ft' in t and ', 0.237 in. wc, charged over the '
+          'straight duct and elbow 0.016.' in t
           for _k, t in sa32.get('fse_gov_notes', ()))
       and 'charged' not in _fse_items(sa32)[0][1],
       "gov %r rows %r" % (sa32.get('fse_gov_notes'), _fse_items(sa32)))
@@ -2863,8 +2872,9 @@ check("case76 control: case 32 (elbow at L 0) says the fan system effect is char
 #     elbow inside Le, so nothing is priced and the NOTE is not said; case 32
 #     prices the elbow at L 0 and says it.
 def _vel_notes(leaf):
-    return [t for _k, t in leaf.get('fse_notes', ())
-            if 'priced at the default fan velocity' in t]
+    # the velocity basis is in the run NOTE only (Colin, 2026-11-11)
+    return [t for _k, t in tuple(leaf.get('fse_notes', ())) + tuple(leaf.get('fse_gov_notes', ()))
+            if 'fpm fan velocity' in t]
 
 
 _FSE77 = dict(FSE_ON, velocity_basis='default', fan_fpm=2000.0)   # 2000 over 1000 fpm
@@ -2874,14 +2884,15 @@ check("case77 nothing priced (no elbow within Le): no fan velocity NOTE",
       _none_only(_none77) and not _vel_notes(_none77),
       "notes %r" % (_none77.get('fse_notes'),))
 check("case77 nothing priced: the no fan system effect NOTE is said instead, once",
-      [t for _k, t in _none77.get('fse_notes', ())
-       if t.startswith('NOTE: no fan system effect at the supply outlet: no elbow within '
-                       'Le (')
-       and t.endswith('the straight duct and fittings are priced at their own losses.')]
-      .__len__() == 1, "notes %r" % (_none77.get('fse_notes'),))
+      [t for _k, t in _none77.get('fse_gov_notes', ())
+       if t.startswith('NOTE: supply outlet, most restrictive run (id 910): no elbow within '
+                       'Le (') and ', no fan system effect' in t]
+      .__len__() == 1 and not _none77.get('fse_notes'),
+      "gov %r notes %r" % (_none77.get('fse_gov_notes'), _none77.get('fse_notes')))
 check("case77 priced: no 'no fan system effect' NOTE",
-      not any(t.startswith('NOTE: no fan system effect') for _k, t in
-              _elb77.get('fse_notes', ())), "notes %r" % (_elb77.get('fse_notes'),))
+      not any('no fan system effect' in t for _k, t in
+              tuple(_elb77.get('fse_notes', ())) + tuple(_elb77.get('fse_gov_notes', ()))),
+      "notes %r" % (_elb77.get('fse_notes'),))
 check("case77 elbow priced at L 0: the fan velocity NOTE is said once",
       _elb77.get('fse_inwc', 0.0) > 0.0 and len(_vel_notes(_elb77)) == 1,
       "notes %r" % (_elb77.get('fse_notes'),))
@@ -2907,8 +2918,8 @@ ra78 = _fse_run(n78, c78, d78, {1160: (2000.0, 'Return Air', 'RG-78')}, 1150,
 _g78 = [t for _k, t in ra78.get('fse_gov_notes', ())]
 _red78 = [t for k, t in ra78.get('fse_notes', ()) if k == 'red']
 check("case78 inlet governs NOTE: L/5 H on the elbow's own H (16 in.): 0.21",
-      len(_g78) == 1 and '(L/5 H %.2f, ' % (1.4 / (5.0 * 16.0 / 12.0)) in _g78[0]
-      and '(L/5 H 0.21, H 16 in. elbow)' in _g78[0], "gov %r" % (_g78,))
+      len(_g78) == 1 and 'first elbow 1152 at 1.4 ft, inside 5 H 6.7 ft (H 16 in., the '
+      'elbow); ER7-1 ' in _g78[0], "gov %r" % (_g78,))
 check("case78 the RED line names the same 5 H, 6.7 ft",
       any('6.7 ft (5 H)' in t for t in _red78), "red %r" % (_red78,))
 
@@ -2934,7 +2945,7 @@ check("case78b RED reads the 8 in. elbow's own D, no collar floor (Colin, 2026-1
       and '1.4 ft of straight duct (2 D of the elbow); 3.4 ft (5 D)' in _red78b[0],
       "red %r" % (_red78b,))
 check("case78b governs NOTE names the elbow: (L/5 D 0.39, D 8 in. elbow)",
-      len(_g78b) == 1 and '(L/5 D %.2f, D 8 in. elbow)' % (1.3 / (40.0 / 12.0)) in _g78b[0],
+      len(_g78b) == 1 and 'inside 5 D 3.4 ft (D 8 in., the elbow); ED7-2 ' in _g78b[0],
       "gov %r" % (_g78b,))
 
 # 78c: the same with a lossy straight duct, so its own losses govern: the
@@ -2978,31 +2989,34 @@ _n80, _c80, _d80, _t80 = _net80('Exhaust Air')
 ef80 = crit([4600], _c80, _d80, _t80, _n80, 10.0, fan_effect=FSE80,
             inline_fan_roots={4600})[4600]['Exhaust Air']
 _rows80 = _fse_items(ef80)
-_vn80 = [t for _k, t in ef80.get('fse_notes', ()) if 'priced at the default fan velocity' in t]
+_vn80 = [t for _k, t in ef80.get('fse_gov_notes', ()) if 'fpm fan velocity' in t]
 check("case80 inline exhaust fan inlet elbow at L/D 2: priced at Pv(2000 fpm)",
       any(abs((i[2] or 0) - 2000.0) < 1e-6 for i in _rows80)
       and abs(ef80.get('fse_inwc', 0.0) -
               sum(i[3] for i in _rows80)) < 1e-12,
       "rows %r fse %r" % (_rows80, ef80.get('fse_inwc')))
 check("case80 inline exhaust fan inlet: the fan velocity NOTE, 2000 fpm over 500 fpm",
-      len(_vn80) == 1 and _vn80[0] == 'NOTE: fan system effect at the exhaust inlet at '
-      'element 4601 priced at the default fan velocity, 2000 fpm, greater than the '
-      'connection velocity of 500 fpm.', "notes %r" % (_vn80,))
+      len(_vn80) == 1 and _vn80[0].startswith(
+          'NOTE: exhaust inlet at element 4601, most restrictive run (id 4610): first elbow '
+          '4603 at 2.0 ft, ')
+      and 'ED7-2 at the 2000 fpm fan velocity (connection 500 fpm)' in _vn80[0],
+      "gov %r" % (ef80.get('fse_gov_notes'),))
 _nr, _cr, _dr80, _tr = _net80('Return Air')
 rtu80 = _fse_run(_nr, _cr, _dr80, _tr, 4600, fan=FSE80, cls='Return Air')
 _rr80 = _fse_items(rtu80)
 check("case80 RTU return inlet, same geometry: connection velocity (500 fpm), no fan NOTE",
       _rr80 and all(abs((i[2] or 0) - 500.0) < 1e-6 for i in _rr80)
-      and not any('priced at the default fan velocity' in t
-                  for _k, t in rtu80.get('fse_notes', ())),
+      and not any('fpm fan velocity' in t
+                  for _k, t in tuple(rtu80.get('fse_notes', ()))
+                  + tuple(rtu80.get('fse_gov_notes', ()))),
       "rows %r" % (_rr80,))
 # The cabinet inlet NOTE says why (Colin, 2026-11-09), once, only where a
 # fan system effect is priced, and not on the 'connection' basis.
-_cab80 = [t for _k, t in rtu80.get('fse_notes', ()) if t.startswith('NOTE') and 'cabinet inlet' in t]
-check("case80 RTU return inlet: the cabinet inlet NOTE, once",
-      _cab80 == ['NOTE: fan system effect at the return inlet at element 4601 priced at '
-                 'the connection velocity, 500 fpm: cabinet inlet, the fan sits past the '
-                 'filter and coil.'], "notes %r" % (rtu80.get('fse_notes'),))
+_cab80 = [t for _k, t in tuple(rtu80.get('fse_notes', ())) + tuple(rtu80.get('fse_gov_notes', ()))
+          if 'cabinet inlet' in t]
+check("case80 RTU return inlet: the cabinet inlet basis, once, in the run NOTE",
+      len(_cab80) == 1 and 'at the 500 fpm connection velocity (cabinet inlet, the fan sits '
+      'past the filter and coil)' in _cab80[0], "gov %r" % (rtu80.get('fse_gov_notes'),))
 check("case80 inline exhaust fan inlet: no cabinet inlet NOTE",
       not any('cabinet inlet' in t for _k, t in ef80.get('fse_notes', ())))
 check("case80 inline exhaust fan inlet: no 3 D WARNING",
@@ -3058,26 +3072,28 @@ check("case81 cabinet inlet elbow at 2.4 ft (2 H 2.0, 3 H 3.0): the 3 H WARNING,
                                                              _r81.get('fse_red_ids')))
 _g81 = [t for _k, t in _r81.get('fse_gov_notes', ())]
 check("case81 the governs NOTE points to the WARNING",
-      len(_g81) == 1 and (
-          _g81[0].endswith('charged at their own losses; under 3 H the fan system effect may '
-                           'be understated, see the WARNING.')
-          or _g81[0].endswith('Fan system effect charged at the opening velocity, the '
-                              'straight duct and elbow are not charged again; under 3 H it '
-                              'may be understated, see the WARNING.')),
+      len(_g81) == 1 and _g81[0].endswith(
+          'charged over the straight duct and elbow 0.007. Under 3 H the fan system effect '
+          'may be understated, see the WARNING.'),
       "gov %r" % (_g81,))
-# both governs wordings, straight from the text builder
-_gw = FSE.governs_text(True, 1, 2.4, 'return inlet', 0.05, 0.01, 5.0, '5 H',
-                       transition=True, warn_dim='H')
-_go = FSE.governs_text(False, 1, 2.4, 'return inlet', 0.01, 0.05, 5.0, '5 H',
-                       transition=True, warn_dim='D')
-check("case81 governs wordings with the WARNING",
-      _gw.endswith('Fan system effect charged at the opening velocity, the straight duct, '
-                   'transition and elbow are not charged again; under 3 H it may be '
-                   'understated, see the WARNING.')
-      and _go.endswith('Straight duct, transition and elbow charged at their own losses; '
-                       'under 3 D the fan system effect may be understated, see the WARNING.')
-      and FSE.governs_text(False, 1, 2.4, 'return inlet', 0.01, 0.05, 5.0, '5 H')
-      .endswith('charged at their own losses, no fan system effect.'),
+# both run NOTE wordings with the WARNING, straight from the text builder
+_via81 = {'kind': 'elbow', 'id': 1, 'l_ft': 2.4, 'win_short': '5 H', 'win_ft': 5.0}
+_gw = FSE.run_note('return inlet', 'id 9', via=_via81, priced={
+    'table': 'ER7-1', 'vel': 'at the 800 fpm connection velocity', 'fse': 0.05, 'own': 0.01,
+    'fse_wins': True, 'transition': True, 'warn_dim': 'H'})
+_go = FSE.run_note('return inlet', 'id 9', via=_via81, priced={
+    'table': 'ER7-1', 'vel': 'at the 800 fpm connection velocity', 'fse': 0.01, 'own': 0.05,
+    'fse_wins': False, 'transition': True, 'warn_dim': 'D'})
+check("case81 run NOTE wordings with the WARNING",
+      _gw == ('NOTE: return inlet, most restrictive run (id 9): first elbow 1 at 2.4 ft, '
+              'inside 5 H 5.0 ft; ER7-1 at the 800 fpm connection velocity, 0.050 in. wc, '
+              'charged over the straight duct, transition and elbow 0.010. Under 3 H the fan '
+              'system effect may be understated, see the WARNING.')
+      and _go == ('NOTE: return inlet, most restrictive run (id 9): first elbow 1 at 2.4 ft, '
+                  'inside 5 H 5.0 ft; ER7-1 at the 800 fpm connection velocity; straight duct, '
+                  'transition and elbow charged at their own losses 0.050, over the fan system '
+                  'effect 0.010. Under 3 D the fan system effect may be understated, see the '
+                  'WARNING.'),
       "%r / %r" % (_gw, _go))
 _r81r = _run81(1.9)
 check("case81 elbow at 1.9 ft: RED only, no WARNING; Reason says 2 H",
@@ -3132,14 +3148,14 @@ check("case82 inlet 1.0 ft + 6 in. curb (L 1.5 ft): RED, one total length incl. 
       ('Straight duct: elbow 4702 at 1.5 ft incl. curb, under 2 H',
        'Straight duct 2.0 ft incl. curb'),
       "red %r ducts %r" % (_red6, _i6r.get('fse_red_ducts')))
-check("case82 one curb NOTE per unit",
-      _notes(_i6).count('NOTE: roof curb 6 in. counted as straight duct at the unit '
-                        'connections (not modeled).') == 1, "notes %r" % (_notes(_i6),))
+check("case82 no curb NOTE per unit: METHOD states the curb (Colin, 2026-11-11)",
+      not any('roof curb' in t and t.startswith('NOTE') for t in _notes(_i6)),
+      "notes %r" % (_notes(_i6),))
 _i6g = [t for _k, t in _i6.get('fse_gov_notes', ())]
 _f6 = _fse_items(_i6)
 check("case82 the basis and governs NOTE give one L incl. curb",
       _f6 and 'L 2.4 ft incl. curb, H 12 in' in _f6[0][1]
-      and len(_i6g) == 1 and 'elbow 4702 at 2.4 ft incl. curb (' in _i6g[0],
+      and len(_i6g) == 1 and 'first elbow 4702 at 2.4 ft incl. 6 in. curb, inside 5 H' in _i6g[0],
       "rows %r gov %r" % (_f6, _i6g))
 _c0 = _run81(1.9, fan=_curb(0))
 check("case82 curb 0: the same as no curb, no curb NOTE",
@@ -3220,7 +3236,8 @@ def _tw83(leaf):
 _t83 = _run83(2.0)
 check("case83 tap at 2.0 ft inside Le, past 0.5 Le: NOTE only, no WARNING, no 3 D",
       not _tw83(_t83) and not any('3 D' in t for t in _notes(_t83))
-      and any('tap 4802 at 2.0 ft' in t for t in _notes(_t83)),
+      and any('leaves through tap 4802 at 2.0 ft, inside Le 3.8 ft' in t
+              for _k, t in _t83.get('fse_gov_notes', ())),
       "notes %r" % (_notes(_t83),))
 _t83c = _run83(1.0)
 check("case83 tap at 1.0 ft under 0.5 Le: the 0.5 Le WARNING, one only",
@@ -3446,9 +3463,16 @@ sa87 = _fse_run(n87, c87, d87, t87, 8700, keep_runs=True)
 _runs87 = dict((r['terminal_id'], r) for r in sa87.get('runs', ()))
 _n87 = sa87.get('fse_notes', ())
 check("case87 drop: the NOTE names the drop and its taps",
-      any(k == 'note' and t.startswith('NOTE: duct 8701 at the supply outlet is a drop')
-          and 'tap 8702 at 1.5 ft' in t and 'tap 8704 at 6.5 ft' in t for k, t in _n87),
-      "notes %r" % (_n87,))
+      [t for _k, t in _runs87[8720].get('fse_gov_notes', ())] == [
+          'NOTE: supply outlet, most restrictive run (id 8720): duct 8701 is a drop (capped); '
+          'the run leaves through tap 8702 at 1.5 ft, inside Le 5.8 ft; tap priced as an '
+          'elbow, SR7-11 at the 750 fpm connection velocity, 0.075 in. wc, charged over the '
+          'straight duct and tap 0.028.']
+      and [t for _k, t in _runs87[8722].get('fse_gov_notes', ())] == [
+          'NOTE: supply outlet, most restrictive run (id 8722): duct 8701 is a drop (capped); '
+          'tap 8704 at 6.5 ft, past Le (5.8 ft), no fan system effect.']
+      and not any(k == 'note' for k, t in _n87),
+      "notes %r gov %r" % (_n87, dict((k, r.get('fse_gov_notes')) for k, r in _runs87.items())))
 check("case87 each run carries its own tap's fan system effect: 1.5 ft > 3.5 ft > none past Le",
       len(_runs87) == 3 and _runs87[8720]['fse_inwc'] > _runs87[8721]['fse_inwc'] > 0.0
       and _runs87[8722]['fse_inwc'] == 0.0,
@@ -3491,8 +3515,11 @@ sa88 = _fse_run(n88, c88, d88, {8820: (3000.0, 'Supply Air', 'SD-1')}, 8800)
 _n88 = sa88.get('fse_notes', ())
 check("case88 the tap the air turns through is priced as an elbow",
       sa88.get('fse_inwc', 0.0) > 0.0
-      and any(k == 'note' and t.startswith('NOTE: tap 8802, 0.5 ft from the supply outlet')
-              for k, t in _n88), "fse %r notes %r" % (sa88.get('fse_inwc'), _n88))
+      and any(t.startswith('NOTE: supply outlet, most restrictive run (id 8820): the unit '
+                           'duct tees into the main through tap 8802 at 0.5 ft, inside Le '
+                           '5.8 ft; tap priced as an elbow, ')
+              for k, t in sa88.get('fse_gov_notes', ())),
+      "fse %r gov %r" % (sa88.get('fse_inwc'), sa88.get('fse_gov_notes')))
 check("case88 tap at 0.5 ft under 0.5 Le: WARNING, not RED",
       any(k == 'warn' and t.startswith('WARNING: Tap 8802 is 0.5 ft') for k, t in _n88)
       and 8802 not in (sa88.get('fse_red_ids') or set()), "notes %r" % (_n88,))
@@ -3548,10 +3575,10 @@ d91 = build([(9101, 0.0, 3.0, 750.0, 4.0, 'Supply Air'),
              (9110, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
 sa91 = _fse_run(n91, c91, d91, {9120: (3000.0, 'Supply Air', 'SD-1')}, 9100)
 check("case91 a hosted tap with no readable position: still a drop, no 'turns through it' NOTE",
-      any(t.startswith('NOTE: duct 9101 at the supply outlet is a drop')
-          for k, t in sa91.get('fse_notes', ()))
-      and not any('turns through it' in t for k, t in sa91.get('fse_notes', ())),
-      "notes %r" % (sa91.get('fse_notes'),))
+      any('duct 9101 is a drop (capped); the run leaves through tap 9102' in t
+          for k, t in sa91.get('fse_gov_notes', ()))
+      and not any('tees into the main' in t for k, t in sa91.get('fse_gov_notes', ())),
+      "gov %r" % (sa91.get('fse_gov_notes'),))
 
 
 # 92: situation 3 (Colin, 2026-11-11): the drop taps another main inside Le
@@ -3582,7 +3609,11 @@ check("case92 the run that continues passes the tap, priced at elbow 9203",
 check("case92 the two runs are priced apart",
       abs(_r92.get(9220, {}).get('fse_inwc', 0.0) - _r92.get(9221, {}).get('fse_inwc', 0.0)) > 1e-6)
 check("case92 the NOTE names the tap and the elbow; tap under 0.5 Le is a WARNING, never RED",
-      any(k == 'note' and 'tap 9202 at 1.0 ft' in t and 'at elbow 9203' in t for k, t in _n92)
+      [t for _k, t in _r92[9221].get('fse_gov_notes', ())] == [
+          'NOTE: supply outlet, most restrictive run (id 9221): stays on the main past tap '
+          '9202 (1.0 ft); first elbow 9203 at 2.0 ft, inside Le 5.8 ft; SR7-11 at the 1000 '
+          'fpm connection velocity, 0.107 in. wc, charged over the straight duct and elbow '
+          '0.010.']
       and any(k == 'warn' and t.startswith('WARNING: Tap 9202 is 1.0 ft from the supply outlet, '
                                            'under 0.5 Le') for k, t in _n92)
       and 9202 not in (sa92.get('fse_red_ids') or set()),
@@ -3825,6 +3856,34 @@ check("J13 NOTE: ER5-3 printed for Ab/Ac 0.50, this fitting Ab/Ac 0.35",
       any('ER5-3 is printed for Ab/Ac 0.50 only' in u and 'Ab/Ac 0.35' in u
           for u in leaf.get('unpriced', ())),
       "unpriced %r" % (leaf.get('unpriced'),))
+
+# ── consolidated notes (Colin, 2026-11-11) ───────────────────────────────────
+# One run NOTE per connection on the index run; the velocity only where a fan
+# system effect is priced; no per unit velocity, taps, drop or curb NOTE.
+_g77n = [t for _k, t in _none77.get('fse_gov_notes', ())]
+_g77e = [t for _k, t in _elb77.get('fse_gov_notes', ())]
+check("notes: not priced run NOTE states no velocity basis",
+      len(_g77n) == 1 and 'fpm' not in _g77n[0], "gov %r" % (_g77n,))
+check("notes: priced run NOTE states the fan velocity over the connection's",
+      len(_g77e) == 1 and 'at the 2000 fpm fan velocity (connection 1000 fpm)' in _g77e[0],
+      "gov %r" % (_g77e,))
+check("notes: no informational fan system effect NOTE per unit (velocity, taps, drop, curb)",
+      not any(k == 'note' for leaf in (_none77, _elb77, sa87, sa88, sa92, _i6)
+              for k, _t in leaf.get('fse_notes', ())),
+      "notes %r" % ([leaf.get('fse_notes') for leaf in (_none77, _elb77, sa87)],))
+check("notes: ranked runs carry their own run NOTE, its terminal named",
+      all(any('(id %d)' % k in t for _kk, t in r.get('fse_gov_notes', ()))
+          for k, r in _runs87.items()))
+_fb79 = [u for u in tuple(ra79.get('unpriced', ())) + tuple(rb79.get('unpriced', ()))
+         if u.startswith('FALLBACK')]
+_gr79 = duct_perf_console.group_lines(_fb79 + _fb79)
+check("notes: the run's FALLBACK lines group to one per (table, reason)",
+      _fb79 and len([u for u in _gr79 if u.startswith('FALLBACK')])
+      == len(set(re.sub(r'tap \d+ (passed on|into branch off) duct \d+, ', '',
+                        re.sub(r'-?\d+\.\d\d is not', 'is not', u)) for u in _fb79))
+      and all(re.match(r'^FALLBACK: tap 701 \(duct 700\): 2001 ED5-2 Cc,[bs] not positive; '
+                       r'RJA worksheet C \d\.\d\d used$', u) for u in _gr79),
+      "fb %r grouped %r" % (_fb79, _gr79))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

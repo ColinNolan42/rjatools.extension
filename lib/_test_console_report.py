@@ -566,6 +566,70 @@ def _entries():
     ]
 
 
+class GroupLinesTests(unittest.TestCase):
+    """Colin, 2026-11-11: repeated lines of a unit grouped, one per (table,
+    reason) for the tap FALLBACKs, one NOTE for the table edge reads, one per
+    duct for unreadable tap positions."""
+
+    def test_fallback_taps_grouped_by_table_and_reason(self):
+        lines = [
+            'FALLBACK: tap 3641127 passed on duct 3640926, 2001 ED5-2 Cc,s -0.29 is not '
+            'positive; RJA worksheet C 0.60 used',
+            'FALLBACK: tap 3641113 passed on duct 3640926, 2001 ED5-2 Cc,s -0.17 is not '
+            'positive; RJA worksheet C 0.60 used',
+            'FALLBACK: tap 3641141 passed on duct 3640923, 2001 ED5-2 Cc,s -0.25 is not '
+            'positive; RJA worksheet C 0.60 used',
+            'FALLBACK: tap 501 into branch off duct 500, 2001 ER5-3 Cc,b -0.10 is not '
+            'positive; RJA worksheet C 0.60 used',
+            'FALLBACK: tap 7 passed on duct 6, RJA worksheet C 0.20 (main airflow unreadable)',
+            'FALLBACK: tap 8 passed on duct 6, RJA worksheet C 0.20 (main airflow unreadable)',
+        ]
+        self.assertEqual(dpc.group_lines(lines), [
+            'FALLBACK: taps 3641113, 3641127 (duct 3640926), 3641141 (duct 3640923): 2001 '
+            'ED5-2 Cc,s not positive; RJA worksheet C 0.60 used',
+            'FALLBACK: tap 501 (duct 500): 2001 ER5-3 Cc,b not positive; RJA worksheet C '
+            '0.60 used',
+            'FALLBACK: taps 7, 8 (duct 6): RJA worksheet C 0.20 (main airflow unreadable)'])
+
+    def test_table_edge_and_blank_cell_one_note_each(self):
+        lines = [
+            'NOTE: transition 3640946 (Supply Air, 12x12" to 10x12", 7.6 deg): SR4-1 angle '
+            '7.6 deg at 10.0 deg (table edge)',
+            'FALLBACK: tap 9 into branch off duct 4, 2001 SR5-11 Cc,b -0.10 is not positive; '
+            'RJA worksheet C 0.60 used; NOTE: tap 3764706 on main 3764127 (Supply Air 6x12"): '
+            'SR5-11 Ab/Ac 1.09 at 0.90 (table edge); tap 3764706 on main 3764127 (Supply Air '
+            '6x12"): ER5-3 is printed for Ab/Ac 0.50 only and is read there; this fitting is '
+            'Ab/Ac 0.35',
+            'NOTE: elbow 12 (Supply Air, 10"dia, 90 deg): CD3-12 next to a blank cell',
+            'NOTE: transition 3640946 (Supply Air, 12x12" to 10x12", 7.6 deg): SR4-1 angle '
+            '7.6 deg at 10.0 deg (table edge)',
+        ]
+        self.assertEqual(dpc.group_lines(lines), [
+            'NOTE: read at the table edge: transition 3640946 SR4-1 angle 7.6 deg at 10.0 deg; '
+            'tap 3764706 SR5-11 Ab/Ac 1.09 at 0.90',
+            'FALLBACK: tap 9 (duct 4): 2001 SR5-11 Cc,b not positive; RJA worksheet C 0.60 used',
+            'NOTE: tap 3764706 on main 3764127 (Supply Air 6x12"): ER5-3 is printed for Ab/Ac '
+            '0.50 only and is read there; this fitting is Ab/Ac 0.35',
+            'NOTE: read next to a blank cell, nearest printed value used: elbow 12 CD3-12'])
+
+    def test_repeats_once_and_other_lines_untouched(self):
+        t = ('NOTE: tap positions on duct 5 unreadable: every tap priced at the full duct '
+             'flow, friction charged over its whole length at its unit end cfm')
+        self.assertEqual(dpc.group_lines([t, 'WARNING: x', t]), [t, 'WARNING: x'])
+
+    def test_corrections_group_per_unit(self):
+        c = dpc.correction
+        fb = ('FALLBACK: tap %d passed on duct 4, 2001 ED5-2 Cc,s -0.20 is not positive; '
+              'RJA worksheet C 0.60 used')
+        g = dpc.correction_lines([c('warn', fb % 1, 'A'), c('warn', fb % 2, 'A'),
+                                  c('warn', fb % 3, 'B')])
+        self.assertEqual([line for _k, line in g[dpc.ACTION]], [
+            'A: FALLBACK: taps 1, 2 (duct 4): 2001 ED5-2 Cc,s not positive; RJA worksheet '
+            'C 0.60 used',
+            'B: FALLBACK: tap 3 (duct 4): 2001 ED5-2 Cc,s not positive; RJA worksheet C '
+            '0.60 used'])
+
+
 class SystemCorrectionsTests(unittest.TestCase):
     """Colin, 2026-11-02: every correction in one System Corrections section,
     Action required then Notes, each line under its unit, no duplicates."""
