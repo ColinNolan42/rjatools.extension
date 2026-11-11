@@ -501,16 +501,19 @@ class DuctPerfSectionTests(unittest.TestCase):
               'Duct losses: straight duct and elbow (CR3-1), L 5.1 / Le 5.7 ft', None, None)),
         ]
         rows, losses = dpc.takeoff_rows(items)
-        by = dict(((r[0], r[1]), r) for r in rows)
-        self.assertEqual(by[('Straight duct', 'Darcy-Weisbach')][4], '0.010')
-        self.assertEqual(by[('Straight duct', 'Darcy-Weisbach, in the fan system effect')][4],
-                         '0.000')
-        self.assertEqual(by[('Rect radius elbow, 90 deg', 'CR3-1')][4], '0.016')
-        self.assertEqual(
-            by[('Rect radius elbow, 90 deg', 'CR3-1, in the fan system effect')][4], '0.000')
-        fse = by[('Fan system effect, supply outlet',
-                  'Duct losses: straight duct and elbow (CR3-1), L 5.1 / Le 5.7 ft')]
-        self.assertEqual((fse[3], fse[4]), ('-', '0.316'))
+        # Route order (2026-11-11): the FSE row first, its group under it.
+        self.assertEqual(rows[0][0], 'Fan system effect, supply outlet')
+        self.assertEqual((rows[0][3], rows[0][4]), ('-', '0.316'))
+        self.assertEqual(rows[1], ['Straight duct',
+                                   'Darcy-Weisbach, 5.0 ft, in the fan system effect',
+                                   '', '-', '0.000'])
+        self.assertEqual(rows[2], ['Rect radius elbow, 90 deg',
+                                   'CR3-1, id 2, in the fan system effect',
+                                   '1', '0.25', '0.000'])
+        self.assertEqual(rows[3], ['Straight duct', 'Darcy-Weisbach, 10.0 ft', '', '-',
+                                   '0.010'])
+        self.assertEqual(rows[4], ['Rect radius elbow, 90 deg', 'CR3-1, id 4', '1', '0.25',
+                                   '0.016'])
         self.assertAlmostEqual(sum(losses), 0.010 + 0.0156 + 0.316)
 
     def test_esp_header_basis(self):
@@ -674,17 +677,102 @@ class TakeoffTests(unittest.TestCase):
             ('Tap passed', 'on duct 1', 800.0, 0.002, ('Tap passed on main (straight through)', 'SR5-13 Cs', 0.04, None)),
         ]
 
-    def test_groups_and_sums(self):
+    def test_route_order_one_row_each(self):
+        """Colin, 2026-11-11: route order from the unit, one row per item,
+        no grouping, the element id in Table / basis."""
         rows, losses = dpc.takeoff_rows(self._items())
-        names = [r[0] for r in rows]
-        self.assertEqual(names[0], 'Straight duct')
-        self.assertEqual(rows[0][2], '2 (15 ft)')
-        self.assertEqual(names.index('Round elbow, 90 deg'), 1)
-        self.assertEqual(rows[1][2], '2')
-        self.assertEqual(rows[1][3], '0.11')
-        self.assertEqual(names[-1], 'Diffuser / grille')
-        self.assertEqual(rows[-1][3], '0.050 each')
+        self.assertEqual([r[0] for r in rows], [
+            'Straight duct', 'Round elbow, 90 deg', 'Straight duct',
+            'Round elbow, 90 deg', 'Diffuser / grille',
+            'Tap passed on main (straight through)'])
+        self.assertEqual(rows[0], ['Straight duct', 'Darcy-Weisbach, 10.0 ft', '', '-',
+                                   '0.010'])
+        self.assertEqual(rows[1], ['Round elbow, 90 deg', 'CD3-1, id 2', '1', '0.11',
+                                   '0.004'])
+        self.assertEqual(rows[3][1], 'CD3-1, id 4')
+        self.assertEqual(rows[4], ['Diffuser / grille', 'known drop, id 5', '1', '-',
+                                   '0.050'])
+        self.assertEqual(rows[5][1], 'SR5-13 Cs, on duct 1')
         self.assertAlmostEqual(sum(losses), 0.076, places=9)
+
+    def test_consecutive_duct_merged(self):
+        """Consecutive duct pieces with no fitting between are one row,
+        length and loss summed; flex stays its own row."""
+        items = [
+            ('Duct 1', 'a', 800.0, 0.010, ('Straight duct', 'Darcy-Weisbach', None, 10.0)),
+            ('Duct 2', 'b', 800.0, 0.004, ('Straight duct', 'Darcy-Weisbach', None, 2.5)),
+            ('Fitting 3', 'x', 800.0, 0.003, ('Round elbow, 90 deg', 'CD3-1', 0.11, None)),
+            ('Duct 4', 'c', 700.0, 0.002, ('Straight duct', 'Darcy-Weisbach', None, 3.0)),
+            ('Duct 5', 'd', 700.0, 0.006, ('Flex duct', 'Darcy-Weisbach', None, 5.0)),
+            ('Flex bend', 'C 3.30', 700.0, 0.100,
+             ('Flex bend, one per flex run', 'DSDG Ch. 2', 3.3, None)),
+            ('Duct 6', 'e', 700.0, 0.001, ('Flex duct', 'Darcy-Weisbach', None, 1.0)),
+        ]
+        rows, losses = dpc.takeoff_rows(items)
+        self.assertEqual([r[0] for r in rows], [
+            'Straight duct', 'Round elbow, 90 deg', 'Straight duct', 'Flex duct',
+            'Flex bend, one per flex run', 'Flex duct'])
+        self.assertEqual(rows[0][1:], ['Darcy-Weisbach, 12.5 ft', '', '-', '0.014'])
+        self.assertAlmostEqual(losses[0], 0.014)
+        self.assertEqual(rows[3][1], 'Darcy-Weisbach, 5.0 ft')
+        self.assertAlmostEqual(sum(losses), sum(it[3] for it in items))
+
+    def test_filter_under_fse_rows(self):
+        """The return filter sits at the unit end, right under the fan
+        system effect rows, and the rows still add up to the subtotal."""
+        items = [
+            ('Fan system effect 9', 'x', 600.0, 0.020,
+             ('Fan system effect, return inlet', 'Fan system effect: ED7-2', 0.5, None)),
+            ('Duct 1', 'a, in the fan system effect', 600.0, 0.0,
+             ('Straight duct', 'Darcy-Weisbach, in the fan system effect', None, 2.0)),
+            ('Duct 2', 'b', 600.0, 0.003, ('Straight duct', 'Darcy-Weisbach', None, 8.0)),
+            ('Terminal 5', 'RG', None, 0.05, ('Diffuser / grille', 'known drop', None, None)),
+        ]
+        rows, losses = dpc.takeoff_rows(items)
+        sub = sum(losses) + 0.14
+        cls = {'sys_class': 'Return Air', 'rows': [], 'takeoff': rows, 'filter': 0.14,
+               'subtotal': sub, 'safety': sub * 0.1, 'total': sub * 1.1}
+        out = dpc._class_rows(cls, True)
+        lists = [r for r in out if isinstance(r, list)]
+        self.assertEqual([r[0] for r in lists[:4]], [
+            'Fan system effect, return inlet', 'Straight duct', 'Return filter',
+            'Straight duct'])
+        body = lists[:5]
+        self.assertEqual(lists[5][0], 'Subtotal')
+        self.assertAlmostEqual(sum(float(r[4]) for r in body), sub, places=2)
+        self.assertEqual(lists[5][4], '%.3f' % sub)
+
+    def test_discharge_after_intake(self):
+        """An inline fan's discharge follows the intake route, the assumed
+        backdraft damper leading it and the roof cap last; the discharge FSE
+        row stays at the top with its own group under it."""
+        items = [
+            ('Fan system effect 7', 'x', 1000.0, 0.03,
+             ('Fan system effect, exhaust inlet', 'Fan system effect: ED7-2', 0.4, None)),
+            ('Fan system effect 8', 'y', 1000.0, 0.04,
+             ('Fan system effect, exhaust outlet', 'Fan system effect: SR7-11', 0.5, None)),
+            ('Duct 1', 'a, in the fan system effect', 900.0, 0.0,
+             ('Straight duct', 'Darcy-Weisbach, in the fan system effect', None, 1.0)),
+            ('Duct 2', 'b', 900.0, 0.002, ('Straight duct', 'Darcy-Weisbach', None, 6.0)),
+            ('Discharge duct 11', 'c, in the fan system effect', 1000.0, 0.0,
+             ('Discharge duct', 'Darcy-Weisbach, in the fan system effect', None, 1.5)),
+            ('Discharge fitting 12', 'd', 1000.0, 0.004,
+             ('Discharge round elbow, 90 deg', 'CD3-1', 0.11, None)),
+            ('Accessory (assumed)', 'Backdraft damper at the fan', None, 0.1,
+             ('Backdraft damper', 'known drop', None, None)),
+            ('Terminal 5', 'EG', None, 0.05, ('Diffuser / grille', 'known drop', None, None)),
+            ('Exhaust roof cap', 'Include exhaust roof cap', None, 0.06,
+             ('Roof cap', 'known drop', None, None)),
+        ]
+        rows, losses = dpc.takeoff_rows(items)
+        self.assertEqual([r[0] for r in rows], [
+            'Fan system effect, exhaust inlet', 'Straight duct',
+            'Fan system effect, exhaust outlet', 'Discharge duct',
+            'Straight duct', 'Diffuser / grille', 'Backdraft damper',
+            'Discharge round elbow, 90 deg', 'Roof cap'])
+        self.assertEqual(rows[6][1], 'known drop, assumed')
+        self.assertEqual(rows[7][1], 'CD3-1, id 12')
+        self.assertAlmostEqual(sum(losses), sum(it[3] for it in items))
 
     def test_rendered_instead_of_rows(self):
         rows, _l = dpc.takeoff_rows(self._items())
