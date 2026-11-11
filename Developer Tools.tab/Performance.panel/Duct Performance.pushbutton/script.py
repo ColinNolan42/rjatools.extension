@@ -6399,27 +6399,28 @@ LEVEL_VP_GAP_FT = 0.1           # sheet feet between level plans
 LEVEL_LABEL_UP_FT = 0.03        # sheet feet from a plan's top to its level label
 
 
-def _row_centers(first_center_x, widths, gap_ft):
-    """Viewport center X for boxes laid left to right, the first centered at
-    first_center_x, each gap_ft past the one before. Pure, for the CPython
-    test."""
+def _column_centers(first_center_y, heights, gap_ft):
+    """Viewport center Y for boxes stacked top to bottom, the first centered
+    at first_center_y, each gap_ft under the one before (Colin, 2026-11-11:
+    each extra floor goes underneath). Pure, for the CPython test."""
     out = []
-    right = None
-    for i, w in enumerate(widths):
+    bottom = None
+    for i, h in enumerate(heights):
         if i == 0:
-            cx = first_center_x
+            cy = first_center_y
         else:
-            cx = right + gap_ft + w / 2.0
-        out.append(cx)
-        right = cx + w / 2.0
+            cy = bottom - gap_ft - h / 2.0
+        out.append(cy)
+        bottom = cy - h / 2.0
     return out
 
 
 def _layout_level_viewports(sheet, vps, tn_type_id):
-    """Lay the level plans out left to right from the first one's fixed
-    center, and put each level's name above its plan (Colin, 2026-11-09).
-    Overlap with the title block or the table is accepted: the engineer
-    moves them. vps: [(Viewport, level name)] lowest level first."""
+    """Stack the level plans top to bottom from the first one's fixed
+    center, each extra floor underneath the one before (Colin, 2026-11-11),
+    and put each level's name above its plan. Overlap with the title block
+    or the table is accepted: the sheet is not printed. vps: [(Viewport,
+    level name)] lowest level first, so Floor 1 is on top."""
     doc.Regenerate()
     sizes = []
     for vp, _name in vps:
@@ -6435,16 +6436,19 @@ def _layout_level_viewports(sheet, vps, tn_type_id):
         c0 = vps[0][0].GetBoxCenter()
     except Exception:
         c0 = XYZ(1.201, 1.212, 0)
-    xs = _row_centers(c0.X, [w for w, _h in sizes], LEVEL_VP_GAP_FT)
-    for (vp, name), cx, (w, h) in zip(vps, xs, sizes):
+    # The label above each plan sits in the gap: leave it room.
+    ys = _column_centers(c0.Y, [h for _w, h in sizes],
+                         LEVEL_VP_GAP_FT + LEVEL_LABEL_UP_FT)
+    for (vp, name), cy, (w, h) in zip(vps, ys, sizes):
+        cx = c0.X
         try:
-            vp.SetBoxCenter(XYZ(cx, c0.Y, 0))
+            vp.SetBoxCenter(XYZ(cx, cy, 0))
         except Exception as ex:
             hvac_graph.log.warning('layout: viewport %s NOT MOVED: %s', eid_int(vp.Id), ex)
         if tn_type_id is not None and name:
             try:
                 TextNote.Create(doc, sheet.Id,
-                                XYZ(cx - w / 2.0, c0.Y + h / 2.0 + LEVEL_LABEL_UP_FT, 0),
+                                XYZ(cx - w / 2.0, cy + h / 2.0 + LEVEL_LABEL_UP_FT, 0),
                                 name.upper(), TextNoteOptions(tn_type_id))
             except Exception as ex:
                 hvac_graph.log.warning('layout: level label %r NOT PLACED: %s', name, ex)

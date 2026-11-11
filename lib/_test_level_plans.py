@@ -26,7 +26,7 @@ def _load(*names):
     return ns
 
 
-NS = _load('_rect_overlap', '_plan_rank', '_crop_box_xy', '_row_centers')
+NS = _load('_rect_overlap', '_plan_rank', '_crop_box_xy', '_column_centers')
 
 
 class OverlapTests(unittest.TestCase):
@@ -79,15 +79,16 @@ class PlanRankTests(unittest.TestCase):
 
 class LayoutTests(unittest.TestCase):
 
-    def test_row_left_to_right(self):
-        xs = NS['_row_centers'](1.0, [2.0, 1.0, 3.0], 0.1)
-        self.assertAlmostEqual(xs[0], 1.0)
-        self.assertAlmostEqual(xs[1], 1.0 + 1.0 + 0.1 + 0.5)        # right of 1st + gap + half
-        self.assertAlmostEqual(xs[2], xs[1] + 0.5 + 0.1 + 1.5)
+    def test_column_top_to_bottom(self):
+        """Each extra floor underneath the one before (Colin, 2026-11-11)."""
+        ys = NS['_column_centers'](1.0, [2.0, 1.0, 3.0], 0.1)
+        self.assertAlmostEqual(ys[0], 1.0)
+        self.assertAlmostEqual(ys[1], 1.0 - 1.0 - 0.1 - 0.5)        # bottom of 1st - gap - half
+        self.assertAlmostEqual(ys[2], ys[1] - 0.5 - 0.1 - 1.5)
 
     def test_one_and_none(self):
-        self.assertEqual(NS['_row_centers'](1.2, [2.0], 0.1), [1.2])
-        self.assertEqual(NS['_row_centers'](1.2, [], 0.1), [])
+        self.assertEqual(NS['_column_centers'](1.2, [2.0], 0.1), [1.2])
+        self.assertEqual(NS['_column_centers'](1.2, [], 0.1), [])
 
 
 class WiringTests(unittest.TestCase):
