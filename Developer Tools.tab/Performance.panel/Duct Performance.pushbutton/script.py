@@ -5637,15 +5637,16 @@ def _esp_table_rows(unit):
 
 
 def _legend_lines(rep, show_r_marker_note=False):
-    """The NOTE LEGEND text lines, in order: one per colour, then the (R)
-    line when shown."""
+    """The NOTE LEGEND text lines, in order: one per colour, then the plan
+    mark lines. show_r_marker_note is the set of marks placed ('R', or 'R1',
+    'R2' ...); True means the plain (R)."""
     words = rep.get('words')
     lines = ['{}: {}'.format(k.title(), m) for k, m in _legend_rows(words)]
     if show_r_marker_note:
-        lines.append('(R): Most restrictive {}. It ends the index run that sets '
-                     'the required external static pressure for its equipment '
-                     'or system.'.format(
-                         (words or duct_perf_console.scope_words('rtu'))['one']))
+        marks = (set(['R']) if show_r_marker_note is True
+                 else set(show_r_marker_note))
+        lines.extend(duct_perf_console.mark_lines(
+            marks, (words or duct_perf_console.scope_words('rtu'))['one']))
     return lines
 
 
@@ -6533,7 +6534,10 @@ def main():
     # Static is on, since that is the only place this path search runs.
     # Marked in the view with a circled "R" (see transaction below), on top
     # of the diffuser's real pass/fail color — never replacing it.
-    restrictive_terminal_ids = set()
+    # terminal id -> plan mark: 'R', or 'R1' plus 'R2', 'R3' ... for the
+    # ranked runs with Ranked run on (Colin, 2026-11-11). A run tied with a
+    # marked one at the printed 0.001 in. wc gets the same mark.
+    restrictive_terminal_ids = {}
 
     # Where each console section's text starts in summary_lines, so the plain
     # text fallback can print just that section.
@@ -6582,7 +6586,9 @@ def main():
                              if exh_backdraft else None),
             # Inline exhaust fans: every exhaust fan but a ceiling one.
             inline_fan_roots=set(exhaust_fan_roots) - set(discharge_roots or ()),
-            keep_runs=bool(ranked_set))
+            # Every run kept: Ranked run, and a tie at the printed 0.001
+            # in. wc names both runs (Colin, 2026-11-11).
+            keep_runs=True)
         summary_lines.append(
             'TOTAL EXTERNAL STATIC PRESSURE ({})'.format(duct_perf_console.ESP_BASIS))
         if box_root_ids:
@@ -6633,7 +6639,16 @@ def main():
 
             for sys_class in sorted(per_class.keys()):
                 c = shown[sys_class]
-                restrictive_terminal_ids.add(per_class[sys_class]['terminal_id'])
+                _mr = per_class[sys_class]
+                _runs = _mr.get('runs') or [_mr]
+                _m1 = 'R1' if ranked_set else 'R'
+                for _r in [_mr] + duct_perf_console.tied_runs(_runs, _mr):
+                    restrictive_terminal_ids[_r['terminal_id']] = _m1
+                _shown_ties = duct_perf_console.tied_runs(_runs, c)
+                if sys_class in rank_of:
+                    _mn = 'R{}'.format(rank_of[sys_class][0])
+                    for _r in [c] + _shown_ties:
+                        restrictive_terminal_ids.setdefault(_r['terminal_id'], _mn)
                 summary_lines.append(
                     '    {}:'.format(sys_class))
                 a_cfm, a_cnt = airflow.get(sys_class, (0.0, 0))
@@ -6688,13 +6703,18 @@ def main():
                                  sys_class, c['unit_side_fittings']), unit_label)
                 safety_inwc = c['total_inwc'] - c['subtotal_inwc']
                 safety_det = '+{:.0f}%'.format(safety_pct)
+                _lbl = lambda r: r.get('terminal_label') or r['terminal_name']
                 if sys_class in rank_of:
                     total_det = 'run {} of {} ends at {}'.format(
-                        rank_of[sys_class][0], rank_of[sys_class][1],
-                        c.get('terminal_label') or c['terminal_name'])
+                        rank_of[sys_class][0], rank_of[sys_class][1], _lbl(c))
+                    if _shown_ties:
+                        total_det += ', tied with {}'.format(
+                            duct_perf_console.and_join(_lbl(r) for r in _shown_ties))
+                elif _shown_ties:
+                    total_det = 'worst run ends at {}, tied'.format(
+                        duct_perf_console.and_join(_lbl(r) for r in [c] + _shown_ties))
                 else:
-                    total_det = 'worst run ends at {}'.format(
-                        c.get('terminal_label') or c['terminal_name'])
+                    total_det = 'worst run ends at {}'.format(_lbl(c))
                 summary_lines.append(_esp_text_line('Subtotal', c['subtotal_inwc']))
                 summary_lines.append(_esp_text_line('Safety factor', safety_inwc, safety_det))
                 summary_lines.append(_esp_text_line('TOTAL', c['total_inwc'], total_det))
@@ -6784,9 +6804,11 @@ def main():
             rk_parts = []
 
             def _mr_part(side, leaf):
-                return '{} {:.3f} at {}'.format(
-                    side, float(leaf['total_inwc']),
-                    leaf.get('terminal_label') or leaf['terminal_name'])
+                _ties = duct_perf_console.tied_runs(leaf.get('runs') or [leaf], leaf)
+                _names = duct_perf_console.and_join(
+                    r.get('terminal_label') or r['terminal_name'] for r in [leaf] + _ties)
+                return '{} {:.3f} at {}{}'.format(
+                    side, float(leaf['total_inwc']), _names, ', tied' if _ties else '')
             if supply is not None:
                 unit_total += shown['Supply Air']['total_inwc']
                 mr_total += supply['total_inwc']
@@ -6803,11 +6825,12 @@ def main():
                 sides.append(worst_k)
                 mr_parts.append(_mr_part(worst_k, worst_c))
                 rk_parts.append('{} #{}'.format(worst_k, rank_of.get(worst_k, (1, 0))[0]))
+            if sides:
+                unit_rec['mr_text'] = ' + '.join(mr_parts)
             if ranked_set and sides:
                 unit_rec['ranked'] = True
                 unit_rec['ranked_text'] = ' + '.join(rk_parts)
                 unit_rec['mr_total'] = mr_total
-                unit_rec['mr_text'] = ' + '.join(mr_parts)
                 summary_lines.append('    {} = {:.3f} in. wc   ({}, {})'.format(
                     duct_perf_console.RANKED_TOTAL_LABEL.upper(), unit_total,
                     unit_rec['ranked_text'], duct_perf_console.RANKED_TOTAL_NOTE))
@@ -7338,6 +7361,7 @@ def main():
             # where the family's Label param is an integer and can't hold a
             # letter).
             for tid in sorted(restrictive_terminal_ids):
+                r_mark = restrictive_terminal_ids[tid]
                 term_elem = all_nodes.get(tid)
                 if term_elem is None or not _on_level(term_elem, lvl_eid):
                     continue
@@ -7361,13 +7385,13 @@ def main():
                         inst      = doc.Create.NewFamilyInstance(mark_pt, keynote_sym, new_view)
                         num_param = inst.LookupParameter('Label')
                         if num_param and not num_param.IsReadOnly and num_param.StorageType == StorageType.String:
-                            num_param.Set('R')
+                            num_param.Set(r_mark)
                             placed = True
                         else:
                             doc.Delete(inst.Id)
                     if not placed and tn_type_id is not None:
                         opts = TextNoteOptions(tn_type_id)
-                        TextNote.Create(doc, new_vid, mark_pt, '(R)', opts)
+                        TextNote.Create(doc, new_vid, mark_pt, '({})'.format(r_mark), opts)
                 except Exception:
                     pass
 
@@ -7403,7 +7427,7 @@ def main():
                 sched_view, content_h, total_w = _build_summary_view(
                     doc, rep, esp_rec, vav_rep, [item[2] for item in flagged_items],
                     selected_cols, source_sheet_num, tn_type_id, ts, fill_id,
-                    show_r_marker_note=bool(restrictive_terminal_ids),
+                    show_r_marker_note=set(restrictive_terminal_ids.values()),
                     corrections=corrections)
                 if sched_view is not None:
                     # X fixed by hand in Revit (see diagram note above) and read

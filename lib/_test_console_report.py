@@ -319,6 +319,38 @@ class DuctPerfSectionTests(unittest.TestCase):
         self.assertEqual(rows[-1], {'cells': body[-2], 'bold': True})
         self.assertEqual(total, body[-1])
 
+    def test_tied_runs_and_marks(self):
+        """A tie is the same printed total at 0.001 in. wc (Colin, 2026-11-11):
+        M05C RG-9 0.3682 and RG-10 0.3681 tie, RG-7 0.3311 does not."""
+        rg9 = {'terminal_id': 9, 'total_inwc': 0.3682}
+        rg10 = {'terminal_id': 10, 'total_inwc': 0.3681}
+        rg7 = {'terminal_id': 7, 'total_inwc': 0.3311}
+        runs = [rg9, rg10, rg7]
+        self.assertEqual(dpc.tied_runs(runs, rg9), [rg10])
+        self.assertEqual(dpc.tied_runs(runs, rg10), [rg9])
+        self.assertEqual(dpc.tied_runs(runs, rg7), [])
+        self.assertEqual(dpc.tied_runs(None, rg9), [])
+        self.assertEqual(dpc.and_join(['A']), 'A')
+        self.assertEqual(dpc.and_join(['A', 'B']), 'A and B')
+        self.assertEqual(dpc.and_join(['A', 'B', 'C']), 'A, B and C')
+        self.assertEqual(len(dpc.mark_lines({'R'})), 1)
+        self.assertTrue(dpc.mark_lines({'R'})[0].startswith('(R): Most restrictive'))
+        lines = dpc.mark_lines({'R1', 'R2', 'R12'}, 'diffuser/grille')
+        self.assertTrue(lines[0].startswith('(R1): Most restrictive diffuser/grille'))
+        self.assertTrue(lines[1].startswith('(R2): 2nd most restrictive'))
+        self.assertTrue(lines[2].startswith('(R12): 12th most restrictive'))
+        self.assertEqual(dpc.mark_lines(set()), [])
+
+    def test_mr_text_without_ranked(self):
+        """Ranked run off, the MOST RESTRICTIVE row still names where each
+        run ends, ties included."""
+        unit = {'classes': [], 'esp_sides': ['Supply Air', 'Return Air'],
+                'esp_total': 1.109,
+                'mr_text': 'Supply Air 0.740 at D-FR1 + Return Air 0.368 at '
+                           'RG-9 and RG-10, tied'}
+        rows, total = dpc.esp_unit_rows(unit)
+        self.assertEqual(total, [dpc.MR_LABEL, unit['mr_text'], '', '', '1.109'])
+
     def test_rank_helpers(self):
         self.assertEqual(dpc.parse_rank('3'), (3, None))
         self.assertEqual(dpc.parse_rank(' 12 '), (12, None))

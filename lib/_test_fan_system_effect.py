@@ -679,7 +679,7 @@ class DialogTest(unittest.TestCase):
         self.assertIn('tb_rank_ret.IsEnabled = rank_on and not box', self.src)
         self.assertEqual(dpc.DEFAULT_RANK, 2)
         self.assertIn("'ranked':        dict(ranked) if ranked else None,", self.src)
-        self.assertIn('keep_runs=bool(ranked_set))', self.src)
+        self.assertIn('keep_runs=True)', self.src)
 
     def test_curb_dialog_and_settings(self):
         # Colin, 2026-11-09: roof curb box, default on at 14 in., outside the

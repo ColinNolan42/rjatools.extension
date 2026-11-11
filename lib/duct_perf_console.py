@@ -239,6 +239,51 @@ def pick_ranked(runs, rank):
     return runs[used - 1], used, n, over
 
 
+def tied_runs(runs, run):
+    """The runs other than run whose total prints the same at 0.001 in. wc
+    (Colin, 2026-11-11: a tie names both). runs is a class leaf's sorted
+    'runs' list; run one of them (or the leaf itself)."""
+    key = '{:.3f}'.format(float(run['total_inwc']))
+    return [r for r in (runs or ())
+            if r['terminal_id'] != run['terminal_id']
+            and '{:.3f}'.format(float(r['total_inwc'])) == key]
+
+
+def and_join(names):
+    """'A', 'A and B', 'A, B and C'."""
+    names = list(names)
+    if len(names) < 2:
+        return ''.join(names)
+    return '{} and {}'.format(', '.join(names[:-1]), names[-1])
+
+
+def mark_lines(marks, one='diffuser/grille'):
+    """NOTE LEGEND lines for the plan marks: marks is the set of labels
+    placed ('R', or 'R1' with 'R2', 'R3' ... under Ranked run)."""
+    lines = []
+    if 'R' in marks:
+        lines.append('(R): Most restrictive {}. It ends the index run that sets '
+                     'the required external static pressure for its equipment '
+                     'or system.'.format(one))
+    if 'R1' in marks:
+        lines.append('(R1): Most restrictive {}. It ends the index run that sets '
+                     'the required external static pressure for its equipment '
+                     'or system.'.format(one))
+    for m in sorted((m for m in marks if m not in ('R', 'R1')),
+                    key=lambda s: int(s[1:])):
+        lines.append('({}): {} most restrictive {}, the ranked run shown in the '
+                     'external static take-off.'.format(m, _ordinal(int(m[1:])), one))
+    return lines
+
+
+def _ordinal(n):
+    if 10 <= n % 100 <= 20:
+        suf = 'th'
+    else:
+        suf = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return '{}{}'.format(n, suf).capitalize()
+
+
 def rank_over_text(side, rank, count):
     """The WARNING when a Ranked run box is above the terminals on a side."""
     return ('{} rank {} is above the {} diffuser(s)/grille(s) on this system; '
@@ -372,7 +417,9 @@ def esp_unit_rows(unit, sheet=False):
             total_row = [mr_label, unit.get('mr_text') or ' + '.join(sides or []),
                          '', '', _f3(unit.get('mr_total'))]
         else:
-            total_row = [mr_label, ' + '.join(sides or []),
+            # mr_text names where each most restrictive run ends, ties
+            # included (Colin, 2026-11-11).
+            total_row = [mr_label, unit.get('mr_text') or ' + '.join(sides or []),
                          '', '', _f3(unit['esp_total'])]
     return rows, total_row
 
