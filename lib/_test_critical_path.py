@@ -1206,6 +1206,11 @@ def _fse_run(nodes, children, ducts, terms, root, fan=FSE_ON, cls='Supply Air', 
     return r.get(root, {}).get(cls, {})
 
 
+def _fse_basis(leaf):
+    """Every basis string of a run's fan system effect rows, joined."""
+    return ' | '.join('%s %s' % (i[1], i[4]) for i in _fse_items(leaf))
+
+
 def _items_sum(leaf):
     return sum(i[3] or 0.0 for i in leaf.get('items', ()))
 
@@ -1369,13 +1374,20 @@ c34b = {980: [981], 981: [982, 983], 982: [990], 983: [991]}
 d34b = build([(981, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
               (983, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
 t34b = {990: (1000.0, 'Supply Air', 'SD-a'), 991: (3000.0, 'Supply Air', 'SD-b')}
-sa34b = _fse_run(n34b, c34b, d34b, t34b, 980)
-check("case34 tap 3 ft along the continuing outlet duct: walked past, no elbow inside Le, tap WARNING (2026-11-11)",
-      sa34b.get('fse_inwc') == 0.0
-      and any(k == 'warn' and t.startswith('WARNING: Tap 982 is 3.0 ft from the supply outlet')
-              and 'no elbow inside Le' in t
-              for k, t in sa34b.get('fse_notes', ())),
+sa34b = _fse_run(n34b, c34b, d34b, t34b, 980, keep_runs=True)
+_r34b = dict((r['terminal_id'], r) for r in sa34b.get('runs', ()))
+check("case34 tap 3 ft along the continuing outlet duct: the run that continues passes it, no elbow inside Le (2026-11-11)",
+      _r34b.get(991, {}).get('fse_inwc') == 0.0
+      and any(k == 'note' and t.startswith('NOTE: the main at the supply outlet has taps inside')
+              and 'tap 982 at 3.0 ft' in t and 'no elbow inside Le' in t
+              for k, t in sa34b.get('fse_notes', ()))
+      and not any(k == 'warn' and t.startswith('WARNING: Tap 982')
+                  for k, t in sa34b.get('fse_notes', ())),
       "notes %r" % (sa34b.get('fse_notes'),))
+check("case34 the run that leaves through tap 982 carries it as an elbow",
+      _r34b.get(990, {}).get('fse_inwc', 0.0) > 0.0
+      and 'tap as elbow' in _fse_basis(_r34b.get(990, {})),
+      "runs %r" % (dict((k, round(v['fse_inwc'], 4)) for k, v in _r34b.items()),))
 
 # 35: round return inlet elbow 1 ft from the unit, r/D 1.0: ED7-2 between
 #     L/D 0 (1.20) and 2.0 (0.67) at L/D 0.5 = 1.0675, 0.067 in. wc, not GRAY;
@@ -2316,11 +2328,15 @@ check("case65 tap at 1 ft, elbows at 2.0 and 2.5 ft (0.5 Le 2.86 ft): both RED w
       and _red65[0].startswith('RED: Elbow 3003 is 2.0 ft')
       and _red65[1].startswith('RED: Elbow 3005 is 2.5 ft'),
       "red %r notes %r" % (sa65.get('fse_red_ids'), _red65))
-check("case65 the tap is walked past, the fan system effect priced at elbow 3003 (2026-11-11)",
-      sa65.get('fse_inwc') > 0.0
-      and any(k == 'warn' and t.startswith('WARNING: Tap 3002')
-              and 'priced at elbow 3003' in t for k, t in
-              sa65.get('fse_notes', ())), "notes %r" % (sa65.get('fse_notes'),))
+sa65r = _fse_run(n65, c65, d65, t65, 3000, keep_runs=True)
+_r65 = dict((r['terminal_id'], r) for r in sa65r.get('runs', ()))
+check("case65 the run on the main passes the tap, priced at elbow 3003; the run through tap 3002 (1.0 ft) carries the tap and is the index run (2026-11-11)",
+      sa65.get('terminal_id') == 3010
+      and 'tap as elbow' in _fse_basis(_r65.get(3010, {}))
+      and _r65.get(3011, {}).get('fse_inwc', 0.0) > 0.0
+      and 'tap as elbow' not in _fse_basis(_r65.get(3011, {}))
+      and any(k == 'note' and 'tap 3002 at 1.0 ft' in t and 'at elbow 3003' in t
+              for k, t in sa65.get('fse_notes', ())), "notes %r" % (sa65.get('fse_notes'),))
 n65t = {3100: _unit({3101: SQ24}),
         3102: Elem(kind='transition', family_name='Rectangular Transition - Length',
                    is_round=False,
@@ -3175,12 +3191,13 @@ def _tw83(leaf):
 
 
 _t83 = _run83(2.0)
-check("case83 tap at 2.0 ft on a 12x12 main (3 D 3.3 ft): the WARNING, De, exact text, nothing priced",
+check("case83 tap at 2.0 ft on a 12x12 main (3 D 3.3 ft): the WARNING, De, exact text",
       _tw83(_t83) == ['WARNING: Tap 4802 is 2.0 ft from the supply outlet; recommended: at least '
                       '3.3 ft of straight duct to the first tap (3 D, De 13.1 in.). A tap this '
-                      'close to the fan acts like an elbow at the outlet; its system effect is '
-                      'not priced, so the external static shown is low; the engineer has final say where space does not allow.']
-      and _t83.get('fse_inwc') == 0.0 and not _t83.get('fse_red_ids')
+                      'close to the fan acts like an elbow at the outlet; it is priced as an '
+                      'elbow on a run that leaves through it; a run that continues on the main '
+                      'passes it; the engineer has final say where space does not allow.']
+      and not _t83.get('fse_red_ids')
       and not any(t.startswith('WARNING: tap 4802,') for t in _notes(_t83)),
       "notes %r" % (_notes(_t83),))
 _t83f = _run83(3.4)
@@ -3526,6 +3543,45 @@ check("case91 a hosted tap with no readable position: still a drop, no 'turns th
           for k, t in sa91.get('fse_notes', ()))
       and not any('turns through it' in t for k, t in sa91.get('fse_notes', ())),
       "notes %r" % (sa91.get('fse_notes'),))
+
+
+# 92: situation 3 (Colin, 2026-11-11): the drop taps another main inside Le
+#     and continues. A run through tap 9202 (1.0 ft) carries the tap as an
+#     elbow; a run that continues passes it and is priced at elbow 9203
+#     (2.0 ft). Le 5.8 ft, 0.5 Le 2.86 ft.
+n92 = {9200: _unit({9201: SQ24}), 9201: Elem(kind='duct', tap_pos={9202: 1.0}),
+       9202: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       9203: Elem(kind='elbow', family_name='Rectangular Elbow - Radius', is_round=False)}
+c92 = {9200: [9201], 9201: [9202, 9203], 9202: [9210], 9203: [9204],
+       9210: [9220], 9204: [9221]}
+d92 = build([(9201, 0.0, 2.0, 1000.0, 4.0, 'Supply Air'),
+             (9210, 0.0, 10.0, 500.0, 2.0, 'Supply Air'),
+             (9204, 0.0, 10.0, 875.0, 4.0, 'Supply Air')])
+d92[EID(9210)].size = '24x12"'
+t92 = {9220: (1000.0, 'Supply Air', 'SD-tap'), 9221: (3000.0, 'Supply Air', 'SD-main')}
+sa92 = _fse_run(n92, c92, d92, t92, 9200, keep_runs=True)
+_r92 = dict((r['terminal_id'], r) for r in sa92.get('runs', ()))
+_n92 = sa92.get('fse_notes', ())
+_b92t = _fse_basis(_r92.get(9220, {}))
+_b92m = _fse_basis(_r92.get(9221, {}))
+check("case92 the run through the tap carries the tap as an elbow",
+      _r92.get(9220, {}).get('fse_inwc', 0.0) > 0.0 and 'tap as elbow' in (_b92t or ''),
+      "basis %r" % (_b92t,))
+check("case92 the run that continues passes the tap, priced at elbow 9203",
+      _r92.get(9221, {}).get('fse_inwc', 0.0) > 0.0 and 'tap as elbow' not in (_b92m or ''),
+      "basis %r" % (_b92m,))
+check("case92 the two runs are priced apart",
+      abs(_r92.get(9220, {}).get('fse_inwc', 0.0) - _r92.get(9221, {}).get('fse_inwc', 0.0)) > 1e-6)
+check("case92 the NOTE names the tap and the elbow; tap under 0.5 Le is a WARNING, never RED",
+      any(k == 'note' and 'tap 9202 at 1.0 ft' in t and 'at elbow 9203' in t for k, t in _n92)
+      and any(k == 'warn' and t.startswith('WARNING: Tap 9202 is 1.0 ft from the supply outlet, '
+                                           'under 0.5 Le') for k, t in _n92)
+      and 9202 not in (sa92.get('fse_red_ids') or set()),
+      "notes %r" % (_n92,))
+check("case92 no 'not priced' WARNING for the tap",
+      not any('not priced' in t and 'Tap 9202' in t for k, t in _n92), "notes %r" % (_n92,))
+check("case92 every run's items add up to its subtotal",
+      all(abs(_items_sum(r) - r['subtotal_inwc']) < 1e-9 for r in _r92.values()))
 
 
 # ══════════════════════════════════════════════════════════════════════════

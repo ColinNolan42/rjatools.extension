@@ -736,7 +736,7 @@ def outlet_tap_ft(size_in):
     return OUTLET_TAP_D * float(size_in) / 12.0
 
 
-def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0):
+def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0, priced=False):
     """The WARNING for a tap, branch, tee, wye or cross close to a cabinet
     unit's supply outlet (Colin, 2026-11-09): a tap this close disturbs the
     outlet velocity profile almost like an elbow, a system effect not
@@ -744,11 +744,16 @@ def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0):
     basis its words ('3 D, D 24 in.' or '1.0 Le, Le 5.7 ft'). l_ft and req_ft
     count a roof curb."""
     curb = ''      # one total length, the curb in it (Colin, 2026-11-09)
+    if priced:     # a tap off a continuing main (Colin, 2026-11-11)
+        tail = ('it is priced as an elbow on a run that leaves through it; a run that continues '
+                'on the main passes it')
+    else:
+        tail = 'its system effect is not priced, so the external static shown is low'
     return ('WARNING: %s %s is %s; recommended: at least %.1f ft of straight duct to '
-            'the first tap (%s)%s. A tap this close to the fan %s; its system effect is not '
-            'priced, so the external static shown is low; the engineer has final say where space does not allow.'
+            'the first tap (%s)%s. A tap this close to the fan %s; %s; the engineer has final '
+            'say where space does not allow.'
             % (str(kind)[:1].upper() + str(kind)[1:], eid, from_text(where, l_ft, curb_ft),
-               _ceil_step(req_ft), basis, curb, OUTLET_TAP_MARK))
+               _ceil_step(req_ft), basis, curb, OUTLET_TAP_MARK, tail))
 
 
 def is_check_warning(text):
@@ -873,8 +878,9 @@ def high_text(rec, where, eid, kind='elbow'):
 
 
 # ── taps near a unit connection (Colin, 2026-11-11) ────────────────────────
-# A continuing main: a tap off its side inside the window is walked past, the
-# fan system effect priced at the first elbow. A drop (the duct from the unit
+# A continuing main: a run that leaves through a tap off its side inside the
+# window carries that tap as an elbow; a run that continues passes it, priced
+# at the first elbow or none. A drop (the duct from the unit
 # ends capped, every bit of air leaves through its taps): each tap acts as an
 # elbow, priced per run. A unit duct that tees into the side of a main through
 # a tap: that tap acts as an elbow. Taps are never RED.
@@ -900,6 +906,21 @@ def tap_passed_text(where, tid, l_ft, win_ft, win_short, eid=None, l_e=None,
             'first few feet of duct is higher than shown. The engineer has final say '
             'where space does not allow.' % (
                 tid, from_text(where, l_ft, curb_ft), win_short, _ceil_step(win_ft), at))
+
+
+def tap_main_text(where, taps, eid=None, l_e=None, win_short='Le', curb_ft=0.0):
+    """The NOTE for taps off a continuing main inside the window (Colin,
+    2026-11-11): a run through a tap carries it as an elbow at its own L; a
+    run that continues on the main is priced at the first elbow (eid at l_e)
+    or carries none. taps: [(tap id, L ft)]."""
+    named = ', '.join('tap %s at %s' % (tid, l_text(l, curb_ft, unit=True))
+                      for tid, l in taps)
+    rest = ('at elbow %s (%s)' % (eid, l_text(l_e, curb_ft, unit=True)) if eid is not None
+            else 'with no fan system effect (no elbow inside %s)' % win_short)
+    return ('NOTE: the main at the %s has taps inside the fan system effect window (%s): a '
+            'run that leaves through a tap turns there and carries the tap as an elbow at its '
+            'own distance; a run that continues on the main is priced %s; %s.' % (
+                where, named, rest, TAP_AS_ELBOW_CAVEAT))
 
 
 def drop_text(where, duct_id, taps, curb_ft=0.0):
@@ -962,8 +983,9 @@ def method_lines(settings):
               'or more is GRAY, with the straight length that brings it under. '
               'L runs from the unit through straight duct and any transitions, '
               'their length counted, to the first elbow. A tap off a continuing '
-              'main inside the window is walked past, its own system effect not priced '
-              '(WARNING). A drop (the duct from the unit capped, its air leaving through '
+              'main inside the window acts as an elbow for a run that leaves through '
+              'it, priced at the tap\'s own L; a run that continues on the main passes '
+              'it. A drop (the duct from the unit capped, its air leaving through '
               'taps): each tap acts as an elbow, priced per run at its own L; a unit '
               'duct teed into the side of a main: that tap acts as an elbow. A tap is '
               'never RED; under the straight duct line it is a WARNING. Tees, wyes and '

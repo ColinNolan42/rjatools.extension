@@ -307,7 +307,7 @@ _SETTINGS_XAML = '''
                             <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
                         </StackPanel>
                         <CheckBox x:Name="cb_fse" Content="Include fan system effect" Margin="0,10,0,0"
-                                  ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. A tap off a continuing main is walked past; taps off a capped drop, or a tap the unit duct tees into, are priced as elbows."/>
+                                  ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. A tap is priced as an elbow on a run that leaves through it (off a continuing main, off a capped drop, or the tap the unit duct tees into); a run that continues on the main passes it."/>
                         <StackPanel x:Name="pnl_fse" Margin="20,4,0,0">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Fan type" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -973,9 +973,10 @@ def _show_velocity_settings_xaml(use_theme):
                               'fan coil) the connection velocity, the fan sits past '
                               'the filter and coil. Added before the '
                               'safety factor. Transitions are priced as fittings. A '
-                              'tap off a continuing main is walked past; a tap off a '
-                              'capped drop, or one the unit duct tees into, is priced '
-                              'as an elbow, per run. An elbow under 0.5 Le of an '
+                              'tap inside the window is priced as an elbow on a run '
+                              'that leaves through it (off a continuing main, off a '
+                              'capped drop, or the tap the unit duct tees into); a run '
+                              'that continues on the main passes it. An elbow under 0.5 Le of an '
                               'outlet, or under 2 H (its side in the plane of the turn; '
                               'D if round) of an inlet, is red with the '
                               'straight duct before it.'),
@@ -4209,42 +4210,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     notes.append(('warn', fan_system_effect.outlet_tap_text(
                         _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, t_need,
                         '%.0f D, De %.1f in.' % (fan_system_effect.OUTLET_TAP_D, t_de),
-                        curb_ft)))
+                        curb_ft, priced=bool(taps_in))))
                     tap_warned = role is not None or bool(taps_in)
-        if taps_in and not tap_warned:
-            # A tap off a continuing main inside the window, walked past
-            # (Colin, 2026-11-11): its own system effect is not priced.
-            if role == 'elbow':
-                _stop = None
-            elif role == 'drop':
-                _stop = 'priced per tap off drop %s' % did
-            elif role == 'tap_turn':
-                _stop = 'priced at tap %s as an elbow' % did
-            elif role is None:
-                _stop = 'not priced, no elbow inside %s' % win_short
-            else:
-                _stop = 'not priced, %s %s inside %s' % (
-                    _FSE_KIND_TEXT.get(role, role), did, win_short)
-            notes.append(('warn', fan_system_effect.tap_passed_text(
-                where, taps_in[0][0], taps_in[0][1], win, win_short,
-                did if role == 'elbow' else None, l_ft if role == 'elbow' else None,
-                curb_ft, stop=_stop)))
-        if role is None:
-            rec['none'] = 'no elbow within %s (%.1f ft)' % (
-                win_short, fan_system_effect._ceil_step(win))
-            # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
-            notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
-            return rec
-        if role not in ('elbow', 'tap_turn', 'drop'):
-            if not tap_warned:
-                notes.append(('warn', fan_system_effect.disruption_text(
-                    _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft, win,
-                    win_name)))
-            rec['none'] = '%s %s at %s inside %s, flagged, not priced' % (
-                _FSE_KIND_TEXT.get(role, role), did,
-                fan_system_effect.l_text(l_ft, curb_ft, unit=True), win_short)
-            return rec
-
         def _price_at(rec, notes, did, l_ft, kind='elbow', insert_vel=True):
             """Price the fan system effect at did, L l_ft from the unit, into
             rec: an elbow, or a tap acting as one (kind 'tap', Colin
@@ -4362,16 +4329,66 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 notes.append(('warn', fan_system_effect.tap_close_text(
                     where, tid, lt, line, line_name, best, best_name, curb_ft)))
 
+
+        def _tap_subs(rec):
+            """Taps off a continuing main inside the window (Colin,
+            2026-11-11): a run that leaves through one turns there, so it
+            carries that tap as an elbow at its own L; a run that continues
+            on the main keeps rec (the first elbow, or none)."""
+            if not taps_in:
+                return rec
+            notes.append(('note', fan_system_effect.tap_main_text(
+                where, [(tid, lt) for tid, lt, _d in taps_in],
+                did if role == 'elbow' else None, l_ft if role == 'elbow' else None,
+                win_short, curb_ft)))
+            subs = rec.get('by_tap') or {}
+            for tid, lt, _d in taps_in:
+                sub = {'loss': 0.0, 'item': None, 'where': rec['where'], 'notes': [],
+                       'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
+                       'red_ducts': {}, 'assumptions': [], 'group': set(),
+                       'where_item': where_item, 'none': None}
+                _tap_close(notes, tid, lt)
+                _price_at(sub, sub['notes'], tid, lt, 'tap', insert_vel=False)
+                if (sub.get('item') is not None and vel_note is not None
+                        and vel_note[1] not in notes):
+                    notes.insert(min(vel_note[0], len(notes)), vel_note[1])
+                for n in sub['notes']:
+                    if n not in notes:
+                        notes.append(n)
+                rec['gray'] |= sub['gray']
+                for _a in sub['assumptions']:
+                    if _a not in rec['assumptions']:
+                        rec['assumptions'].append(_a)
+                subs[tid] = sub
+            rec['by_tap'] = subs
+            return rec
+
+        if role is None:
+            rec['none'] = 'no elbow within %s (%.1f ft)' % (
+                win_short, fan_system_effect._ceil_step(win))
+            # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
+            notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
+            return _tap_subs(rec)
+        if role not in ('elbow', 'tap_turn', 'drop'):
+            if not tap_warned:
+                notes.append(('warn', fan_system_effect.disruption_text(
+                    _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft, win,
+                    win_name)))
+            rec['none'] = '%s %s at %s inside %s, flagged, not priced' % (
+                _FSE_KIND_TEXT.get(role, role), did,
+                fan_system_effect.l_text(l_ft, curb_ft, unit=True), win_short)
+            return _tap_subs(rec)
+
         if role == 'tap_turn':
             notes.append(('note', fan_system_effect.tap_turn_text(where, did, l_ft, curb_ft)))
             _tap_close(notes, did, l_ft)
-            return _price_at(rec, notes, did, l_ft, 'tap')
+            return _tap_subs(_price_at(rec, notes, did, l_ft, 'tap'))
         if role == 'drop':
             # Each tap off the drop acts as an elbow, per run (Colin,
             # 2026-11-11): a run picks the record of the tap it passes.
             notes.append(('note', fan_system_effect.drop_text(
                 where, drop_info['duct'], drop_info['taps'], curb_ft)))
-            rec['by_tap'] = {}
+            rec['by_tap'] = rec.get('by_tap') or {}
             vel_done = False
             for tid, lt in drop_info['taps']:
                 sub = {'loss': 0.0, 'item': None, 'where': rec['where'], 'notes': [],
@@ -4399,8 +4416,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 rec['by_tap'][tid] = sub
                 rec['loss'] = max(rec['loss'], sub['loss'])
             rec['none'] = 'drop %s, priced per tap' % drop_info['duct']
-            return rec
-        return _price_at(rec, notes, did, l_ft, 'elbow')
+            return _tap_subs(rec)
+        return _tap_subs(_price_at(rec, notes, did, l_ft, 'elbow'))
 
     def _checks_only(rec):
         """A connection record with the fan system effect pricing taken out,
