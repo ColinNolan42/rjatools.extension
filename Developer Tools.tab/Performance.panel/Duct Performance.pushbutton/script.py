@@ -3238,9 +3238,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     _TABLE_ID = re.compile(r'^([A-Z]{2}\d+-\d+)')
 
     def _takeoff_key(elem, fam, detail, counted, note):
-        """(row name, table, C, feet) grouping one fitting into the external
-        static take-off table: fittings of one kind, one table and one C share
-        a row, the way the WSFU take-off groups fixtures."""
+        """(row name, table, C, feet) of one fitting's row in the external
+        static take-off table (route order, one row each, 2026-11-11)."""
         role = fitting_tables.classify_fitting(fam)
         f = (fam or '').lower()
         if role == 'elbow':
@@ -4753,7 +4752,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         # The group's charge always sits on the fan system effect row, whichever
         # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
         # ', in the fan system effect' on their Table / basis, so the take-off
-        # groups them apart and the 0.000 reads as covered, not free. The
+        # lists them under that row and the 0.000 reads as covered, not free. The
         # subtotal is the same either way: the group's friction and fittings
         # come out, the governing value goes in on this row.
         fse_wins = fse >= group
@@ -4813,7 +4812,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
     def _in_group(it):
         """A group item listed at 0.000, its basis marked as in the fan system
-        effect row (the take-off groups on name, Table / basis and C)."""
+        effect row (the take-off lists it under that row)."""
         t4 = it[4]
         if t4 is not None:
             t4 = (t4[0], '{}, in the fan system effect'.format(t4[1] or '-'), t4[2], t4[3])
@@ -7527,9 +7526,9 @@ def main():
                     _u = (u if (u.startswith('FALLBACK') or u.startswith('NOTE'))
                           else 'UNPRICED: ' + u)
                     _correct('warn', _u, unit_label)
-                # The take-off: every item on the index run grouped by kind,
-                # table and C, the way the WSFU take-off lists fixtures (Colin,
-                # 2026-10-23). Its rows add up to the subtotal less the filter.
+                # The take-off: every item on the run in route order from the
+                # unit, one row each, straight duct between merged (Colin,
+                # 2026-11-11). Its rows add up to the subtotal less the filter.
                 _to_rows, _to_loss = duct_perf_console.takeoff_rows(c.get('items', ()))
                 _to_sum = sum(_to_loss, 0.0)
                 _expect = c['subtotal_inwc'] - c.get('filter_inwc', 0.0)

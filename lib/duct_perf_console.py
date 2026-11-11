@@ -26,8 +26,9 @@ Record shapes (all text already formatted unless noted):
                   cls = {'sys_class', 'airflow', 'rows': [(item, inwc float,
                   detail)], 'subtotal' float, 'safety' float, 'safety_detail',
                   'total' float, 'total_detail', 'takeoff': [[item, table,
-                  qty, C, in. wc]] (optional, from takeoff_rows; rendered
-                  instead of 'rows' when present), 'filter': float or None}
+                  qty, C, in. wc]] (optional, from takeoff_rows, in route
+                  order from the unit; rendered instead of 'rows' when
+                  present), 'filter': float or None}
 
                   Warnings, notes, fan system effect lines and unpriced
                   fittings are not in these records: they are System
@@ -40,6 +41,8 @@ Record shapes (all text already formatted unless noted):
 
 IronPython 2.7: no f-strings; floats are cast with float() before '{:.3f}'.
 """
+
+import re
 
 import console_report as cr
 
@@ -292,66 +295,139 @@ def rank_over_text(side, rank, count):
 
 TAKEOFF_HEADERS = ['Item', 'Table / basis', 'Qty', 'C', 'in. wc']
 
-# Row order in the take-off: duct first, fittings, taps passed, components.
-_TAKEOFF_RANK = (
-    ('Straight duct', 0), ('Flex duct', 1), ('Flex bend', 2),
-    ('Fan system effect', 3),
-    ('Tap passed', 5), ('Unit side stretch', 7),
-)
+# The take-off follows the ROUTE of the run from the unit out to the terminal
+# (Colin, 2026-11-11): fan system effect rows first, each with the rows its
+# group lists at 0.000 under it, then every item in the order the run meets
+# it, one row each, with straight duct between them merged into one row.
+# The return filter goes right under the fan system effect rows
+# (_class_rows); an inline fan's discharge follows the intake route.
+_IN_FSE = ', in the fan system effect'
 _KNOWN_DROP = 'known drop'
+_DUCT_ROWS = ('Straight duct', 'Flex duct', 'Discharge duct')
+_ITEM_ID = re.compile(r'^(?!Fan system effect).* (\d+)$')
 
 
-def _rank(name, table):
-    for prefix, r in _TAKEOFF_RANK:
-        if name.startswith(prefix):
-            return r
-    if table == _KNOWN_DROP:
-        return 6
-    if name.startswith('End of main'):
-        return 4
-    return 3
+def _is_fse(it):
+    return (it[0] or '').startswith('Fan system effect')
+
+
+def _in_fse(it):
+    t4 = it[4] if len(it) > 4 else None
+    return bool(t4 and (t4[1] or '').endswith(_IN_FSE)) or (it[1] or '').endswith(_IN_FSE)
+
+
+def _is_discharge(it):
+    return (it[0] or '').startswith('Discharge ')
+
+
+def _is_backdraft(it):
+    t4 = it[4] if len(it) > 4 else None
+    return it[0] == 'Accessory (assumed)' and bool(t4) and t4[0] == 'Backdraft damper'
+
+
+def _route_order(items):
+    """The items in take-off order (see above). items come from the walk in
+    route order already, unit first; only the fan system effect group, the
+    assumed backdraft damper (at the fan), the inline fan discharge and its
+    roof cap move."""
+    fse = [it for it in items if _is_fse(it)]
+    grp = [it for it in items if not _is_fse(it) and _in_fse(it)]
+    rest = [it for it in items if not _is_fse(it) and not _in_fse(it)]
+    dis = [it for it in rest if _is_discharge(it)]
+    backdraft = [it for it in rest if _is_backdraft(it)]
+    cap = [it for it in rest if it[0] == 'Exhaust roof cap']
+    route = [it for it in rest if not _is_discharge(it) and not _is_backdraft(it)
+             and it[0] != 'Exhaust roof cap']
+    head = []
+    for i, f in enumerate(fse):
+        head.append(f)
+        last = i == len(fse) - 1
+        if len(fse) == 1:
+            head.extend(grp)
+        elif i == 0:
+            head.extend(g for g in grp if not _is_discharge(g))
+        elif last:
+            head.extend(g for g in grp if _is_discharge(g))
+    if not fse:
+        head.extend(grp)
+    if dis:
+        return head + route + backdraft + dis + cap
+    return head + backdraft + route + cap
+
+
+def _with_id(table, label):
+    m = _ITEM_ID.match(label or '')
+    if m is None:
+        return table
+    if table.endswith(_IN_FSE):
+        return '{}, id {}{}'.format(table[:-len(_IN_FSE)], m.group(1), _IN_FSE)
+    return '{}, id {}'.format(table, m.group(1))
 
 
 def takeoff_rows(items):
-    """External static take-off, the way the WSFU take-off lists fixtures:
-    one row per kind of item on the index run, with its table, how many, its
-    C and the pressure drop they add up to (Colin, 2026-10-23).
+    """External static take-off in route order (Colin, 2026-11-11): one row
+    per fitting, accessory and known drop in the order the run meets it from
+    the unit, its element id in Table / basis, and the straight duct between
+    them as one row (consecutive pieces merged, length and loss summed).
 
-    items: the index run items, (label, detail, fpm, loss, (name, table, C,
-    feet)). Items of the same name, table and C share a row; straight duct
-    rows carry their total length in Qty. Returns [[item, table, qty, C,
-    in. wc]] as text, plus the summed loss as the last element of each row
-    in a parallel float list: (rows, losses)."""
-    groups = {}
-    order = []
-    for it in items:
-        if len(it) < 5 or it[4] is None:
-            key = (it[0], '', None)
-            ft = None
-        else:
-            name, table, c, ft = it[4]
-            key = (name, table, None if c is None else round(float(c), 2))
-        if key not in groups:
-            groups[key] = [0, 0.0, 0.0]
-            order.append(key)
-        g = groups[key]
-        g[0] += 1
-        g[1] += float(it[3] or 0.0)
-        g[2] += float(ft or 0.0)
-    first = dict((k, i) for i, k in enumerate(order))
-    order = sorted(order, key=lambda k: (_rank(k[0], k[1]), first[k]))
+    items: the run items, (label, detail, fpm, loss, (name, table, C, feet)).
+    Returns (rows, losses): rows [[item, table, qty, C, in. wc]] as text and
+    each row's loss as a float, so sum(losses) is the sum of the items."""
     rows, losses = [], []
-    for key in order:
-        name, table, c = key
-        n, loss, ft = groups[key]
-        qty = '%d (%.0f ft)' % (n, ft) if ft else str(n)
-        if table == _KNOWN_DROP and n:
-            ctext = '%.3f each' % (loss / n)
+    duct = None          # [name, in group, feet, loss] of the open duct row
+
+    def close():
+        if duct is not None:
+            basis = 'Darcy-Weisbach, %.1f ft' % duct[2]
+            if duct[1]:
+                basis += _IN_FSE
+            rows.append([duct[0], basis, '', '-', _f3(duct[3])])
+            losses.append(duct[3])
+
+    for it in _route_order(items):
+        loss = float(it[3] or 0.0)
+        t4 = it[4] if len(it) > 4 else None
+        if t4 is not None and t4[0] in _DUCT_ROWS and not _is_fse(it):
+            grp = _in_fse(it)
+            if duct is not None and duct[0] == t4[0] and duct[1] == grp:
+                duct[2] += float(t4[3] or 0.0)
+                duct[3] += loss
+                continue
+            close()
+            duct = [t4[0], grp, float(t4[3] or 0.0), loss]
+            continue
+        close()
+        duct = None
+        if t4 is None:
+            name, table, c = it[0], '', None
         else:
-            ctext = '-' if c is None else '%.2f' % c
-        rows.append([name, table or '-', qty, ctext, _f3(loss)])
+            name, table, c = t4[0], t4[1] or '', t4[2]
+        if not _is_fse(it):
+            if it[0] == 'Accessory (assumed)':
+                table = '{}, assumed'.format(table or _KNOWN_DROP)
+            elif it[0] == 'Tap passed' and (it[1] or '').startswith('on duct '):
+                table = '{}, {}'.format(table, it[1].split(',')[0])
+            else:
+                table = _with_id(table, it[0])
+        ctext = '-' if c is None else '%.2f' % float(c)
+        rows.append([name, table or '-', '1', ctext, _f3(loss)])
         losses.append(loss)
+    close()
     return rows, losses
+
+
+def _fse_head(rows):
+    """How many take-off rows lead with the fan system effect: its rows and
+    the rows its group lists at 0.000 under it."""
+    n = 0
+    for r in rows:
+        if isinstance(r, dict):
+            break
+        if r[0].startswith('Fan system effect') or (r[1] or '').endswith(_IN_FSE):
+            n += 1
+        else:
+            break
+    return n
 
 
 def _class_rows(cls, counted, sheet=False):
@@ -372,12 +448,14 @@ def _class_rows(cls, counted, sheet=False):
     if not counted:
         head += '  (not counted, the larger return side governs)'
     rows = [{'band': head}]
-    if cls.get('takeoff'):
-        rows.extend(list(r) for r in cls['takeoff'])
-    else:
-        rows.extend([item, det or '', '', '', _f3(val)] for item, val, det in cls['rows'])
+    body = ([list(r) for r in cls['takeoff']] if cls.get('takeoff') else
+            [[item, det or '', '', '', _f3(val)] for item, val, det in cls['rows']])
     if cls.get('filter') is not None:
-        rows.append(['Return filter', 'known drop', '1', '-', _f3(cls['filter'])])
+        # At the unit end of the return, right under the fan system effect
+        # rows, since the filter sits at the unit (Colin, 2026-11-11).
+        at = _fse_head(body) if cls.get('takeoff') else len(body)
+        body.insert(at, ['Return filter', 'known drop', '1', '-', _f3(cls['filter'])])
+    rows.extend(body)
     rows.append(['Subtotal', '', '', '', _f3(cls['subtotal'])])
     rows.append(['Safety factor', cls.get('safety_detail') or '', '', '',
                  _f3(cls['safety'])])
