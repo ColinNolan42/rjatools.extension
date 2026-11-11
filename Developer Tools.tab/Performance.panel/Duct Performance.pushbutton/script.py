@@ -3006,12 +3006,6 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     junction_why = {}
     junction_exit_why = {}
 
-    def _is_endcap(nid):
-        elem = all_nodes.get(nid)
-        return (elem is not None and hvac_graph.is_fitting(elem)
-                and fitting_tables.classify_fitting(
-                    hvac_graph.fitting_family_name(elem)) == 'endcap')
-
     def _leg_cfm(leg_id):
         """cfm through one leg of a junction: the duct on it, the terminal on
         it, else every duct below it."""
@@ -3047,7 +3041,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # A leg with no airflow (terminals without Flow) would read a
                 # wrong split; only an end cap carries none (review,
                 # 2026-11-11).
-                dry = sorted([k for k in kids if q[k] <= 0.0 and not _is_endcap(k)])
+                dry = sorted([k for k in kids if q[k] <= 0.0 and not _is_endcap_node(k)])
                 lay = ashrae_fittings.junction_layout(
                     legs[par]['dir'], dict((k, legs[k]['dir']) for k in kids))
                 if dry:
