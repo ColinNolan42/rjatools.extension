@@ -3163,7 +3163,7 @@ check("case83 De: 12x12 13.1 in. (3 D 3.3 ft), 10x12 12.0 in. (3 D 3.0 ft), roun
 WIDE = {'round': False, 'area_ft2': 1.75, 'd_in': None, 'w_in': 36.5, 'h_in': 6.9}
 
 
-def _run83(tap_at, fan=None, elbow_first=False, **kw):
+def _run83(tap_at, fan=None, elbow_first=False, msize=12.0, **kw):
     # a wide flat fan coil collar into a 12x12 main
     n = {4800: _unit({4801: WIDE}), 4801: Elem(kind='duct', tap_pos={4802: tap_at}),
          4802: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
@@ -3179,8 +3179,8 @@ def _run83(tap_at, fan=None, elbow_first=False, **kw):
         rows.append((4798, 0.0, 0.5, 800.0, 1.0, 'Supply Air'))
     d = build(rows)
     for _r in d.values():
-        _r.size = '12x12"'
-        _r.d_h_in = 12.0
+        _r.size = '%dx%d"' % (msize, msize)
+        _r.d_h_in = msize
     t = {4810: (200.0, 'Supply Air', 'SD-83a'), 4811: (600.0, 'Supply Air', 'SD-83b')}
     return _fse_run(n, c, d, t, 4800, fan=fan or FSE_ON, **kw)
 
@@ -3200,6 +3200,20 @@ check("case83 tap at 2.0 ft on a 12x12 main (3 D 3.3 ft): the WARNING, De, exact
       and not _t83.get('fse_red_ids')
       and not any(t.startswith('WARNING: tap 4802,') for t in _notes(_t83)),
       "notes %r" % (_notes(_t83),))
+# A tap past Le but under 3 D (Colin, 2026-11-11, TB-M12C tap 4.7 ft, Le 4.6,
+# 3 D 5.2): the WARNING keeps the 3 D advice but does not say the static is
+# low; past Le the 2001 tables carry no system effect.
+_le83 = None
+for _k, _tx in _run83(2.0).get('fse_notes', ()):
+    if 'no elbow within Le (' in _tx:
+        _le83 = float(_tx.split('no elbow within Le (')[1].split(' ft')[0])
+_t83p = _run83(4.5, msize=20.0)
+check("case83 tap at 4.5 ft on a 20x20 main, past Le 3.8 / under 3 D 5.5: WARNING says past Le, no system effect, not 'static low'",
+      _le83 is not None and _le83 < 4.5
+      and len(_tw83(_t83p)) == 1 and 'it is past Le' in _tw83(_t83p)[0]
+      and 'carry no system effect' in _tw83(_t83p)[0]
+      and 'shown is low' not in _tw83(_t83p)[0] and 'priced as an' not in _tw83(_t83p)[0],
+      "Le %r notes %r" % (_le83, _notes(_t83p),))
 _t83f = _run83(3.4)
 check("case83 tap at 3.4 ft: past 3 De, no WARNING (the wide collar is not D)",
       not _tw83(_t83f), "notes %r" % (_notes(_t83f),))
@@ -3224,8 +3238,9 @@ _t83o = _run83(2.0, fan=dict(FSE_ON, on=False))
 check("case83 fan system effect unticked: the WARNING still prints (a straight duct check)",
       len(_tw83(_t83o)) == 1, "notes %r" % (_notes(_t83o),))
 check("case83 METHOD line", "A tap within 3 D of a cabinet unit's supply outlet is a WARNING "
-      '(system effect not priced; D the De of the main it sits on, the walk stopping at the '
-      'first elbow).' in FSE.method_lines(FSE_ON)[0])
+      '(D the De of the main it sits on, the walk stopping at the first elbow); inside Le '
+      'the tap is priced as an elbow on a run through it, past Le the 2001 tables carry no '
+      'system effect.' in FSE.method_lines(FSE_ON)[0])
 
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round

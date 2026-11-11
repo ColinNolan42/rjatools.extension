@@ -736,7 +736,8 @@ def outlet_tap_ft(size_in):
     return OUTLET_TAP_D * float(size_in) / 12.0
 
 
-def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0, priced=False):
+def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0, priced=False,
+                    past_le=None):
     """The WARNING for a tap, branch, tee, wye or cross close to a cabinet
     unit's supply outlet (Colin, 2026-11-09): a tap this close disturbs the
     outlet velocity profile almost like an elbow, a system effect not
@@ -744,7 +745,11 @@ def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0, priced=F
     basis its words ('3 D, D 24 in.' or '1.0 Le, Le 5.7 ft'). l_ft and req_ft
     count a roof curb."""
     curb = ''      # one total length, the curb in it (Colin, 2026-11-09)
-    if priced:     # a tap off a continuing main (Colin, 2026-11-11)
+    if past_le is not None:   # past Le, under 3 D (Colin, 2026-11-11, TB-M12C)
+        tail = ('it is past Le (%.1f ft), where the 2001 tables carry no system effect, so '
+                'none is priced, but it may still disturb the outlet velocity profile'
+                % _ceil_step(past_le))
+    elif priced:   # a tap off a continuing main (Colin, 2026-11-11)
         tail = ('it is priced as an elbow on a run that leaves through it; a run that continues '
                 'on the main passes it')
     else:
@@ -1018,8 +1023,9 @@ def method_lines(settings):
         method += (' Velocity: the connection velocity, cfm over the unit connector '
                    'area (the first duct when unreadable).')
     method += (' A tap within 3 D of a cabinet unit\'s supply outlet is a WARNING '
-               '(system effect not priced; D the De of the main it sits on, the walk '
-               'stopping at the first elbow).')
+               '(D the De of the main it sits on, the walk stopping at the first elbow); '
+               'inside Le the tap is priced as an elbow on a run through it, past Le the '
+               '2001 tables carry no system effect.')
     if float(settings.get('curb_in') or 0.0) > 0.0:
         method += (' A roof curb (dialog, default %.0f in.; %g in. this run) is counted '
                    'as straight duct at RTU connections, length only.'

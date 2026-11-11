@@ -4210,7 +4210,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     notes.append(('warn', fan_system_effect.outlet_tap_text(
                         _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, t_need,
                         '%.0f D, De %.1f in.' % (fan_system_effect.OUTLET_TAP_D, t_de),
-                        curb_ft, priced=bool(taps_in))))
+                        curb_ft, priced=bool(taps_in),
+                        past_le=(win if (not taps_in and role is None
+                                         and t_l >= win - 1e-9) else None))))
                     tap_warned = role is not None or bool(taps_in)
         def _price_at(rec, notes, did, l_ft, kind='elbow', insert_vel=True):
             """Price the fan system effect at did, L l_ft from the unit, into
