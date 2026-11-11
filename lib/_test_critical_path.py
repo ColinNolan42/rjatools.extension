@@ -1362,9 +1362,10 @@ d34b = build([(981, 0.0, 10.0, 1000.0, 4.0, 'Supply Air'),
               (983, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
 t34b = {990: (1000.0, 'Supply Air', 'SD-a'), 991: (3000.0, 'Supply Air', 'SD-b')}
 sa34b = _fse_run(n34b, c34b, d34b, t34b, 980)
-check("case34 tap 3 ft along the outlet duct: flagged as a tap, not priced (no duct size: no De)",
+check("case34 tap 3 ft along the continuing outlet duct: walked past, no elbow inside Le, tap WARNING (2026-11-11)",
       sa34b.get('fse_inwc') == 0.0
-      and any(k == 'warn' and t.startswith('WARNING: tap 982, 3.0 ft from the supply outlet')
+      and any(k == 'warn' and t.startswith('WARNING: Tap 982 is 3.0 ft from the supply outlet')
+              and 'no elbow inside Le' in t
               for k, t in sa34b.get('fse_notes', ())),
       "notes %r" % (sa34b.get('fse_notes'),))
 
@@ -1527,7 +1528,7 @@ sa38c = _fse_run(n38c, c38c, d38c, {2210: (1000.0, 'Supply Air', 'SD-a'),
                  duct_rooted_ids={2200})
 check("case38c tap on the picked duct measured from its unit side neighbor, flagged by id",
       getattr(n38c[2200], 'tap_from', None) == 2201
-      and any(k == 'warn' and t.startswith('WARNING: tap 2205, 1.5 ft from the supply outlet')
+      and any(k == 'warn' and t.startswith('WARNING: Tap 2205 is 1.5 ft from the supply outlet')
               for k, t in sa38c.get('fse_notes', ())),
       "from %r notes %r" % (getattr(n38c[2200], 'tap_from', None), sa38c.get('fse_notes')))
 # F2 (2026-11-02): external static orders the same taps from the same end,
@@ -2307,9 +2308,10 @@ check("case65 tap at 1 ft, elbows at 2.0 and 2.5 ft (0.5 Le 2.86 ft): both RED w
       and _red65[0].startswith('RED: Elbow 3003 is 2.0 ft')
       and _red65[1].startswith('RED: Elbow 3005 is 2.5 ft'),
       "red %r notes %r" % (sa65.get('fse_red_ids'), _red65))
-check("case65 the tap is still the priced window's first disruption (WARNING, no fse)",
-      sa65.get('fse_inwc') == 0.0
-      and any(k == 'warn' and t.startswith('WARNING: tap 3002') for k, t in
+check("case65 the tap is walked past, the fan system effect priced at elbow 3003 (2026-11-11)",
+      sa65.get('fse_inwc') > 0.0
+      and any(k == 'warn' and t.startswith('WARNING: Tap 3002')
+              and 'priced at elbow 3003' in t for k, t in
               sa65.get('fse_notes', ())), "notes %r" % (sa65.get('fse_notes'),))
 n65t = {3100: _unit({3101: SQ24}),
         3102: Elem(kind='transition', family_name='Rectangular Transition - Length',
@@ -3384,6 +3386,102 @@ check("case86 a terminal reached two ways keeps its lossier run (T11 0.55, not 0
       "got %r" % (_r86[0]['friction_inwc'] if _r86 else None,))
 check("case86 every ranked run's items add up to its subtotal",
       all(abs(sum(i[3] or 0.0 for i in r['items']) - r['subtotal_inwc']) < 1e-9 for r in _r86))
+
+# 87: a drop (Colin, 2026-11-11). The duct from the unit ends capped, every bit
+#     of air leaves through its taps: each tap acts as an elbow for the fan
+#     system effect, per run, at its own L. Le 5.8 ft, 0.5 Le 2.86 ft.
+#     Tap 8702 at 1.5 ft (under 0.5 Le, WARNING), 8703 at 3.5 ft (inside Le),
+#     8704 at 6.5 ft (past Le, none). Never RED.
+n87 = {8700: _unit({8701: SQ24}),
+       8701: Elem(kind='duct', tap_pos={8702: 1.5, 8703: 3.5, 8704: 6.5}),
+       8702: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       8703: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       8704: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       8709: Elem(kind='cap', family_name='Rectangular Endcap', is_round=False)}
+c87 = {8700: [8701], 8701: [8702, 8703, 8704, 8709], 8702: [8710], 8703: [8711],
+       8704: [8712], 8710: [8720], 8711: [8721], 8712: [8722]}
+d87 = build([(8701, 0.0, 7.0, 750.0, 4.0, 'Supply Air'),
+             (8710, 0.0, 10.0, 500.0, 2.0, 'Supply Air'),
+             (8711, 0.0, 10.0, 500.0, 2.0, 'Supply Air'),
+             (8712, 0.0, 10.0, 500.0, 2.0, 'Supply Air')])
+for _k in (8710, 8711, 8712):
+    d87[EID(_k)].size = '24x12"'
+t87 = {8720: (1000.0, 'Supply Air', 'SD-1'), 8721: (1000.0, 'Supply Air', 'SD-2'),
+       8722: (1000.0, 'Supply Air', 'SD-3')}
+sa87 = _fse_run(n87, c87, d87, t87, 8700, keep_runs=True)
+_runs87 = dict((r['terminal_id'], r) for r in sa87.get('runs', ()))
+_n87 = sa87.get('fse_notes', ())
+check("case87 drop: the NOTE names the drop and its taps",
+      any(k == 'note' and t.startswith('NOTE: duct 8701 at the supply outlet is a drop')
+          and 'tap 8702 at 1.5 ft' in t and 'tap 8704 at 6.5 ft' in t for k, t in _n87),
+      "notes %r" % (_n87,))
+check("case87 each run carries its own tap's fan system effect: 1.5 ft > 3.5 ft > none past Le",
+      len(_runs87) == 3 and _runs87[8720]['fse_inwc'] > _runs87[8721]['fse_inwc'] > 0.0
+      and _runs87[8722]['fse_inwc'] == 0.0,
+      "fse %r" % (dict((k, round(v['fse_inwc'], 4)) for k, v in _runs87.items()),))
+check("case87 the index run leaves through the closest tap",
+      sa87.get('terminal_id') == 8720, "got %r" % (sa87.get('terminal_id'),))
+check("case87 tap 8702 under 0.5 Le is a WARNING, tap 8703 past 0.5 Le is not",
+      any(k == 'warn' and t.startswith('WARNING: Tap 8702 is 1.5 ft from the supply outlet, '
+                                       'under 0.5 Le') for k, t in _n87)
+      and not any(t.startswith('WARNING: Tap 8703') for k, t in _n87),
+      "notes %r" % (_n87,))
+check("case87 taps are never RED",
+      not (sa87.get('fse_red_ids') or set()) & {8702, 8703, 8704}
+      and not any(k == 'red' for k, t in _n87), "red %r" % (sa87.get('fse_red_ids'),))
+_fi87 = _fse_items(_runs87.get(8720, {}))
+check("case87 the take-off row reads the tap as an elbow",
+      bool(_fi87) and 'tap as elbow' in (_fi87[0][4][1] or ''),
+      "items %r" % (_fi87,))
+check("case87 every run's items add up to its subtotal",
+      all(abs(_items_sum(r) - r['subtotal_inwc']) < 1e-9 for r in _runs87.values()))
+
+# 88: the unit duct tees into the side of a main through a tap (OLMC RTU
+#     3616958, Colin 2026-11-11): the air turns there, priced as an elbow at
+#     L to the tap; the checks walk on along the main past the capped leg.
+n88 = {8800: _unit({8801: SQ24}),
+       8802: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       8803: Elem(kind='duct', tap_pos={8802: 0.9}),
+       8804: Elem(kind='elbow', family_name='Rectangular Elbow - Mitered', is_round=False),
+       8805: Elem(kind='cap', family_name='Rectangular Endcap', is_round=False)}
+c88 = {8800: [8801], 8801: [8802], 8802: [8803], 8803: [8804, 8805], 8804: [8806],
+       8806: [8820]}
+d88 = build([(8801, 0.0, 0.5, 750.0, 4.0, 'Supply Air'),
+             (8803, 0.0, 2.2, 750.0, 4.0, 'Supply Air'),
+             (8806, 0.0, 20.0, 750.0, 4.0, 'Supply Air')])
+for _k in (8801, 8803, 8806):
+    d88[EID(_k)].size = '24x24"'
+sa88 = _fse_run(n88, c88, d88, {8820: (3000.0, 'Supply Air', 'SD-1')}, 8800)
+_n88 = sa88.get('fse_notes', ())
+check("case88 the tap the air turns through is priced as an elbow",
+      sa88.get('fse_inwc', 0.0) > 0.0
+      and any(k == 'note' and t.startswith('NOTE: tap 8802, 0.5 ft from the supply outlet')
+              for k, t in _n88), "fse %r notes %r" % (sa88.get('fse_inwc'), _n88))
+check("case88 tap at 0.5 ft under 0.5 Le: WARNING, not RED",
+      any(k == 'warn' and t.startswith('WARNING: Tap 8802 is 0.5 ft') for k, t in _n88)
+      and 8802 not in (sa88.get('fse_red_ids') or set()), "notes %r" % (_n88,))
+check("case88 the straight duct check walks on along the main: elbow 8804 at 1.4 ft RED",
+      8804 in (sa88.get('fse_red_ids') or set())
+      and any(k == 'red' and t.startswith('RED: Elbow 8804 is 1.4 ft') for k, t in _n88),
+      "red %r notes %r" % (sa88.get('fse_red_ids'), _n88))
+check("case88 no 'flagged, not priced' WARNING",
+      not any('not priced' in t and 'disruption' in t for k, t in _n88))
+
+# 89: the same tee into a main that runs both ways (no cap): a real split,
+#     still flagged, not priced.
+n89 = dict(n88)
+n89[8805] = Elem(kind='elbow', family_name='Rectangular Elbow - Mitered', is_round=False)
+c89 = {8800: [8801], 8801: [8802], 8802: [8803], 8803: [8804, 8805], 8804: [8806],
+       8805: [8807], 8806: [8820], 8807: [8821]}
+d89 = build([(8801, 0.0, 0.5, 750.0, 4.0, 'Supply Air'),
+             (8803, 0.0, 2.2, 750.0, 4.0, 'Supply Air'),
+             (8806, 0.0, 20.0, 375.0, 4.0, 'Supply Air'),
+             (8807, 0.0, 20.0, 375.0, 4.0, 'Supply Air')])
+sa89 = _fse_run(n89, c89, d89, {8820: (1500.0, 'Supply Air', 'SD-1'),
+                                8821: (1500.0, 'Supply Air', 'SD-2')}, 8800)
+check("case89 a tee into a main running both ways: priced as the turn it is (tap at 0.5 ft)",
+      sa89.get('fse_inwc', 0.0) > 0.0,
+      "fse %r notes %r" % (sa89.get('fse_inwc'), sa89.get('fse_notes')))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

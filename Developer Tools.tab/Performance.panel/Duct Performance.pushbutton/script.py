@@ -307,7 +307,7 @@ _SETTINGS_XAML = '''
                             <TextBlock Text="in. wc known drop (MERV 8), added to the return total" VerticalAlignment="Center"/>
                         </StackPanel>
                         <CheckBox x:Name="cb_fse" Content="Include fan system effect" Margin="0,10,0,0"
-                                  ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. Transitions and taps there are flagged, not priced."/>
+                                  ToolTip="Prices the first elbow past each unit connection from the 2001 ASHRAE Fundamentals fan system effect tables and adds it before the safety factor. A tap off a continuing main is walked past; taps off a capped drop, or a tap the unit duct tees into, are priced as elbows."/>
                         <StackPanel x:Name="pnl_fse" Margin="20,4,0,0">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Fan type" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -970,8 +970,10 @@ def _show_velocity_settings_xaml(use_theme):
                               'velocity; at a cabinet unit inlet (RTU, AHU, furnace, '
                               'fan coil) the connection velocity, the fan sits past '
                               'the filter and coil. Added before the '
-                              'safety factor. Transitions are priced as fittings, '
-                              'taps flagged, not priced. An elbow under 0.5 Le of an '
+                              'safety factor. Transitions are priced as fittings. A '
+                              'tap off a continuing main is walked past; a tap off a '
+                              'capped drop, or one the unit duct tees into, is priced '
+                              'as an elbow, per run. An elbow under 0.5 Le of an '
                               'outlet, or under 2 H (its side in the plane of the turn; '
                               'D if round) of an inlet, is red with the '
                               'straight duct before it.'),
@@ -3333,10 +3335,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                    nid, length)
         return length
 
+    def _is_tap_node(nid):
+        elem = all_nodes.get(nid) if nid is not None else None
+        return (elem is not None and hvac_graph.is_fitting(elem) and
+                fitting_tables.classify_fitting(
+                    hvac_graph.fitting_family_name(elem)) == 'takeoff')
+
+    def _is_endcap_node(nid):
+        elem = all_nodes.get(nid)
+        return (elem is not None and fitting_tables.classify_fitting(
+            hvac_graph.fitting_family_name(elem)) == 'endcap')
+
     def _fse_first_disruption(root_id, first, win, where='unit connection',
                               prev=None, seen=None, collect=None, passed=None,
                               through_taps=False, ducts=None, accessories=None,
-                              l0=0.0):
+                              l0=0.0, tap_log=None, drop=None):
         """(role or None, L ft, node id, notes): the first disruption within
         win feet of the unit connection at node first.
 
@@ -3374,7 +3387,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         accessories: a list filled with (id, L ft, family) for every damper
         passed (fan_system_effect.DAMPER_KINDS), for the damper in the fan
         clearance WARNING (Colin, 2026-11-04, F1). Still passed at zero
-        length."""
+        length.
+
+        Taps near the unit (Colin, 2026-11-11). tap_log: the pricing walk
+        passes taps off a continuing main, filling (tap id, L ft, duct id)
+        for each one inside win. drop: the pricing walk's dict; a duct whose
+        air all leaves through its taps (capped, or a dead end) is a drop:
+        returns ('drop', L at the duct, duct id) and fills drop with
+        {'duct', 'taps': [(tap id, L ft)]}. A tap fitting ON the walk (the
+        unit duct tees into the side of a main): the pricing walk returns
+        'tap_turn' there; every other walk goes on along the main, a capped
+        dead leg skipped, 'split' when the main runs both ways."""
         notes = []
         if seen is None:
             prev, seen = root_id, set([root_id])
@@ -3390,14 +3413,43 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # outlet tap check reads that duct's De, Colin 2026-11-09).
                 if ducts is not None:
                     ducts.append((nid, l_ft))
+                if _is_tap_node(prev):
+                    # Entered through a tap on its side: on along the main
+                    # the way the air goes, a capped leg skipped.
+                    live = [c for c in kids if not _is_endcap_node(c)]
+                    if len(live) != 1:
+                        return 'split', l_ft, nid, notes
+                    try:
+                        d_in = hvac_graph.tap_positions_ft(elem, live[0]).get(prev)
+                    except Exception:
+                        d_in = None
+                    if d_in is None:
+                        d_in = float(dr.length_ft or 0.0)
+                        notes.append(('note', 'NOTE: tap %s position on duct %s '
+                                      'unreadable, the whole duct length counted '
+                                      'for the fan system effect' % (prev, nid)))
+                    l_ft += d_in
+                    prev, nid = nid, live[0]
+                    continue
                 taps = _taps(nid)
+                pos = {}
+                if taps and elem is not None and prev is not None:
+                    try:
+                        pos = hvac_graph.tap_positions_ft(elem, prev)
+                    except Exception:
+                        pos = {}
+                if (taps and len(taps) == 1 and taps[0] not in pos
+                        and (drop is not None or tap_log is not None or through_taps
+                             or collect is not None)
+                        and not [c for c in kids if c not in taps
+                                 and not _is_endcap_node(c)]):
+                    # A tap joined at this duct's END, not on its side: the
+                    # duct runs into it (the unit duct tees into a main,
+                    # Colin 2026-11-11). Walked as a fitting on the run.
+                    l_ft += float(dr.length_ft or 0.0)
+                    prev, nid = nid, taps[0]
+                    continue
                 if taps:
-                    pos = {}
-                    if elem is not None and prev is not None:
-                        try:
-                            pos = hvac_graph.tap_positions_ft(elem, prev)
-                        except Exception:
-                            pos = {}
                     if all(t in pos for t in taps):
                         tid = min(taps, key=lambda t: pos[t])
                         at = pos[tid]
@@ -3414,8 +3466,23 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                       % nid))
                     fan_system_effect.log.info('fan system effect: tap %s on duct %s '
                                                'at %.2f ft', tid, nid, l_ft + at)
+                    if drop is not None and not [c for c in kids if c not in taps
+                                                 and not _is_endcap_node(c)]:
+                        # A drop: every bit of air leaves through its taps.
+                        drop['duct'] = nid
+                        drop['taps'] = sorted(
+                            [(t, l_ft + pos.get(t, at if t == tid else 0.0)) for t in taps],
+                            key=lambda x: (x[1], x[0]))
+                        fan_system_effect.log.info('fan system effect: duct %s is a '
+                                                   'drop, taps %r', nid, drop['taps'])
+                        return 'drop', l_ft, nid, notes
                     if through_taps:
                         pass                # the main goes on past the tap
+                    elif tap_log is not None:
+                        # A continuing main: walked past (Colin, 2026-11-11).
+                        for t in sorted(taps, key=lambda x: pos.get(x, 0.0)):
+                            if l_ft + pos.get(t, 0.0) < win:
+                                tap_log.append((t, l_ft + pos.get(t, 0.0), nid))
                     elif l_ft + at < win:
                         return 'takeoff', l_ft + at, tid, notes
                     else:
@@ -3434,6 +3501,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     l_ft += _transition_length_ft(elem, nid)
                 elif collect is not None and role == 'elbow':
                     collect.append((nid, l_ft))
+                elif role == 'takeoff' and drop is not None:
+                    # The unit duct tees into a main: the air turns here.
+                    fan_system_effect.log.info('fan system effect: tap %s on the walk at '
+                                               '%.2f ft, a turn', nid, l_ft)
+                    return 'tap_turn', l_ft, nid, notes
+                elif role == 'takeoff' and (collect is not None or through_taps):
+                    pass                    # on along the main past it
                 elif role not in fitting_tables.ZERO_LOSS_ROLES:
                     fan_system_effect.log.info('fan system effect: %s %s at %.2f ft',
                                                role, nid, l_ft)
@@ -3579,6 +3653,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                           'taken from %s, radius unknown' % (
                               'D' if is_round else 'H', size, src_l)))
         return is_round, size, None
+
+    def _tap_inlet_size(tid):
+        """(is_round, D or H in., r in. or None) for a tap priced as an inlet
+        elbow (Colin, 2026-11-11): read on the duct past the tap, its LARGER
+        side if rectangular, on the mitered r/H row (ER7-1); round on ED7-2
+        with the radius unknown. (None, None, None) when unreadable."""
+        dc = _duct_conn(_first_duct(tid))
+        if dc is None:
+            return None, None, None
+        if dc.get('d_in'):
+            return True, dc['d_in'], None
+        if dc.get('w_in') and dc.get('h_in'):
+            h = max(dc['w_in'], dc['h_in'])
+            return False, h, fan_system_effect.MITERED_R_OVER_H * h
+        return None, None, None
 
     def _duct_conn(dr):
         """A picked duct's own section in the shape of
@@ -3880,28 +3969,35 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             notes.append(('warn', fan_system_effect.damper_window_text(
                 where_c, a_id, a_fam, a_l, win, win_name)))
         grp_ducts = []
+        taps_in = []        # taps off a continuing main inside the window
+        drop_info = {}      # a drop: its duct and taps
         if pick is not None:
             role, l_ft, did, wnotes = _fse_first_disruption(
                 root_id, first, win, where, prev=pick[0], seen=set(pick[1]),
-                passed=passed, ducts=grp_ducts, l0=curb_ft)
+                passed=passed, ducts=grp_ducts, l0=curb_ft, tap_log=taps_in,
+                drop=drop_info)
         else:
-            role, l_ft, did, wnotes = _fse_first_disruption(root_id, first, win, where,
-                                                            passed=passed, ducts=grp_ducts, l0=curb_ft)
+            role, l_ft, did, wnotes = _fse_first_disruption(
+                root_id, first, win, where, passed=passed, ducts=grp_ducts, l0=curb_ft,
+                tap_log=taps_in, drop=drop_info)
         notes.extend(wnotes)
         # A tap close to a cabinet unit's supply outlet (Colin, 2026-11-09):
         # a WARNING when the first tap, branch, tee, wye or cross on the main
         # sits under 3 D, D the equivalent diameter De of the main duct the
         # tap sits on (round: its diameter; never the unit opening, a fan
         # coil collar is wide and flat), L to the tap with the curb counted.
-        # The walk stops at the first elbow, which has its own checks. One
-        # WARNING: inside Le it replaces the tap inside Le flag. Not at an
-        # exhaust fan, a VAV box root, an inlet or a duct pick.
+        # Not at an exhaust fan, a VAV box root, an inlet or a duct pick. A
+        # drop tap or a tap the air turns through is priced as an elbow
+        # instead (Colin, 2026-11-11).
         tap_out = (role_here == fan_system_effect.OUTLET and pick is None
                    and root_id not in inline_fan_roots
                    and root_id not in discharge_roots and root_id not in box_ids)
         tap_warned = False
-        if tap_out:
-            if role is None:
+        if tap_out and role not in ('drop', 'tap_turn'):
+            if taps_in:
+                t_role, t_l, t_id = 'takeoff', taps_in[0][1], taps_in[0][0]
+                t_ducts = [(taps_in[0][2], 0.0)]
+            elif role is None:
                 # nothing inside Le: walked on (still stopping at an elbow)
                 t_ducts = []
                 t_role, t_l, t_id, _tn = _fse_first_disruption(
@@ -3921,14 +4017,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, t_need,
                         '%.0f D, De %.1f in.' % (fan_system_effect.OUTLET_TAP_D, t_de),
                         curb_ft)))
-                    tap_warned = role is not None
+                    tap_warned = role is not None or bool(taps_in)
+        if taps_in and not tap_warned:
+            # A tap off a continuing main inside the window, walked past
+            # (Colin, 2026-11-11): its own system effect is not priced.
+            notes.append(('warn', fan_system_effect.tap_passed_text(
+                where, taps_in[0][0], taps_in[0][1], win, win_short,
+                did if role == 'elbow' else None, l_ft if role == 'elbow' else None,
+                curb_ft)))
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (
                 win_short, fan_system_effect._ceil_step(win))
             # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
             notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
             return rec
-        if role != 'elbow':
+        if role not in ('elbow', 'tap_turn', 'drop'):
             if not tap_warned:
                 notes.append(('warn', fan_system_effect.disruption_text(
                     _FSE_KIND_TEXT.get(role, role), did, where_c, l_ft, win,
@@ -3937,97 +4040,170 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 _FSE_KIND_TEXT.get(role, role), did,
                 fan_system_effect.l_text(l_ft, curb_ft, unit=True), win_short)
             return rec
-        if role_here == fan_system_effect.OUTLET:
-            r = fan_system_effect.outlet_effect(
-                fse_set.get('fan_type'), fse_set.get('blast_ratio'), area, cfm, l_ft,
-                pv_of=hvac_graph.velocity_pressure_inwg, v_fpm=v)
-        else:
-            enotes = []
-            is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow, enotes,
-                                                   did, l_ft, where_c)
-            if size is None:
-                notes.append(('warn', 'WARNING: elbow %s, %s, but no size '
-                              'could be read; fan system effect not priced'
-                              % (did, fan_system_effect.from_text(where, l_ft, curb_ft))))
-                rec['none'] = 'elbow %s size unreadable, not priced' % did
-                return rec
-            r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft,
-                                               pv_of=hvac_graph.velocity_pressure_inwg,
-                                               v_fpm=v)
-            if not r['within']:
-                # Past the table's floor distance for its own size: an
-                # ordinary elbow, priced by the walk like any other.
-                fan_system_effect.log.info('fan system effect: inlet elbow %s at %.2f ft '
-                                           'is past %.2f ft, priced as a fitting',
-                                           did, l_ft, r['floor_ft'])
-                _lt = fan_system_effect.l_text(l_ft, curb_ft, unit=True)
-                rec['none'] = ('elbow %s at %s, past %.1f ft, priced as a fitting'
-                               % (did, _lt, r['floor_ft']))
-                notes.append(('note', fan_system_effect.no_effect_text(
-                    where, 'elbow %s at %s is past %.1f ft, where the inlet table '
-                    'floors' % (did, _lt, r['floor_ft']))))
-                return rec
-            for _k, _t in enotes:
-                if _k == 'assume':
-                    rec['assumptions'].append(_t)
+
+        def _price_at(rec, notes, did, l_ft, kind='elbow', insert_vel=True):
+            """Price the fan system effect at did, L l_ft from the unit, into
+            rec: an elbow, or a tap acting as one (kind 'tap', Colin
+            2026-11-11). Returns rec."""
+            if role_here == fan_system_effect.OUTLET:
+                r = fan_system_effect.outlet_effect(
+                    fse_set.get('fan_type'), fse_set.get('blast_ratio'), area, cfm, l_ft,
+                    pv_of=hvac_graph.velocity_pressure_inwg, v_fpm=v)
+            else:
+                enotes = []
+                if kind == 'tap':
+                    is_round, size, r_in = _tap_inlet_size(did)
                 else:
-                    notes.append((_k, _t))
-        r['curb_ft'] = curb_ft     # the basis and GRAY text name it
-        loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
-        # The straight duct, any transition (a curb adapter) and the first
-        # elbow are one group, charged once as the larger of the fan system
-        # effect and their own losses (Colin, 2026-11-04), outlet and inlet.
-        # The walk prices them as usual; each path's end picks the larger.
-        rec['group'] = set(d for d, _at in grp_ducts) | set(passed) | set([did])
-        # Which one governs is said once the path is known (_fse_group_max,
-        # Colin, 2026-11-09), not here.
-        # The ratio said in the NOTE and the Duct losses basis is on the same
-        # size the table was read at (Colin, 2026-11-09, TB-M10 3652084): an
-        # outlet's Le; an inlet's 5 x the elbow's own D or H (the side in the
-        # plane of its turn, as ER7-1 / ED7-2 and the RED line read it).
-        g_size = None
-        if role_here == fan_system_effect.OUTLET:
-            g_win, g_short = win, win_short
-        else:
-            g_win = fan_system_effect.inlet_floor_ft(r['size_in'])
-            g_dim = 'D' if r.get('table') == fan_system_effect.INLET_ROUND else 'H'
-            g_short = '%g %s' % (fan_system_effect.INLET_FLOOR_D, g_dim)
-            # Named, so it reads with the RED line (Colin, 2026-11-09,
-            # TB-M12 3720096). An unreadable elbow took the first duct's D or
-            # Height (its own NOTE says so).
-            g_geo = hvac_graph.elbow_geometry(all_nodes.get(did))
-            g_own = g_geo is not None and bool(g_geo.get('d_in') or g_geo.get('w_in'))
-            g_size = ('%s %.0f in.' % (g_dim, r['size_in']),
-                      'elbow' if g_own else 'first duct')
-        rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': g_win, 'win_short': g_short,
-                      'transition': bool(passed), 'transitions': sorted(passed),
-                      'size': g_size,
-                      'warn3': (rec.get('warn3') or (None, None))[1]
-                      if (rec.get('warn3') or (None,))[0] == did else None,
-                      'curb': curb_ft}
-        notes.extend(('note', 'NOTE: elbow %s, %s: %s' % (
-            did, fan_system_effect.from_text(where, l_ft, curb_ft), n)) for n in r['notes'])
-        if r['high']:
-            # GRAY, not RED (Colin, 2026-10-29): still priced in the total,
-            # reported with the straight length that brings the loss under
-            # HIGH_LOSS_INWC (0.5 in. wc, Colin 2026-11-02, was C 1.0), and
-            # the elbow is drawn gray on the plan.
-            notes.append(('gray', fan_system_effect.high_text(r, where, did)))
-            rec['gray'].add(did)
-        name = 'Fan system effect, ' + where_item
-        basis = fan_system_effect.basis_text(r)
-        rec['loss'] = loss
-        if vel_note is not None:
-            notes.insert(vel_note[0], vel_note[1])
-        rec['item'] = ('Fan system effect {}'.format(did), basis, r['v_fpm'], loss,
-                       (name, basis, r['c'], None))
-        return rec
+                    is_round, size, r_in = _fse_inlet_size(all_nodes.get(did), conn, flow,
+                                                           enotes, did, l_ft, where_c)
+                if size is None:
+                    notes.append(('warn', 'WARNING: %s %s, %s, but no size '
+                                  'could be read; fan system effect not priced'
+                                  % (kind, did, fan_system_effect.from_text(where, l_ft, curb_ft))))
+                    rec['none'] = '%s %s size unreadable, not priced' % (kind, did)
+                    return rec
+                r = fan_system_effect.inlet_effect(is_round, size, r_in, area, cfm, l_ft,
+                                                   pv_of=hvac_graph.velocity_pressure_inwg,
+                                                   v_fpm=v)
+                if not r['within']:
+                    # Past the table's floor distance for its own size: an
+                    # ordinary elbow, priced by the walk like any other.
+                    fan_system_effect.log.info('fan system effect: inlet elbow %s at %.2f ft '
+                                               'is past %.2f ft, priced as a fitting',
+                                               did, l_ft, r['floor_ft'])
+                    _lt = fan_system_effect.l_text(l_ft, curb_ft, unit=True)
+                    rec['none'] = ('%s %s at %s, past %.1f ft, priced as a fitting'
+                                   % (kind, did, _lt, r['floor_ft']))
+                    notes.append(('note', fan_system_effect.no_effect_text(
+                        where, '%s %s at %s is past %.1f ft, where the inlet table '
+                        'floors' % (kind, did, _lt, r['floor_ft']))))
+                    return rec
+                for _k, _t in enotes:
+                    if _k == 'assume':
+                        rec['assumptions'].append(_t)
+                    else:
+                        notes.append((_k, _t))
+            r['curb_ft'] = curb_ft     # the basis and GRAY text name it
+            loss = r['c'] * hvac_graph.velocity_pressure_inwg(r['v_fpm'])
+            # The straight duct, any transition (a curb adapter) and the first
+            # elbow are one group, charged once as the larger of the fan system
+            # effect and their own losses (Colin, 2026-11-04), outlet and inlet.
+            # The walk prices them as usual; each path's end picks the larger.
+            rec['group'] = set(d for d, _at in grp_ducts) | set(passed) | set([did])
+            # Which one governs is said once the path is known (_fse_group_max,
+            # Colin, 2026-11-09), not here.
+            # The ratio said in the NOTE and the Duct losses basis is on the same
+            # size the table was read at (Colin, 2026-11-09, TB-M10 3652084): an
+            # outlet's Le; an inlet's 5 x the elbow's own D or H (the side in the
+            # plane of its turn, as ER7-1 / ED7-2 and the RED line read it).
+            g_size = None
+            if role_here == fan_system_effect.OUTLET:
+                g_win, g_short = win, win_short
+            else:
+                g_win = fan_system_effect.inlet_floor_ft(r['size_in'])
+                g_dim = 'D' if r.get('table') == fan_system_effect.INLET_ROUND else 'H'
+                g_short = '%g %s' % (fan_system_effect.INLET_FLOOR_D, g_dim)
+                # Named, so it reads with the RED line (Colin, 2026-11-09,
+                # TB-M12 3720096). An unreadable elbow took the first duct's D or
+                # Height (its own NOTE says so).
+                g_geo = hvac_graph.elbow_geometry(all_nodes.get(did))
+                g_own = g_geo is not None and bool(g_geo.get('d_in') or g_geo.get('w_in'))
+                g_size = ('%s %.0f in.' % (g_dim, r['size_in']),
+                          'elbow' if g_own else 'first duct')
+            rec['gov'] = {'eid': did, 'l_ft': l_ft, 'win': g_win, 'win_short': g_short,
+                          'transition': bool(passed), 'transitions': sorted(passed),
+                          'size': g_size,
+                          'warn3': (rec.get('warn3') or (None, None))[1]
+                          if (rec.get('warn3') or (None,))[0] == did else None,
+                          'curb': curb_ft, 'kind': kind}
+            notes.extend(('note', 'NOTE: %s %s, %s: %s' % (
+                kind, did, fan_system_effect.from_text(where, l_ft, curb_ft), n)) for n in r['notes'])
+            if r['high']:
+                # GRAY, not RED (Colin, 2026-10-29): still priced in the total,
+                # reported with the straight length that brings the loss under
+                # HIGH_LOSS_INWC (0.5 in. wc, Colin 2026-11-02, was C 1.0), and
+                # the elbow is drawn gray on the plan.
+                notes.append(('gray', fan_system_effect.high_text(r, where, did, kind)))
+                rec['gray'].add(did)
+            name = 'Fan system effect, ' + where_item
+            basis = fan_system_effect.basis_text(r)
+            if kind == 'tap':
+                basis += ', tap as elbow'
+            rec['loss'] = loss
+            if vel_note is not None and insert_vel:
+                notes.insert(min(vel_note[0], len(notes)), vel_note[1])
+            rec['item'] = ('Fan system effect {}'.format(did), basis, r['v_fpm'], loss,
+                           (name, basis, r['c'], None))
+            return rec
+
+        def _tap_close(notes, tid, lt):
+            """The WARNING for a tap priced as an elbow under the straight
+            duct line (0.5 Le outlet, 2 H inlet). Never RED (Colin,
+            2026-11-11)."""
+            if role_here == fan_system_effect.OUTLET:
+                line, best = fan_system_effect.outlet_red_ft(win), win
+                line_name = '%.1f Le' % fan_system_effect.OUTLET_RED_RATIO
+                best_name = '1.0 Le'
+            else:
+                _r, size_t, _ri = _tap_inlet_size(tid)
+                if not size_t:
+                    return
+                dim = 'D' if _r else 'H'
+                line = fan_system_effect.inlet_red_ft(size_t)
+                best = fan_system_effect.inlet_floor_ft(size_t)
+                line_name = '%.0f %s (%s %.0f in.)' % (
+                    fan_system_effect.INLET_RED_D, dim, dim, size_t)
+                best_name = '%.0f %s' % (fan_system_effect.INLET_FLOOR_D, dim)
+            if lt < line - 1e-9:
+                notes.append(('warn', fan_system_effect.tap_close_text(
+                    where, tid, lt, line, line_name, best, best_name, curb_ft)))
+
+        if role == 'tap_turn':
+            notes.append(('note', fan_system_effect.tap_turn_text(where, did, l_ft, curb_ft)))
+            _tap_close(notes, did, l_ft)
+            return _price_at(rec, notes, did, l_ft, 'tap')
+        if role == 'drop':
+            # Each tap off the drop acts as an elbow, per run (Colin,
+            # 2026-11-11): a run picks the record of the tap it passes.
+            notes.append(('note', fan_system_effect.drop_text(
+                where, drop_info['duct'], drop_info['taps'], curb_ft)))
+            rec['by_tap'] = {}
+            vel_done = False
+            for tid, lt in drop_info['taps']:
+                sub = {'loss': 0.0, 'item': None, 'where': rec['where'], 'notes': [],
+                       'skip': set(), 'gray': set(), 'red': set(), 'boost': {},
+                       'red_ducts': {}, 'assumptions': [], 'group': set(),
+                       'where_item': where_item, 'none': None}
+                if lt >= win - 1e-9:
+                    sub['none'] = 'tap %s at %s, past %s (%.1f ft)' % (
+                        tid, fan_system_effect.l_text(lt, curb_ft, unit=True),
+                        win_short, fan_system_effect._ceil_step(win))
+                else:
+                    _tap_close(notes, tid, lt)
+                    _price_at(sub, sub['notes'], tid, lt, 'tap', insert_vel=False)
+                    if (sub.get('item') is not None and not vel_done
+                            and vel_note is not None):
+                        notes.insert(min(vel_note[0], len(notes)), vel_note[1])
+                        vel_done = True
+                for n in sub['notes']:
+                    if n not in notes:
+                        notes.append(n)
+                rec['gray'] |= sub['gray']
+                for _a in sub['assumptions']:
+                    if _a not in rec['assumptions']:
+                        rec['assumptions'].append(_a)
+                rec['by_tap'][tid] = sub
+                rec['loss'] = max(rec['loss'], sub['loss'])
+            rec['none'] = 'drop %s, priced per tap' % drop_info['duct']
+            return rec
+        return _price_at(rec, notes, did, l_ft, 'elbow')
 
     def _checks_only(rec):
         """A connection record with the fan system effect pricing taken out,
         the straight duct and swirl RED kept (fan system effect unticked)."""
         rec['loss'] = 0.0
         rec['item'] = None
+        rec['by_tap'] = {}
         rec['group'] = set()
         rec['skip'] = set()
         rec['gray'] = set()
@@ -4321,7 +4497,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 gov.get('win'), gov.get('win_short', 'Le'),
                 transition=gov.get('transition', False),
                 size_note=('%s %s' % gov['size']) if gov.get('size') else None,
-                warn_dim=gov.get('warn3'), curb_ft=gov.get('curb') or 0.0)
+                warn_dim=gov.get('warn3'), curb_ft=gov.get('curb') or 0.0,
+                kind=gov.get('kind') or 'elbow')
         # The group's charge always sits on the fan system effect row, whichever
         # governs (Colin, 2026-11-09); its own rows stay listed at 0.000 with
         # ', in the fan system effect' on their Table / basis, so the take-off
@@ -4353,8 +4530,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return (it[0], '{}, in the fan system effect'.format(it[1]), it[2], 0.0, t4)
 
     def _group_words(gov):
-        return ('straight duct, transition and elbow' if (gov or {}).get('transition')
-                else 'straight duct and elbow')
+        kind = (gov or {}).get('kind') or 'elbow'
+        return ('straight duct, transition and %s' % kind if (gov or {}).get('transition')
+                else 'straight duct and %s' % kind)
 
     def _table_of(it):
         """The ASHRAE table id of a priced fitting item ('CR3-1'), else its
@@ -4669,9 +4847,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # system effect (0 when none, or not checked).
                 fse_rec = None
                 for _first in fse_firsts:
-                    if _first in path and (fse_rec is None or
-                                           fse_recs[_first]['loss'] > fse_rec['loss']):
-                        fse_rec = fse_recs[_first]
+                    if _first not in path:
+                        continue
+                    _fr = fse_recs[_first]
+                    if _fr.get('by_tap'):
+                        # A drop (Colin, 2026-11-11): the record of the tap
+                        # this path leaves the drop through.
+                        for _t, _sub in _fr['by_tap'].items():
+                            if _t in path:
+                                _fr = _sub
+                                break
+                    if fse_rec is None or _fr['loss'] > fse_rec['loss']:
+                        fse_rec = _fr
                 # The group at the connection (straight duct, transition, first
                 # elbow) is charged once with its fan system effect, the larger.
                 items_l, fse_loss, _gfr, _gft, _fitem, _gnote = _fse_group_max(

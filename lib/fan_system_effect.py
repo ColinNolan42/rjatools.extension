@@ -754,7 +754,8 @@ def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0):
 def is_check_warning(text):
     """A straight duct WARNING that prints with the fan system effect off
     too: the cabinet inlet 3 D WARNING and the supply outlet tap WARNING."""
-    return text.startswith(CABINET_WARN_PREFIX) or OUTLET_TAP_MARK in text
+    return (text.startswith(CABINET_WARN_PREFIX) or OUTLET_TAP_MARK in text
+            or (text.startswith(TAP_CLOSE_PREFIX) and 'priced as an elbow' in text))
 
 
 def straight_duct_reason(eid, l_ft, role, dim='D', curb_ft=0.0):
@@ -800,7 +801,8 @@ def no_effect_text(where, why):
 
 
 def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_short,
-                 transition=False, size_note=None, warn_dim=None, curb_ft=0.0):
+                 transition=False, size_note=None, warn_dim=None, curb_ft=0.0,
+                 kind='elbow'):
     """The NOTE saying which was charged for the group at one connection
     (Colin, 2026-11-09): the two values side by side, then the outcome.
     Near the end of the window (L close to Le) the fan system effect falls
@@ -808,12 +810,13 @@ def governs_text(fse_wins, eid, l_ft, where, fse_inwc, own_inwc, win_ft, win_sho
     in the group, so it is named. size_note: at an inlet, the size the
     window was read at, e.g. 'D 8 in. elbow' (Colin, 2026-11-09). warn_dim:
     'D' or 'H' when the elbow drew the cabinet inlet 3 D WARNING."""
-    group = 'straight duct, transition and elbow' if transition else 'straight duct and elbow'
+    group = ('straight duct, transition and %s' % kind if transition
+             else 'straight duct and %s' % kind)
     ratio = (' (L/%s %.2f%s)' % (win_short, float(l_ft) / float(win_ft),
                                  (', ' + size_note) if size_note else '')
              if win_ft else '')
-    head = ('NOTE: %s, elbow %s at %s%s: fan system effect %.3f in. wc, %s %.3f '
-            'in. wc. ' % (where, eid, l_text(l_ft, curb_ft, unit=True), ratio,
+    head = ('NOTE: %s, %s %s at %s%s: fan system effect %.3f in. wc, %s %.3f '
+            'in. wc. ' % (where, kind, eid, l_text(l_ft, curb_ft, unit=True), ratio,
                           float(fse_inwc), group, float(own_inwc)))
     if warn_dim:
         # the cabinet inlet 3 D WARNING fired on this elbow (Colin, 2026-11-09)
@@ -846,7 +849,7 @@ def basis_text(rec):
         rec['size_in'])
 
 
-def high_text(rec, where, eid):
+def high_text(rec, where, eid, kind='elbow'):
     """The GRAY line for the engineer (Colin, 2026-10-29), in the Duct
     Performance reason style. where: 'supply outlet', 'return inlet'. eid:
     the elbow's element id, named with its distance from the unit (Colin,
@@ -863,10 +866,69 @@ def high_text(rec, where, eid):
     else:
         basis = '%s r/%s %.2f' % (rec['table'], 'D' if rec['table'] == INLET_ROUND
                                   else 'H', rec['r_ratio'])
-    return ('GRAY: System Effect Pressure Loss too high at elbow %s, %s, %.3f in. wc, '
+    return ('GRAY: System Effect Pressure Loss too high at %s %s, %s, %.3f in. wc, '
             '%s (C %.2f at %.0f fpm, %s; %.1f in. wc or more). Priced as drawn; %s' % (
-                eid, from_text(where, rec['l_ft'], rec.get('curb_ft') or 0.0), rec['loss'],
+                kind, eid, from_text(where, rec['l_ft'], rec.get('curb_ft') or 0.0), rec['loss'],
                 fix, rec['c'], rec['v_fpm'], basis, HIGH_LOSS_INWC, FINAL))
+
+
+# ── taps near a unit connection (Colin, 2026-11-11) ────────────────────────
+# A continuing main: a tap off its side inside the window is walked past, the
+# fan system effect priced at the first elbow. A drop (the duct from the unit
+# ends capped, every bit of air leaves through its taps): each tap acts as an
+# elbow, priced per run. A unit duct that tees into the side of a main through
+# a tap: that tap acts as an elbow. Taps are never RED.
+TAP_AS_ELBOW_CAVEAT = ('a tap is not in the 2001 tables, so the true loss may be '
+                       'higher (a straight 90 deg tap guides the air less than an '
+                       'elbow) or lower (a 45 deg entry tap)')
+TAP_CLOSE_PREFIX = 'WARNING: Tap '
+
+
+def tap_passed_text(where, tid, l_ft, win_ft, win_short, eid=None, l_e=None,
+                    curb_ft=0.0):
+    """The WARNING for a tap off a continuing main inside the window: walked
+    past, the fan system effect priced at the first elbow (eid at l_e), or
+    none when no elbow is inside the window."""
+    if eid is not None:
+        at = 'priced at elbow %s (%s)' % (eid, l_text(l_e, curb_ft, unit=True))
+    else:
+        at = 'not priced, no elbow inside %s' % win_short
+    return ('WARNING: Tap %s is %s, inside %s (%.1f ft). The fan system effect is %s; '
+            "the tap's own system effect is not priced, so the true loss through the "
+            'first few feet of duct is higher than shown. The engineer has final say '
+            'where space does not allow.' % (
+                tid, from_text(where, l_ft, curb_ft), win_short, _ceil_step(win_ft), at))
+
+
+def drop_text(where, duct_id, taps, curb_ft=0.0):
+    """The NOTE for a drop: the duct from the unit ends capped, so each tap
+    off it acts as an elbow for the fan system effect, per run. taps:
+    [(tap id, L ft)]."""
+    named = ', '.join('tap %s at %s' % (t, l_text(l, curb_ft, unit=True))
+                      for t, l in taps)
+    return ('NOTE: duct %s at the %s is a drop (capped, no turn): each tap off it acts as '
+            "an elbow for the fan system effect, priced per run at the tap's distance "
+            'from the unit (%s); %s.' % (duct_id, curb_where(where, curb_ft), named,
+                                         TAP_AS_ELBOW_CAVEAT))
+
+
+def tap_turn_text(where, tid, l_ft, curb_ft=0.0):
+    """The NOTE for a unit duct that tees into the side of a main through a
+    tap: the air turns through it, priced as an elbow."""
+    return ('NOTE: tap %s, %s: the air from the unit turns through it into the main, so '
+            'the fan system effect prices it as an elbow; %s.' % (
+                tid, from_text(where, l_ft, curb_ft), TAP_AS_ELBOW_CAVEAT))
+
+
+def tap_close_text(where, tid, l_ft, line_ft, line_name, best_ft, best_name,
+                   curb_ft=0.0):
+    """The WARNING for a tap priced as an elbow under the straight duct line
+    (0.5 Le at an outlet, 2 H at an inlet). Never RED (Colin, 2026-11-11)."""
+    return ('WARNING: Tap %s is %s, under %s (%.1f ft); it is priced as an elbow for the '
+            'fan system effect. Recommended: at least %.1f ft of straight duct to the '
+            'tap; %.1f ft (%s) removes the system effect. Priced as drawn; %s' % (
+                tid, from_text(where, l_ft, curb_ft), line_name, _ceil_step(line_ft),
+                _ceil_step(line_ft), _ceil_step(best_ft), best_name, FINAL))
 
 
 def disruption_text(kind, eid, where, l_ft, limit_ft, limit_name):
@@ -897,9 +959,13 @@ def method_lines(settings):
               'losses. Added before the safety factor. A loss of %.1f in. wc '
               'or more is GRAY, with the straight length that brings it under. '
               'L runs from the unit through straight duct and any transitions, '
-              'their length counted, to the first elbow. Taps and splits inside '
-              'the window are flagged, not '
-              'priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
+              'their length counted, to the first elbow. A tap off a continuing '
+              'main inside the window is walked past, its own system effect not priced '
+              '(WARNING). A drop (the duct from the unit capped, its air leaving through '
+              'taps): each tap acts as an elbow, priced per run at its own L; a unit '
+              'duct teed into the side of a main: that tap acts as an elbow. A tap is '
+              'never RED; under the straight duct line it is a WARNING. Tees, wyes and '
+              'splits inside the window are flagged, not priced. A rect mitered inlet elbow is read on the ER7-1 r/H %.1f '
               'row. An elbow under 0.5 Le of a unit outlet, or under 2 H of an inlet '
               '(H the elbow\'s side in the plane of the turn; D if round), is RED with '
               'the straight duct before it; the inlet window is 5 H of the first elbow. '
