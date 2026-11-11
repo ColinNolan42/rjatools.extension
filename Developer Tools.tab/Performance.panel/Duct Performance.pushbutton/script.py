@@ -6095,9 +6095,10 @@ def _legend_rows(words=None):
         ('YELLOW', 'Main only: approaching the limit.'),
         ('RED',    'Main: exceeds the limit. Branch: {} or duct undersized. '
                    'Either: fails the diffuser/duct height clearance (see Reason).'.format(one)),
-        ('GRAY',   'No airflow data: no CFM reaches this element (broken or '
-                   'disconnected system). Or an elbow at a unit connection whose fan '
-                   'system effect is too high (see External Static Pressure).'),
+        ('GRAY',   'Not judged: no CFM reaches it (broken or disconnected system), '
+                   'or a check could not be read (a NOTE names the duct and why). Or '
+                   'an elbow at a unit connection whose fan system effect is too high '
+                   '(see External Static Pressure).'),
     ]
 
 # Columns read best left aligned; the rest are centred.
@@ -7232,12 +7233,13 @@ def main():
             duct_roles[eid] = 'Main (fan discharge)'
             continue
         term_elem = None
-        if len(tset) == 1 and hvac_graph.takeoff_child_ids(
+        if len(tset) == 1 and hvac_graph.main_end_reaches_tap(
                 eid_int(eid), all_nodes, all_children):
             # A main stepped down to its last tap: the branch starts AT the
             # tap, so this piece is still a main, judged on the main limits
             # (Colin, 2026-11-05, TB-M10C 6x10 end piece read GRAY as a
-            # rect branch on a round neck).
+            # rect branch on a round neck). Also when the tap is further down,
+            # past an elbow or transition (Colin, 2026-11-11, TB-M18).
             branch_ctx[eid] = None
             duct_roles[eid] = _duct_role_label(False, None)
             continue
@@ -7934,6 +7936,7 @@ def main():
         # its main shall read differently). (duct id, NOTE) pairs; each is an
         # Action required line in System Corrections, under its unit.
         clearance_notes = []
+        gray_notes = []
         branch_duct_ids = set(eid_int(k) for k, v in branch_ctx.items() if v is not None)
 
         # A short stub straight off a unit connection that runs into a
@@ -7994,6 +7997,14 @@ def main():
                 duct_labels[eid] = (label, green_cap, reason)
             counts[label] = counts.get(label, 0) + 1
             elem_labels[eid] = label
+            if label == 'GRAY':
+                # Say which duct and why it was not judged (Colin, 2026-11-11):
+                # the legend alone read 'no airflow' for a rect duct on a
+                # round neck.
+                gray_notes.append((dr.element_id,
+                                   'NOTE: duct {} ({}, {}) not judged: {}.'.format(
+                                       dr.element_id, dr.sys_class or '-', dr.size or '-',
+                                       reason or 'Cannot check')))
 
         # A clearance NOTE asks for a resize: Action required, named by the
         # first picked unit whose ductwork holds the duct.
@@ -8004,6 +8015,8 @@ def main():
             return None
         for _did, _n in sorted(clearance_notes, key=lambda dn: dn[1]):
             _correct('warn', _n, _unit_of(_did), duct_perf_console.ACTION)
+        for _did, _n in sorted(gray_notes):
+            _correct('note', _n, _unit_of(_did))
 
         # Color fittings, accessories and diffusers by worst nearby duct color
         adj = {}

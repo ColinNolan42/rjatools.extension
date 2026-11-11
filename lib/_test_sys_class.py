@@ -148,5 +148,43 @@ class TestJunctionLegsShape(unittest.TestCase):
         self.assertAlmostEqual(legs[12]['area_ft2'], 0.5)
 
 
+class MainEndReachesTap(unittest.TestCase):
+    """A one terminal duct whose run reaches a tap further down, past an elbow
+    or transition, is the end of a main, not the branch (Colin, 2026-11-11,
+    TB-M18: 6x12 piece, elbow, then the last tap)."""
+
+    class _N(object):
+        def __init__(self, kind, fam=''):
+            self.kind, self.fam = kind, fam
+
+    def setUp(self):
+        self._saved = (HG.is_duct, HG.is_fitting, HG.fitting_family_name)
+        HG.is_duct = lambda e: e.kind == 'duct'
+        HG.is_fitting = lambda e: e.kind == 'fit'
+        HG.fitting_family_name = lambda e: e.fam
+
+    def tearDown(self):
+        HG.is_duct, HG.is_fitting, HG.fitting_family_name = self._saved
+
+    def _net(self):
+        N = self._N
+        nodes = {1: N('duct'), 2: N('fit', 'Rectangular Elbow - Radius'), 3: N('duct'),
+                 4: N('fit', 'Round Takeoff - Shoe'), 5: N('fit', 'Rectangular Endcap'),
+                 6: N('duct'), 7: N('fit', 'Round Elbow'), 8: N('term')}
+        children = {1: [2], 2: [3], 3: [4, 5], 4: [6], 6: [7], 7: [8]}
+        return nodes, children
+
+    def test_piece_before_an_elbow_then_the_tap_is_a_main(self):
+        nodes, children = self._net()
+        self.assertTrue(HG.main_end_reaches_tap(1, nodes, children))
+
+    def test_duct_with_the_tap_on_it_is_a_main(self):
+        nodes, children = self._net()
+        self.assertTrue(HG.main_end_reaches_tap(3, nodes, children))
+
+    def test_branch_after_the_tap_stays_a_branch(self):
+        nodes, children = self._net()
+        self.assertFalse(HG.main_end_reaches_tap(6, nodes, children))
+
 if __name__ == '__main__':
     unittest.main()

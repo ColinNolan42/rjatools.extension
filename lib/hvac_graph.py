@@ -1221,6 +1221,31 @@ def takeoff_child_ids(node_id, nodes, children):
     return out
 
 
+def main_end_reaches_tap(node_id, nodes, children, max_steps=40):
+    """Does the run below this duct reach a tap before the terminal? Walked
+    down the single chain of ducts and non tap fittings (elbows,
+    transitions, offsets). True means this piece is the end of a main past
+    its next to last tap, the branch starts at the tap further down (Colin,
+    2026-11-11, TB-M18: 6x12 piece, elbow, then the last tap). Logged."""
+    nid = node_id
+    for _ in range(max_steps):
+        if takeoff_child_ids(nid, nodes, children):
+            log.info('main_end_reaches_tap: %s reaches a tap at %s', node_id, nid)
+            return True
+        nxt = [c for c in children.get(nid, [])
+               if nodes.get(c) is not None
+               and (is_duct(nodes[c]) or is_fitting(nodes[c]))]
+        if len(nxt) != 1:
+            return False
+        elem = nodes[nxt[0]]
+        if is_fitting(elem) and fitting_tables.classify_fitting(
+                fitting_family_name(elem)) == 'takeoff':
+            return False      # this run leaves through the tap: a branch
+        nid = nxt[0]
+    log.info('main_end_reaches_tap: %s walk stopped after %d steps', node_id, max_steps)
+    return False
+
+
 def duct_continues_past(node_id, nodes, children):
     """Does a duct carry on into another DUCT downstream?
 
