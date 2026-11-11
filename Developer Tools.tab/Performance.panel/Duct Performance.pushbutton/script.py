@@ -364,7 +364,7 @@ _SETTINGS_XAML = '''
                         </StackPanel>
                         <!-- Ranked run (Colin, 2026-11-10) -->
                         <CheckBox x:Name="cb_rank" Content="Ranked run" Margin="0,10,0,0"
-                                  ToolTip="Prints the take-off of a lesser run (2 = the second most restrictive) as a sanity check. The most restrictive run (MR) total still prints and stays the design ESP."/>
+                                  ToolTip="Prints the take-off of a lesser run (2 = the second most restrictive) as a sanity check. The most restrictive total still prints and stays the design ESP."/>
                         <StackPanel x:Name="pnl_rank" Orientation="Horizontal" Margin="20,4,0,0">
                             <TextBlock Text="Supply rank" VerticalAlignment="Center"/>
                             <TextBox x:Name="tb_rank_sup" Width="56" Margin="8,0,16,0"
@@ -374,7 +374,7 @@ _SETTINGS_XAML = '''
                                      ToolTip="Which return or exhaust run to print, 2 or higher (2 = the second most restrictive)."/>
                         </StackPanel>
                         <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,2,0,0"
-                                   Text="2 = the second most restrictive run. The MR total still prints as the design ESP."/>
+                                   Text="2 = the second most restrictive run. The most restrictive total still prints as the design ESP."/>
                     </StackPanel>
                 </Border>
 
@@ -5646,11 +5646,6 @@ def _legend_lines(rep, show_r_marker_note=False):
                      'the required external static pressure for its equipment '
                      'or system.'.format(
                          (words or duct_perf_console.scope_words('rtu'))['one']))
-        # The MR mark of the external static table (Colin, 2026-11-10);
-        # (R) shows exactly when external static ran.
-        lines.append('{}: {}{}'.format(duct_perf_console.MR_LEGEND[0],
-                                       duct_perf_console.MR_LEGEND[1][0].upper(),
-                                       duct_perf_console.MR_LEGEND[1][1:]))
     return lines
 
 
@@ -6827,7 +6822,7 @@ def main():
                 summary_lines.append(
                     '    {} = {:.3f} in. wc   ({})'.format(
                         duct_perf_console.VAVBOX_ESP_LABEL if _is_box
-                        else 'EXTERNAL STATIC PRESSURE (MR)', mr_total, _sides))
+                        else 'EXTERNAL STATIC PRESSURE (MOST RESTRICTIVE)', mr_total, _sides))
                 if _is_box:
                     summary_lines.append('    ' + duct_perf_console.VAVBOX_ESP_CAUTION)
                     unit_rec['caution'] = duct_perf_console.VAVBOX_ESP_CAUTION
@@ -6843,7 +6838,7 @@ def main():
                     summary_lines.append('    ' + unit_rec['fan_type'])
             elif supply is not None and returns:
                 summary_lines.append(
-                    '    EXTERNAL STATIC PRESSURE (MR) = {:.3f} in. wc   ({})'.format(
+                    '    EXTERNAL STATIC PRESSURE (MOST RESTRICTIVE) = {:.3f} in. wc   ({})'.format(
                         mr_total, ' + '.join(sides)))
                 unit_rec['esp'] = _esp_console_text(mr_total, ' + '.join(sides))
                 unit_rec['esp_total'] = unit_total
@@ -7541,8 +7536,7 @@ def main():
         'vav_basis': vav_basis,
         # Terminal wording (Colin, 2026-11-09), the auto-sizing diffuser and
         # slot notes left out on Exhaust System, where they cannot apply.
-        'notes': duct_perf_console.branch_notes(words) + (
-            [duct_perf_console.MR_LEGEND] if critical else []),
+        'notes': duct_perf_console.branch_notes(words),
         'legend': legend_rows,
         'words': words,
         'clearance': (clearance_count > 0,

@@ -887,7 +887,7 @@ class DialogTest(unittest.TestCase):
             'caution': dpc.VAVBOX_ESP_CAUTION}
         self.assertEqual(dpc.esp_unit_notes(unit)[0], ('warn', dpc.VAVBOX_ESP_CAUTION))
         _rows, total = dpc.esp_unit_rows(unit)
-        self.assertEqual(total[0], dpc.VAVBOX_ESP_LABEL + ' (MR)')
+        self.assertEqual(total[0], dpc.VAVBOX_ESP_LABEL + dpc.MR_TAG)
         self.assertIn('NOT THE TOTAL SYSTEM LOSS', dpc.external_static({'units': [unit]}))
         self.assertIn('NOT THE TOTAL SYSTEM LOSS', dpc.system_summary(
             {'grand': [], 'equipment': [], 'caution': dpc.VAVBOX_ESP_CAUTION}))

@@ -346,7 +346,7 @@ class SheetLayoutTests(unittest.TestCase):
                    caution=dpc.VAVBOX_ESP_CAUTION)
         DRAW['_draw_external_static'](None, None, 0.0, TOTAL_W, {'units': [box]})
         vals = self.rec.values()
-        self.assertIn(dpc.VAVBOX_ESP_LABEL + ' (MR)', vals)
+        self.assertIn(dpc.VAVBOX_ESP_LABEL + dpc.MR_TAG, vals)
         self.assertNotIn(dpc.MR_LABEL, vals)
         text = ' '.join(' '.join(vals).split())
         self.assertIn('EXTERNAL STATIC AFTER THE VAV BOX ONLY. NOT THE TOTAL SYSTEM LOSS.',

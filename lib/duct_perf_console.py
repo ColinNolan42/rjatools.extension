@@ -206,13 +206,10 @@ VAVBOX_ESP_CAUTION = (
 # restrictive run instead of the first, while the most restrictive (MR) total
 # still prints and stays the design ESP.
 DEFAULT_RANK = 2
-MR_LABEL = 'TOTAL EXTERNAL STATIC PRESSURE (MR)'
+MR_TAG = ' (MOST RESTRICTIVE)'
+MR_LABEL = 'TOTAL EXTERNAL STATIC PRESSURE' + MR_TAG
 RANKED_TOTAL_LABEL = 'Ranked runs total'
 RANKED_TOTAL_NOTE = 'sanity check, not the design ESP'
-MR_LEGEND = ('MR',
-             'most restrictive run: on each side, the run from the unit to one '
-             'terminal with the highest external static. Supply MR plus return MR '
-             'is the design external static pressure.')
 
 
 def parse_rank(text):
@@ -366,7 +363,7 @@ def esp_unit_rows(unit, sheet=False):
         rows.extend(_class_rows(cls, counted, sheet))
     total_row = None
     if unit.get('esp_total') is not None:
-        mr_label = (VAVBOX_ESP_LABEL + ' (MR)' if unit.get('caution') else MR_LABEL)
+        mr_label = (VAVBOX_ESP_LABEL + MR_TAG if unit.get('caution') else MR_LABEL)
         if unit.get('ranked'):
             ranked = [RANKED_TOTAL_LABEL, '{}, {}'.format(
                 unit.get('ranked_text') or ' + '.join(sides or []), RANKED_TOTAL_NOTE),
