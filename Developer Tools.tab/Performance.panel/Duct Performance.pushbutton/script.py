@@ -6784,7 +6784,7 @@ def main():
             rk_parts = []
 
             def _mr_part(side, leaf):
-                return '{} {:.3f} ({})'.format(
+                return '{} {:.3f} at {}'.format(
                     side, float(leaf['total_inwc']),
                     leaf.get('terminal_label') or leaf['terminal_name'])
             if supply is not None:

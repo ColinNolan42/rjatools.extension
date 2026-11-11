@@ -303,7 +303,7 @@ class DuctPerfSectionTests(unittest.TestCase):
                 'esp_total': 0.719, 'esp_sides': ['Supply Air', 'Return Air'],
                 'ranked': True, 'ranked_text': 'Supply Air #2 + Return Air #3',
                 'mr_total': 0.739,
-                'mr_text': 'Supply Air 0.427 (D-4) + Return Air 0.312 (RG-1)'}
+                'mr_text': 'Supply Air 0.427 at D-4 + Return Air 0.312 at RG-1'}
         html = dpc.external_static({'units': [unit]})
         body = [[c[2] for c in r] for r in shape(html).rows]
         self.assertIn('Supply Air, run 2 of 12', html)
@@ -312,7 +312,7 @@ class DuctPerfSectionTests(unittest.TestCase):
                                     'Supply Air #2 + Return Air #3, ' + dpc.RANKED_TOTAL_NOTE,
                                     '', '', '0.719'])
         self.assertEqual(body[-1], [dpc.MR_LABEL,
-                                    'Supply Air 0.427 (D-4) + Return Air 0.312 (RG-1)',
+                                    'Supply Air 0.427 at D-4 + Return Air 0.312 at RG-1',
                                     '', '', '0.739'])
         # the sheet form draws both totals bold, the same cells
         rows, total = dpc.esp_unit_rows(unit, sheet=True)
