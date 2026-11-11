@@ -400,9 +400,18 @@ def _printed_geometry_notes(key, t, actual):
             printed = 1.0
         else:
             continue
-        if abs(float(real) - printed) > GEOMETRY_NOTE_TOL:
-            out.append('%s is printed for %s %.2f only and is read there; this fitting '
-                       'is %s %.2f' % (key.split('_')[0], name, printed, name, float(real)))
+        if abs(float(real) - printed) <= GEOMETRY_NOTE_TOL:
+            continue
+        if name == 'Ab/Ac' and float(real) > printed:
+            # A tap larger than the printed 0.5 is read conservatively
+            # (lower real branch velocity): said once in METHOD, no NOTE
+            # per tap (Colin, 2026-11-11).
+            continue
+        tail = (', smaller than printed, so its loss may be understated'
+                if name == 'Ab/Ac' else '')
+        out.append('%s is printed for %s %.2f only and is read there; this fitting '
+                   'is %s %.2f%s' % (key.split('_')[0], name, printed, name, float(real),
+                                     tail))
     return out
 
 

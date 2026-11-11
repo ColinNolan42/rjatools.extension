@@ -431,6 +431,10 @@ class TestJunctionLookups(unittest.TestCase):
         self.assertAlmostEqual(cc, 0.76, places=6)
         self.assertTrue(any('ER5-3 is printed for Ab/Ac 0.50' in n and 'Ab/Ac 0.25' in n
                             for n in notes), notes)
+        self.assertTrue(any('smaller than printed' in n for n in notes), notes)
+        # A tap larger than printed is conservative: no NOTE (Colin, 2026-11-11).
+        _cc, _l, notes = self.af.tap_branch_c(False, 'rect', 'rect', False, 0.88, 0.5)
+        self.assertFalse([n for n in notes if 'printed for Ab/Ac' in n], notes)
         cc, _l, notes = self.af.tap_branch_c(False, 'rect', 'rect', False, 0.53, 0.5)
         self.assertAlmostEqual(cc, 0.76, places=6)
         self.assertFalse([n for n in notes if 'printed for' in n], notes)

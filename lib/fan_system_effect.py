@@ -767,6 +767,17 @@ def transition_text(eid, l_ft, where, v_used):
             'velocity, %.0f fpm at the unit end.' % (eid, float(l_ft), where, float(v_used)))
 
 
+def no_effect_run_text(where, taps, why, curb_ft=0.0):
+    """The NOTE for the most restrictive run when it stays on a main that has
+    taps inside the window (Colin, 2026-11-11): a run through a tap does carry
+    a fan system effect, so the NOTE says which run has none and why.
+    taps: [(tap id, L ft)]."""
+    named = ', '.join('tap %s (%s)' % (tid, l_text(l, curb_ft, unit=True)) for tid, l in taps)
+    return ('NOTE: no fan system effect on the most restrictive run at the %s: it stays on '
+            'the main past %s and %s; the straight duct and fittings are priced at their own '
+            'losses.' % (where, named, why))
+
+
 def no_effect_text(where, why):
     """The NOTE when no fan system effect is used at a connection (Colin,
     2026-11-09): no elbow inside the window, so the straight duct and

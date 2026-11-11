@@ -4356,8 +4356,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             rec['win_short'] = win_short
             rec['none_group'] = bool(_gd)
             rec['none_trans'] = bool(_gt)
-            # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
-            notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
+            # Said in place of the fan velocity NOTE (Colin, 2026-11-09). With
+            # taps inside the window a run through a tap does carry one: then
+            # it is said for the most restrictive run only, when that run
+            # stays on the main (Colin, 2026-11-11).
+            if taps_in:
+                rec['none_run_note'] = fan_system_effect.no_effect_run_text(
+                    where, [(tid, lt) for tid, lt, _d in taps_in],
+                    'there is no elbow within %s (%.1f ft)' % (
+                        win_short, fan_system_effect._ceil_step(win)), curb_ft)
+            else:
+                notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
             return _tap_subs(rec)
         if role not in ('elbow', 'tap_turn', 'drop'):
             if not tap_warned:
@@ -5130,6 +5139,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     fse_rec, items)
                 fse_items = (_fitem,) if _fitem is not None else ()
                 gov_notes = (('note', _gnote),) if _gnote else ()
+                if fse_rec is not None and fse_rec.get('none_run_note'):
+                    gov_notes = gov_notes + (('note', fse_rec['none_run_note']),)
                 fric_l, fit_l, dis_items = fric - _gfr, fit - _gft, ()
                 n_d, n_f, len_l, unpriced_l = dcount, fcount, dlen, unpriced
                 if dis_here is not None:
@@ -7704,7 +7715,8 @@ def main():
                    '(elbows CD3-1, CR3-1, CR3-6, CR3-9; transitions SR4/SD4/ER4/ED4 '
                    'at the section o Pv; taps SR5/SD5/ER5/ED5, printed Cb and Cs '
                    'converted to the main Pv at the geometry each table was read at, '
-                   'Eq. 34, ER5-2 and ER5-3 at their printed Ab/Ac 0.5). Unbroken '
+                   'Eq. 34, ER5-2 and ER5-3 at their printed Ab/Ac 0.5, conservative for a larger '
+                   'tap, a smaller one noted). Unbroken '
                    'main: As/Ac read on the 0.9 row. A tap C of 0 or less from the '
                    '2001 tables is replaced by the RJA worksheet C (FALLBACK). The '
                    '2001 book has no round shoe (boot) table on a round main; ED5-2 / '

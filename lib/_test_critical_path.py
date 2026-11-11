@@ -1401,6 +1401,15 @@ check("case34 tap 3 ft along the continuing outlet duct: the run that continues 
       and not any(k == 'warn' and t.startswith('WARNING: Tap 982')
                   for k, t in sa34b.get('fse_notes', ())),
       "notes %r" % (sa34b.get('fse_notes'),))
+_g34 = [t for k, t in (_r34b.get(991, {}).get('fse_gov_notes') or ())]
+check("case34 the no fan system effect NOTE is said for a run that stays on the main, naming the tap it passes (2026-11-11)",
+      sa34b.get('terminal_id') == 990
+      and any(k == 'note' and t.startswith('NOTE: no fan system effect on the most restrictive run '
+                                           'at the supply outlet: it stays on the main past tap 982 (3.0 ft)')
+              for k, t in (_r34b.get(991, {}).get('fse_gov_notes') or ()))
+      and not any(t.startswith('NOTE: no fan system effect at the supply outlet')
+                  for k, t in sa34b.get('fse_notes', ())),
+      "gov %r notes %r" % (_r34b.get(991, {}).get('fse_gov_notes'), sa34b.get('fse_notes')))
 check("case34 the run that leaves through tap 982 carries it as an elbow",
       _r34b.get(990, {}).get('fse_inwc', 0.0) > 0.0
       and 'tap as elbow' in _fse_basis(_r34b.get(990, {})),
