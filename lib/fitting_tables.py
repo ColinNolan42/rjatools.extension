@@ -379,7 +379,9 @@ def fitting_c(role, sys_class, is_round=True, upstream_area_ft2=None,
                 'take-off into branch%s' % (' (end of main)' if is_end_of_main else ''))
     if role in ('tee', 'cross'):
         # A tee or cross the path turns through behaves as a take-off branch;
-        # the worksheet publishes no separate tee coefficient.
+        # the worksheet publishes no separate tee coefficient. Since
+        # 2026-11-11 this is only the FALLBACK: Duct Performance prices tees,
+        # crosses and wyes from the 2001 tables when their legs read.
         return (takeoff_c(sys_class, is_end_of_main=is_end_of_main, c=c),
                 '%s, priced as a take-off branch' % role)
     if role == 'wye':

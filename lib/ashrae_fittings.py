@@ -49,6 +49,7 @@ IronPython 2.7 / pyRevit -- no f-strings, no nonlocal.
 import io
 import json
 import logging
+import math
 import os
 
 log = logging.getLogger(__name__)
@@ -448,6 +449,145 @@ def bullhead_wye_c(is_supply, ab_ac):
     return c, '%s Ab/Ac %.2f' % (key, float(ab_ac)), notes
 
 
+# ── tees, crosses and wyes (Colin, 2026-11-11) ───────────────────────────────
+#
+# A tee, cross or wye fitting is priced on the leg the run leaves through: the
+# branch pays Cc,b, the straight pays Cc,s, both x the COMMON leg Pv (the leg
+# toward the unit), the same convention as taps. Tables by shape are the tap
+# tables (_junction_keys). Colin's rulings, 2026-11-11:
+#   - Cross: SD5-24 where it fits (round main, round branches, supply). Any
+#     other cross prices each branch on the matching tee table at its own
+#     split, stated in a NOTE as standing in for a cross.
+#   - No leg in line with the common (a symmetrical wye, or a bullhead tee
+#     fed through its branch): SR5-14 / ER5-4, the symmetrical dovetail wye,
+#     by Ab/Ac. Printed at Qb/Qc 0.5 only; a split far from that is NOTED.
+#   - Rectangular offsets: not changed (two 45s are two elbows).
+
+STRAIGHT_DOT = -0.9          # a leg within about 25 deg of opposite the common is the straight
+ENTRY_45_MAX_DEG = 67.5      # a branch closer than this to the straight is a 45 entry
+SPLIT_NOTE_TOL = 0.1         # |Qb/Qc - 0.5| past this gets a NOTE on SR5-14 / ER5-4
+
+
+def _unit(v):
+    try:
+        x, y, z = float(v[0]), float(v[1]), float(v[2])
+    except Exception:
+        return None
+    n = (x * x + y * y + z * z) ** 0.5
+    if n < 1e-9:
+        return None
+    return (x / n, y / n, z / n)
+
+
+def junction_layout(common_dir, leg_dirs):
+    """Name the legs of a tee, cross or wye from its connector axes.
+
+    common_dir: outward axis (x, y, z) of the connector on the unit side.
+    leg_dirs: {leg id: outward axis} of the other connected connectors.
+    Returns {'straight': leg id or None, 'branches': {leg id: angle deg}};
+    a branch angle is between its axis and the straight through direction
+    (90 for a tee, 45 for a lateral). None when an axis is unreadable."""
+    import math
+    c = _unit(common_dir)
+    if c is None or not leg_dirs:
+        return None
+    units = {}
+    for k, v in leg_dirs.items():
+        u = _unit(v)
+        if u is None:
+            return None
+        units[k] = u
+    def dot(a, b):
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    straight, best = None, STRAIGHT_DOT
+    for k in sorted(units):
+        d = dot(c, units[k])
+        if d < best:
+            straight, best = k, d
+    branches = {}
+    for k in sorted(units):
+        if k == straight:
+            continue
+        cosang = max(-1.0, min(1.0, -dot(c, units[k])))
+        branches[k] = math.degrees(math.acos(cosang))
+    return {'straight': straight, 'branches': branches}
+
+
+def tee_c(is_supply, main_shape, branch_shape, entry_45, leg, ab_ac, as_ac,
+          qb_qc, qs_qc, main_d_in=None):
+    """Cc for the run leaving a tee (or a lateral wye) through leg 'branch' or
+    'straight', referenced to the common leg. The tap tables by shape.
+    Returns (Cc, label, notes); Cc None when no table fits."""
+    if leg == 'branch':
+        return tap_branch_c(is_supply, branch_shape, main_shape, entry_45,
+                            ab_ac, qb_qc, as_ac=as_ac, main_d_in=main_d_in)
+    return tap_main_c(is_supply, branch_shape, main_shape, entry_45,
+                      as_ac, qs_qc, ab_ac=ab_ac, main_d_in=main_d_in)
+
+
+def cross_c(is_supply, main_shape, branch_shape, entry_45, leg, ab_ac, as_ac,
+            qb_qc, qs_qc, main_d_in=None):
+    """Cc for the run leaving a cross through leg 'branch' or 'straight'.
+    SD5-24 for a round supply cross with round branches; any other cross
+    takes the matching tee table at this branch's own split, NOTED.
+    Returns (Cc, label, notes)."""
+    if is_supply and main_shape == 'round' and branch_shape == 'round':
+        if leg == 'branch':
+            key = 'SD5-24_Cb1'
+            t = table(key)
+            if t is not None:
+                c, notes = _call(key, t, {'As/Ac': as_ac, 'Ab1/Ac': ab_ac, 'Qb1/Qc': qb_qc})
+                if c is not None:
+                    read_ab = _ratio_read_at(t, 'Ab1/Ac', ab_ac)
+                    q_read = min(max(float(qb_qc), 0.1), 1.0)
+                    cc = _to_common(c, q_read, read_ab)
+                    return cc, ('SD5-24 As/Ac %.2f, Ab/Ac %.2f, Qb/Qc %.2f: Cb %.2f, Cc,b %.2f'
+                                % (_ratio_read_at(t, 'As/Ac', as_ac), read_ab, q_read, c, cc)), notes
+        else:
+            key = 'SD5-24_Cs'
+            t = table(key)
+            if t is not None:
+                c, notes = _call(key, t, {'As/Ac': as_ac, 'Qs/Qc': qs_qc})
+                if c is not None:
+                    read_as = _ratio_read_at(t, 'As/Ac', as_ac)
+                    q_read = min(max(float(qs_qc), 0.1), 1.0)
+                    cc = _to_common(c, q_read, read_as)
+                    return cc, ('SD5-24 As/Ac %.2f, Qs/Qc %.2f: Cs %.2f, Cc,s %.2f'
+                                % (read_as, q_read, c, cc)), notes
+    cc, label, notes = tee_c(is_supply, main_shape, branch_shape, entry_45, leg,
+                             ab_ac, as_ac, qb_qc, qs_qc, main_d_in=main_d_in)
+    if cc is None:
+        return cc, label, notes
+    return cc, label, list(notes or []) + [
+        '%s stands in for a cross (no 2001 cross table for this shape or system)'
+        % label.split(' ')[0]]
+
+
+def split_c(is_supply, ab_ac, qb_qc, stands_for=None):
+    """Cc,b for the run leaving a junction with no leg in line with the common
+    (a symmetrical wye, or a bullhead tee fed through its branch): SR5-14 /
+    ER5-4 Cb by Ab/Ac, converted to the common leg at the geometry the table
+    is printed for (Qb/Qc 0.5, Ab/Ac read). stands_for: 'bullhead tee' adds
+    the stand in NOTE. Returns (Cc,b, label, notes)."""
+    key = 'SR5-14' if is_supply else 'ER5-4'
+    t = table(key)
+    if t is None:
+        return None, 'no 2001 table for this split', []
+    cb, notes = lookup(key, float(ab_ac))
+    if cb is None:
+        return None, 'no 2001 table for this split', notes
+    vals = t['x']['values']
+    read_ab = min(max(float(ab_ac), vals[0]), vals[-1])
+    cc = _to_common(cb, 0.5, read_ab)
+    notes = list(notes or [])
+    if qb_qc is not None and abs(float(qb_qc) - 0.5) > SPLIT_NOTE_TOL:
+        notes.append('%s is printed at Qb/Qc 0.5 only; this split is Qb/Qc %.2f'
+                     % (key, float(qb_qc)))
+    if stands_for:
+        notes.append('%s (symmetrical dovetail wye) stands in for a %s' % (key, stands_for))
+    return cc, '%s Ab/Ac %.2f, Qb/Qc 0.50: Cb %.2f, Cc,b %.2f' % (key, read_ab, cb, cc), notes
+
+
 # ── what the Advanced settings dialog lists ──────────────────────────────────
 #
 # One row per fitting the tool prices: (label, model family it covers, the
@@ -501,10 +641,25 @@ FITTING_ROWS = (
      ('ED7-2',), None),
     ('Fan inlet with rect elbow (fan system effect)', 'Unit return / exhaust connection',
      ('ER7-1',), None),
+    # Tees, crosses and wyes (Colin, 2026-11-11): priced on the exit leg, the
+    # tap tables by shape. The worksheet key is the fallback for the branch.
+    ('Rect tee, rect branch (supply / return)', 'Rectangular Tee',
+     ('SR5-13_Cb', 'SR5-13_Cs', 'ER5-3_Cb', 'ER5-3_Cs'), 'supply_tap_branch'),
+    ('Rect tee, round branch (supply / return)', 'Rectangular Tee with round branch',
+     ('SR5-11_Cb', 'SR5-11_Cs', 'ER5-2_Cb', 'ER5-2_Cs'), 'supply_tap_branch'),
+    ('Round tee (supply / return)', 'Round Tee',
+     ('SD5-9_Cb', 'SD5-9_Cs', 'ED5-3_le250_Cb', 'ED5-3_le250_Cs', 'ED5-3_gt250_Cb',
+      'ED5-3_gt250_Cs'), 'supply_tap_branch'),
+    ('Round lateral wye (supply / return)', 'Round Wye - Lateral',
+     ('SD5-1_Cb', 'SD5-1_Cs', 'ED5-2_Cb', 'ED5-2_Cs'), 'supply_tap_branch'),
+    ('Round cross, supply (other crosses: tee table per branch)', 'Round Cross',
+     ('SD5-24_Cb1', 'SD5-24_Cs'), 'supply_tap_branch'),
+    ('Symmetrical wye, bullhead tee (supply / return)', 'Wye, or a tee fed through its branch',
+     ('SR5-14', 'ER5-4'), 'wye_bullhead'),
 )
-# Not yet looked up from the 2001 tables, still the RJA worksheet value:
-# tees, crosses, wyes (incl. bullhead, SR5-14 / ER5-4 are transcribed) and
-# offsets (CR3-17 / CD6-4 transcribed).
+# Not looked up from the 2001 tables, still the RJA worksheet value: offsets
+# (CR3-17 / CD6-4 transcribed, not wired; two 45s are priced as two elbows,
+# Colin 2026-11-11).
 
 
 def table_keys_like(prefix):

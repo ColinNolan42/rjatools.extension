@@ -188,6 +188,11 @@ hvac_graph.connector_areas_ft2     = _connector_areas_ft2
 hvac_graph.transition_areas        = _transition_areas
 hvac_graph.velocity_pressure_inwg  = _velocity_pressure_inwg
 hvac_graph.CAP_LABEL              = 'Wall / roof cap'
+# Tees, crosses and wyes (2026-11-11): Elem.legs {neighbor id: leg dict} as
+# the real junction_legs returns it; no legs = unreadable = worksheet.
+hvac_graph.junction_legs = lambda elem, ids: dict(
+    (i, (getattr(elem, 'legs', None) or {})[i]) for i in ids
+    if i in (getattr(elem, 'legs', None) or {}))
 
 ns = {'hvac_graph': hvac_graph, 'fitting_tables': fitting_tables,
       'vav_checks': vav_checks, 'ashrae_fittings': ashrae_fittings,
@@ -3521,6 +3526,142 @@ check("case91 a hosted tap with no readable position: still a drop, no 'turns th
           for k, t in sa91.get('fse_notes', ()))
       and not any('turns through it' in t for k, t in sa91.get('fse_notes', ())),
       "notes %r" % (sa91.get('fse_notes'),))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Tees, crosses and wyes from the 2001 tables (Colin, 2026-11-11). Priced on
+# the leg the run leaves through, Cc x the common leg Pv.
+# ══════════════════════════════════════════════════════════════════════════
+def _rleg(w, h, d):
+    return {'shape': 'rect', 'area_ft2': w * h / 144.0, 'd_in': None,
+            'w_in': w, 'h_in': h, 'dir': d}
+
+
+def _oleg(dia, d):
+    return {'shape': 'round', 'area_ft2': math.pi * (dia / 12.0) ** 2 / 4.0,
+            'd_in': dia, 'w_in': None, 'h_in': None, 'dir': d}
+
+
+def _junction_run(fam, legs, kids_rows, sys_class, heavy, is_round=False):
+    """root 0 -> duct 1 (common) -> junction 2 -> one duct per leg -> terminal.
+    kids_rows: [(duct id, cfm, area ft2)]. heavy: the leg duct given a big
+    friction so the index run leaves through it."""
+    q_c = sum(r[1] for r in kids_rows)
+    a_c = legs[1]['area_ft2'] if 1 in legs else 2.0
+    rows = [(1, 0.0, 10.0, q_c / a_c, a_c, sys_class)]
+    children = {0: [1], 1: [2], 2: [r[0] for r in kids_rows]}
+    terms = {}
+    for did, q, a in kids_rows:
+        rows.append((did, 1.0 if did == heavy else 0.0, 10.0, q / a, a, sys_class))
+        children[did] = [100 + did]
+        terms[100 + did] = (q, sys_class, 'T-%d' % did)
+    tee = Elem(kind='unknown_fitting', family_name=fam, is_round=is_round)
+    tee.legs = legs
+    nodes = {1: Elem(kind='duct'), 2: tee}
+    for r in kids_rows:
+        nodes[r[0]] = Elem(kind='duct')
+    res = crit([0], children, build(rows), terms, nodes)
+    leaf = res.get(0, {}).get(sys_class, {})
+    item = [i for i in leaf.get('items', ()) if i[0] == 'Fitting 2']
+    return leaf, (item[0] if item else None), q_c / a_c
+
+
+# J1: rect supply tee, 24x12 main, run leaves through the 12x12 branch.
+L1 = {1: _rleg(24, 12, (-1, 0, 0)), 3: _rleg(24, 12, (1, 0, 0)), 4: _rleg(12, 12, (0, 1, 0))}
+leaf, it, vc = _junction_run('Rectangular Tee', L1, [(3, 1000.0, 2.0), (4, 600.0, 1.0)],
+                             'Supply Air', heavy=4)
+cc, _l, _n = ashrae_fittings.tee_c(True, 'rect', 'rect', False, 'branch', 0.5, 1.0,
+                                   600.0 / 1600.0, 1000.0 / 1600.0)
+check("J1 rect supply tee into branch: SR5-13 Cc,b x common Pv",
+      it is not None and 'SR5-13' in it[1] and abs(it[3] - cc * pv(vc)) < 1e-9
+      and it[4][0] == 'Tee, into branch' and it[4][1] == 'SR5-13',
+      "item %r expected %.5f" % (it, cc * pv(vc)))
+check("J1 the tee is counted once", leaf.get('fitting_count') == 1,
+      "%r" % leaf.get('fitting_count'))
+
+# J2: same tee, run straight through.
+leaf, it, vc = _junction_run('Rectangular Tee', L1, [(3, 1000.0, 2.0), (4, 600.0, 1.0)],
+                             'Supply Air', heavy=3)
+cc, _l, _n = ashrae_fittings.tee_c(True, 'rect', 'rect', False, 'straight', 0.5, 1.0,
+                                   600.0 / 1600.0, 1000.0 / 1600.0)
+check("J2 rect supply tee straight through: SR5-13 Cc,s",
+      it is not None and 'Cc,s' in it[1] and abs(it[3] - cc * pv(vc)) < 1e-9
+      and it[4][0] == 'Tee, straight through',
+      "item %r expected %.5f" % (it, cc * pv(vc)))
+
+# J3: round supply cross, SD5-24 on the branch.
+L3 = {1: _oleg(16, (-1, 0, 0)), 3: _oleg(14, (1, 0, 0)), 4: _oleg(8, (0, 1, 0)),
+      5: _oleg(8, (0, -1, 0))}
+a3 = dict((k, v['area_ft2']) for k, v in L3.items())
+leaf, it, vc = _junction_run('Round Cross', L3, [(3, 800.0, a3[3]), (4, 200.0, a3[4]),
+                                                 (5, 150.0, a3[5])], 'Supply Air', heavy=4,
+                             is_round=True)
+cc, _l, _n = ashrae_fittings.cross_c(True, 'round', 'round', False, 'branch',
+                                     a3[4] / a3[1], a3[3] / a3[1], 200.0 / 1150.0,
+                                     800.0 / 1150.0)
+check("J3 round supply cross into branch: SD5-24",
+      it is not None and it[1].split(', ', 1)[1].startswith('SD5-24')
+      and abs(it[3] - cc * pv(vc)) < 1e-9,
+      "item %r expected %.5f" % (it, cc * pv(vc)))
+
+# J4: rect return cross: tee table per branch, NOTE that it stands in.
+L4 = {1: _rleg(24, 12, (-1, 0, 0)), 3: _rleg(20, 12, (1, 0, 0)), 4: _rleg(10, 10, (0, 1, 0)),
+      5: _rleg(10, 10, (0, -1, 0))}
+leaf, it, vc = _junction_run('Rectangular Cross', L4, [(3, 900.0, L4[3]['area_ft2']),
+                                                       (4, 300.0, L4[4]['area_ft2']),
+                                                       (5, 300.0, L4[5]['area_ft2'])],
+                             'Return Air', heavy=4)
+check("J4 rect return cross: tee table stands in, NOTED, loss positive",
+      it is not None and it[3] > 0
+      and any('stands in for a cross' in u for u in leaf.get('unpriced', ())),
+      "item %r unpriced %r" % (it, leaf.get('unpriced')))
+
+# J5: bullhead tee fed through its branch: SR5-14 stands in.
+L5 = {1: _rleg(16, 12, (0, -1, 0)), 3: _rleg(12, 12, (1, 0, 0)), 4: _rleg(12, 12, (-1, 0, 0))}
+leaf, it, vc = _junction_run('Rectangular Tee', L5, [(3, 500.0, 1.0), (4, 500.0, 1.0)],
+                             'Supply Air', heavy=3)
+cc, _l, _n = ashrae_fittings.split_c(True, 1.0 / L5[1]['area_ft2'], 0.5, 'bullhead tee')
+check("J5 bullhead tee: SR5-14 by Ab/Ac, stand in NOTE",
+      it is not None and 'SR5-14' in it[1] and abs(it[3] - cc * pv(vc)) < 1e-9
+      and any('stands in for a bullhead tee' in u for u in leaf.get('unpriced', ())),
+      "item %r unpriced %r" % (it, leaf.get('unpriced')))
+
+# J6: round lateral wye, 45 deg branch: SD5-1.
+L6 = {1: _oleg(14, (-1, 0, 0)), 3: _oleg(12, (1, 0, 0)), 4: _oleg(8, (0.7071, 0.7071, 0))}
+leaf, it, vc = _junction_run('Round Wye - Lateral', L6, [(3, 700.0, L6[3]['area_ft2']),
+                                                         (4, 300.0, L6[4]['area_ft2'])],
+                             'Supply Air', heavy=4, is_round=True)
+check("J6 round lateral wye into its 45 deg branch: SD5-1",
+      it is not None and 'SD5-1 ' in it[1] and it[4][0] == 'Wye, into branch',
+      "item %r" % (it,))
+
+# J7: a tee whose legs cannot be read: worksheet, flagged FALLBACK.
+leaf, it, vc = _junction_run('Rectangular Tee', {}, [(3, 1000.0, 2.0), (4, 600.0, 1.0)],
+                             'Supply Air', heavy=4)
+check("J7 unreadable tee: worksheet take-off C, FALLBACK",
+      it is not None and abs(it[3] - fitting_tables.takeoff_c('Supply Air') * pv(vc)) < 1e-9
+      and any(u.startswith('FALLBACK') and 'Rectangular Tee' in u
+              for u in leaf.get('unpriced', ())),
+      "item %r unpriced %r" % (it, leaf.get('unpriced')))
+
+# J8: an elbow right past the tee's branch is priced at the branch leg's own
+#     velocity (600 cfm over 1 ft2), not the common's 800 fpm.
+L8 = dict(L1)
+el8 = Elem(kind='elbow', family_name='Rectangular Elbow - Mitered', is_round=False, angle=90.0,
+           geom={'round': False, 'd_in': None, 'w_in': 12.0, 'h_in': 12.0, 'r_in': None,
+                 'angle': 90.0})
+t8 = Elem(kind='unknown_fitting', family_name='Rectangular Tee', is_round=False)
+t8.legs = {1: _rleg(24, 12, (-1, 0, 0)), 3: _rleg(24, 12, (1, 0, 0)), 9: _rleg(12, 12, (0, 1, 0))}
+n8 = {1: Elem(kind='duct'), 2: t8, 3: Elem(kind='duct'), 9: el8, 4: Elem(kind='duct')}
+c8 = {0: [1], 1: [2], 2: [3, 9], 9: [4], 3: [103], 4: [104]}
+d8 = build([(1, 0.0, 10.0, 800.0, 2.0, 'Supply Air'), (3, 0.0, 10.0, 500.0, 2.0, 'Supply Air'),
+            (4, 1.0, 10.0, 600.0, 1.0, 'Supply Air')])
+r8 = crit([0], c8, d8, {103: (1000.0, 'Supply Air', 'T-3'), 104: (600.0, 'Supply Air', 'T-4')},
+          n8)
+_el8 = [i for i in r8.get(0, {}).get('Supply Air', {}).get('items', ()) if i[0] == 'Fitting 9']
+check("J8 elbow past the tee branch priced at the branch's 600 fpm",
+      len(_el8) == 1 and abs(_el8[0][2] - 600.0) < 1e-6,
+      "items %r" % (_el8,))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

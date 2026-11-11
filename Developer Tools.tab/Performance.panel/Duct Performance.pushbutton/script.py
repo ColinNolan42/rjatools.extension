@@ -400,7 +400,7 @@ _SETTINGS_XAML = '''
                             </Expander>
                             <Expander x:Name="exp_c" IsExpanded="False" Margin="0,4,0,0"
                                       Header="Fallback C values (RJA SP loss worksheet)"
-                                      ToolTip="Used where a fitting's geometry or flows cannot be read (flagged FALLBACK in the report), and for tees, crosses, wyes, offsets and the flex bend, which have no 2001 table lookup. Cannot be negative.">
+                                      ToolTip="Used where a fitting's geometry or flows cannot be read (flagged FALLBACK in the report), and for offsets and the flex bend, which have no 2001 table lookup. Cannot be negative.">
                                 <Grid x:Name="grid_c" Margin="16,4,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -940,7 +940,9 @@ def _show_velocity_settings_xaml(use_theme):
                      'Rect mitered elbows: no vanes to 45 deg (CR3-6), vanes above '
                      '(CR3-9). Transitions at the section o Pv, taps at the common '
                      'section Pv. RJA SP loss worksheet C where geometry is '
-                     'unreadable, and for tees, crosses, wyes and offsets. One flex bend (C 3.3, ASHRAE Duct Systems Design '
+                     'unreadable, and for offsets. Tees, crosses and wyes on the leg the run leaves '
+                     'through: the tap tables by shape, SD5-24 for a round supply cross, SR5-14 / ER5-4 '
+                     'for a symmetrical split. One flex bend (C 3.3, ASHRAE Duct Systems Design '
                      'Guide) per flex run.'),
         ('External static', 'The most restrictive run (index run) from the unit to '
                             'a terminal, supply path plus return path. Includes duct '
@@ -2989,6 +2991,123 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 return dr.sys_class
         return sys_class
 
+    # ── tees, crosses and wyes (Colin, 2026-11-11) ──────────────────────────
+    # Priced on the leg the run LEAVES through, so in the child loop of the
+    # walk, not when the fitting is reached: the branch pays Cc,b, the
+    # straight Cc,s, x the common (unit side) leg Pv, the tap convention.
+    # Legs, areas and axes from the fitting's own connectors; each leg's cfm
+    # is the ducts below it. Unreadable legs or flows: the RJA worksheet, as
+    # before, flagged FALLBACK.
+    _JUNCTION_ROLES = ('tee', 'cross', 'wye')
+    junction_cache = {}
+
+    def _leg_cfm(leg_id):
+        """cfm through one leg of a junction: the duct on it, the terminal on
+        it, else every duct below it."""
+        d = dr_by_int_id.get(leg_id)
+        if d is not None:
+            return float(d.cfm or 0.0)
+        if leg_id in all_terminals:
+            return float(all_terminals[leg_id][0] or 0.0)
+        below = vav_checks.nearest_ducts_down(leg_id, all_children, _kind)
+        q = sum([float(dr_by_int_id[x].cfm or 0.0) for x in below if x in dr_by_int_id], 0.0)
+        if q <= 0.0:
+            q = sum([float(all_terminals[ch][0] or 0.0) for ch in all_children.get(leg_id, [])
+                     if ch in all_terminals], 0.0)
+        return q
+
+    def _junction(nid):
+        """{'role', 'legs', 'q', 'qc', 'common', 'layout'} for a tee, cross or
+        wye whose every leg reads, else None (the worksheet prices it)."""
+        if nid in junction_cache:
+            return junction_cache[nid]
+        res = None
+        elem = all_nodes.get(nid)
+        par = parent_of.get(nid)
+        kids = list(all_children.get(nid, []))
+        role = (fitting_tables.classify_fitting(hvac_graph.fitting_family_name(elem))
+                if elem is not None else None)
+        if role in _JUNCTION_ROLES and par is not None and len(kids) >= 2:
+            legs = hvac_graph.junction_legs(elem, [par] + kids)
+            if par in legs and all([k in legs for k in kids]):
+                q = dict((k, _leg_cfm(k)) for k in kids)
+                qc = sum(q.values(), 0.0)
+                lay = ashrae_fittings.junction_layout(
+                    legs[par]['dir'], dict((k, legs[k]['dir']) for k in kids))
+                if qc > 0.0 and lay is not None:
+                    res = {'role': role, 'legs': legs, 'q': q, 'qc': qc,
+                           'common': legs[par], 'layout': lay}
+        if role in _JUNCTION_ROLES:
+            hvac_graph.log.info('_junction: %s %s %s', role, nid,
+                                'read' if res else 'NOT READ, worksheet')
+        junction_cache[nid] = res
+        return res
+
+    junction_exit_cache = {}
+    def _junction_exit(nid, child_id, sys_class):
+        """(loss in. wc, detail, notes, leg fpm, leg area ft2) for the run
+        leaving junction nid through child_id, or None (worksheet)."""
+        key = (nid, child_id, sys_class)
+        if key in junction_exit_cache:
+            return junction_exit_cache[key]
+        res = None
+        j = _junction(nid)
+        if j is not None and child_id in j['legs'] and j['q'].get(child_id):
+            legs, q, qc, lay, role = j['legs'], j['q'], j['qc'], j['layout'], j['role']
+            com = j['common']
+            ac = com['area_ft2']
+            leg = legs[child_id]
+            vc = qc / ac
+            sup = vav_checks.is_supply_class(sys_class)
+            straight, branches = lay['straight'], lay['branches']
+            c, label, n = None, '', []
+            legname = 'branch'
+            if straight is None:
+                # No leg in line with the common: a symmetrical wye, or a
+                # bullhead tee fed through its branch (SR5-14 / ER5-4).
+                stands = {'tee': 'bullhead tee', 'cross': 'cross'}.get(role)
+                c, label, n = ashrae_fittings.split_c(
+                    sup, leg['area_ft2'] / ac, min(q[child_id] / qc, 1.0), stands_for=stands)
+                ws = fitting_tables.c_of('wye_bullhead', c_values)
+            else:
+                if child_id == straight:
+                    legname = 'straight'
+                    # Cs is read against the largest branch's geometry.
+                    b = (sorted(branches, key=lambda k: (-q.get(k, 0.0), k))[0]
+                         if branches else None)
+                else:
+                    b = child_id
+                if b is not None:
+                    bl = legs[b]
+                    entry_45 = branches.get(b, 90.0) < ashrae_fittings.ENTRY_45_MAX_DEG
+                    fn = (ashrae_fittings.cross_c if (role == 'cross' or len(branches) >= 2)
+                          else ashrae_fittings.tee_c)
+                    c, label, n = fn(sup, com['shape'], bl['shape'], entry_45, legname,
+                                     bl['area_ft2'] / ac, legs[straight]['area_ft2'] / ac,
+                                     min(q.get(b, 0.0) / qc, 1.0),
+                                     min(q.get(straight, 0.0) / qc, 1.0),
+                                     main_d_in=com['d_in'])
+                ws = (fitting_tables.takeoff_c(sys_class, c=c_values) if legname == 'branch'
+                      else fitting_tables.takeoff_main_c(sys_class, c_values))
+            if c is not None:
+                c_use, fb = _tap_c_positive(
+                    c, ws, label.split(' ')[0] + (' Cc,s' if legname == 'straight' else ' Cc,b'),
+                    '%s %s leaving through %s' % (role, nid, child_id))
+                if fb is None:
+                    detail = '%s at common %.0f fpm' % (label, vc)
+                else:
+                    detail = ('RJA worksheet %s %s, C %.2f at common %.0f fpm'
+                              % (role, legname, c_use, vc))
+                where = '%s %s (%s, %s, leaving through %s %s)' % (
+                    role, nid, _shown_class(nid, sys_class),
+                    _size_text(com['shape'] == 'round', com['d_in'], com['w_in'], com['h_in']),
+                    legname, child_id)
+                res = (c_use * hvac_graph.velocity_pressure_inwg(vc), detail,
+                       _located(where, n) + ([fb] if fb else []),
+                       q[child_id] / leg['area_ft2'], leg['area_ft2'])
+        junction_exit_cache[key] = res
+        return res
+
     def _ashrae_fitting(elem, role, fam, sys_class, up_fpm, up_area, loc_id=None):
         """(loss in. wc, label, notes, downstream area) from the 2001 tables,
         or None to fall back to the worksheet. sys_class picks the table; the
@@ -3093,7 +3212,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             name = 'Transition'
         elif role == 'takeoff':
             name = 'Tap, into branch'
-        elif role in ('tee', 'cross', 'wye', 'offset'):
+        elif role in ('tee', 'cross', 'wye'):
+            straight = 'Cc,s' in (detail or '') or ' straight,' in (detail or '')
+            name = '%s, %s' % (role.capitalize(),
+                               'straight through' if straight else 'into branch')
+        elif role == 'offset':
             name = role.capitalize()
         else:
             name = fam or 'Fitting'
@@ -3162,7 +3285,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             upstream_area_ft2=flow_up, downstream_area_ft2=flow_down,
             is_end_of_main=False, c=c_values, angle_deg=angle)
         fb = None
-        if role in ('elbow', 'takeoff') or (role == 'transition' and not reversed_walk):
+        if (role in ('elbow', 'takeoff', 'tee', 'cross', 'wye')
+                or (role == 'transition' and not reversed_walk)):
             fb = 'FALLBACK: %s: %s, RJA worksheet C %.2f (geometry or flows unreadable)' % (
                 fam or '?', note, c)
         if c > 0.0:
@@ -4689,6 +4813,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
 
             elem = all_nodes.get(nid)
             dr   = dr_by_int_id.get(nid)
+            jn_here = False
 
             if dr is not None:
                 fric      = fric + dr.friction_loss_inwc
@@ -4727,6 +4852,14 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 # include the elbow's own loss (Colin, 2026-10-29), so it is
                 # one line in the take-off, the fan system effect one.
                 pass
+
+            elif (elem is not None and hvac_graph.is_fitting(elem)
+                  and nid not in fse_boost and _junction(nid) is not None):
+                # A tee, cross or wye whose legs read: priced in the child
+                # loop below, on the leg the run leaves through (Colin,
+                # 2026-11-11).
+                fcount = fcount + 1
+                jn_here = True
 
             elif elem is not None and hvac_graph.is_fitting(elem):
                 # A transition between the unit and the first disruption,
@@ -5065,6 +5198,31 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                 ('End of main tap adjustment', 'RJA worksheet', None, None)),)
                 c_fpm, c_area = up_fpm, up_area
                 c_class = sys_class
+                if jn_here:
+                    # The junction's loss for THIS exit leg: Cc,b into a
+                    # branch, Cc,s straight through (_junction_exit), the
+                    # next fitting priced at this leg's own velocity. A leg
+                    # that cannot be read takes the worksheet, FALLBACK.
+                    _jfam = hvac_graph.fitting_family_name(elem) or '?'
+                    _jx = _junction_exit(nid, child_id, sys_class)
+                    if _jx is not None:
+                        _jl, _jd, _jnotes, _jfpm, _jarea = _jx
+                        _jfb = [x for x in _jnotes if x and x.startswith('FALLBACK')]
+                        _jrest = _notes_text([x for x in _jnotes
+                                              if x and not x.startswith('FALLBACK')])
+                        _jtext = '; '.join(_jfb + ([_jrest] if _jrest else [])) or None
+                        c_fpm, c_area = _jfpm, _jarea
+                    else:
+                        _jl, _jc, _jtext, _ja, _jd = _price_fitting(
+                            elem, sys_class, up_fpm, up_area,
+                            against_flow=fitting_tables.flows_toward_unit(sys_class),
+                            nid=nid)
+                    extra_fit = extra_fit + _jl
+                    if _jtext:
+                        extra_unpriced = extra_unpriced + (_jtext,)
+                    extra_items = extra_items + ((
+                        'Fitting {}'.format(nid), '{}, {}'.format(_jfam, _jd),
+                        up_fpm, _jl, _takeoff_key(elem, _jfam, _jd, 1, _jtext)),)
                 if dr is not None and dr.area_ft2 and child_id not in _taps(nid):
                     # Past the last tap on an unbroken main only the flow the
                     # taps left is still moving, so a fitting there is priced

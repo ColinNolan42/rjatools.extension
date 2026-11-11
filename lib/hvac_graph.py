@@ -2127,6 +2127,41 @@ def _connector_to(elem, other_id):
     return None
 
 
+def junction_legs(elem, neighbor_ids):
+    """{neighbor id: {'shape': 'round'|'rect', 'area_ft2', 'd_in', 'w_in',
+    'h_in', 'dir': (x, y, z)}} for the connectors of a tee, cross or wye
+    joined to each neighbor. 'dir' is Connector.CoordinateSystem.BasisZ, the
+    connector's outward axis (the same read elbow_geometry uses). A neighbor
+    whose connector cannot be read is left out, logged.
+    Colin, 2026-11-11: tees, crosses and wyes priced from the 2001 tables."""
+    out = {}
+    eid = eid_int(elem.Id) if elem is not None else '?'
+    for nid in neighbor_ids:
+        c = _connector_to(elem, nid) if elem is not None else None
+        if c is None:
+            log.info('junction_legs: fitting %s connector to %s NOT FOUND', eid, nid)
+            continue
+        try:
+            z = c.CoordinateSystem.BasisZ
+            d = (z.X, z.Y, z.Z)
+            if c.Shape == ConnectorProfileType.Round:
+                r = c.Radius
+                leg = {'shape': 'round', 'area_ft2': math.pi * r * r,
+                       'd_in': 2.0 * r * 12.0, 'w_in': None, 'h_in': None, 'dir': d}
+            else:
+                leg = {'shape': 'rect', 'area_ft2': c.Width * c.Height, 'd_in': None,
+                       'w_in': c.Width * 12.0, 'h_in': c.Height * 12.0, 'dir': d}
+        except Exception as ex:
+            log.info('junction_legs: fitting %s connector to %s unreadable: %s', eid, nid, ex)
+            continue
+        if not leg['area_ft2'] or leg['area_ft2'] <= 0:
+            log.info('junction_legs: fitting %s connector to %s has no area', eid, nid)
+            continue
+        out[nid] = leg
+    log.info('junction_legs: fitting %s read %d of %d legs', eid, len(out), len(neighbor_ids))
+    return out
+
+
 def _direction_word(conn):
     """'in', 'out' or None (unreadable or bidirectional)."""
     try:

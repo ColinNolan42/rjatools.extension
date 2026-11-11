@@ -364,5 +364,56 @@ class AshraeTablesTest(unittest.TestCase):
                 self.assertGreaterEqual(len(cells), 3, key)
 
 
+class TestJunctionLookups(unittest.TestCase):
+    """Tees, crosses and wyes (Colin, 2026-11-11): ashrae_fittings names the
+    legs from connector axes and reads the tap tables, SD5-24 and SR5-14 /
+    ER5-4. Expected values are printed cells converted by Eq. 34."""
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        sys.path.insert(0, HERE)
+        import ashrae_fittings
+        cls.af = ashrae_fittings
+
+    def test_layout_tee_lateral_bullhead(self):
+        lay = self.af.junction_layout((-1, 0, 0), {3: (1, 0, 0), 4: (0, 1, 0)})
+        self.assertEqual(lay['straight'], 3)
+        self.assertAlmostEqual(lay['branches'][4], 90.0, places=6)
+        lay = self.af.junction_layout((-1, 0, 0), {3: (1, 0, 0), 4: (0.7071, 0.7071, 0)})
+        self.assertAlmostEqual(lay['branches'][4], 45.0, places=2)
+        lay = self.af.junction_layout((0, -1, 0), {3: (1, 0, 0), 4: (-1, 0, 0)})
+        self.assertIsNone(lay['straight'])
+        self.assertIsNone(self.af.junction_layout((0, 0, 0), {3: (1, 0, 0)}))
+
+    def test_tee_reads_tap_tables(self):
+        cc, label, _n = self.af.tee_c(True, 'rect', 'rect', False, 'branch',
+                                      0.5, 1.0, 0.5, 0.5)
+        self.assertTrue(label.startswith('SR5-13'))
+        self.assertAlmostEqual(cc, 0.73, places=6)
+        cc, label, _n = self.af.tee_c(True, 'round', 'rect', False, 'branch',
+                                      0.5, 1.0, 0.5, 0.5)
+        self.assertIsNone(cc)
+
+    def test_cross_sd5_24_and_stand_in(self):
+        cc, label, notes = self.af.cross_c(True, 'round', 'round', False, 'straight',
+                                           0.4, 0.8, 0.3, 0.4)
+        self.assertTrue(label.startswith('SD5-24'))
+        self.assertFalse(notes)
+        cc, label, notes = self.af.cross_c(False, 'rect', 'rect', False, 'branch',
+                                           0.4, 0.8, 0.3, 0.4)
+        self.assertTrue(label.startswith('ER5-3'))
+        self.assertTrue(any('stands in for a cross' in n for n in notes))
+
+    def test_split_dovetail(self):
+        cc, label, notes = self.af.split_c(True, 0.5, 0.5)
+        self.assertAlmostEqual(cc, 0.30, places=6)
+        self.assertFalse(notes)
+        cc, label, notes = self.af.split_c(False, 1.0, 0.7, 'bullhead tee')
+        self.assertAlmostEqual(cc, 0.28 * (0.5 / 1.0) ** 2, places=6)
+        self.assertTrue(any('printed at Qb/Qc 0.5 only' in n for n in notes))
+        self.assertTrue(any('stands in for a bullhead tee' in n for n in notes))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
