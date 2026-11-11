@@ -2294,6 +2294,7 @@ def _pick_unit(scope, scope_label):
                                                         eid_int(elem.Id)))
     return elem
 
+DUCT_REDUCTION_REASON = 'Duct reduction size available'   # PURPLE reason (Colin, 2026-11-11; was 'Oversized')
 MR_LINE_WEIGHT = 8   # projection line weight of the most restrictive run (1 to 16)
 MR_LINE_COLOR = Color(255, 128, 0)   # its outline: orange, apart from every label color
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
@@ -5611,7 +5612,7 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
       Purple : GREEN AND a smaller standard size exists (see _suggest_size_info)
 
     Returns (label, max_cap_cfm, reason) — reason is 'Velocity', 'Friction',
-    'Oversized', 'Diffuser/Duct Clearance', or '' (GREEN/GRAY, nothing to flag).
+    DUCT_REDUCTION_REASON, 'Diffuser/Duct Clearance', or '' (GREEN/GRAY, nothing to flag).
 
     A VAV medium pressure duct (dr.is_mp) is judged against the MP limits,
     PURPLE included: the shrink candidate is tested on the MP limits too
@@ -5657,7 +5658,7 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
         _, sugg_area = _suggest_shrink_info(dr, custom_limits, downstream_height_in)
         if sugg_area is not None:
             combined = 'PURPLE'
-            reason   = 'Oversized'
+            reason   = DUCT_REDUCTION_REASON
 
     # Diffuser/duct height clearance — hard override, independent of
     # everything above.
@@ -6087,7 +6088,7 @@ def _legend_rows(words=None):
     one = (words or duct_perf_console.scope_words('rtu'))['one']
     return [
         ('GREEN',  'Main: within limit. Branch: {} and duct both correctly sized.'.format(one)),
-        ('PURPLE', 'Main only: oversized, a smaller standard size is available.'),
+        ('PURPLE', 'Main only: duct reduction size available, a smaller standard size still meets the limits.'),
         ('YELLOW', 'Main only: approaching the limit.'),
         ('RED',    'Main: exceeds the limit. Branch: {} or duct undersized. '
                    'Either: fails the diffuser/duct height clearance (see Reason).'.format(one)),
@@ -8496,7 +8497,7 @@ def main():
         ['Green', str(counts.get('GREEN', 0)), str(fitting_counts.get('GREEN', 0)),
          'Main: within limit. Branch: {} and duct both correctly sized'.format(words['one'])],
         ['Purple', str(counts.get('PURPLE', 0)), str(fitting_counts.get('PURPLE', 0)),
-         'Main only: oversized (low velocity, review for cost)'],
+         'Main only: duct reduction size available (a smaller standard size still meets the limits, review for cost)'],
         ['Yellow', str(counts.get('YELLOW', 0)), str(fitting_counts.get('YELLOW', 0)),
          'Main only: approaching limit'],
         ['Red', str(counts.get('RED', 0)), str(fitting_counts.get('RED', 0)),
