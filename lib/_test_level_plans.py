@@ -26,7 +26,12 @@ def _load(*names):
     return ns
 
 
-NS = _load('_rect_overlap', '_plan_rank', '_crop_box_xy', '_column_centers')
+NS = _load('_rect_overlap', '_plan_rank', '_crop_box_xy', '_column_centers',
+           '_canon_level_pick', '_fit_plan_scale')
+NS['LEVEL_SAME_ELEV_FT'] = 0.5
+NS['STANDARD_PLAN_SCALES'] = (24, 32, 48, 64, 96, 128, 192)
+NS['LEVEL_PLAN_TARGET_IN'] = 24.0
+
 
 
 class OverlapTests(unittest.TestCase):
@@ -89,6 +94,40 @@ class LayoutTests(unittest.TestCase):
     def test_one_and_none(self):
         self.assertEqual(NS['_column_centers'](1.2, [2.0], 0.1), [1.2])
         self.assertEqual(NS['_column_centers'](1.2, [], 0.1), [])
+
+
+class CanonLevelTests(unittest.TestCase):
+    """Colin, 2026-11-11, TB-M12: a leftover level with no plan at LEVEL 1's
+    elevation; ceiling and deck levels with no plan."""
+    PLANS = [(1, 0.0), (2, 14.33)]          # LEVEL 1, LEVEL 2
+
+    def test_same_elevation(self):
+        self.assertEqual(NS['_canon_level_pick'](0.0, self.PLANS), 1)
+
+    def test_ceiling_goes_to_the_floor_below(self):
+        self.assertEqual(NS['_canon_level_pick'](9.0, self.PLANS), 1)
+        self.assertEqual(NS['_canon_level_pick'](23.33, self.PLANS), 2)
+
+    def test_deck_just_under_the_next_floor(self):
+        self.assertEqual(NS['_canon_level_pick'](14.0, self.PLANS), 2)   # within 0.5 ft
+
+    def test_below_every_plan(self):
+        self.assertIsNone(NS['_canon_level_pick'](-10.0, self.PLANS))
+
+
+class FitScaleTests(unittest.TestCase):
+    """The largest drawing whose width fits 24 in., never shrunk."""
+
+    def test_enlarges_to_fit(self):
+        # 50 ft wide: 1/4" (48) is 12.5 in., 3/8" (32) is 18.75 in., 1/2" (24) 25 in.
+        self.assertEqual(NS['_fit_plan_scale'](50.0, 96), 32)
+
+    def test_never_shrinks(self):
+        self.assertEqual(NS['_fit_plan_scale'](300.0, 96), 96)
+        self.assertEqual(NS['_fit_plan_scale'](10.0, 24), 24)
+
+    def test_exact_fit(self):
+        self.assertEqual(NS['_fit_plan_scale'](96.0, 192), 48)    # 24.0 in. at 1/4"
 
 
 class WiringTests(unittest.TestCase):

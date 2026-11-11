@@ -6148,6 +6148,97 @@ def _elem_level_id(elem):
     return None
 
 
+LEVEL_SAME_ELEV_FT = 0.5       # two levels this close are the same floor
+
+
+def _canon_level_pick(elev, plan_levels):
+    """The floor an element on a level with no plan is drawn on (Colin,
+    2026-11-11, TB-M12: 85 ducts on a leftover 'LEVEL 0' at LEVEL 1's
+    elevation): the plan level at the same elevation, else the nearest plan
+    level below, else None. plan_levels: [(int level id, elevation ft)].
+    Pure, for the CPython test."""
+    same = [(abs(e - elev), lid) for lid, e in plan_levels
+            if abs(e - elev) <= LEVEL_SAME_ELEV_FT]
+    if same:
+        return min(same)[1]
+    below = [(e, lid) for lid, e in plan_levels if e <= elev + LEVEL_SAME_ELEV_FT]
+    if below:
+        return max(below)[1]
+    return None
+
+
+STANDARD_PLAN_SCALES = (24, 32, 48, 64, 96, 128, 192)   # 1/2" to 1/16"
+LEVEL_PLAN_TARGET_IN = 24.0    # sheet inches a multi floor plan's width fills
+
+
+def _fit_plan_scale(width_ft, current, target_in=None, scales=None):
+    """The largest drawing (smallest scale number) whose width fits target_in
+    sheet inches, never smaller than the current scale (Colin, 2026-11-11:
+    the two story plans read too small). Pure, for the CPython test."""
+    target_in = LEVEL_PLAN_TARGET_IN if target_in is None else target_in
+    scales = STANDARD_PLAN_SCALES if scales is None else scales
+    for s in sorted(scales):
+        if s >= current:
+            break
+        if float(width_ft) * 12.0 / s <= target_in:
+            return s
+    return current
+
+
+def _fit_level_view_scale(view):
+    """Enlarge a multi floor plan to fill the sheet (_fit_plan_scale). A
+    view template that locks the scale is applied to the view and detached
+    first, so the copy keeps its graphics. Logged; never raises."""
+    try:
+        cb = view.CropBox
+        width = float(cb.Max.X - cb.Min.X)
+        now = int(view.Scale)
+    except Exception as ex:
+        hvac_graph.log.warning('scale: view %s crop or scale NOT READ: %s',
+                               eid_int(view.Id), ex)
+        return
+    fit = _fit_plan_scale(width, now)
+    if fit >= now:
+        hvac_graph.log.info('scale: view %s kept at 1:%d (%.1f ft wide)',
+                            eid_int(view.Id), now, width)
+        return
+    try:
+        view.Scale = fit
+    except Exception:
+        try:
+            tid = view.ViewTemplateId
+            if tid is not None and tid != ElementId.InvalidElementId:
+                view.ApplyViewTemplateParameters(doc.GetElement(tid))
+                view.ViewTemplateId = ElementId.InvalidElementId
+            view.Scale = fit
+        except Exception as ex:
+            hvac_graph.log.warning('scale: view %s NOT SET to 1:%d: %s',
+                                   eid_int(view.Id), fit, ex)
+            return
+    hvac_graph.log.info('scale: view %s 1:%d -> 1:%d (%.1f ft wide)',
+                        eid_int(view.Id), now, fit, width)
+
+
+def _plan_levels(sheets_by_view):
+    """([(int level id, elevation ft)], {int level id: ElementId}) of the
+    levels with a floor plan placed on a sheet (not a template, a demolition
+    plan or a Duct Performance output)."""
+    out = {}
+    for v in FilteredElementCollector(doc).OfClass(ViewPlan):
+        try:
+            if v.IsTemplate or v.ViewType != ViewType.FloorPlan or v.GenLevel is None:
+                continue
+            if sheets_by_view.get(eid_int(v.Id)) is None:
+                continue
+            name = _view_name(v).upper()
+            if 'DEMO' in name or name.startswith('DUCT PERFORMANCE'):
+                continue
+            out[eid_int(v.GenLevel.Id)] = (float(v.GenLevel.Elevation), v.GenLevel.Id)
+        except Exception:
+            continue
+    return [(k, e) for k, (e, _i) in out.items()], dict((k, i) for k, (_e, i) in out.items())
+
+
 def _sheets_by_view():
     """int view id -> the ViewSheet it is placed on."""
     out = {}
@@ -7412,6 +7503,29 @@ def main():
     # otherwise stopped at the RTU boot, because the main level ductwork was
     # checked but never drawn.
     sheets_by_view = _sheets_by_view()
+    # A level with no floor plan (a leftover or a ceiling level) is drawn on
+    # the plan level at its elevation, else the nearest below (Colin,
+    # 2026-11-11, TB-M12 'LEVEL 0 - DELETE BEFORE COPYING').
+    _plan_lvls, _plan_lvl_ids = _plan_levels(sheets_by_view)
+    _plan_ids = set(l for l, _e in _plan_lvls)
+    _canon_cache = {}
+
+    def _draw_level_id(elem):
+        lid = _elem_level_id(elem)
+        if lid is None:
+            return None
+        key = eid_int(lid)
+        if key in _plan_ids:
+            return lid
+        if key not in _canon_cache:
+            pick = None
+            try:
+                pick = _canon_level_pick(float(doc.GetElement(lid).Elevation), _plan_lvls)
+            except Exception as ex:
+                hvac_graph.log.warning('level: %s elevation NOT READ: %s', key, ex)
+            _canon_cache[key] = _plan_lvl_ids.get(pick, lid) if pick is not None else lid
+            hvac_graph.log.info('level: %s drawn on level %s', key, pick)
+        return _canon_cache[key]
     # The levels the system touches: every duct (its Reference Level) and
     # every terminal. A level holding only the unit (an RTU on a roof deck)
     # gets no plan; the unit is colored in whichever plan shows it (Colin,
@@ -7419,16 +7533,16 @@ def main():
     level_ids = {}
     level_elems = {}          # int level id -> [elements drawn on it]: crop and plan pick
     for eid, dr in all_duct_results.items():
-        lid = _elem_level_id(dr.elem)
+        lid = _draw_level_id(dr.elem)
         if lid is not None:
             level_ids[eid_int(lid)] = lid
     for _nid in all_terminals.keys():
         _el = all_nodes.get(_nid)
-        lid = _elem_level_id(_el) if _el is not None else None
+        lid = _draw_level_id(_el) if _el is not None else None
         if lid is not None:
             level_ids[eid_int(lid)] = lid
     for _nid, _el in all_nodes.items():
-        lid = _elem_level_id(_el) if _el is not None else None
+        lid = _draw_level_id(_el) if _el is not None else None
         if lid is not None:
             level_elems.setdefault(eid_int(lid), []).append(_el)
     # Each level's system as a model XY rectangle: a source plan's crop
@@ -7695,7 +7809,7 @@ def main():
         def _on_level(elem, lvl_eid):
             if lvl_eid is None:
                 return True
-            lid = _elem_level_id(elem)
+            lid = _draw_level_id(elem)
             return lid is None or lid == lvl_eid
 
         new_sheets = []
@@ -7774,6 +7888,8 @@ def main():
 
             if multi_level and lvl_eid is not None:
                 _crop_to_elements(new_view, level_elems.get(eid_int(lvl_eid), []), 5.0)
+                _fit_level_view_scale(new_view)
+                mark_off_ft = (5.0 / (64.0 * 12.0)) * float(getattr(new_view, 'Scale', 48)) * 2.0
 
             for oid, lbl_key in elem_labels.items():
                 new_view.SetElementOverrides(oid, ogs_by_label[lbl_key])
