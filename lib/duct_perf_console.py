@@ -208,8 +208,8 @@ VAVBOX_ESP_CAUTION = (
 DEFAULT_RANK = 2
 MR_TAG = ' (MOST RESTRICTIVE)'
 MR_LABEL = 'TOTAL EXTERNAL STATIC PRESSURE' + MR_TAG
-RANKED_TOTAL_LABEL = 'Ranked runs total'
-RANKED_TOTAL_NOTE = 'sanity check, not the design ESP'
+RANKED_TOTAL_LABEL = 'Ranked runs total (not the design ESP)'
+RANKED_TOTAL_NOTE = 'sanity check'
 
 
 def parse_rank(text):
@@ -413,7 +413,9 @@ def esp_unit_rows(unit, sheet=False):
             ranked = [RANKED_TOTAL_LABEL, '{}, {}'.format(
                 unit.get('ranked_text') or ' + '.join(sides or []), RANKED_TOTAL_NOTE),
                 '', '', _f3(unit['esp_total'])]
-            rows.append({'cells': ranked, 'bold': True} if sheet else ranked)
+            # Plain, so the MOST RESTRICTIVE row below it is the one that
+            # stands out (Colin, 2026-11-11).
+            rows.append(ranked)
             total_row = [mr_label, unit.get('mr_text') or ' + '.join(sides or []),
                          '', '', _f3(unit.get('mr_total'))]
         else:

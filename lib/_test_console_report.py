@@ -316,7 +316,7 @@ class DuctPerfSectionTests(unittest.TestCase):
                                     '', '', '0.739'])
         # the sheet form draws both totals bold, the same cells
         rows, total = dpc.esp_unit_rows(unit, sheet=True)
-        self.assertEqual(rows[-1], {'cells': body[-2], 'bold': True})
+        self.assertEqual(rows[-1], body[-2])
         self.assertEqual(total, body[-1])
 
     def test_tied_runs_and_marks(self):
