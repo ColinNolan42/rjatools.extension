@@ -7887,7 +7887,14 @@ def main():
         _act_lid = None
     multi_level = len(level_ids) > 1 or (len(level_ids) == 1 and _act_lid not in level_ids)
     if multi_level:
-        targets = list(level_targets)
+        # Listed lowest level first, as the sheet stacks them (Colin,
+        # 2026-11-11: printed LEVEL 3, LEVEL 1, LEVEL 2).
+        def _t_elev(t):
+            try:
+                return float(doc.GetElement(t[0]).Elevation)
+            except Exception:
+                return 0.0
+        targets = sorted(level_targets, key=_t_elev)
     else:
         targets = [(None, active_view, sheets_by_view.get(eid_int(active_view.Id)))]
     _plan_txt = ', '.join(
@@ -8489,12 +8496,14 @@ def main():
         ['Red', str(counts.get('RED', 0)), str(fitting_counts.get('RED', 0)),
          'Main: exceeds limit. Branch: {} or duct undersized'.format(words['one'])],
         ['Gray', str(counts.get('GRAY', 0)), str(fitting_counts.get('GRAY', 0)),
-         'No airflow data: broken or disconnected system (not in the flagged table)'],
+         'Not judged: no CFM reaches it (broken or disconnected system), or a check '
+         'could not be read (a NOTE names the duct and why). Not in the flagged table'],
     ]
     legend_rec = {
         'roles_note': ('Mains and branches were checked by different methods.',
                        'A duct is a branch when exactly one terminal is reachable '
-                       'downstream of it, a main when two or more are.'),
+                       'downstream of it and no tap lies between it and that terminal, '
+                       'a main otherwise (the end of a main runs to its last tap).'),
         'limits_caption': ('Main ducts, design limits used (green at or under max, '
                            'yellow within {}% above max, red over max + {}%, purple '
                            'when a smaller standard size still fits)'.format(
