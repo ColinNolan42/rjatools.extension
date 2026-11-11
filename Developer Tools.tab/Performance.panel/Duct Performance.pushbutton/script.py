@@ -2295,6 +2295,7 @@ def _pick_unit(scope, scope_label):
     return elem
 
 MR_LINE_WEIGHT = 8   # projection line weight of the most restrictive run (1 to 16)
+MR_LINE_COLOR = Color(255, 128, 0)   # its outline: orange, apart from every label color
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
@@ -8118,7 +8119,10 @@ def main():
                 ogs.SetSurfaceForegroundPatternColor(color)
                 if fill_id != ElementId.InvalidElementId:
                     ogs.SetSurfaceForegroundPatternId(fill_id)
-                ogs.SetProjectionLineColor(color)
+                # The most restrictive run: an orange outline over its label
+                # fill, so it reads even with Thin Lines on (Colin,
+                # 2026-11-11: weight alone did not show).
+                ogs.SetProjectionLineColor(MR_LINE_COLOR if bold else color)
                 if bold:
                     try:
                         ogs.SetProjectionLineWeight(MR_LINE_WEIGHT)
