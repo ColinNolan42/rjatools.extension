@@ -142,10 +142,7 @@ INLET_RED_D = 2.0            # an elbow under 2 D of a unit inlet is RED
 INLET_FLOOR_D = 5.0          # where the inlet tables stop falling (the note)
 CABINET_WARN_D = 3.0         # a cabinet unit inlet elbow under 3 D: WARNING (Colin, 2026-11-09)
 CABINET_WARN_PREFIX = 'WARNING: Elbow '
-OUTLET_TAP_D = 3.0           # a tap under 3 D of a cabinet unit supply outlet: WARNING (Colin, 2026-11-09)
-OUTLET_TAP_MARK = 'acts like an elbow at the outlet'
 TAP_ROLES = ('takeoff', 'split', 'tee', 'wye', 'cross')
-OUTLET_TAP_WALK_FT = 30.0    # how far the outlet tap walk looks past Le
 LE_SPLIT_MPS = 13.0          # Eq. 36 above this outlet velocity, Eq. 37 at or below
 SWIRL_DH = 6.0               # inlet swirl window, hydraulic diameters (p. 34.11)
 SWIRL_SAME_PLANE = 0.1       # |n1 x n2| under this: two turn planes are the same
@@ -730,41 +727,10 @@ def equivalent_diameter_in(conn):
     return 1.30 * (a * b) ** 0.625 / (a + b) ** 0.25
 
 
-def outlet_tap_ft(size_in):
-    """OUTLET_TAP_D x De, ft: a tap closer than this to a cabinet unit
-    supply outlet is a WARNING (De of the main the tap sits on)."""
-    return OUTLET_TAP_D * float(size_in) / 12.0
-
-
-def outlet_tap_text(kind, eid, where, l_ft, req_ft, basis, curb_ft=0.0, priced=False,
-                    past_le=None):
-    """The WARNING for a tap, branch, tee, wye or cross close to a cabinet
-    unit's supply outlet (Colin, 2026-11-09): a tap this close disturbs the
-    outlet velocity profile almost like an elbow, a system effect not
-    priced. req_ft: the straight duct asked for (the larger of 3 D and Le),
-    basis its words ('3 D, D 24 in.' or '1.0 Le, Le 5.7 ft'). l_ft and req_ft
-    count a roof curb."""
-    curb = ''      # one total length, the curb in it (Colin, 2026-11-09)
-    if past_le is not None:   # past Le, under 3 D (Colin, 2026-11-11, TB-M12C)
-        tail = ('it is past Le (%.1f ft), where the 2001 tables carry no system effect, so '
-                'none is priced, but it may still disturb the outlet velocity profile'
-                % _ceil_step(past_le))
-    elif priced:   # a tap off a continuing main (Colin, 2026-11-11)
-        tail = ('it is priced as an elbow on a run that leaves through it; a run that continues '
-                'on the main passes it')
-    else:
-        tail = 'its system effect is not priced, so the external static shown is low'
-    return ('WARNING: %s %s is %s; recommended: at least %.1f ft of straight duct to '
-            'the first tap (%s)%s. A tap this close to the fan %s; %s; the engineer has final '
-            'say where space does not allow.'
-            % (str(kind)[:1].upper() + str(kind)[1:], eid, from_text(where, l_ft, curb_ft),
-               _ceil_step(req_ft), basis, curb, OUTLET_TAP_MARK, tail))
-
-
 def is_check_warning(text):
     """A straight duct WARNING that prints with the fan system effect off
     too: the cabinet inlet 3 D WARNING and the supply outlet tap WARNING."""
-    return (text.startswith(CABINET_WARN_PREFIX) or OUTLET_TAP_MARK in text
+    return (text.startswith(CABINET_WARN_PREFIX)
             or (text.startswith(TAP_CLOSE_PREFIX) and 'priced as an elbow' in text))
 
 
@@ -1022,10 +988,8 @@ def method_lines(settings):
     else:
         method += (' Velocity: the connection velocity, cfm over the unit connector '
                    'area (the first duct when unreadable).')
-    method += (' A tap within 3 D of a cabinet unit\'s supply outlet is a WARNING '
-               '(D the De of the main it sits on, the walk stopping at the first elbow); '
-               'inside Le the tap is priced as an elbow on a run through it, past Le the '
-               '2001 tables carry no system effect.')
+    method += (' A tap inside Le of a supply outlet is priced as an elbow on a run '
+               'through it; past Le the 2001 tables carry no system effect.')
     if float(settings.get('curb_in') or 0.0) > 0.0:
         method += (' A roof curb (dialog, default %.0f in.; %g in. this run) is counted '
                    'as straight duct at RTU connections, length only.'

@@ -4175,45 +4175,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 root_id, first, win, where, passed=passed, ducts=grp_ducts, l0=curb_ft,
                 tap_log=taps_in, drop=drop_info)
         notes.extend(wnotes)
-        # A tap close to a cabinet unit's supply outlet (Colin, 2026-11-09):
-        # a WARNING when the first tap, branch, tee, wye or cross on the main
-        # sits under 3 D, D the equivalent diameter De of the main duct the
-        # tap sits on (round: its diameter; never the unit opening, a fan
-        # coil collar is wide and flat), L to the tap with the curb counted.
-        # Not at an exhaust fan, a VAV box root, an inlet or a duct pick. A
-        # drop tap or a tap the air turns through is priced as an elbow
-        # instead (Colin, 2026-11-11).
-        tap_out = (role_here == fan_system_effect.OUTLET and pick is None
-                   and root_id not in inline_fan_roots
-                   and root_id not in discharge_roots and root_id not in box_ids)
+        # Taps at a supply outlet follow Le only (Colin, 2026-11-11): inside Le
+        # priced as an elbow on a run through the tap (NOTE; WARNING under
+        # 0.5 Le), past Le nothing. The 3 D outlet tap rule (2026-11-09) is
+        # gone; it contradicted Le.
         tap_warned = False
-        if tap_out and role not in ('drop', 'tap_turn'):
-            if taps_in:
-                t_role, t_l, t_id = 'takeoff', taps_in[0][1], taps_in[0][0]
-                t_ducts = [(taps_in[0][2], 0.0)]
-            elif role is None:
-                # nothing inside Le: walked on (still stopping at an elbow)
-                t_ducts = []
-                t_role, t_l, t_id, _tn = _fse_first_disruption(
-                    root_id, first, fan_system_effect.OUTLET_TAP_WALK_FT, where,
-                    ducts=t_ducts, l0=curb_ft)
-            else:
-                t_role, t_l, t_id, t_ducts = role, l_ft, did, grp_ducts
-            if t_role in fan_system_effect.TAP_ROLES and t_ducts:
-                t_main = _duct_conn(dr_by_int_id.get(t_ducts[-1][0]))
-                t_de = fan_system_effect.equivalent_diameter_in(t_main)
-                t_need = fan_system_effect.outlet_tap_ft(t_de) if t_de else 0.0
-                fan_system_effect.log.info(
-                    'supply outlet tap check: %s, %s %s at %.2f ft on duct %s, De %s in., '
-                    '3 D %.2f ft', where, t_role, t_id, t_l, t_ducts[-1][0], t_de, t_need)
-                if t_de and t_l < t_need - 1e-9:
-                    notes.append(('warn', fan_system_effect.outlet_tap_text(
-                        _FSE_KIND_TEXT.get(t_role, t_role), t_id, where, t_l, t_need,
-                        '%.0f D, De %.1f in.' % (fan_system_effect.OUTLET_TAP_D, t_de),
-                        curb_ft, priced=bool(taps_in),
-                        past_le=(win if (not taps_in and role is None
-                                         and t_l >= win - 1e-9) else None))))
-                    tap_warned = role is not None or bool(taps_in)
         def _price_at(rec, notes, did, l_ft, kind='elbow', insert_vel=True):
             """Price the fan system effect at did, L l_ft from the unit, into
             rec: an elbow, or a tap acting as one (kind 'tap', Colin

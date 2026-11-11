@@ -3203,61 +3203,29 @@ def _run83(tap_at, fan=None, elbow_first=False, msize=12.0, **kw):
 
 
 def _tw83(leaf):
-    return [t for k, t in leaf.get('fse_notes', ()) if k == 'warn'
-            and FSE.OUTLET_TAP_MARK in t]
+    return [t for k, t in leaf.get('fse_notes', ()) if k == 'warn' and 'Tap 4802' in t]
 
 
+# Taps at a supply outlet follow Le only (Colin, 2026-11-11); the 3 D outlet
+# tap WARNING is gone. Le 3.8 ft here, 0.5 Le 1.9 ft.
 _t83 = _run83(2.0)
-check("case83 tap at 2.0 ft on a 12x12 main (3 D 3.3 ft): the WARNING, De, exact text",
-      _tw83(_t83) == ['WARNING: Tap 4802 is 2.0 ft from the supply outlet; recommended: at least '
-                      '3.3 ft of straight duct to the first tap (3 D, De 13.1 in.). A tap this '
-                      'close to the fan acts like an elbow at the outlet; it is priced as an '
-                      'elbow on a run that leaves through it; a run that continues on the main '
-                      'passes it; the engineer has final say where space does not allow.']
-      and not _t83.get('fse_red_ids')
-      and not any(t.startswith('WARNING: tap 4802,') for t in _notes(_t83)),
+check("case83 tap at 2.0 ft inside Le, past 0.5 Le: NOTE only, no WARNING, no 3 D",
+      not _tw83(_t83) and not any('3 D' in t for t in _notes(_t83))
+      and any('tap 4802 at 2.0 ft' in t for t in _notes(_t83)),
       "notes %r" % (_notes(_t83),))
-# A tap past Le but under 3 D (Colin, 2026-11-11, TB-M12C tap 4.7 ft, Le 4.6,
-# 3 D 5.2): the WARNING keeps the 3 D advice but does not say the static is
-# low; past Le the 2001 tables carry no system effect.
-_le83 = None
-for _k, _tx in _run83(2.0).get('fse_notes', ()):
-    if 'no elbow within Le (' in _tx:
-        _le83 = float(_tx.split('no elbow within Le (')[1].split(' ft')[0])
+_t83c = _run83(1.0)
+check("case83 tap at 1.0 ft under 0.5 Le: the 0.5 Le WARNING, one only",
+      len(_tw83(_t83c)) == 1 and 'under 0.5 Le' in _tw83(_t83c)[0],
+      "notes %r" % (_notes(_t83c),))
 _t83p = _run83(4.5, msize=20.0)
-check("case83 tap at 4.5 ft on a 20x20 main, past Le 3.8 / under 3 D 5.5: WARNING says past Le, no system effect, not 'static low'",
-      _le83 is not None and _le83 < 4.5
-      and len(_tw83(_t83p)) == 1 and 'it is past Le' in _tw83(_t83p)[0]
-      and 'carry no system effect' in _tw83(_t83p)[0]
-      and 'shown is low' not in _tw83(_t83p)[0] and 'priced as an' not in _tw83(_t83p)[0],
-      "Le %r notes %r" % (_le83, _notes(_t83p),))
-_t83f = _run83(3.4)
-check("case83 tap at 3.4 ft: past 3 De, no WARNING (the wide collar is not D)",
-      not _tw83(_t83f), "notes %r" % (_notes(_t83f),))
-_t83c = _run83(2.2, fan=_curb(14))
-check("case83 tap at 2.2 ft + 14 in. curb (3.37 ft): past 3 De, no WARNING",
-      not _tw83(_t83c) and _tw83(_run83(2.2)), "notes %r" % (_notes(_t83c),))
-_t83k = _run83(1.0, fan=_curb(14))
-check("case83 tap at 1.0 ft + 14 in. curb: the WARNING gives one total length, curb included",
-      len(_tw83(_t83k)) == 1 and _tw83(_t83k)[0].startswith(
-          'WARNING: Tap 4802 is 2.2 ft from the supply outlet, 14 in. roof curb included; '
-          'recommended: at least 3.3 ft of straight duct to the first tap (3 D, De 13.1 in.). '),
-      "notes %r" % (_notes(_t83k),))
-_t83l = _run83(0.5, elbow_first=True)
-check("case83 a tap past the first elbow: not this check", not _tw83(_t83l),
-      "notes %r" % (_notes(_t83l),))
-_t83e = _run83(2.0, inline_fan_roots={4800})
-_t83b = _run83(2.0, vav_box_ids={4800})
-check("case83 exhaust fan and VAV box roots: no supply outlet tap WARNING",
-      not _tw83(_t83e) and not _tw83(_t83b),
-      "exh %r box %r" % (_notes(_t83e), _notes(_t83b)))
-_t83o = _run83(2.0, fan=dict(FSE_ON, on=False))
-check("case83 fan system effect unticked: the WARNING still prints (a straight duct check)",
-      len(_tw83(_t83o)) == 1, "notes %r" % (_notes(_t83o),))
-check("case83 METHOD line", "A tap within 3 D of a cabinet unit's supply outlet is a WARNING "
-      '(D the De of the main it sits on, the walk stopping at the first elbow); inside Le '
-      'the tap is priced as an elbow on a run through it, past Le the 2001 tables carry no '
-      'system effect.' in FSE.method_lines(FSE_ON)[0])
+check("case83 tap at 4.5 ft past Le: no tap WARNING and no tap NOTE",
+      not _tw83(_t83p) and not any('tap 4802' in t for t in _notes(_t83p)),
+      "notes %r" % (_notes(_t83p),))
+_t83e = _run83(1.0, inline_fan_roots={4800})
+check("case83 METHOD line: taps follow Le, no 3 D",
+      "A tap inside Le of a supply outlet is priced as an elbow on a run through it; past "
+      "Le the 2001 tables carry no system effect." in FSE.method_lines(FSE_ON)[0]
+      and '3 D of a cabinet' not in FSE.method_lines(FSE_ON)[0])
 
 # 79: taps never reduce the system (Colin, 2026-11-09). A return round shoe
 #     tap on a 12 in. round main (ED5-2 stands in, no shoe table on a round
