@@ -422,6 +422,16 @@ class TestJunctionLookups(unittest.TestCase):
         self.assertTrue(any('this split is Qb/Qc 0.80' in n and 'converted at Qb/Qc 0.5' in n
                             for n in notes), notes)
 
+    def test_mitered_45_reads_cr3_6_with_float_noise(self):
+        # Revit can read a 45 deg elbow as 45.0000001 (Colin, 2026-11-11,
+        # TB-M18C): it is still CR3-6, never the vaned CR3-9.
+        c45, lab45, _n = self.af.rect_mitered_elbow_c(0.6, 45.0)
+        cn, labn, _n = self.af.rect_mitered_elbow_c(0.6, 45.0000001)
+        self.assertTrue(lab45.startswith('CR3-6') and labn.startswith('CR3-6'), (lab45, labn))
+        self.assertAlmostEqual(c45, cn, places=9)
+        _c, lab60, _n = self.af.rect_mitered_elbow_c(0.6, 60.0)
+        self.assertTrue(lab60.startswith('CR3-9'), lab60)
+
     def test_printed_geometry_note(self):
         # Review 2026-11-11: ER5-3 is printed for Ab/Ac 0.5 and As = Ac and
         # stays read there (Colin 2026-10-23); a real ratio more than 0.05

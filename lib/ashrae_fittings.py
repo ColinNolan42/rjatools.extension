@@ -264,10 +264,17 @@ def rect_smooth_elbow_c(r_over_w, h_over_w, angle_deg):
     return cp * k, label, notes + n2
 
 
+ANGLE_TOL_DEG = 0.5    # an angle this close to a table break reads as the break
+
+
 def rect_mitered_elbow_c(h_over_w, angle_deg):
     """Rect mitered elbow. Up to 45 deg, no vanes: CR3-6 by angle and H/W.
     Above 45 deg (and an unreadable angle), single thickness vanes: CR3-9."""
-    if angle_deg is not None and float(angle_deg) <= MITERED_NO_VANES_MAX_DEG:
+    # A 45 deg elbow read as 45.0000001 in Revit is still 45 (Colin,
+    # 2026-11-11, TB-M18C: two of four 45 deg elbows read CR3-9).
+    if (angle_deg is not None
+            and float(angle_deg) <= MITERED_NO_VANES_MAX_DEG + ANGLE_TOL_DEG):
+        angle_deg = min(float(angle_deg), MITERED_NO_VANES_MAX_DEG)
         c, notes = lookup('CR3-6', float(angle_deg), float(h_over_w))
         return c, 'CR3-6 no vanes, %.0f deg, H/W %.2f' % (float(angle_deg),
                                                          float(h_over_w)), notes
