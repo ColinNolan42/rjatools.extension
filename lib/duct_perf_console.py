@@ -267,11 +267,11 @@ def mark_lines(marks, one='diffuser/grille'):
     if 'R' in marks:
         lines.append('(R): Most restrictive {}. It ends the index run that sets '
                      'the required external static pressure for its equipment '
-                     'or system.'.format(one))
+                     'or system; that run is drawn with a bold outline.'.format(one))
     if 'R1' in marks:
         lines.append('(R1): Most restrictive {}. It ends the index run that sets '
                      'the required external static pressure for its equipment '
-                     'or system.'.format(one))
+                     'or system; that run is drawn with a bold outline.'.format(one))
     for m in sorted((m for m in marks if m not in ('R', 'R1')),
                     key=lambda s: int(s[1:])):
         lines.append('({}): {} most restrictive {}, the ranked run shown in the '

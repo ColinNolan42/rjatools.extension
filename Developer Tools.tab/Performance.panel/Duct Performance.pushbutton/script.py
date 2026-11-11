@@ -2294,6 +2294,7 @@ def _pick_unit(scope, scope_label):
                                                         eid_int(elem.Id)))
     return elem
 
+MR_LINE_WEIGHT = 8   # projection line weight of the most restrictive run (1 to 16)
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
 
 
@@ -8125,13 +8126,42 @@ def main():
             doc.Regenerate()
 
         ogs_by_label = {}
+        ogs_bold_by_label = {}
         for lbl_key, color in _COLOR_MAP.items():
-            ogs = OverrideGraphicSettings()
-            ogs.SetSurfaceForegroundPatternColor(color)
-            if fill_id != ElementId.InvalidElementId:
-                ogs.SetSurfaceForegroundPatternId(fill_id)
-            ogs.SetProjectionLineColor(color)
-            ogs_by_label[lbl_key] = ogs
+            for bold in (False, True):
+                ogs = OverrideGraphicSettings()
+                ogs.SetSurfaceForegroundPatternColor(color)
+                if fill_id != ElementId.InvalidElementId:
+                    ogs.SetSurfaceForegroundPatternId(fill_id)
+                ogs.SetProjectionLineColor(color)
+                if bold:
+                    try:
+                        ogs.SetProjectionLineWeight(MR_LINE_WEIGHT)
+                    except Exception as ex:
+                        hvac_graph.log.warning('bold run: line weight %s NOT SET: %s',
+                                               MR_LINE_WEIGHT, ex)
+                (ogs_bold_by_label if bold else ogs_by_label)[lbl_key] = ogs
+
+        # The most restrictive run, unit to its (R) / (R1) terminal, drawn with
+        # a bold outline so its routing can be followed (Colin, 2026-11-11).
+        _key_of = dict((eid_int(k), k) for k in elem_labels)
+        _up = {}
+        for _p, _cs in all_children.items():
+            for _c in _cs:
+                _up.setdefault(_c, _p)
+        bold_ids = set()
+        for _tid, _mk in restrictive_terminal_ids.items():
+            if _mk not in ('R', 'R1'):
+                continue
+            _n, _guard = _tid, 0
+            while _n is not None and _guard < 5000:
+                if _n in _key_of:
+                    bold_ids.add(_key_of[_n])
+                if _n in all_root_ids:
+                    break
+                _n, _guard = _up.get(_n), _guard + 1
+        hvac_graph.log.info('bold run: %d elements on the most restrictive run(s)',
+                            len(bold_ids))
 
         # A marker is only placed in the plan for the level its element is
         # on, so a main level duct never gets a circle drawn on the roof plan.
@@ -8221,7 +8251,8 @@ def main():
                 mark_off_ft = (5.0 / (64.0 * 12.0)) * float(getattr(new_view, 'Scale', 48)) * 2.0
 
             for oid, lbl_key in elem_labels.items():
-                new_view.SetElementOverrides(oid, ogs_by_label[lbl_key])
+                new_view.SetElementOverrides(
+                    oid, (ogs_bold_by_label if oid in bold_ids else ogs_by_label)[lbl_key])
 
             # Numbered callouts, one sequence across every level so circle 3
             # is row 3 of the schedule whichever sheet it is on.
