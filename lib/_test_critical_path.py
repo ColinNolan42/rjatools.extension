@@ -1206,6 +1206,15 @@ def _fse_run(nodes, children, ducts, terms, root, fan=FSE_ON, cls='Supply Air', 
     return r.get(root, {}).get(cls, {})
 
 
+def _none_only(leaf):
+    """No fan system effect priced: every FSE row is a 'none' row (it may
+    still carry the straight duct inside the window, Colin 2026-11-11), and
+    fse_inwc is their sum."""
+    rows = _fse_items(leaf)
+    return (bool(rows) and all(i[0] == 'Fan system effect (none)' for i in rows)
+            and abs((leaf.get('fse_inwc') or 0.0) - sum(i[3] or 0.0 for i in rows)) < 1e-12)
+
+
 def _fse_basis(leaf):
     """Every basis string of a run's fan system effect rows, joined."""
     return ' | '.join('%s %s' % (i[1], i[4]) for i in _fse_items(leaf))
@@ -1227,18 +1236,26 @@ d31 = build([(901, 0.10, 20.0, 1000.0, 4.0, 'Supply Air')])
 t31 = {910: (4000.0, 'Supply Air', 'SD-31')}
 on31 = _fse_run(n31, c31, d31, t31, 900)
 off31 = _fse_run(n31, c31, d31, t31, 900, fan=None)
-check("case31 straight 20 ft from the outlet (Le 5.71 ft): fse 0, total as with it off",
-      on31.get('fse_inwc') == 0.0
+check("case31 straight 20 ft from the outlet (Le 5.71 ft): nothing priced, total as with it off",
+      _none_only(on31)
       and abs(on31['total_inwc'] - off31['total_inwc']) < 1e-12,
       "on %r off %r" % (on31.get('total_inwc'), off31.get('total_inwc')))
 # Outlet and inlet always read apart (Colin, 2026-11-05): an unpriced
 # connection still prints its own take-off row at 0.000 with the reason.
 _it31 = _fse_items(on31)
-check("case31 one 0.000 take-off row 'Fan system effect, supply outlet', none: no elbow within Le",
-      len(_it31) == 1 and _it31[0][3] == 0.0
+check("case31 one take-off row 'Fan system effect, supply outlet', none: no elbow within Le",
+      len(_it31) == 1
       and _it31[0][4][0] == 'Fan system effect, supply outlet'
       and _it31[0][4][1].startswith('none: no elbow within Le (5.8 ft)'),
       "items %r" % (_it31,))
+# The straight duct inside Le sits on that row at its own losses (Colin,
+# 2026-11-11): 5.71 of the 20 ft duct's 0.100 in. wc, the rest on its own row.
+_d31 = [i for i in on31.get('items', ()) if i[0] == 'Duct 901']
+check("case31 the row carries the duct share inside Le (5.71 / 20 x 0.100), the duct row the rest",
+      abs(_it31[0][3] - 0.1 * 5.714285714 / 20.0) < 1e-6
+      and 'duct losses: straight duct inside Le' in _it31[0][4][1]
+      and len(_d31) == 1 and abs(_d31[0][3] + _it31[0][3] - 0.1) < 1e-9,
+      "items %r duct %r" % (_it31, _d31))
 check("case31 fan system effect off: no fan system effect row at all",
       not _fse_items(off31), "items %r" % (_fse_items(off31),))
 
@@ -1377,7 +1394,7 @@ t34b = {990: (1000.0, 'Supply Air', 'SD-a'), 991: (3000.0, 'Supply Air', 'SD-b')
 sa34b = _fse_run(n34b, c34b, d34b, t34b, 980, keep_runs=True)
 _r34b = dict((r['terminal_id'], r) for r in sa34b.get('runs', ()))
 check("case34 tap 3 ft along the continuing outlet duct: the run that continues passes it, no elbow inside Le (2026-11-11)",
-      _r34b.get(991, {}).get('fse_inwc') == 0.0
+      _none_only(_r34b.get(991, {}))
       and any(k == 'note' and t.startswith('NOTE: the main at the supply outlet has taps inside')
               and 'tap 982 at 3.0 ft' in t and 'no elbow inside Le' in t
               for k, t in sa34b.get('fse_notes', ()))
@@ -1737,7 +1754,7 @@ d47 = build([(1602, 0.0, 10.0, 2000.0, 4.0, 'Supply Air'),
 t47 = {1620: (8000.0, 'Supply Air', 'SD-elbow'), 1621: (4000.0, 'Supply Air', 'SD-long')}
 sa47 = _fse_run(n47, c47, d47, t47, 1600)
 check("case47 the worst path is the plain outlet: no FSE in its total",
-      sa47.get('terminal_name') == 'SD-long' and sa47.get('fse_inwc') == 0.0,
+      sa47.get('terminal_name') == 'SD-long' and _none_only(sa47),
       "terminal %r fse %r" % (sa47.get('terminal_name'), sa47.get('fse_inwc')))
 _g47 = [t for k, t in sa47.get('fse_notes', ()) if k == 'gray']
 check("case47 the other outlet's GRAY is still reported, once, named by element",
@@ -2845,7 +2862,7 @@ _FSE77 = dict(FSE_ON, velocity_basis='default', fan_fpm=2000.0)   # 2000 over 10
 _none77 = _fse_run(n31, c31, d31, t31, 900, fan=_FSE77)
 _elb77 = _fse_run(n32, c32, d32, t32, 920, fan=_FSE77)
 check("case77 nothing priced (no elbow within Le): no fan velocity NOTE",
-      _none77.get('fse_inwc') == 0.0 and not _vel_notes(_none77),
+      _none_only(_none77) and not _vel_notes(_none77),
       "notes %r" % (_none77.get('fse_notes'),))
 check("case77 nothing priced: the no fan system effect NOTE is said instead, once",
       [t for _k, t in _none77.get('fse_notes', ())
@@ -2956,7 +2973,7 @@ _vn80 = [t for _k, t in ef80.get('fse_notes', ()) if 'priced at the default fan 
 check("case80 inline exhaust fan inlet elbow at L/D 2: priced at Pv(2000 fpm)",
       any(abs((i[2] or 0) - 2000.0) < 1e-6 for i in _rows80)
       and abs(ef80.get('fse_inwc', 0.0) -
-              max(i[3] for i in _rows80)) < 1e-12,
+              sum(i[3] for i in _rows80)) < 1e-12,
       "rows %r fse %r" % (_rows80, ef80.get('fse_inwc')))
 check("case80 inline exhaust fan inlet: the fan velocity NOTE, 2000 fpm over 500 fpm",
       len(_vn80) == 1 and _vn80[0] == 'NOTE: fan system effect at the exhaust inlet at '

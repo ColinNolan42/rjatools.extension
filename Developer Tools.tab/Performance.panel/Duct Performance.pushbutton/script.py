@@ -4368,6 +4368,28 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (
                 win_short, fan_system_effect._ceil_step(win))
+            # The straight duct and any transition inside the window still
+            # sit on the fan system effect row, at their own losses (Colin,
+            # 2026-11-11), as they do when an elbow is priced.
+            # What lies inside the window: a duct running past it moves only
+            # its share inside the window (friction pro rata on length); the
+            # rest stays on its own row.
+            _gd, _frac = set(), {}
+            for _d, _at in grp_ducts:
+                _dr = dr_by_int_id.get(_d)
+                _len = float(getattr(_dr, 'length_ft', 0.0) or 0.0)
+                if _dr is None or _at >= win - 1e-6:
+                    break
+                _gd.add(_d)
+                if _len > 1e-9 and _at + _len > win + 1e-6:
+                    _frac[_d] = (win - _at) / _len
+                    break
+            _gt = set(_t for _t, _at in passed.items() if _gd and _at < win)
+            rec['group'] = _gd | _gt
+            rec['group_frac'] = _frac
+            rec['win_short'] = win_short
+            rec['none_group'] = bool(_gd)
+            rec['none_trans'] = bool(_gt)
             # Said in place of the fan velocity NOTE (Colin, 2026-11-09).
             notes.append(('note', fan_system_effect.no_effect_text(where, rec['none'])))
             return _tap_subs(rec)
@@ -4433,6 +4455,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         rec['boost'] = {}
         rec['assumptions'] = []
         rec['none'] = None
+        rec['none_group'] = False
         rec['notes'] = [n for n in rec['notes'] if n[0] == 'red' or (
             n[0] == 'warn' and fan_system_effect.is_check_warning(n[1]))]
         return rec
@@ -4688,6 +4711,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         effect: <table>' or 'Duct losses: straight duct and elbow (<table>),
         L / Le' with C '-'. 'fse charged' is that row's value, so the
         subtotal is the same either way. The NOTE says which governed."""
+        if (rec is not None and rec.get('item') is None and rec.get('none_group')
+                and rec.get('where_item') and rec.get('none')):
+            return _none_group(rec, its)
         if rec is None or rec.get('item') is None or not rec.get('group'):
             item = (rec or {}).get('item')
             if item is None and rec and rec.get('none') and rec.get('where_item'):
@@ -4745,6 +4771,45 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 item[1], _group_words(gov), group)
         item = (item[0], detail, item[2], charged, row)
         return its, charged, g_fric, g_fit, item, note
+
+    def _none_group(rec, its):
+        """No fan system effect at a connection, but the straight duct (and any
+        transition) inside the window is listed on the fan system effect row at
+        its own losses, its own rows at 0.000 'in the fan system effect'
+        (Colin, 2026-11-11). Same return as _fse_group_max."""
+        g_fric, g_fit, hits, parts = 0.0, 0.0, [], {}
+        frac = rec.get('group_frac') or {}
+        for i, it in enumerate(its):
+            m = _GROUP_ITEM.match(it[0])
+            if m is None or int(m.group(2)) not in rec['group']:
+                continue
+            f = frac.get(int(m.group(2)))
+            if f is not None and m.group(1).lower() == 'duct':
+                share = (it[3] or 0.0) * f
+                g_fric += share
+                parts[i] = share
+                continue
+            hits.append(i)
+            if m.group(1).lower() == 'duct':
+                g_fric += it[3] or 0.0
+            else:
+                g_fit += it[3] or 0.0
+        words = ('straight duct and transition' if rec.get('none_trans') and g_fit
+                 else 'straight duct')
+        name = 'Fan system effect, ' + rec['where_item']
+        if not hits and not parts:
+            return its, 0.0, 0.0, 0.0, ('Fan system effect (none)', rec['none'], None, 0.0,
+                                        (name, 'none: ' + rec['none'], None, None)), None
+        group = g_fric + g_fit
+        its = tuple(_in_group(it) if i in hits
+                    else (it[0], it[1], it[2], (it[3] or 0.0) - parts[i], it[4]) if i in parts
+                    else it for i, it in enumerate(its))
+        if parts:
+            words += ' inside %s' % rec.get('win_short', 'the window')
+        basis = 'none: %s; duct losses: %s' % (rec['none'], words)
+        item = ('Fan system effect (none)', '%s at own losses (%.4f in. wc)' % (basis, group),
+                None, group, (name, basis, None, None))
+        return its, group, g_fric, g_fit, item, None
 
     def _in_group(it):
         """A group item listed at 0.000, its basis marked as in the fan system
@@ -5119,7 +5184,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     n_f += dis_here['n_fit']
                     len_l += dis_here['feet']
                     unpriced_l = unpriced_l + dis_here['unpriced']
-                    if _drec is not None and _drec['loss']:
+                    if _drec is not None and (_drec['loss'] or _drec.get('none_group')):
                         fse_loss += _dl
                     if _drec is not None and _ditem is not None:
                         fse_items = fse_items + (_ditem,)
