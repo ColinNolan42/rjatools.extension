@@ -181,6 +181,9 @@ hvac_graph.elbow_geometry          = _elbow_geometry
 hvac_graph.elbow_turn_normal       = _elbow_turn_normal
 hvac_graph.transition_geometry     = _transition_geometry
 hvac_graph.tap_positions_ft        = _tap_positions_ft
+# A tap joined at a duct's end: the mock says so for a duct tap that has no
+# position on it (Elem.end_taps lists them; 2026-11-11).
+hvac_graph.tap_joins_duct_end      = lambda duct, tid: tid in getattr(duct, 'end_taps', ())
 hvac_graph.connector_areas_ft2     = _connector_areas_ft2
 hvac_graph.transition_areas        = _transition_areas
 hvac_graph.velocity_pressure_inwg  = _velocity_pressure_inwg
@@ -3451,6 +3454,8 @@ d88 = build([(8801, 0.0, 0.5, 750.0, 4.0, 'Supply Air'),
              (8806, 0.0, 20.0, 750.0, 4.0, 'Supply Air')])
 for _k in (8801, 8803, 8806):
     d88[EID(_k)].size = '24x24"'
+n88[8801] = Elem(kind='duct')
+n88[8801].end_taps = (8802,)
 sa88 = _fse_run(n88, c88, d88, {8820: (3000.0, 'Supply Air', 'SD-1')}, 8800)
 _n88 = sa88.get('fse_notes', ())
 check("case88 the tap the air turns through is priced as an elbow",
@@ -3482,6 +3487,40 @@ sa89 = _fse_run(n89, c89, d89, {8820: (1500.0, 'Supply Air', 'SD-1'),
 check("case89 a tee into a main running both ways: priced as the turn it is (tap at 0.5 ft)",
       sa89.get('fse_inwc', 0.0) > 0.0,
       "fse %r notes %r" % (sa89.get('fse_inwc'), sa89.get('fse_notes')))
+
+# 90: review 2026-11-11. A tee into a main that also has a branch tap of its
+#     own downstream: the main's own tap is not a second way on, so the
+#     straight duct check still reaches the elbow past the tee.
+n90 = dict(n88)
+n90[8803] = Elem(kind='duct', tap_pos={8802: 0.9, 8808: 0.5})
+n90[8808] = Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False)
+c90 = dict(c88)
+c90[8803] = [8804, 8805, 8808]
+c90[8808] = [8809]
+c90[8809] = [8821]
+d90 = dict(d88)
+d90.update(build([(8809, 0.0, 10.0, 375.0, 2.0, 'Supply Air')]))
+sa90 = _fse_run(n90, c90, d90, {8820: (1500.0, 'Supply Air', 'SD-1'),
+                                8821: (1500.0, 'Supply Air', 'SD-2')}, 8800)
+check("case90 the main's own tap is not a split: elbow 8804 past the tee still RED",
+      8804 in (sa90.get('fse_red_ids') or set()),
+      "red %r notes %r" % (sa90.get('fse_red_ids'), sa90.get('fse_notes')))
+
+# 91: review 2026-11-11. A hosted tap whose position cannot be read is NOT
+#     taken as joined at the duct end: a single tap off a capped duct stays a
+#     drop, not a turn.
+n91 = {9100: _unit({9101: SQ24}), 9101: Elem(kind='duct'),
+       9102: Elem(kind='tap', family_name='Rectangular Tap - Beveled', is_round=False),
+       9109: Elem(kind='cap', family_name='Rectangular Endcap', is_round=False)}
+c91 = {9100: [9101], 9101: [9102, 9109], 9102: [9110], 9110: [9120]}
+d91 = build([(9101, 0.0, 3.0, 750.0, 4.0, 'Supply Air'),
+             (9110, 0.0, 10.0, 750.0, 4.0, 'Supply Air')])
+sa91 = _fse_run(n91, c91, d91, {9120: (3000.0, 'Supply Air', 'SD-1')}, 9100)
+check("case91 a hosted tap with no readable position: still a drop, no 'turns through it' NOTE",
+      any(t.startswith('NOTE: duct 9101 at the supply outlet is a drop')
+          for k, t in sa91.get('fse_notes', ()))
+      and not any('turns through it' in t for k, t in sa91.get('fse_notes', ())),
+      "notes %r" % (sa91.get('fse_notes'),))
 
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)

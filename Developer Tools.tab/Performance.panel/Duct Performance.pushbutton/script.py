@@ -3416,7 +3416,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 if _is_tap_node(prev):
                     # Entered through a tap on its side: on along the main
                     # the way the air goes, a capped leg skipped.
-                    live = [c for c in kids if not _is_endcap_node(c)]
+                    own = set(_taps(nid))
+                    live = [c for c in kids if c not in own and not _is_endcap_node(c)]
+                    if not live:
+                        return None, l_ft, None, notes   # all of it leaves through taps
                     if len(live) != 1:
                         return 'split', l_ft, nid, notes
                     try:
@@ -3438,7 +3441,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         pos = hvac_graph.tap_positions_ft(elem, prev)
                     except Exception:
                         pos = {}
-                if (taps and len(taps) == 1 and taps[0] not in pos
+                end_tap = ([tp for tp in taps if hvac_graph.tap_joins_duct_end(elem, tp)]
+                           if taps and elem is not None else [])
+                if (end_tap
                         and (drop is not None or tap_log is not None or through_taps
                              or collect is not None)
                         and not [c for c in kids if c not in taps
@@ -3447,7 +3452,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     # duct runs into it (the unit duct tees into a main,
                     # Colin 2026-11-11). Walked as a fitting on the run.
                     l_ft += float(dr.length_ft or 0.0)
-                    prev, nid = nid, taps[0]
+                    prev, nid = nid, end_tap[0]
                     continue
                 if taps:
                     if all(t in pos for t in taps):
@@ -4021,10 +4026,21 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if taps_in and not tap_warned:
             # A tap off a continuing main inside the window, walked past
             # (Colin, 2026-11-11): its own system effect is not priced.
+            if role == 'elbow':
+                _stop = None
+            elif role == 'drop':
+                _stop = 'priced per tap off drop %s' % did
+            elif role == 'tap_turn':
+                _stop = 'priced at tap %s as an elbow' % did
+            elif role is None:
+                _stop = 'not priced, no elbow inside %s' % win_short
+            else:
+                _stop = 'not priced, %s %s inside %s' % (
+                    _FSE_KIND_TEXT.get(role, role), did, win_short)
             notes.append(('warn', fan_system_effect.tap_passed_text(
                 where, taps_in[0][0], taps_in[0][1], win, win_short,
                 did if role == 'elbow' else None, l_ft if role == 'elbow' else None,
-                curb_ft)))
+                curb_ft, stop=_stop)))
         if role is None:
             rec['none'] = 'no elbow within %s (%.1f ft)' % (
                 win_short, fan_system_effect._ceil_step(win))
@@ -4869,6 +4885,12 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 n_d, n_f, len_l, unpriced_l = dcount, fcount, dlen, unpriced
                 if dis_here is not None:
                     _drec = fse_recs.get(dis_here['first'])
+                    if _drec is not None and _drec.get('by_tap'):
+                        _dnames = set(_it[0] for _it in dis_here['items'])
+                        for _t, _sub in _drec['by_tap'].items():
+                            if 'Fitting {}'.format(_t) in _dnames:
+                                _drec = _sub
+                                break
                     dis_items, _dl, _dfr, _dft, _ditem, _dnote = _fse_group_max(
                         _drec, dis_here['items'])
                     if _dnote:

@@ -885,11 +885,13 @@ TAP_CLOSE_PREFIX = 'WARNING: Tap '
 
 
 def tap_passed_text(where, tid, l_ft, win_ft, win_short, eid=None, l_e=None,
-                    curb_ft=0.0):
+                    curb_ft=0.0, stop=None):
     """The WARNING for a tap off a continuing main inside the window: walked
     past, the fan system effect priced at the first elbow (eid at l_e), or
     none when no elbow is inside the window."""
-    if eid is not None:
+    if stop:
+        at = stop
+    elif eid is not None:
         at = 'priced at elbow %s (%s)' % (eid, l_text(l_e, curb_ft, unit=True))
     else:
         at = 'not priced, no elbow inside %s' % win_short

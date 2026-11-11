@@ -1179,6 +1179,29 @@ def tap_positions_ft(duct, from_id):
     return out
 
 
+def tap_joins_duct_end(duct, tap_id):
+    """Is tap tap_id joined at one of the duct's END connectors (the duct
+    runs into the tap, as a unit duct teed into the side of a main), rather
+    than hosted on its side through a Curve connector? Colin, 2026-11-11.
+    False when the connectors cannot be read (logged)."""
+    try:
+        conns = list(duct.ConnectorManager.Connectors)
+    except Exception as ex:
+        log.info('tap_joins_duct_end: duct connectors NOT FOUND (%s)', ex)
+        return False
+    for c in conns:
+        try:
+            if c.ConnectorType != ConnectorType.End:
+                continue
+            for r in c.AllRefs:
+                o = r.Owner
+                if o is not None and eid_int(o.Id) == tap_id:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def takeoff_child_ids(node_id, nodes, children):
     """Child node ids of `node_id` that are take-off / tap fittings.
 
