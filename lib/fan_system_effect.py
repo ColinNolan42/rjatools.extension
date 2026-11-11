@@ -910,7 +910,7 @@ def drop_text(where, duct_id, taps, curb_ft=0.0):
                       for t, l in taps)
     return ('NOTE: duct %s at the %s is a drop (capped, no turn): each tap off it acts as '
             "an elbow for the fan system effect, priced per run at the tap's distance "
-            'from the unit (%s); %s.' % (duct_id, curb_where(where, curb_ft), named,
+            'from the unit (%s); %s.' % (duct_id, where, named,
                                          TAP_AS_ELBOW_CAVEAT))
 
 
