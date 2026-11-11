@@ -329,11 +329,11 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1500 fpm Exhaust System and Indoor System, 2000 fpm Rooftop Unit, VAV System and VAV Box."/>
+                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1000 fpm Exhaust System, 1500 fpm Rooftop Unit, VAV System, VAV Box and Indoor System."/>
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Set by the Scope: 1500 fpm Exhaust System and Indoor System, 2000 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
+                                       Text="Set by the Scope: 1000 fpm Exhaust System, 1500 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
                             <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
@@ -966,8 +966,8 @@ def _show_velocity_settings_xaml(use_theme):
                               'elbow are charged once, the larger of the fan system '
                               'effect and their own losses. Velocity at an outlet, '
                               'and at an inline or roof exhaust fan inlet: the larger '
-                              'of the fan velocity (default by the Scope, 1500 fpm '
-                              'Exhaust System and Indoor System, 2000 fpm otherwise) '
+                              'of the fan velocity (default by the Scope, 1000 fpm '
+                              'Exhaust System, 1500 fpm otherwise) '
                               'and the connection '
                               'velocity; at a cabinet unit inlet (RTU, AHU, furnace, '
                               'fan coil) the connection velocity, the fan sits past '
@@ -1052,9 +1052,9 @@ def _show_velocity_settings_xaml(use_theme):
     sync_enable()
 
     # Fan type, fan velocity and roof curb follow the Scope (Colin,
-    # 2026-11-03 and 2026-11-09): RTU and VAV System DWDI at 2000 fpm with
-    # the curb on, Indoor System DWDI at 1500 fpm, Exhaust System SWSI at
-    # 1500 fpm, the curb off and greyed out on Indoor System, VAV Box and Exhaust
+    # 2026-11-03, 2026-11-09 and 2026-11-11): RTU and VAV System DWDI at 1500
+    # fpm with the curb on, Indoor System DWDI at 1500 fpm, Exhaust System SWSI
+    # at 1000 fpm, the curb off and greyed out on Indoor System, VAV Box and Exhaust
     # System. Set only when the Scope changes, so a value typed after the
     # switch holds for the run.
     def _dialog_scope():

@@ -257,23 +257,23 @@ class SettingsTest(unittest.TestCase):
     def test_defaults(self):
         d = F.default_settings()
         self.assertEqual(d, {'on': True, 'fan_type': 'DWDI', 'blast_ratio': 0.5,
-                             'velocity_basis': 'default', 'fan_fpm': 2000.0})
+                             'velocity_basis': 'default', 'fan_fpm': 1500.0})
         self.assertEqual(F.HIGH_LOSS_INWC, 0.5)
         self.assertFalse(hasattr(F, 'HIGH_C'))
         self.assertFalse(hasattr(F, 'RED_C'))
         self.assertFalse(hasattr(F, 'WINDOW_FT'))    # fixed window dropped
 
     def test_scope_fan_velocity(self):
-        # Colin, 2026-11-09: Exhaust System 1500 fpm, every other Scope 2000
-        self.assertEqual(F.scope_fan_fpm('exhaust'), 1500.0)
-        for sc in ('rtu', 'vav', 'vavbox', None):
-            self.assertEqual(F.scope_fan_fpm(sc), 2000.0)
-        self.assertEqual(F.default_settings('exhaust')['fan_fpm'], 1500.0)
-        self.assertEqual(F.default_settings('rtu')['fan_fpm'], 2000.0)
+        # Colin, 2026-11-11: Exhaust System 1000 fpm, every other Scope 1500
+        self.assertEqual(F.scope_fan_fpm('exhaust'), 1000.0)
+        for sc in ('rtu', 'vav', 'vavbox', 'fancoil', None):
+            self.assertEqual(F.scope_fan_fpm(sc), 1500.0)
+        self.assertEqual(F.default_settings('exhaust')['fan_fpm'], 1000.0)
+        self.assertEqual(F.default_settings('rtu')['fan_fpm'], 1500.0)
 
     def test_method_prints_the_fan_velocity_used(self):
         m, _a = F.method_lines(F.default_settings('exhaust'))
-        self.assertIn('the larger of the fan velocity, 1500 fpm, and the connection', m)
+        self.assertIn('the larger of the fan velocity, 1000 fpm, and the connection', m)
         m, _a = F.method_lines(dict(F.default_settings(), fan_fpm=1750.0))
         self.assertIn('the larger of the fan velocity, 1750 fpm, and the connection', m)
         self.assertNotIn('default fan velocity, 2000', m)
@@ -335,7 +335,7 @@ class SettingsTest(unittest.TestCase):
         # Colin, 2026-11-03: no duct pick; 5 D RED and the velocity basis named
         self.assertNotIn('duct pick', m.lower())
         self.assertIn('under 2 H', m)
-        self.assertIn('the larger of the fan velocity, 2000 fpm', m)   # basis missing: default
+        self.assertIn('the larger of the fan velocity, 1500 fpm', m)   # basis missing: default
         m4, _a4 = F.method_lines(dict(F.default_settings(), velocity_basis='connection'))
         self.assertIn('the connection velocity, cfm over the unit connector', m4)
         self.assertNotIn('default fan velocity', m4)
@@ -347,7 +347,7 @@ class VelocityBasisTest(unittest.TestCase):
 
     def test_design_velocity(self):
         d = F.default_settings()
-        self.assertEqual(F.design_velocity(d, 1031.0), (2000.0, True))
+        self.assertEqual(F.design_velocity(d, 1031.0), (1500.0, True))
         self.assertEqual(F.design_velocity(d, 2400.0), (2400.0, False))
         self.assertEqual(F.design_velocity(d, 3000.0), (3000.0, False))
         self.assertEqual(F.design_velocity(dict(d, fan_fpm=800.0), 1031.0), (1031.0, False))
@@ -692,11 +692,11 @@ class DialogTest(unittest.TestCase):
             ns['_scope_fan_type']()
             return (ns['tb_fan_fpm'].Text, ns['rb_fan_swsi'].IsChecked,
                     ns['cb_curb'].IsChecked, ns['cb_curb'].IsEnabled, ns['tb_curb'].Text)
-        self.assertEqual(pick('rb_scope_exhaust'), ('1500', True, False, False, '14'))
+        self.assertEqual(pick('rb_scope_exhaust'), ('1000', True, False, False, '14'))
         self.assertEqual(pick('rb_scope_fancoil'), ('1500', False, False, False, '14'))
-        self.assertEqual(pick('rb_scope_rtu'), ('2000', False, True, True, '14'))
-        self.assertEqual(pick('rb_scope_vav'), ('2000', False, True, True, '14'))
-        self.assertEqual(pick('rb_scope_vavbox'), ('2000', False, False, False, '14'))
+        self.assertEqual(pick('rb_scope_rtu'), ('1500', False, True, True, '14'))
+        self.assertEqual(pick('rb_scope_vav'), ('1500', False, True, True, '14'))
+        self.assertEqual(pick('rb_scope_vavbox'), ('1500', False, False, False, '14'))
         self.assertEqual(ns['_dialog_scope'](), 'vavbox')
         # the plain fallback dialog takes the Scope's fan velocity and curb,
         # Indoor System included

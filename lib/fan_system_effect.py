@@ -81,8 +81,9 @@ RJA DECISIONS (Colin, 2026-11-03):
     the velocity is the LARGER of a default fan velocity (DEFAULT_FAN_FPM)
     and the connection velocity, cfm / the unit connector area. A unit's
     opening is often smaller than the duct it feeds, and the fan discharge
-    faster than the duct. Default 2000 fpm (Colin, 2026-11-03; Greenheck's
-    simulator is fixed at 2500 fpm).
+    faster than the duct. Default by the Scope (Colin, 2026-11-11): 1500 fpm
+    RTU, VAV System, VAV Box and Indoor System, 1000 fpm Exhaust System
+    (2000 fpm from 2026-11-03; Greenheck's simulator is fixed at 2500 fpm).
     'connection': the connection velocity alone. The velocity sets Pv, the
     loss, the GRAY check and the outlet Le. The transitions passed between
     the unit and the first disruption are priced at the same velocity.
@@ -131,8 +132,8 @@ BLAST_RATIO_MIN = 0.4        # the SR7 tables' printed Ab/Ao range
 BLAST_RATIO_MAX = 1.0
 VELOCITY_BASES = ('default', 'connection')
 DEFAULT_VELOCITY_BASIS = 'default'
-DEFAULT_FAN_FPM = 2000.0     # default fan velocity, firm value (Colin, 2026-11-03)
-EXHAUST_FAN_FPM = 1500.0     # Exhaust System Scope default (Colin, 2026-11-09)
+DEFAULT_FAN_FPM = 1500.0     # RTU, VAV System, VAV Box default (Colin, 2026-11-11; 2000 from 2026-11-03)
+EXHAUST_FAN_FPM = 1000.0     # Exhaust System Scope default (Colin, 2026-11-11; 1500 from 2026-11-09)
 FAN_COIL_FAN_FPM = 1500.0    # Indoor System Scope default (key fancoil) (Colin, 2026-11-09)
 DEFAULT_CURB_IN = 14.0       # roof curb counted as straight duct, RTU / VAV System (Colin, 2026-11-09)
 CURB_MAX_IN = 48.0           # dialog cap on the curb height
