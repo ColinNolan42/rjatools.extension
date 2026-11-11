@@ -376,6 +376,36 @@ def _ratio_read_at(t, name, actual):
     return float(actual)
 
 
+GEOMETRY_NOTE_TOL = 0.05     # real ratio this far off a printed condition gets a NOTE
+
+
+def _printed_geometry_notes(key, t, actual):
+    """NOTEs for a table printed for one geometry (ER5-2 and ER5-3: Ab/Ac 0.5,
+    As = Ac) read at a fitting whose real ratio is more than
+    GEOMETRY_NOTE_TOL away from it. The price stays at the printed geometry
+    (Colin, 2026-10-23); the NOTE only says so (review, 2026-11-11).
+    actual: {ratio name: real value or None}."""
+    cond = t.get('conditions') or {}
+    out = []
+    for name in sorted(actual):
+        real = actual[name]
+        if real is None:
+            continue
+        if name in cond:
+            try:
+                printed = float(cond[name])
+            except (TypeError, ValueError):
+                continue
+        elif name == 'As/Ac' and cond.get('As = Ac'):
+            printed = 1.0
+        else:
+            continue
+        if abs(float(real) - printed) > GEOMETRY_NOTE_TOL:
+            out.append('%s is printed for %s %.2f only and is read there; this fitting '
+                       'is %s %.2f' % (key.split('_')[0], name, printed, name, float(real)))
+    return out
+
+
 def _to_common(c, q_ratio, area_ratio):
     """Eq. 34 turned around: the printed C, referenced to its own section,
     re-referenced to the common (main) section velocity pressure.
@@ -408,6 +438,7 @@ def tap_branch_c(is_supply, tap_shape, main_shape, is_45_entry,
     notes = [n for n in notes
              if not (n.startswith(kb + ': Qb/Qc ')
                      and "is above the table's highest value" in n)]
+    notes = notes + _printed_geometry_notes(kb, t, {'Ab/Ac': ab_ac, 'As/Ac': as_ac})
     read_ab = _ratio_read_at(t, 'Ab/Ac', ab_ac)
     q_read = min(max(float(qb_qc), 0.1), 1.0)
     ccb = _to_common(cb, q_read, read_ab)
@@ -434,6 +465,8 @@ def tap_main_c(is_supply, tap_shape, main_shape, is_45_entry,
     cs, notes = _call(ks, t, ratios)
     if cs is None:
         return None, 'no 2001 table for this tap', notes
+    notes = list(notes or []) + _printed_geometry_notes(ks, t, {'As/Ac': as_ac,
+                                                                 'Ab/Ac': ab_ac})
     read_as = _ratio_read_at(t, 'As/Ac', as_ac)
     q_read = min(max(float(qs_qc), 0.1), 1.0)
     ccs = _to_common(cs, q_read, read_as)
@@ -581,8 +614,8 @@ def split_c(is_supply, ab_ac, qb_qc, stands_for=None):
     cc = _to_common(cb, 0.5, read_ab)
     notes = list(notes or [])
     if qb_qc is not None and abs(float(qb_qc) - 0.5) > SPLIT_NOTE_TOL:
-        notes.append('%s is printed at Qb/Qc 0.5 only; this split is Qb/Qc %.2f'
-                     % (key, float(qb_qc)))
+        notes.append('%s is printed at Qb/Qc 0.5 only; this split is Qb/Qc %.2f, '
+                     'Cb read and converted at Qb/Qc 0.5' % (key, float(qb_qc)))
     if stands_for:
         notes.append('%s (symmetrical dovetail wye) stands in for a %s' % (key, stands_for))
     return cc, '%s Ab/Ac %.2f, Qb/Qc 0.50: Cb %.2f, Cc,b %.2f' % (key, read_ab, cb, cc), notes

@@ -3663,6 +3663,104 @@ check("J8 elbow past the tee branch priced at the branch's 600 fpm",
       len(_el8) == 1 and abs(_el8[0][2] - 600.0) < 1e-6,
       "items %r" % (_el8,))
 
+# ── review fixes, 2026-11-11 ────────────────────────────────────────────────
+def _fb(leaf):
+    return [u for u in leaf.get('unpriced', ()) if u.startswith('FALLBACK')]
+
+
+# J9 (items 1, 5b): a rect branch on a round supply main has no 2001 table.
+#     Straight through takes the worksheet tap main C 0.20 (not the branch's
+#     0.98), labelled straight through; into the branch keeps 0.98. The
+#     FALLBACK says why: no 2001 table for that combination.
+#     Common 16 in. round at 1600 cfm.
+L9 = {1: _oleg(16, (-1, 0, 0)), 3: _oleg(14, (1, 0, 0)), 4: _rleg(12, 8, (0, 1, 0))}
+leaf, it, vc = _junction_run('Round Tee', L9, [(3, 1000.0, L9[3]['area_ft2']),
+                                               (4, 600.0, L9[4]['area_ft2'])],
+                             'Supply Air', heavy=3, is_round=True)
+vc9 = 1600.0 / (math.pi * (16.0 / 12.0) ** 2 / 4.0)
+check("J9 no 2001 table, straight through: worksheet C 0.20 x common Pv, 'Tee, straight through'",
+      it is not None and abs(it[3] - 0.20 * pv(vc9)) < 1e-9
+      and it[4][0] == 'Tee, straight through' and it[4][1] == 'RJA worksheet'
+      and abs(it[4][2] - 0.20) < 1e-12,
+      "item %r expected %.5f" % (it, 0.20 * pv(vc9)))
+check("J9 FALLBACK names the missing table combination, not 'unreadable'",
+      any('no 2001 table for a rect branch on a round main' in u and 'straight through' in u
+          and 'unreadable' not in u for u in _fb(leaf)),
+      "fallbacks %r" % (_fb(leaf),))
+leaf, it, vc = _junction_run('Round Tee', L9, [(3, 1000.0, L9[3]['area_ft2']),
+                                               (4, 600.0, L9[4]['area_ft2'])],
+                             'Supply Air', heavy=4, is_round=True)
+check("J9 no 2001 table, into the branch: worksheet C 0.98, 'Tee, into branch'",
+      it is not None and abs(it[3] - 0.98 * pv(vc9)) < 1e-9
+      and it[4][0] == 'Tee, into branch',
+      "item %r expected %.5f" % (it, 0.98 * pv(vc9)))
+
+# J10 (items 3, 5c): leg 4's terminal has no Flow (0 cfm): the split cannot
+#     be read, so the tee is NOT priced from SR5-13 (which would read Qb/Qc 0
+#     on that leg) but on the worksheet branch C 0.98 at the common 1000 fpm,
+#     with a FALLBACK naming leg 4 and the exit leg left unidentified.
+leaf, it, vc = _junction_run('Rectangular Tee', L1, [(3, 1000.0, 2.0), (4, 0.0, 1.0)],
+                             'Supply Air', heavy=3)
+check("J10 a leg without Flow: worksheet 0.98 x Pv(500 fpm), not the 2001 table",
+      it is not None and abs(it[3] - 0.98 * pv(500.0)) < 1e-9 and 'SR5-13' not in it[1],
+      "item %r expected %.5f" % (it, 0.98 * pv(500.0)))
+check("J10 FALLBACK names leg 4, unreadable flows, exit leg not identified",
+      any('leg 4 carries no airflow' in u and 'unreadable' in u
+          and 'exit leg not identified' in u for u in _fb(leaf)),
+      "fallbacks %r" % (_fb(leaf),))
+
+# J11 (item 3): an end cap on the branch leg at 0 cfm is fine: the tee still
+#     reads, the run straight through prices SR5-13 Cc,s at Qs/Qc 1.0.
+t11 = Elem(kind='unknown_fitting', family_name='Rectangular Tee', is_round=False)
+t11.legs = {1: _rleg(24, 12, (-1, 0, 0)), 3: _rleg(24, 12, (1, 0, 0)),
+            6: _rleg(12, 12, (0, 1, 0))}
+n11 = {1: Elem(kind='duct'), 2: t11, 3: Elem(kind='duct'),
+       6: Elem(kind='unknown_fitting', family_name='Rectangular Endcap', is_round=False)}
+c11 = {0: [1], 1: [2], 2: [3, 6], 3: [103]}
+d11 = build([(1, 0.0, 10.0, 500.0, 2.0, 'Supply Air'), (3, 1.0, 10.0, 500.0, 2.0, 'Supply Air')])
+r11 = crit([0], c11, d11, {103: (1000.0, 'Supply Air', 'T-3')}, n11)
+leaf11 = r11.get(0, {}).get('Supply Air', {})
+_it11 = [i for i in leaf11.get('items', ()) if i[0] == 'Fitting 2']
+check("J11 an end cap leg at 0 cfm does not knock the tee to the worksheet",
+      len(_it11) == 1 and 'SR5-13' in _it11[0][1] and 'Cc,s' in _it11[0][1]
+      and not _fb(leaf11),
+      "items %r fallbacks %r" % (_it11, _fb(leaf11)))
+
+# J12 (item 5a): a tee on the unit side chain of a picked duct is never read
+#     by _junction; its FALLBACK says so, and that the exit leg is unknown.
+#     Priced as the branch: 0.98 x Pv(800).
+ch12 = {200: [201, 203], 201: [202], 203: [210]}
+nd12 = {201: Elem(kind='unknown_fitting', family_name='Rectangular Tee', is_round=False)}
+dc12 = build([(200, 0.0, 5.0, 800.0, 2.5, 'Supply Air'),
+              (202, 0.0, 0.2, 0.0, 2.5, 'Supply Air'),
+              (203, 0.0, 10.0, 800.0, 2.5, 'Supply Air')])
+for _d in dc12.values():
+    _d.d_h_in = 18.0
+r12j = crit([200], ch12, dc12, {210: (2000.0, 'Supply Air', 'SD-J12')}, nd12,
+            duct_rooted_ids=set([200]))[200]['Supply Air']
+check("J12 unit side chain tee: 0.98 x Pv(800), FALLBACK says unit side chain",
+      abs(r12j['fitting_inwc'] - 0.98 * pv(800.0)) < 1e-9
+      and any('unit side chain' in u and 'exit leg not identified' in u
+              and 'unreadable' not in u for u in _fb(r12j)),
+      "fit %r fallbacks %r" % (r12j['fitting_inwc'], _fb(r12j)))
+
+# J13 (item 2): a rect return tee reads ER5-3, printed for Ab/Ac 0.5 and
+#     As = Ac. A 10x10 branch on a 24x12 main is Ab/Ac 0.35: priced at the
+#     printed 0.5 as before, with a NOTE naming the real ratio.
+L13 = {1: _rleg(24, 12, (-1, 0, 0)), 3: _rleg(24, 12, (1, 0, 0)), 4: _rleg(10, 10, (0, 1, 0))}
+leaf, it, vc = _junction_run('Rectangular Tee', L13, [(3, 1000.0, 2.0),
+                                                      (4, 1000.0, L13[4]['area_ft2'])],
+                             'Return Air', heavy=4)
+# ER5-3 Cb at Qb/Qc 0.5 is 0.76 (case29b); converted at the printed Ab/Ac
+# 0.5: 0.76 x (0.5 / 0.5)^2 = 0.76, x the common Pv (2000 cfm / 2 ft2).
+check("J13 ER5-3 tee read at its printed Ab/Ac 0.5: 0.76 x Pv(1000)",
+      it is not None and abs(it[3] - 0.76 * pv(1000.0)) < 1e-9,
+      "item %r expected %.5f" % (it, 0.76 * pv(1000.0)))
+check("J13 NOTE: ER5-3 printed for Ab/Ac 0.50, this fitting Ab/Ac 0.35",
+      any('ER5-3 is printed for Ab/Ac 0.50 only' in u and 'Ab/Ac 0.35' in u
+          for u in leaf.get('unpriced', ())),
+      "unpriced %r" % (leaf.get('unpriced'),))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 print("\n" + "=" * 70)
 n_pass = sum(1 for _, ok, _ in results if ok)

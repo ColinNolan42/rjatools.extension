@@ -2999,7 +2999,18 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
     # is the ducts below it. Unreadable legs or flows: the RJA worksheet, as
     # before, flagged FALLBACK.
     _JUNCTION_ROLES = ('tee', 'cross', 'wye')
+    _UNREADABLE = 'geometry or flows unreadable'
     junction_cache = {}
+    # Why a junction, or one exit leg of it, is on the worksheet: the reason
+    # in its FALLBACK line (review, 2026-11-11).
+    junction_why = {}
+    junction_exit_why = {}
+
+    def _is_endcap(nid):
+        elem = all_nodes.get(nid)
+        return (elem is not None and hvac_graph.is_fitting(elem)
+                and fitting_tables.classify_fitting(
+                    hvac_graph.fitting_family_name(elem)) == 'endcap')
 
     def _leg_cfm(leg_id):
         """cfm through one leg of a junction: the duct on it, the terminal on
@@ -3022,6 +3033,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         if nid in junction_cache:
             return junction_cache[nid]
         res = None
+        why = _UNREADABLE
         elem = all_nodes.get(nid)
         par = parent_of.get(nid)
         kids = list(all_children.get(nid, []))
@@ -3032,15 +3044,36 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             if par in legs and all([k in legs for k in kids]):
                 q = dict((k, _leg_cfm(k)) for k in kids)
                 qc = sum(q.values(), 0.0)
+                # A leg with no airflow (terminals without Flow) would read a
+                # wrong split; only an end cap carries none (review,
+                # 2026-11-11).
+                dry = sorted([k for k in kids if q[k] <= 0.0 and not _is_endcap(k)])
                 lay = ashrae_fittings.junction_layout(
                     legs[par]['dir'], dict((k, legs[k]['dir']) for k in kids))
-                if qc > 0.0 and lay is not None:
+                if dry:
+                    why = ('%s: leg %s carries no airflow (a terminal without Flow '
+                           'below it)' % (_UNREADABLE, ', '.join([str(k) for k in dry])))
+                elif lay is None:
+                    why = '%s: connector axes unreadable' % _UNREADABLE
+                elif qc > 0.0:
                     res = {'role': role, 'legs': legs, 'q': q, 'qc': qc,
                            'common': legs[par], 'layout': lay}
+                    # Only reached on the worksheet where the main walk does
+                    # not price it per leg (between the unit and the first
+                    # disruption, at the fan velocity).
+                    why = 'read, but priced on the worksheet at the fan velocity'
+                else:
+                    why = '%s: no airflow through it' % _UNREADABLE
+            else:
+                why = '%s: connector to %s not read' % (_UNREADABLE, ', '.join(
+                    [str(k) for k in [par] + kids if k not in legs]))
+        elif role in _JUNCTION_ROLES:
+            why = '%s: fewer than two legs leave it on this run' % _UNREADABLE
         if role in _JUNCTION_ROLES:
             hvac_graph.log.info('_junction: %s %s %s', role, nid,
                                 'read' if res else 'NOT READ, worksheet')
         junction_cache[nid] = res
+        junction_why[nid] = why
         return res
 
     junction_exit_cache = {}
@@ -3052,6 +3085,10 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return junction_exit_cache[key]
         res = None
         j = _junction(nid)
+        if j is None:
+            junction_exit_why[key] = junction_why.get(nid, _UNREADABLE)
+        elif child_id not in j['legs'] or not j['q'].get(child_id):
+            junction_exit_why[key] = 'leg %s carries no airflow' % child_id
         if j is not None and child_id in j['legs'] and j['q'].get(child_id):
             legs, q, qc, lay, role = j['legs'], j['q'], j['qc'], j['layout'], j['role']
             com = j['common']
@@ -3068,6 +3105,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 stands = {'tee': 'bullhead tee', 'cross': 'cross'}.get(role)
                 c, label, n = ashrae_fittings.split_c(
                     sup, leg['area_ft2'] / ac, min(q[child_id] / qc, 1.0), stands_for=stands)
+                if c is None:
+                    junction_exit_why[key] = label
                 ws = fitting_tables.c_of('wye_bullhead', c_values)
             else:
                 if child_id == straight:
@@ -3087,6 +3126,17 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                                      min(q.get(b, 0.0) / qc, 1.0),
                                      min(q.get(straight, 0.0) / qc, 1.0),
                                      main_d_in=com['d_in'])
+                    if c is None:
+                        if ashrae_fittings._junction_keys(
+                                sup, bl['shape'], com['shape'], entry_45,
+                                com['d_in']) == (None, None):
+                            junction_exit_why[key] = (
+                                'no 2001 table for a %s branch on a %s main, %s'
+                                % (bl['shape'], com['shape'],
+                                   'supply' if sup else 'return / exhaust'))
+                        else:
+                            junction_exit_why[key] = '%s: %s' % (
+                                _UNREADABLE, '; '.join(n or []) or label)
                 ws = (fitting_tables.takeoff_c(sys_class, c=c_values) if legname == 'branch'
                       else fitting_tables.takeoff_main_c(sys_class, c_values))
             if c is not None:
@@ -3213,7 +3263,8 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         elif role == 'takeoff':
             name = 'Tap, into branch'
         elif role in ('tee', 'cross', 'wye'):
-            straight = 'Cc,s' in (detail or '') or ' straight,' in (detail or '')
+            straight = ('Cc,s' in (detail or '') or ' straight,' in (detail or '')
+                        or 'straight through' in (detail or ''))
             name = '%s, %s' % (role.capitalize(),
                                'straight through' if straight else 'into branch')
         elif role == 'offset':
@@ -3238,7 +3289,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         return ('NOTE: ' + '; '.join(notes)) if notes else None
 
     def _price_fitting(elem, sys_class, up_fpm, up_area, against_flow=False,
-                       nid=None, loc_id=None):
+                       nid=None, loc_id=None, junction_leg=None, fb_why=None):
         """(loss in. wc, counted 0/1, unpriced note or None, downstream area,
         detail text).
 
@@ -3255,6 +3306,11 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
         transition that grows toward the unit is priced as the contraction the
         air sees (Colin, 2026-10-21). The returned downstream area stays in
         WALK order, because the caller tracks area along the walk.
+
+        junction_leg: a tee, cross or wye on the worksheet whose exit leg is
+        known, 'straight' (worksheet tap main C) or 'branch'; None prices it
+        as the branch, conservative. fb_why: the reason in its FALLBACK line
+        (review, 2026-11-11).
         """
         fam  = hvac_graph.fitting_family_name(elem)
         role = fitting_tables.classify_fitting(fam)
@@ -3279,13 +3335,25 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             up_a, down_a = hvac_graph.transition_areas(elem, up_area)
             flow_up, flow_down = (down_a, up_a) if against_flow else (up_a, down_a)
         angle = hvac_graph.fitting_angle_deg(elem) if role == 'elbow' else None
-        c, note = fitting_tables.fitting_c(
-            role, sys_class,
-            is_round=hvac_graph.fitting_is_round(elem),
-            upstream_area_ft2=flow_up, downstream_area_ft2=flow_down,
-            is_end_of_main=False, c=c_values, angle_deg=angle)
+        if role in _JUNCTION_ROLES and junction_leg == 'straight':
+            # Straight through a tee, cross or wye: the worksheet's tap main
+            # C, not the branch's (review, 2026-11-11).
+            c, note = (fitting_tables.takeoff_main_c(sys_class, c_values),
+                       '%s, straight through' % role)
+        else:
+            c, note = fitting_tables.fitting_c(
+                role, sys_class,
+                is_round=hvac_graph.fitting_is_round(elem),
+                upstream_area_ft2=flow_up, downstream_area_ft2=flow_down,
+                is_end_of_main=False, c=c_values, angle_deg=angle)
         fb = None
-        if (role in ('elbow', 'takeoff', 'tee', 'cross', 'wye')
+        if role in _JUNCTION_ROLES:
+            why = (fb_why or (junction_why.get(nid) if nid is not None else None)
+                   or _UNREADABLE)
+            if junction_leg is None:
+                why = '%s; exit leg not identified, priced as the branch (conservative)' % why
+            fb = 'FALLBACK: %s: %s, RJA worksheet C %.2f (%s)' % (fam or '?', note, c, why)
+        elif (role in ('elbow', 'takeoff')
                 or (role == 'transition' and not reversed_walk)):
             fb = 'FALLBACK: %s: %s, RJA worksheet C %.2f (geometry or flows unreadable)' % (
                 fam or '?', note, c)
@@ -3370,7 +3438,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     loss, counted, note, down_a, _detail = _price_fitting(
                         elem, root_dr.sys_class, up_fpm, up_area,
                         against_flow=not fitting_tables.flows_toward_unit(
-                            root_dr.sys_class), loc_id=n)
+                            root_dr.sys_class), loc_id=n,
+                        fb_why='priced on the worksheet on the unit side chain, '
+                               'which has no 2001 junction lookup')
                     fit   += loss
                     n_fit += counted
                     if note:
@@ -4548,7 +4618,9 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 _k = boost.get(nid)
                 price_fpm = up_fpm * _k if (_k and up_fpm) else up_fpm
                 loss, counted, note, down_a, detail = _price_fitting(
-                    elem, 'Supply Air', price_fpm, up_area, against_flow=False, loc_id=nid)
+                    elem, 'Supply Air', price_fpm, up_area, against_flow=False, loc_id=nid,
+                    fb_why='priced on the worksheet on the exhaust discharge, '
+                           'which has no 2001 junction lookup')
                 if _k and up_fpm:
                     detail = '{}, at fan velocity'.format(detail)
                 fam = hvac_graph.fitting_family_name(elem) or '?'
@@ -5213,10 +5285,19 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                         _jtext = '; '.join(_jfb + ([_jrest] if _jrest else [])) or None
                         c_fpm, c_area = _jfpm, _jarea
                     else:
+                        # The exit leg is known here (_junction read it), so
+                        # straight through takes the worksheet's tap main C,
+                        # a branch the take-off C (review, 2026-11-11).
+                        _jj = _junction(nid)
+                        _jleg = None
+                        if _jj is not None:
+                            _jleg = ('straight' if _jj['layout']['straight'] == child_id
+                                     else 'branch')
                         _jl, _jc, _jtext, _ja, _jd = _price_fitting(
                             elem, sys_class, up_fpm, up_area,
                             against_flow=fitting_tables.flows_toward_unit(sys_class),
-                            nid=nid)
+                            nid=nid, junction_leg=_jleg,
+                            fb_why=junction_exit_why.get((nid, child_id, sys_class)))
                     extra_fit = extra_fit + _jl
                     if _jtext:
                         extra_unpriced = extra_unpriced + (_jtext,)

@@ -414,6 +414,33 @@ class TestJunctionLookups(unittest.TestCase):
         self.assertTrue(any('printed at Qb/Qc 0.5 only' in n for n in notes))
         self.assertTrue(any('stands in for a bullhead tee' in n for n in notes))
 
+    def test_split_note_states_read_at_half(self):
+        # Review 2026-11-11: the NOTE gives the real split and that Cb is
+        # read and converted at Qb/Qc 0.5; the number does not change.
+        cc, label, notes = self.af.split_c(True, 0.5, 0.8)
+        self.assertAlmostEqual(cc, 0.30, places=6)
+        self.assertTrue(any('this split is Qb/Qc 0.80' in n and 'converted at Qb/Qc 0.5' in n
+                            for n in notes), notes)
+
+    def test_printed_geometry_note(self):
+        # Review 2026-11-11: ER5-3 is printed for Ab/Ac 0.5 and As = Ac and
+        # stays read there (Colin 2026-10-23); a real ratio more than 0.05
+        # off gets a NOTE, the price is unchanged (Cb 0.76 at Qb/Qc 0.5,
+        # converted at 0.5: 0.76).
+        cc, _l, notes = self.af.tap_branch_c(False, 'rect', 'rect', False, 0.25, 0.5)
+        self.assertAlmostEqual(cc, 0.76, places=6)
+        self.assertTrue(any('ER5-3 is printed for Ab/Ac 0.50' in n and 'Ab/Ac 0.25' in n
+                            for n in notes), notes)
+        cc, _l, notes = self.af.tap_branch_c(False, 'rect', 'rect', False, 0.53, 0.5)
+        self.assertAlmostEqual(cc, 0.76, places=6)
+        self.assertFalse([n for n in notes if 'printed for' in n], notes)
+        _cc, _l, notes = self.af.tap_main_c(False, 'rect', 'rect', False, 0.8, 0.5)
+        self.assertTrue(any('ER5-3 is printed for As/Ac 1.00' in n and 'As/Ac 0.80' in n
+                            for n in notes), notes)
+        # A table printed across the ratio (SR5-13) gets no such NOTE.
+        _cc, _l, notes = self.af.tap_branch_c(True, 'rect', 'rect', False, 0.25, 0.5)
+        self.assertFalse([n for n in notes if 'printed for' in n], notes)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

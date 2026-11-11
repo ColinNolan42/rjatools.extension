@@ -112,5 +112,41 @@ class TestOneSupplyTest(unittest.TestCase):
         self.assertFalse(FT._is_supply('Return Air'))
 
 
+
+class _Xyz(object):
+    def __init__(self, x, y, z):
+        self.X, self.Y, self.Z = x, y, z
+
+
+class _Conn(object):
+    """A junction connector: Shape from the stubbed ConnectorProfileType."""
+
+    def __init__(self, shape, w=1.0, h=0.5, r=0.5):
+        self.Shape = shape
+        self.Width, self.Height, self.Radius = w, h, r
+        self.CoordinateSystem = type('CS', (object,), {'BasisZ': _Xyz(1.0, 0.0, 0.0)})()
+
+
+class TestJunctionLegsShape(unittest.TestCase):
+    """Review 2026-11-11: junction_legs reads round and rectangular legs
+    only; an oval leg is left out (unreadable), so the tee takes the worksheet
+    FALLBACK instead of being priced as rectangular with Width x Height."""
+
+    def test_oval_leg_is_unreadable(self):
+        cpt = _db.ConnectorProfileType
+        conns = {11: _Conn(cpt.Round), 12: _Conn(cpt.Rectangular, 1.0, 0.5),
+                 13: _Conn(cpt.Oval, 1.0, 0.5)}
+        old = HG._connector_to
+        HG._connector_to = lambda elem, nid: conns.get(nid)
+        try:
+            legs = HG.junction_legs(type('E', (object,), {'Id': _Id(9)})(), [11, 12, 13])
+        finally:
+            HG._connector_to = old
+        self.assertEqual(sorted(legs), [11, 12])
+        self.assertEqual(legs[11]['shape'], 'round')
+        self.assertEqual(legs[12]['shape'], 'rect')
+        self.assertAlmostEqual(legs[12]['area_ft2'], 0.5)
+
+
 if __name__ == '__main__':
     unittest.main()

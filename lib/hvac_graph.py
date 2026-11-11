@@ -2148,11 +2148,20 @@ def junction_legs(elem, neighbor_ids):
                 r = c.Radius
                 leg = {'shape': 'round', 'area_ft2': math.pi * r * r,
                        'd_in': 2.0 * r * 12.0, 'w_in': None, 'h_in': None, 'dir': d}
-            else:
+            elif c.Shape == ConnectorProfileType.Rectangular:
                 leg = {'shape': 'rect', 'area_ft2': c.Width * c.Height, 'd_in': None,
                        'w_in': c.Width * 12.0, 'h_in': c.Height * 12.0, 'dir': d}
+            else:
+                leg = None
         except Exception as ex:
             log.info('junction_legs: fitting %s connector to %s unreadable: %s', eid, nid, ex)
+            continue
+        if leg is None:
+            # Oval (or anything else): no 2001 junction table, and its
+            # Width x Height is not its area. Left out, so the junction takes
+            # the worksheet, FALLBACK (review, 2026-11-11).
+            log.info('junction_legs: fitting %s connector to %s is not round or '
+                     'rectangular (oval?), unreadable', eid, nid)
             continue
         if not leg['area_ft2'] or leg['area_ft2'] <= 0:
             log.info('junction_legs: fitting %s connector to %s has no area', eid, nid)
