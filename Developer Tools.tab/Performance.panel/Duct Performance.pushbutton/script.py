@@ -5629,6 +5629,10 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     """
     max_fpm, max_friction = _limits_of(dr, custom_limits)
     tol_fac = tol_pct / 100.0
+    # At the limit is green (Colin, 2026-11-12, TB-M01C: 8,000 cfm in a 64x30
+    # at exactly 600 fpm read YELLOW because 600 x 13.333 ft2 stores as
+    # 7,999.99999). One part in a million absorbs the float error only.
+    _eps = 1.0 + 1e-6
 
     # Velocity check (CFM vs capacity at max FPM)
     if dr.cfm <= 0 or dr.area_ft2 <= 0:
@@ -5637,9 +5641,9 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
     else:
         max_cap = max_fpm * dr.area_ft2
         red_cap = max_cap * (1.0 + tol_fac)
-        if dr.cfm <= max_cap:
+        if dr.cfm <= max_cap * _eps:
             vel_label = 'GREEN'
-        elif dr.cfm <= red_cap:
+        elif dr.cfm <= red_cap * _eps:
             vel_label = 'YELLOW'
         else:
             vel_label = 'RED'
@@ -5649,9 +5653,9 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
         fric_label = 'GRAY'
     else:
         red_fric = max_friction * (1.0 + tol_fac)
-        if dr.friction_per_100ft <= max_friction:
+        if dr.friction_per_100ft <= max_friction * _eps:
             fric_label = 'GREEN'
-        elif dr.friction_per_100ft <= red_fric:
+        elif dr.friction_per_100ft <= red_fric * _eps:
             fric_label = 'YELLOW'
         else:
             fric_label = 'RED'
