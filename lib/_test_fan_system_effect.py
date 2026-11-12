@@ -638,11 +638,14 @@ class DialogTest(unittest.TestCase):
         pnl = [e for e in root.iter() if e.get(xn) == 'pnl_static'][0]
         inner = set(e.get(xn) for e in pnl.iter() if e.get(xn))
         self.assertTrue({'cb_fse', 'pnl_fse', 'tb_blast'} <= inner)
-        # Exhaust fans section under VAV boxes, inside the external static
-        # group; the VAV dropdown and the Scope exhaust panel are gone
-        # (Colin, 2026-11-02).
-        self.assertTrue({'pnl_vav_static', 'pnl_exh_static', 'cb_exh_backdraft',
-                         'tb_backdraft', 'cb_exh_cap', 'tb_exh_cap'} <= inner)
+        # VAV boxes and Exhaust fans moved out of the external static group
+        # into the Scope options group (Colin, 2026-11-12).
+        opts = [e for e in root.iter() if e.get(xn) == 'pnl_scope_opts'][0]
+        opts_inner = set(e.get(xn) for e in opts.iter() if e.get(xn))
+        self.assertTrue({'pnl_curb', 'cb_curb', 'tb_curb', 'pnl_vav_static',
+                         'pnl_exh_static', 'cb_exh_backdraft', 'tb_backdraft',
+                         'cb_exh_cap', 'tb_exh_cap'} <= opts_inner)
+        self.assertFalse({'pnl_vav_static', 'pnl_exh_static', 'cb_curb'} & inner)
         exh = [e for e in root.iter() if e.get(xn) == 'pnl_exh_static'][0]
         exh_inner = set(e.get(xn) for e in exh.iter() if e.get(xn))
         self.assertTrue({'cb_exh_backdraft', 'cb_exh_cap'} <= exh_inner)
@@ -651,7 +654,7 @@ class DialogTest(unittest.TestCase):
         self.assertFalse([e for e in exh.iter() if e.get('Style') and 'RjaHint' in e.get('Style')])
         for gone in ('exp_vav', 'grid_vav', 'pnl_exhaust'):
             self.assertNotIn(gone, names)
-        order = [e.get(xn) for e in pnl.iter() if e.get(xn)]
+        order = [e.get(xn) for e in opts.iter() if e.get(xn)]
         self.assertLess(order.index('pnl_vav_static'), order.index('pnl_exh_static'))
         # Colin, 2026-11-03: the fan velocity basis sits in the fan panel
         fse = [e for e in root.iter() if e.get(xn) == 'pnl_fse'][0]
@@ -721,7 +724,7 @@ class DialogTest(unittest.TestCase):
         inner = [e.get(xn) for e in pnl.iter() if e.get(xn)]
         self.assertTrue({'cb_rank', 'pnl_rank', 'tb_rank_sup', 'tb_rank_ret',
                          'lbl_rank_ret'} <= set(inner))
-        self.assertLess(inner.index('pnl_exh_static'), inner.index('cb_rank'))
+        self.assertNotIn('pnl_exh_static', inner)   # moved to Scope options (2026-11-12)
         self.assertIn('cb_rank.IsChecked = False', self.src)
         self.assertIn('tb_rank_sup.IsEnabled = rank_on and not bool(rb_scope_exhaust.IsChecked)',
                       self.src)
@@ -743,7 +746,10 @@ class DialogTest(unittest.TestCase):
         self.assertNotIn('cb_curb', inner)
         # Colin, 2026-11-09: the hint is the one line, and the dialog's
         # Calculation basis keeps only the high level steps (no curb or tap row).
-        self.assertIn('Text="Untick for indoor units (fan coil, furnace, indoor AHU)."', m.group(1))
+        # 2026-11-12: the curb sits in the Scope options group, shown on RTU
+        # and VAV System only, so the indoor hint is gone.
+        self.assertNotIn('Untick for indoor units', m.group(1))
+        self.assertIn("show_curb = bool(rb_scope_rtu.IsChecked) or bool(rb_scope_vav.IsChecked)", self.src)
         self.assertNotIn('The curb is never modeled.', m.group(1))
         self.assertNotIn("('Roof curb', ", self.src)
         self.assertNotIn("('Tap near a supply outlet', ", self.src)
@@ -881,10 +887,16 @@ class DialogTest(unittest.TestCase):
         self.assertIsNotNone(m)
         ns = {'vav_checks': vav_checks, 'fan_system_effect': F}
         exec(re.search(r"^def _scope_of\(.*?\n\n\n", self.src, re.S | re.M).group(0), ns)
+        exec(re.search(r"^def _full_report_columns\(.*?\n\n\n", self.src, re.S | re.M).group(0), ns)
         exec(m.group(0), ns)
         r = ns['_settings_result']({}, 10, set(), False, True, 10, {}, {}, {}, 0.0,
                                    False, vav_checks.default_settings())
         self.assertEqual(r['fan_effect'], F.default_settings())
+        # Full Report adds CFM and Length, nothing else (Colin, 2026-11-12)
+        self.assertEqual(r['selected_cols'], set())
+        rf = ns['_settings_result']({}, 10, set(['fpm']), True, False, 10, {}, {}, {}, 0.0,
+                                    False, vav_checks.default_settings())
+        self.assertEqual(rf['selected_cols'], set(['cfm', 'length']))
         r2 = ns['_settings_result']({}, 10, set(), False, True, 10, {}, {}, {}, 0.0,
                                     False, vav_checks.default_settings(),
                                     {'on': False, 'fan_type': 'SWSI', 'blast_ratio': 0.7})

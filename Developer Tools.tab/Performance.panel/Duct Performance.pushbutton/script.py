@@ -224,6 +224,47 @@ _SETTINGS_XAML = '''
                              ToolTip="A constant volume rooftop or packaged unit with supply and return. The roof curb is counted. VAV boxes and exhaust fans are not listed."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
                            Text="Lists units only, no VAV boxes or exhaust fans."/>
+                <!-- Scope options (Colin, 2026-11-12): the accessories of the
+                     selected Scope, moved under its radio button by code -->
+                <Border x:Name="pnl_scope_opts" Style="{DynamicResource RjaGroupBorder}" Margin="20,4,0,4">
+                    <StackPanel>
+                        <StackPanel x:Name="pnl_curb" Orientation="Horizontal">
+                            <CheckBox x:Name="cb_curb" Content="Include roof curb" Width="190" VerticalAlignment="Center"
+                                      ToolTip="Counts the curb height as straight duct at the unit connections."/>
+                            <TextBox x:Name="tb_curb" Width="56" Margin="0,0,6,0"
+                                     ToolTip="Curb height, in., 0 to 48."/>
+                            <TextBlock Text="in. high" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel x:Name="pnl_vav_static" Margin="0,8,0,0" Visibility="Collapsed">
+                            <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
+                            <Grid x:Name="grid_vav_static" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel x:Name="pnl_exh_static" Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox x:Name="cb_exh_backdraft" Content="Include backdraft damper" Width="190" VerticalAlignment="Center"
+                                          ToolTip="Adds the backdraft damper drop once to an exhaust fan run."/>
+                                <TextBox x:Name="tb_backdraft" Width="56" Margin="0,0,6,0"
+                                         ToolTip="Backdraft damper drop, in. wc. Cannot be negative."/>
+                                <TextBlock Text="in. wc, added once where none is modeled" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <CheckBox x:Name="cb_exh_cap" Content="Include roof / wall cap" Width="190" VerticalAlignment="Center"
+                                          ToolTip="Adds the roof / wall cap drop once to every exhaust run."/>
+                                <TextBox x:Name="tb_exh_cap" Width="56" Margin="0,0,6,0"
+                                         ToolTip="Roof / wall cap drop, in. wc. Cannot be negative."/>
+                                <TextBlock Text="in. wc, added once to every exhaust run" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock x:Name="tb_scope_opts_hint" Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                                   Text="Used when external static pressure is calculated (Outputs)."/>
+                    </StackPanel>
+                </Border>
                 <RadioButton x:Name="rb_scope_fancoil" GroupName="scope" Content="Indoor System" Margin="0,8,0,0"
                              ToolTip="An indoor unit with supply and return: fan coil, furnace, indoor AHU. Checked like an RTU."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -267,28 +308,10 @@ _SETTINGS_XAML = '''
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
                     <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Outputs"/>
                 </Border>
-                <CheckBox x:Name="cb_full_diag" Content="Report all ducts"
-                          ToolTip="Unchecked, the report lists only ducts that fail or can be downsized (red, yellow, purple). Checked, every duct is listed and numbered in the plan."/>
+                <CheckBox x:Name="cb_full_diag" Content="Full Report"
+                          ToolTip="Checked, every duct is listed and numbered in the plan, with its total CFM and length. Unchecked, only the ducts flagged red, yellow or purple are listed."/>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,6"
-                           Text="Unchecked lists only the ducts that fail or can be downsized (red, yellow, purple)."/>
-                <Grid x:Name="grid_cols">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                </Grid>
-
-                <!-- Roof curb (Colin, 2026-11-09): the straight duct checks use it,
-                     so it sits outside the external static group -->
-                <StackPanel x:Name="pnl_curb" Orientation="Horizontal" Margin="0,10,0,0">
-                    <CheckBox x:Name="cb_curb" Content="Include roof curb" VerticalAlignment="Center"
-                              ToolTip="Counts the curb height as straight duct at the unit connections."/>
-                    <TextBox x:Name="tb_curb" Width="56" Margin="8,0,6,0"
-                             ToolTip="Curb height, in., 0 to 48."/>
-                    <TextBlock Text="in. high" VerticalAlignment="Center"/>
-                </StackPanel>
-                <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,0"
-                           Text="Untick for indoor units (fan coil, furnace, indoor AHU)."/>
+                           Text="Every duct with its CFM and length. Unchecked lists only the red, yellow and purple ducts."/>
 
                 <!-- External static pressure, grouped under Outputs -->
                 <CheckBox x:Name="cb_static" Content="Calculate total external static pressure" Margin="0,10,0,0"
@@ -336,33 +359,6 @@ _SETTINGS_XAML = '''
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
                                        Text="Set by the Scope: 1000 fpm Exhaust System, 1500 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
-                        </StackPanel>
-                        <StackPanel x:Name="pnl_vav_static" Margin="0,10,0,0" Visibility="Collapsed">
-                            <TextBlock FontWeight="SemiBold" Text="VAV boxes"/>
-                            <Grid x:Name="grid_vav_static" Margin="0,4,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                            </Grid>
-                        </StackPanel>
-                        <StackPanel x:Name="pnl_exh_static" Margin="0,10,0,0" Visibility="Collapsed">
-                            <TextBlock FontWeight="SemiBold" Text="Exhaust fans"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                <CheckBox x:Name="cb_exh_backdraft" Content="Include backdraft damper" Width="190" VerticalAlignment="Center"
-                                          ToolTip="Adds the backdraft damper drop once to an exhaust fan's run."/>
-                                <TextBox x:Name="tb_backdraft" Width="56" Margin="0,0,6,0"
-                                         ToolTip="Backdraft damper drop, in. wc. Cannot be negative."/>
-                                <TextBlock Text="in. wc, added once where none is modeled" VerticalAlignment="Center"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                <CheckBox x:Name="cb_exh_cap" Content="Include roof / wall cap" Width="190" VerticalAlignment="Center"
-                                          ToolTip="Adds the roof / wall cap drop once to every exhaust run."/>
-                                <TextBox x:Name="tb_exh_cap" Width="56" Margin="0,0,6,0"
-                                         ToolTip="Roof / wall cap drop, in. wc. Cannot be negative."/>
-                                <TextBlock Text="in. wc, added once to every exhaust run" VerticalAlignment="Center"/>
-                            </StackPanel>
                         </StackPanel>
                         <!-- Ranked run (Colin, 2026-11-10) -->
                         <CheckBox x:Name="cb_rank" Content="Ranked run" Margin="0,10,0,0"
@@ -500,6 +496,13 @@ def _scope_of(vav, vavbox, exhaust, fancoil=False):
     return 'vav' if vav else 'exhaust' if exhaust else 'rtu'
 
 
+def _full_report_columns(full_diag):
+    """The optional table columns: Total CFM through Duct and Length with
+    Full Report, none otherwise (Colin, 2026-11-12: one Full Report box
+    replaces Report all ducts and the two column checkboxes)."""
+    return set(['cfm', 'length']) if full_diag else set()
+
+
 def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
                      safety_pct, c_values, comp_values, calc_basis, filter_inwc,
                      vav, vav_settings, fan_effect=None, exhaust_cap=False,
@@ -520,6 +523,7 @@ def _settings_result(limits, tol_pct, selected_cols, full_diag, ext_static,
     'ranked': None (Ranked run off, the legacy dialog too) or {'supply': n,
     'return': n}, n 2 or higher (Colin, 2026-11-10).
     """
+    selected_cols = _full_report_columns(full_diag)
     limits = dict(limits)
     if vav:
         limits[vav_checks.MP_KEY] = (vav_settings['mp_fpm'], vav_settings['mp_fric'])
@@ -587,7 +591,9 @@ def _show_velocity_settings_xaml(use_theme):
     grid_vav_static = N('grid_vav_static')
     grid_limits = N('grid_limits')
     tb_tol = N('tb_tol')
-    grid_cols = N('grid_cols')
+    pnl_scope_opts = N('pnl_scope_opts')
+    pnl_curb = N('pnl_curb')
+    tb_scope_opts_hint = N('tb_scope_opts_hint')
     cb_static = N('cb_static')
     pnl_static = N('pnl_static')
     tb_sf = N('tb_sf')
@@ -725,20 +731,9 @@ def _show_velocity_settings_xaml(use_theme):
         vav_boxes[key] = tb
         mp_row.append(tb)
 
-    # ── outputs: optional column checkboxes, two columns ────────────────────
-    _optional = _optional_columns()
-    _ncols = 2
-    _nrows = (len(_optional) + _ncols - 1) // _ncols
-    for _ in range(max(_nrows, 1)):
-        _add_row_def(grid_cols)
+    # No optional column checkboxes (Colin, 2026-11-12): Full Report adds the
+    # CFM and Length columns, see _full_report_columns.
     col_boxes = {}
-    for i, (key, header, _vw, _cw, default_on) in enumerate(_optional):
-        cb = CheckBox()
-        cb.Content = header
-        cb.IsChecked = default_on
-        cb.ToolTip = 'Optional column in the sheet table and the pyRevit window table.'
-        _put(grid_cols, cb, i // _nrows, i % _nrows)
-        col_boxes[key] = cb
 
     # ── advanced value rows (same defaults and stores as the legacy dialog) ─
     def _fill_value_grid(grid, rows, store, order, fmt):
@@ -997,6 +992,24 @@ def _show_velocity_settings_xaml(use_theme):
 
     # ── grey out the external static group until its checkbox is ticked ─────
     filter_state = {'was_box': False, 'tick': None}
+    scope_list = rb_scope_rtu.Parent
+
+    def _place_scope_opts():
+        """Move the Scope options group to just under the selected Scope's
+        radio button and its hint line (Colin, 2026-11-12)."""
+        target = rb_scope_rtu
+        for rb in (rb_scope_rtu, rb_scope_fancoil, rb_scope_vav, rb_scope_vavbox,
+                   rb_scope_exhaust):
+            if bool(rb.IsChecked):
+                target = rb
+        try:
+            owner = pnl_scope_opts.Parent
+            if owner is not None:
+                owner.Children.Remove(pnl_scope_opts)
+            idx = scope_list.Children.IndexOf(target)
+            scope_list.Children.Insert(idx + 2, pnl_scope_opts)   # after its hint
+        except Exception as ex:
+            hvac_graph.log.warning('scope options not moved: %s', ex)
 
     def sync_enable(s=None, e=None):
         master = bool(cb_static.IsChecked)
@@ -1031,14 +1044,25 @@ def _show_velocity_settings_xaml(use_theme):
         tb_rank_ret.IsEnabled = rank_on and not box
         lbl_rank_ret.Text = ('Exhaust rank' if bool(rb_scope_exhaust.IsChecked)
                              else 'Return rank')
-        # VAV box and static fields appear only with VAV and external static
-        # both ticked (Colin, 2026-10-22).
-        both = master and bool(rb_scope_vav.IsChecked)
-        pnl_vav_static.Visibility = Visibility.Visible if both else Visibility.Collapsed
-        # Exhaust fans, the same way: Exhaust System and external static
-        # both ticked (Colin, 2026-11-02).
-        exh = master and bool(rb_scope_exhaust.IsChecked)
-        pnl_exh_static.Visibility = Visibility.Visible if exh else Visibility.Collapsed
+        # Scope options sit under the selected Scope (Colin, 2026-11-12):
+        # roof curb on RTU and VAV System, VAV boxes on VAV System, backdraft
+        # damper and roof / wall cap on Exhaust System, nothing on Indoor
+        # System and VAV Box. The drops are greyed until external static is
+        # ticked; the curb is always live (the straight duct checks use it).
+        _place_scope_opts()
+        show_curb = bool(rb_scope_rtu.IsChecked) or bool(rb_scope_vav.IsChecked)
+        show_vav = bool(rb_scope_vav.IsChecked)
+        show_exh = bool(rb_scope_exhaust.IsChecked)
+        pnl_curb.Visibility = Visibility.Visible if show_curb else Visibility.Collapsed
+        pnl_vav_static.Visibility = Visibility.Visible if show_vav else Visibility.Collapsed
+        pnl_exh_static.Visibility = Visibility.Visible if show_exh else Visibility.Collapsed
+        for p in (pnl_vav_static, pnl_exh_static):
+            p.IsEnabled = master
+            p.Opacity = 1.0 if master else 0.55
+        tb_scope_opts_hint.Visibility = (Visibility.Visible if (show_vav or show_exh)
+                                         else Visibility.Collapsed)
+        pnl_scope_opts.Visibility = (Visibility.Visible if (show_curb or show_vav or show_exh)
+                                     else Visibility.Collapsed)
         # An exhaust fan has no return path, so the return filter is not
         # asked for under Exhaust System (Colin, 2026-11-04).
         pnl_filter.Visibility = (Visibility.Collapsed if bool(rb_scope_exhaust.IsChecked)
@@ -1379,8 +1403,8 @@ def _show_velocity_settings_dialog_legacy():
     cb_full_diag = CheckBox()
     cb_full_diag_text = TextBlock()
     cb_full_diag_text.Text = (
-        'Full System.  Unchecked = only failing ducts '
-        '(Red, Yellow, Purple).')
+        'Full Report.  Every duct with its CFM and length. Unchecked = only '
+        'the red, yellow and purple ducts.')
     cb_full_diag_text.TextWrapping = TextWrapping.Wrap
     cb_full_diag_text.Width = CONTENT_W - 20
     cb_full_diag.Content   = cb_full_diag_text
@@ -1753,36 +1777,7 @@ def _show_velocity_settings_dialog_legacy():
     adv_note.Margin = Thickness(0, 0, 0, 4)
     adv_exp.Content.Children.Insert(0, adv_note)
 
-    col_grid = Grid()
-    _COL_PICKER_COLS = 2
-    for _ in range(_COL_PICKER_COLS):
-        cd = ColumnDefinition()
-        cd.Width = GridLength(CONTENT_W / float(_COL_PICKER_COLS))
-        col_grid.ColumnDefinitions.Add(cd)
-    # Ceiling division, written the Python 2 way (// on ints floors).
-    _optional = _optional_columns()
-    _col_rows = (len(_optional) + _COL_PICKER_COLS - 1) // _COL_PICKER_COLS
-    for _ in range(_col_rows):
-        rd = RowDefinition()
-        rd.Height = GridLength(22)
-        col_grid.RowDefinitions.Add(rd)
-
-    col_boxes = {}   # column key -> CheckBox
-    for i, (key, header, _vw, _cw, default_on) in enumerate(_optional):
-        cb = CheckBox()
-        cb_txt = TextBlock()
-        cb_txt.Text = header
-        cb_txt.TextWrapping = TextWrapping.NoWrap
-        cb.Content   = cb_txt
-        cb.IsChecked = default_on
-        cb.Margin    = Thickness(2, 2, 2, 2)
-        cb.VerticalAlignment = VerticalAlignment.Center
-        Grid.SetColumn(cb, i // _col_rows)
-        Grid.SetRow(cb, i % _col_rows)
-        col_grid.Children.Add(cb)
-        col_boxes[key] = cb
-
-    outer.Children.Add(col_grid)
+    col_boxes = {}   # Full Report sets the optional columns (Colin, 2026-11-12)
 
     # Assumptions / formula reference block
     sep = Separator()
