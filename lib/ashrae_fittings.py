@@ -323,7 +323,11 @@ def _junction_keys(is_supply, tap_shape, main_shape, is_45_entry, main_d_in=None
     """(Cb table, Cs table) for a tap of this shape on a main of this shape."""
     if is_supply:
         if main_shape == 'rect':
-            return (('SR5-13_Cb', 'SR5-13_Cs') if tap_shape == 'rect'
+            # A round shoe (45 deg entry) on a rect main has no 2001 table;
+            # SR5-13 (45 deg entry, rect on rect) stands in, read at the round
+            # tap's area. SR5-11 is a straight round tap (Colin, 2026-11-12).
+            return (('SR5-13_Cb', 'SR5-13_Cs')
+                    if tap_shape == 'rect' or is_45_entry
                     else ('SR5-11_Cb', 'SR5-11_Cs'))
         if tap_shape == 'round':
             return (('SD5-1_Cb', 'SD5-1_Cs') if is_45_entry
@@ -671,8 +675,10 @@ FITTING_ROWS = (
      ('ER4-3', 'ED4-2'), 'transition_expansion'),
     ('Rect tap on rect main, supply', 'Rectangular Tap - Beveled',
      ('SR5-13_Cb', 'SR5-13_Cs'), 'supply_tap_branch'),
-    ('Round tap on rect main, supply', 'Round Takeoff - Shoe / w_Damper',
+    ('Round straight tap on rect main, supply', 'Round Takeoff w_Damper',
      ('SR5-11_Cb', 'SR5-11_Cs'), 'supply_tap_branch'),
+    ('Round shoe (45 deg entry) on rect main, supply (SR5-13 stands in)',
+     'Round Takeoff - Shoe', ('SR5-13_Cb', 'SR5-13_Cs'), 'supply_tap_branch'),
     ('Round 45 deg tap on round main, supply', 'Round Takeoff - Shoe',
      ('SD5-1_Cb', 'SD5-1_Cs'), 'supply_tap_branch'),
     ('Round straight tap on round main, supply', 'Round Takeoff w_Damper, tees',

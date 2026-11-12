@@ -455,6 +455,19 @@ class TestJunctionLookups(unittest.TestCase):
         _cc, _l, notes = self.af.tap_branch_c(True, 'rect', 'rect', False, 0.25, 0.5)
         self.assertFalse([n for n in notes if 'printed for' in n], notes)
 
+    def test_round_shoe_on_rect_supply_main_reads_sr5_13(self):
+        """A round shoe (45 deg entry) on a rect supply main is priced on
+        SR5-13; a straight round tap stays on SR5-11 (Colin, 2026-11-12, OLMC
+        tap 3797312, 12 in. shoe on a 14x18 main)."""
+        import ashrae_fittings as af
+        shoe, slabel, _n = af.tap_branch_c(True, 'round', 'rect', True, 0.45, 0.46)
+        straight, tlabel, _n = af.tap_branch_c(True, 'round', 'rect', False, 0.45, 0.46)
+        self.assertTrue(slabel.startswith('SR5-13'), slabel)
+        self.assertTrue(tlabel.startswith('SR5-11'), tlabel)
+        self.assertLess(shoe, straight)
+        _kb, ks = af._junction_keys(True, 'round', 'rect', True)
+        self.assertEqual(ks, 'SR5-13_Cs')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

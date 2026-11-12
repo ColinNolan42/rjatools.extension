@@ -7776,7 +7776,9 @@ def main():
                    'main: As/Ac read on the 0.9 row. A tap C of 0 or less from the '
                    '2001 tables is replaced by the RJA worksheet C (FALLBACK). The '
                    '2001 book has no round shoe (boot) table on a round main; ED5-2 / '
-                   'SD5-1 (45 deg wye) stand in for it. RJA SP_LOSS_WORKSHEET C where '
+                   'SD5-1 (45 deg wye) stand in for it. A round shoe on a rect supply '
+                   'main has no 2001 table; SR5-13 (45 deg entry) stands in, read at '
+                   'the round tap area. RJA SP_LOSS_WORKSHEET C where '
                    'geometry is unreadable (FALLBACK).'.format(
                        calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                        calc_basis['air_density']))
