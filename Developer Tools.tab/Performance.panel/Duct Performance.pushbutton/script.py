@@ -1613,7 +1613,8 @@ def _show_velocity_settings_dialog_legacy():
     outer.Children.Add(sf_panel)
 
     # Return filter as a known drop on the return path total. Colin,
-    # 2026-10-08: "Include Return Filter", 0.14 known drop. On by default
+    # 2026-10-08: "Include Return Filter", 0.10 known drop (MERV 8, Colin
+    # 2026-11-12, was 0.14). On by default
     # (Colin, 2026-11-02); untick it when the filter is inside the unit and
     # already deducted from its published ESP.
     filt_panel = StackPanel()

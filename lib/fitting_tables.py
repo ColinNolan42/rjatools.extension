@@ -151,9 +151,9 @@ for _k, _lbl, _v in COMPONENT_TABLE:
 # Return filter known pressure drop, in. wc. Off by default: the filter is normally
 # inside the unit and already deducted from the published ESP. Colin, 2026-10-08:
 # an "Include Return Filter" option adds this once to the RETURN path total. The
-# 0.14 is the MERV 8 figure from the PM's hand calc on the Kyrus job (RTU-3), a
-# known drop, not a C value; it is editable in the dialog.
-DEFAULT_RETURN_FILTER_INWC = 0.14
+# 0.10 is the RJA MERV 8 filter drop (Colin, 2026-11-12; was 0.14 from the PM's
+# Kyrus RTU-3 hand calc), a known drop, not a C value; it is editable in the dialog.
+DEFAULT_RETURN_FILTER_INWC = 0.10
 
 
 def component_of(key, comps=None):
