@@ -136,10 +136,9 @@ _COLUMN_DEFS = [
     # key          header                              view_w  console_w  default_on
     ('num',       '#',                                  0.050,    3,  True),
     ('status',    'Status',                             0.120,    7,  True),
-    ('reason',    'Reason',                             0.245,   34,  True),
+    ('reason',    'Reason',                             0.385,   46,  True),
     ('role',      'Duct Role',                          0.150,   18,  True),
     ('size',      'Size',                               0.100,    9,  True),
-    ('required',  'Required Size',                      0.140,   14,  True),
     ('cfm',       'Total CFM through Duct',             0.200,   22,  False),
     ('fpm',       'Actual FPM',                         0.120,   11,  True),
     ('fric',      'Actual Fric (iwc/100)',              0.180,   21,  True),
@@ -150,7 +149,10 @@ _COLUMN_DEFS = [
 # circles placed in the view, so it stays in the table to keep that
 # correlation.
 _FIXED_COLUMN_KEYS = frozenset(
-    ['num', 'status', 'reason', 'role', 'size', 'required', 'fpm', 'fric'])
+    ['num', 'status', 'reason', 'role', 'size', 'fpm', 'fric'])
+# No Required Size column (Colin, 2026-11-12): Duct Performance is a check
+# tool. It says high or low against the standard; the engineer picks the size
+# (space, noise). Size Duct still sizes.
 
 
 def _optional_columns():
@@ -2295,7 +2297,17 @@ def _pick_unit(scope, scope_label):
                                                         eid_int(elem.Id)))
     return elem
 
-DUCT_REDUCTION_REASON = 'Duct reduction size available'   # PURPLE reason (Colin, 2026-11-11; was 'Oversized')
+DUCT_REDUCTION_REASON = 'Reduced Duct Size Available'   # PURPLE reason (Colin, 2026-11-12; was 'Duct reduction size available', 'Oversized')
+MEETS_STANDARD_REASON = 'Meets Design Standard'         # GREEN main (Colin, 2026-11-12)
+# RED / YELLOW main reasons (Colin, 2026-11-12): a check, never a size.
+_MAIN_REASONS = {
+    ('RED', 'vel'):     'High Velocity',
+    ('RED', 'fric'):    'High Pressure Loss',
+    ('RED', 'both'):    'High Velocity and Pressure Loss',
+    ('YELLOW', 'vel'):  'Velocity Above Max Standard',
+    ('YELLOW', 'fric'): 'Pressure Loss Above Max Standard',
+    ('YELLOW', 'both'): 'Velocity and Pressure Loss Above Max Standard',
+}
 MR_LINE_WEIGHT = 8   # projection line weight of the most restrictive run (1 to 16)
 MR_LINE_COLOR = Color(255, 128, 0)   # its outline: orange, apart from every label color
 _PRIORITY = {'RED': 4, 'YELLOW': 3, 'PURPLE': 2, 'GREEN': 1, 'GRAY': 0}
@@ -5612,8 +5624,8 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
       Red    : cfm > max_cap * (1 + tol_pct/100), OR fails height clearance
       Purple : GREEN AND a smaller standard size exists (see _suggest_size_info)
 
-    Returns (label, max_cap_cfm, reason) — reason is 'Velocity', 'Friction',
-    DUCT_REDUCTION_REASON, 'Diffuser/Duct Clearance', or '' (GREEN/GRAY, nothing to flag).
+    Returns (label, max_cap_cfm, reason) — reason is one of _MAIN_REASONS,
+    DUCT_REDUCTION_REASON, MEETS_STANDARD_REASON, 'Diffuser/Duct Clearance', or '' (GRAY).
 
     A VAV medium pressure duct (dr.is_mp) is judged against the MP limits,
     PURPLE included: the shrink candidate is tested on the MP limits too
@@ -5650,7 +5662,13 @@ def _duct_label(dr, custom_limits, tol_pct, downstream_height_in=None):
 
     fric_wins = _PRIORITY.get(fric_label, 0) > _PRIORITY.get(vel_label, 0)
     combined  = fric_label if fric_wins else vel_label
-    reason    = ('Friction' if fric_wins else 'Velocity') if combined in ('YELLOW', 'RED') else ''
+    if combined in ('YELLOW', 'RED'):
+        which = ('both' if fric_label == vel_label else ('fric' if fric_wins else 'vel'))
+        reason = _MAIN_REASONS[(combined, which)]
+    elif combined == 'GREEN':
+        reason = MEETS_STANDARD_REASON
+    else:
+        reason = ''
 
     # GREEN ducts get downgraded to PURPLE if a smaller standard size — both
     # width and height at least one nominal size down — would still satisfy
@@ -6088,10 +6106,10 @@ def _legend_rows(words=None):
     Reason column's name and stays."""
     one = (words or duct_perf_console.scope_words('rtu'))['one']
     return [
-        ('GREEN',  'Main: within limit. Branch: {} and duct both correctly sized.'.format(one)),
-        ('PURPLE', 'Main only: duct reduction size available, a smaller standard size still meets the limits.'),
-        ('YELLOW', 'Main only: approaching the limit.'),
-        ('RED',    'Main: exceeds the limit. Branch: {} or duct undersized. '
+        ('GREEN',  'Main: meets the design standard. Branch: {} and duct both correctly sized.'.format(one)),
+        ('PURPLE', 'Main only: reduced duct size available, a smaller standard size still meets the design standard.'),
+        ('YELLOW', 'Main only: above the max standard, within the tolerance.'),
+        ('RED',    'Main: high velocity or pressure loss, over the max standard plus tolerance. Branch: {} or duct undersized. '
                    'Either: fails the diffuser/duct height clearance (see Reason).'.format(one)),
         ('GRAY',   'Not judged: no CFM reaches it (broken or disconnected system), '
                    'or a check could not be read (a NOTE names the duct and why). Or '
@@ -7990,7 +8008,7 @@ def main():
                 if label == 'PURPLE' and _unit_adapter_stub(eid_int(eid), dr):
                     hvac_graph.log.info('duct %s: unit connection adapter stub, '
                                         'not judged oversized', eid_int(eid))
-                    label, reason = 'GREEN', ''
+                    label, reason = 'GREEN', MEETS_STANDARD_REASON
             if dr.element_id in vav_red:
                 label, reason = 'RED', vav_red[dr.element_id]
             # The straight duct before an elbow under the straight duct line
@@ -8112,10 +8130,6 @@ def main():
             cells = _row_cells(lbl, dr, reason, duct_roles.get(eid, 'Main'),
                                branch_results.get(eid), custom_limits, tol_pct,
                                downstream_heights.get(eid))
-            if dr.element_id in inlet_runout_ids:
-                cells['required'] = '-'   # sized to the box, no MP suggestion
-            if dr.element_id in fse_red_ducts and reason == fse_red_ducts[dr.element_id][0]:
-                cells['required'] = fse_red_ducts[dr.element_id][1]
             row_cells_by_eid[eid] = cells
             flagged_items.append((lbl, dr, cells))
 
@@ -8496,13 +8510,13 @@ def main():
         vav_basis = list(vav_checks.basis_rows(vav_set))
     legend_rows = [
         ['Green', str(counts.get('GREEN', 0)), str(fitting_counts.get('GREEN', 0)),
-         'Main: within limit. Branch: {} and duct both correctly sized'.format(words['one'])],
+         'Main: meets the design standard. Branch: {} and duct both correctly sized'.format(words['one'])],
         ['Purple', str(counts.get('PURPLE', 0)), str(fitting_counts.get('PURPLE', 0)),
-         'Main only: duct reduction size available (a smaller standard size still meets the limits, review for cost)'],
+         'Main only: reduced duct size available (a smaller standard size still meets the design standard)'],
         ['Yellow', str(counts.get('YELLOW', 0)), str(fitting_counts.get('YELLOW', 0)),
-         'Main only: approaching limit'],
+         'Main only: above the max standard, within the tolerance'],
         ['Red', str(counts.get('RED', 0)), str(fitting_counts.get('RED', 0)),
-         'Main: exceeds limit. Branch: {} or duct undersized'.format(words['one'])],
+         'Main: high velocity or pressure loss, over the max standard plus tolerance. Branch: {} or duct undersized'.format(words['one'])],
         ['Gray', str(counts.get('GRAY', 0)), str(fitting_counts.get('GRAY', 0)),
          'Not judged: no CFM reaches it (broken or disconnected system), or a check '
          'could not be read (a NOTE names the duct and why). Not in the flagged table'],

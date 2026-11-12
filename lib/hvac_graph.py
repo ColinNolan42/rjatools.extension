@@ -1428,8 +1428,8 @@ def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
     the inlet diameter. No velocity or friction verdict, like every branch.
     (c) Colin, 2026-11-09: the slot's Flow is judged against the slot table
     for its own length and slot count (diffuser_tables.slot_max_cfm), a
-    consistency check on the family. Over it is RED naming the slot that
-    fits ('use 24 in. x 6 slots') or 'Max CFM reached, split slot'. A length
+    consistency check on the family. Over it is RED stating the table
+    capacity (no size named, 2026-11-12) or 'Max CFM reached, split slot'. A length
     or count that is unreadable or not in the table skips (c), logged.
     """
     res.sys_class = terminal_sys_class(terminal_elem)
@@ -1473,8 +1473,8 @@ def _slot_branch_check(res, terminal_elem, geom, installed_branch_size, tid):
             res.required_size = 'Split slot'
         else:
             res.required_size = diffuser_tables.slot_label(fit[0], fit[1])
-            table_fail = 'Slot over table capacity (%s max %d CFM), use %s' % (
-                here, max_cfm, res.required_size)
+            table_fail = 'Slot over table capacity (%s max %d CFM)' % (
+                here, max_cfm)   # no size named (Colin, 2026-11-12)
         log.info('branch_diffuser_check: slot id=%s %.0f cfm over %s max %d -> %s',
                  tid, res.cfm, here, max_cfm, table_fail)
 
@@ -1674,17 +1674,17 @@ def branch_diffuser_check(terminal_elem, terminal_cfm, installed_branch_size):
     # Compose the verdict. A real failure always beats an unverifiable half:
     # not being able to check the diffuser does not excuse an undersized duct.
     # Over the largest published size no neck or face carries the Flow: the
-    # diffuser has to be split (Colin, 2026-11-02). Otherwise an undersized
-    # diffuser names the size it needs, the same as the Required Size column.
+    # diffuser has to be split (Colin, 2026-11-02). No size is named (Colin,
+    # 2026-11-12: a check tool, the engineer picks the size).
     if over_max:
         res.status = 'RED'
         res.reason = 'Max CFM reached, split diffuser'
     elif diffuser_ok is False and branch_ok is False:
         res.status = 'RED'
-        res.reason = 'Diffuser + branch undersized, use {}'.format(res.required_size)
+        res.reason = 'Diffuser + branch undersized'
     elif diffuser_ok is False:
         res.status = 'RED'
-        res.reason = 'Diffuser undersized for CFM, use {}'.format(res.required_size)
+        res.reason = 'Diffuser undersized for CFM'
     elif branch_ok is False:
         res.status = 'RED'
         res.reason = 'Branch smaller than diffuser'

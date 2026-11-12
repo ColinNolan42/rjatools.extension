@@ -159,8 +159,8 @@ def branch_notes(words):
          'are judged off the auto-sized slot family: the branch duct shall be at '
          'least the slot inlet diameter, a filled Sizing Warning on the slot is '
          'red, and the slot\'s Flow over the slot table for its length and number '
-         'of slots (Titus ML-38 supply, MLR-38 return) is red, naming the slot '
-         'that fits or "Max CFM reached, split slot".'),
+         'of slots (Titus ML-38 supply, MLR-38 return) is red, stating the '
+         'table capacity, or "Max CFM reached, split slot".'),
         _BRANCH_NOT_RJA,
     ]
 

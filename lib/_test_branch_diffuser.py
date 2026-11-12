@@ -82,14 +82,13 @@ class TestCeiling(unittest.TestCase):
     def test_undersized_neck_names_the_size_needed(self):
         r = check(CEIL8, 300.0, 8.0)
         self.assertEqual(r.status, 'RED')
-        self.assertTrue(r.reason.startswith('Diffuser undersized for CFM, use '), r.reason)
-        self.assertIn(r.required_size, r.reason)
+        self.assertEqual(r.reason, 'Diffuser undersized for CFM')   # no size named (2026-11-12)
         self.assertIn('10', r.required_size)
 
     def test_undersized_neck_and_branch(self):
         r = check(CEIL8, 300.0, 6.0)
         self.assertEqual(r.status, 'RED')
-        self.assertTrue(r.reason.startswith('Diffuser + branch undersized, use '), r.reason)
+        self.assertEqual(r.reason, 'Diffuser + branch undersized')
 
     def test_over_largest_neck_is_split_diffuser(self):
         # Ceiling supply table tops out at 14 in., 750 cfm.
@@ -253,15 +252,15 @@ class TestSlotTable(unittest.TestCase):
         # 24 in. x 4 slots carries 220; 251 needs 5 slots at the same length
         r = check(_slot(24.0, 4), 251.0, 10.0)
         self.assertEqual(r.status, 'RED')
-        self.assertEqual(r.reason, 'Slot over table capacity (24 in. x 4 slots max 220 CFM), '
-                                   'use 24 in. x 5 slots')
+        self.assertEqual(r.reason, 'Slot over table capacity (24 in. x 4 slots max 220 CFM)')
         self.assertEqual(r.required_size, '24 in. x 5 slots')
 
     def test_over_the_length_names_a_longer_slot(self):
         # past 24 in. x 8 (435): 36 in. needs 6 slots (490)
         r = check(_slot(24.0, 8), 450.0, 12.0)
         self.assertEqual(r.status, 'RED')
-        self.assertTrue(r.reason.endswith('use 36 in. x 6 slots'), r.reason)
+        self.assertEqual(r.required_size, '36 in. x 6 slots')
+        self.assertNotIn('use', r.reason)
 
     def test_over_the_largest_is_split_slot(self):
         r = check(_slot(72.0, 8), 1400.0, 12.0)
@@ -272,7 +271,8 @@ class TestSlotTable(unittest.TestCase):
         # MLR-38 24 in. x 1 slot 65 cfm; 100 cfm needs 2 slots (135)
         r = check(_slot(24.0, 1, 6.0, 'Return Air'), 100.0, 6.0)
         self.assertEqual(r.status, 'RED')
-        self.assertTrue(r.reason.endswith('use 24 in. x 2 slots'), r.reason)
+        self.assertEqual(r.required_size, '24 in. x 2 slots')
+        self.assertNotIn('use', r.reason)
         self.assertEqual(check(_slot(24.0, 1, 6.0, 'Return Air'), 0.0, 6.0).status, 'GREEN')
 
     def test_table_fail_and_branch_undersized(self):
