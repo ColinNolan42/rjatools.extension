@@ -39,7 +39,7 @@ MP_KEY = 'Supply Air (MP)'
 
 MP_DEFAULT_FPM = 2000.0          # EDR VAV Guide p100, ducts in ceiling plenums
 MP_DEFAULT_FRICTION = 0.30       # EDR VAV Guide p3, p100 (start at 0.25 to 0.30)
-DEFAULT_BOX_DROP_INWC = 0.25     # Colin: priced like a balancing damper for now
+DEFAULT_BOX_DROP_INWC = 0.15     # Colin 2026-11-12: same as the balancing damper (was 0.25)
 DEFAULT_MIN_BOX_PRESSURE_INWC = 0.75   # Colin's firm rule of thumb
 DEFAULT_UNIT_MAX_ESP_INWC = None       # blank: no check, engineer enters the unit's value
 

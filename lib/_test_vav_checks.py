@@ -205,7 +205,7 @@ class TestLimitsAndFields(unittest.TestCase):
         d = vc.default_settings()
         self.assertEqual(d['mp_fpm'], 2000.0)
         self.assertEqual(d['mp_fric'], 0.30)
-        self.assertEqual(d['box_drop'], 0.25)
+        self.assertEqual(d['box_drop'], 0.15)
         self.assertIsNone(d['unit_max_esp'])
         self.assertEqual(d['min_box_inwc'], 0.75)
 
