@@ -131,7 +131,7 @@ def equipment_headers(words):
 
 
 _BRANCH_LEAD = ('Branch ducts are checked against the terminal sizing tables '
-                '(diffusers and grilles, MEP Design Standards, section 1), not '
+                '(diffusers and grilles, MEP Design Standards, section 2), not '
                 'against velocity or friction.')
 _BRANCH_CHECKS = ('whether the terminal\'s own neck/face is big enough for its own '
                   'CFM, and whether the branch duct is at least as big as the '
