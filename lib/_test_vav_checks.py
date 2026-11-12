@@ -207,7 +207,12 @@ class TestLimitsAndFields(unittest.TestCase):
         self.assertEqual(d['mp_fric'], 0.30)
         self.assertEqual(d['box_drop'], 0.15)
         self.assertIsNone(d['unit_max_esp'])
-        self.assertEqual(d['min_box_inwc'], 0.75)
+        # Blank, the engineer enters it; suggested values only (Colin, 2026-11-12)
+        self.assertIsNone(d['min_box_inwc'])
+        self.assertEqual(vc.SUGGESTED_MIN_BOX_PRESSURE_INWC, 0.35)
+        self.assertEqual(vc.SUGGESTED_UNIT_MAX_ESP_INWC, 1.0)
+        self.assertEqual(vc.format_default(d['min_box_inwc']), '')
+        self.assertEqual(vc.parse_field('', 'pos_or_blank'), (None, None))
 
     def test_parse_field(self):
         self.assertEqual(vc.parse_field('', 'pos_or_blank'), (None, None))
@@ -243,6 +248,7 @@ class TestLimitsAndFields(unittest.TestCase):
         self.assertTrue(vc.pressure_low(0.7, 0.75))
         self.assertFalse(vc.pressure_low(0.75, 0.75))
         self.assertFalse(vc.pressure_low(None, 0.75))
+        self.assertFalse(vc.pressure_low(0.1, None))   # no minimum entered, not judged
 
 
 class TestSizeDuctMp(unittest.TestCase):

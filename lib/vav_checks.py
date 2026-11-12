@@ -40,8 +40,13 @@ MP_KEY = 'Supply Air (MP)'
 MP_DEFAULT_FPM = 2000.0          # EDR VAV Guide p100, ducts in ceiling plenums
 MP_DEFAULT_FRICTION = 0.30       # EDR VAV Guide p3, p100 (start at 0.25 to 0.30)
 DEFAULT_BOX_DROP_INWC = 0.15     # Colin 2026-11-12: same as the balancing damper (was 0.25)
-DEFAULT_MIN_BOX_PRESSURE_INWC = 0.75   # Colin's firm rule of thumb
-DEFAULT_UNIT_MAX_ESP_INWC = None       # blank: no check, engineer enters the unit's value
+# Both start blank: the engineer looks them up and enters them (Colin,
+# 2026-11-12). Blank = that check is not run, with a NOTE. The dialog shows
+# the suggested value beside the box; it is never filled in for them.
+DEFAULT_MIN_BOX_PRESSURE_INWC = None
+DEFAULT_UNIT_MAX_ESP_INWC = None
+SUGGESTED_MIN_BOX_PRESSURE_INWC = 0.35   # Colin, 2026-11-12 (was a filled 0.75)
+SUGGESTED_UNIT_MAX_ESP_INWC = 1.0        # Colin, 2026-11-12
 
 ROLE_MP = 'Main (MP)'
 # An MP duct (or fitting) with exactly ONE box downstream: the MP analog of a
@@ -67,10 +72,12 @@ VAV_LIMIT_FIELDS = (
 )
 VAV_STATIC_FIELDS = (
     ('box_drop', 'VAV box pressure drop', 'in. wc', DEFAULT_BOX_DROP_INWC, 'nonneg'),
-    ('unit_max_esp', 'Unit max external static', 'in. wc, blank for no check',
+    ('unit_max_esp', 'Unit max external static',
+     'in. wc, suggested %g, blank for no check' % SUGGESTED_UNIT_MAX_ESP_INWC,
      DEFAULT_UNIT_MAX_ESP_INWC, 'pos_or_blank'),
-    ('min_box_inwc', 'Minimum pressure available at a box', 'in. wc',
-     DEFAULT_MIN_BOX_PRESSURE_INWC, 'nonneg'),
+    ('min_box_inwc', 'Minimum pressure available at a box',
+     'in. wc, suggested %g, blank for no check' % SUGGESTED_MIN_BOX_PRESSURE_INWC,
+     DEFAULT_MIN_BOX_PRESSURE_INWC, 'pos_or_blank'),
 )
 VAV_FIELDS = VAV_LIMIT_FIELDS + VAV_STATIC_FIELDS
 
@@ -113,6 +120,7 @@ def basis_rows(settings=None):
     if settings:
         s.update(settings)
     esp = s.get('unit_max_esp')
+    mn = s.get('min_box_inwc')
     return [
         ('VAV, MP supply',
          'Supply mains between the unit and the box inlets with two or more boxes '
@@ -129,11 +137,11 @@ def basis_rows(settings=None):
          'the box by the engineer: not judged on the MP limits, never resized.'),
         ('VAV, static',
          'Box drop {:.2f} in. wc. Pressure left at each box is the unit max '
-         'external static ({}) less the MP loss, flagged under {:.2f} in. wc '
-         '(RJA rule).'.format(
+         'external static ({}) less the MP loss, flagged under the minimum at a '
+         'box ({}).'.format(
              float(s['box_drop']),
              'not entered, no check' if esp is None else '%.2f in. wc' % float(esp),
-             float(s['min_box_inwc']))),
+             'not entered, no check' if mn is None else '%.2f in. wc' % float(mn))),
     ]
 
 
@@ -411,6 +419,6 @@ def pressure_left(unit_max_esp, mp_loss_inwc):
 
 def pressure_low(left_inwc, minimum_inwc):
     """True when the pressure left at a box is under the minimum."""
-    if left_inwc is None:
+    if left_inwc is None or minimum_inwc is None:
         return False
     return left_inwc < float(minimum_inwc) - 1e-9

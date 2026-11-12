@@ -1047,8 +1047,8 @@ def _show_velocity_settings_xaml(use_theme):
         # Scope options sit under the selected Scope (Colin, 2026-11-12):
         # roof curb on RTU and VAV System, VAV boxes on VAV System, backdraft
         # damper and roof / wall cap on Exhaust System, nothing on Indoor
-        # System and VAV Box. The drops are greyed until external static is
-        # ticked; the curb is always live (the straight duct checks use it).
+        # System and VAV Box. Always live, external static or not (Colin,
+        # 2026-11-12); the drops are only charged when it is ticked.
         _place_scope_opts()
         show_curb = bool(rb_scope_rtu.IsChecked) or bool(rb_scope_vav.IsChecked)
         show_vav = bool(rb_scope_vav.IsChecked)
@@ -1056,9 +1056,6 @@ def _show_velocity_settings_xaml(use_theme):
         pnl_curb.Visibility = Visibility.Visible if show_curb else Visibility.Collapsed
         pnl_vav_static.Visibility = Visibility.Visible if show_vav else Visibility.Collapsed
         pnl_exh_static.Visibility = Visibility.Visible if show_exh else Visibility.Collapsed
-        for p in (pnl_vav_static, pnl_exh_static):
-            p.IsEnabled = master
-            p.Opacity = 1.0 if master else 0.55
         tb_scope_opts_hint.Visibility = (Visibility.Visible if (show_vav or show_exh)
                                          else Visibility.Collapsed)
         pnl_scope_opts.Visibility = (Visibility.Visible if (show_curb or show_vav or show_exh)
@@ -1178,9 +1175,10 @@ def _show_velocity_settings_xaml(use_theme):
 
         exhaust = bool(rb_scope_exhaust.IsChecked)
         exhaust_settings = {'backdraft': bool(cb_exh_backdraft.IsChecked)}
-        if exhaust and ext_static:
+        if exhaust:
             # The two drops price modeled dampers and a ceiling fan's own cap
-            # too, so they are read whether or not their box is ticked.
+            # too, so they are read whether or not their box is ticked. Always
+            # live, external static or not (Colin, 2026-11-12).
             bd = num(tb_backdraft, 'Backdraft damper drop', 'nonneg')
             if bd is not None:
                 comp_values['backdraft'] = bd
@@ -1223,8 +1221,7 @@ def _show_velocity_settings_xaml(use_theme):
         vav_settings = vav_checks.default_settings()
         if vav:
             fields = [(f, ()) for f in vav_checks.VAV_LIMIT_FIELDS]
-            if ext_static:
-                fields += [(f, ()) for f in vav_checks.VAV_STATIC_FIELDS]
+            fields += [(f, ()) for f in vav_checks.VAV_STATIC_FIELDS]   # always live (2026-11-12)
             for (key, label, _unit, _default, kind), exps in fields:
                 v, err = vav_checks.parse_field(vav_boxes[key].Text, kind)
                 if err:
@@ -5474,12 +5471,13 @@ def _vav_box_report(root_ids, vav_by_root, root_labels, critical, vav_set):
     (external static off), 'NOT REACHED', 'NOT CHECKED', 'OK' or 'LOW'.
     """
     umax = vav_set.get('unit_max_esp')
-    minimum = float(vav_set['min_box_inwc'])
+    minimum = vav_set.get('min_box_inwc')   # None: not entered, not judged
+    minimum = None if minimum is None else float(minimum)
     basis = 'MP supply {:.0f} FPM, {:.2f} in. wc per 100 ft'.format(
         float(vav_set['mp_fpm']), float(vav_set['mp_fric']))
     title = 'VAV BOXES ({})'.format(basis)
     report = {'title': title, 'basis': basis, 'lines': ['', title], 'units': [],
-              'minimum': minimum}
+              'minimum': minimum, 'unit_max': umax}
 
     for rid in root_ids:
         vs = vav_by_root.get(rid)
@@ -5516,7 +5514,10 @@ def _vav_box_report(root_ids, vav_by_root, root_labels, critical, vav_set):
                 text += ', pressure left not checked (no unit max entered)'
             else:
                 text += ', pressure left {:.3f} in. wc'.format(left)
-                if vav_checks.pressure_low(left, minimum):
+                if minimum is None:
+                    rec['status'] = 'NOT CHECKED'
+                    text += ', not judged (no minimum at a box entered)'
+                elif vav_checks.pressure_low(left, minimum):
                     rec['status'] = 'LOW'
                     text += ', LOW: under the {:.2f} in. wc minimum'.format(minimum)
                 else:

@@ -887,7 +887,11 @@ def vav_notes(rep, sheet=False):
         if 'NOT REACHED' in statuses:
             out.append(('note', 'Not reached: the index run search did not reach the box.'))
         if 'NOT CHECKED' in statuses:
-            out.append(('note', 'Not checked: no unit max external static entered.'))
+            # Blank inputs skip the check (Colin, 2026-11-12); say which.
+            if rep.get('unit_max') is None:
+                out.append(('note', 'Not checked: no unit max external static entered.'))
+            if rep.get('minimum', 0) is None:
+                out.append(('note', 'Not judged: no minimum pressure at a box entered.'))
     return out
 
 
