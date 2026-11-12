@@ -370,7 +370,7 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertEqual(vals.count('Item'), 1)          # one table header
         self.assertIn('EXTERNAL STATIC PRESSURE - RTU-1 (id 123456)', vals)
         self.assertIn(dpc.MR_LABEL, vals)
-        self.assertIn('Supply Air total', vals)
+        self.assertIn('Supply Air subtotal', vals)
         self.assertNotIn('worst run ends at ' + LONG_TERMINAL, vals)
         self.assertIn('EXTERNAL STATIC PRESSURE - Duct 3 + Duct 4', vals)
         # No METHOD / NOT INCLUDED on the sheet (Colin, 2026-11-02): the

@@ -7633,8 +7633,9 @@ def main():
                 _ties = duct_perf_console.tied_runs(leaf.get('runs') or [leaf], leaf)
                 _names = duct_perf_console.and_join(
                     r.get('terminal_label') or r['terminal_name'] for r in [leaf] + _ties)
+                # Subtotal: the safety factor is applied once at the end.
                 return '{} {:.3f} at {}{}'.format(
-                    side, float(leaf['total_inwc']), _names, ', tied' if _ties else '')
+                    side, float(leaf['subtotal_inwc']), _names, ', tied' if _ties else '')
             if supply is not None:
                 unit_total += shown['Supply Air']['total_inwc']
                 mr_total += supply['total_inwc']
@@ -7652,7 +7653,8 @@ def main():
                 mr_parts.append(_mr_part(worst_k, worst_c))
                 rk_parts.append('{} #{}'.format(worst_k, rank_of.get(worst_k, (1, 0))[0]))
             if sides:
-                unit_rec['mr_text'] = ' + '.join(mr_parts)
+                unit_rec['mr_text'] = '{}, plus {:.0f}%'.format(
+                    ' + '.join(mr_parts), float(safety_pct))
             if ranked_set and sides:
                 unit_rec['ranked'] = True
                 unit_rec['ranked_text'] = ' + '.join(rk_parts)
@@ -7696,6 +7698,7 @@ def main():
                 # One side only. Held back, not warned about yet: whether it is
                 # half of a system depends on what else was selected.
                 one_sided.append((root_id, mr_total, sides, supply is not None))
+                unit_rec['esp_sides'] = list(sides)
             if (vav_on and sides and vav_set.get('unit_max_esp') is not None
                     and root_id in vav_by_root and vav_by_root[root_id].is_vav):
                 _umax = float(vav_set['unit_max_esp'])

@@ -257,8 +257,8 @@ class DuctPerfSectionTests(unittest.TestCase):
         self.assertEqual(body[0], dpc.TAKEOFF_HEADERS)
         self.assertEqual([r[0] for r in body[1:]],
                          ['Supply Air, 950 CFM, 3 terminals', 'Duct friction',
-                          'Fitting losses', 'Components', 'Subtotal', 'Safety factor',
-                          'Supply Air total', dpc.MR_LABEL])
+                          'Fitting losses', 'Components', 'Supply Air subtotal',
+                          'Safety factor', dpc.MR_LABEL])
         self.assertEqual(body[-1], [dpc.MR_LABEL, 'Supply Air',
                                     '', '', '0.894'])
         html = dpc.external_static(_sample_esp())
@@ -307,7 +307,9 @@ class DuctPerfSectionTests(unittest.TestCase):
         html = dpc.external_static({'units': [unit]})
         body = [[c[2] for c in r] for r in shape(html).rows]
         self.assertIn('Supply Air, run 2 of 12', html)
-        self.assertIn(['Supply Air total, run #2', '', '', '', '0.419'], body)
+        self.assertIn(['Supply Air subtotal, run #2', '', '', '', '0.381'], body)
+        self.assertEqual([r[0] for r in body[-4:-1]],
+                         ['Subtotal', 'Safety factor', dpc.RANKED_TOTAL_LABEL])
         self.assertEqual(body[-2], [dpc.RANKED_TOTAL_LABEL,
                                     'Supply Air #2 + Return Air #3, ' + dpc.RANKED_TOTAL_NOTE,
                                     '', '', '0.719'])
@@ -318,6 +320,43 @@ class DuctPerfSectionTests(unittest.TestCase):
         rows, total = dpc.esp_unit_rows(unit, sheet=True)
         self.assertEqual(rows[-1], body[-2])
         self.assertEqual(total, body[-1])
+
+    def test_safety_factor_once_at_the_end(self):
+        """Colin, 2026-11-12: sides end at a subtotal, one Safety factor row
+        near the end, and the total equals the old per side sum."""
+        def cls(name, sub):
+            return {'sys_class': name, 'rows': [('Duct friction', sub, '')],
+                    'subtotal': sub, 'safety': sub * 0.1, 'safety_detail': '+10%',
+                    'total': sub * 1.1, 'total_detail': ''}
+        s, r = 0.500123, 0.295456
+        old = s * 1.1 + r * 1.1
+        two = {'classes': [cls('Supply Air', s), cls('Return Air', r)],
+               'esp_total': old, 'esp_sides': ['Supply Air', 'Return Air'],
+               'mr_text': 'Supply Air 0.500 at D-1, plus 10%'}
+        one = {'classes': [cls('Supply Air', s)], 'esp_total': s * 1.1,
+               'esp_sides': ['Supply Air']}
+        for unit, want in ((two, old), (one, s * 1.1)):
+            for sheet in (False, True):
+                rows, total = dpc.esp_unit_rows(unit, sheet=sheet)
+                cells = [r['cells'] if 'cells' in r else r for r in rows if not (isinstance(r, dict) and 'band' in r)]
+                labels = [c[0] for c in cells if len(c) > 1]
+                self.assertEqual(labels.count('Safety factor'), 1)
+                self.assertFalse(any(l.endswith(' total') for l in labels))
+                i = labels.index('Safety factor')
+                self.assertEqual(cells[i][4], '%.3f' % (want - sum(
+                    c['subtotal'] for c in unit['classes'])))
+                self.assertAlmostEqual(float(unit['esp_total']), want, places=9)
+                self.assertEqual(total[0], dpc.MR_LABEL)
+        rows, _t = dpc.esp_unit_rows(two)
+        self.assertIn(['Subtotal', 'Supply Air + Return Air', '', '', '0.796'], rows)
+        rows, _t = dpc.esp_unit_rows(one)
+        self.assertNotIn('Subtotal', [r[0] for r in rows if isinstance(r, list)])
+        # a one side unit with no unit total row ends in its side total
+        lone = {'classes': [cls('Supply Air', s)], 'esp_total': None}
+        rows, t = dpc.esp_unit_rows(lone)
+        self.assertIsNone(t)
+        self.assertEqual([r[0] for r in rows[-2:]], ['Safety factor', 'Supply Air total'])
+        self.assertEqual(rows[-1][4], '0.550')
 
     def test_tied_runs_and_marks(self):
         """A tie is the same printed total at 0.001 in. wc (Colin, 2026-11-11):
@@ -802,7 +841,7 @@ class TakeoffTests(unittest.TestCase):
             'Fan system effect, return inlet', 'Straight duct', 'Return filter',
             'Straight duct'])
         body = lists[:5]
-        self.assertEqual(lists[5][0], 'Subtotal')
+        self.assertEqual(lists[5][0], 'Return Air subtotal')
         self.assertAlmostEqual(sum(float(r[4]) for r in body), sub, places=2)
         self.assertEqual(lists[5][4], '%.3f' % sub)
 

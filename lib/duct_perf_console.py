@@ -433,10 +433,11 @@ def _fse_head(rows):
 
 def _class_rows(cls, counted, sheet=False):
     """One system class inside the unit's combined table: a heading band, its
-    items, Subtotal, Safety factor and the class total. counted False marks a
-    side that does not go into the unit total (the lesser of return/exhaust).
+    items and the class subtotal (no safety factor here, esp_unit_rows adds it
+    once). counted False marks a side that does not go into the unit total
+    (the lesser of return/exhaust).
 
-    sheet True is the drafting view form: the class total row is returned as
+    sheet True is the drafting view form: the class subtotal row is returned as
     {'cells': [...], 'bold': True} and its long 'worst run ends at ...'
     detail is left out (the sheet puts it in the note panel under the table,
     see esp_unit_notes, because drafting view cells do not wrap)."""
@@ -457,14 +458,13 @@ def _class_rows(cls, counted, sheet=False):
         at = _fse_head(body) if cls.get('takeoff') else len(body)
         body.insert(at, ['Return filter', 'known drop', '1', '-', _f3(cls['filter'])])
     rows.extend(body)
-    rows.append(['Subtotal', '', '', '', _f3(cls['subtotal'])])
-    rows.append(['Safety factor', cls.get('safety_detail') or '', '', '',
-                 _f3(cls['safety'])])
-    total = ['{} total{}'.format(cls['sys_class'],
-                                 ', run #{}'.format(cls['rank']) if cls.get('rank') else ''),
-             '' if sheet else (cls.get('total_detail') or ''),
-             '', '', _f3(cls['total'])]
-    rows.append({'cells': total, 'bold': True} if sheet else total)
+    # The class ends at its subtotal. The safety factor is applied once, at
+    # the end of the unit's table (Colin, 2026-11-12).
+    sub = ['{} subtotal{}'.format(cls['sys_class'],
+                                  ', run #{}'.format(cls['rank']) if cls.get('rank') else ''),
+           '' if sheet else (cls.get('total_detail') or ''),
+           '', '', _f3(cls['subtotal'])]
+    rows.append({'cells': sub, 'bold': True} if sheet else sub)
     return rows
 
 
@@ -486,6 +486,26 @@ def esp_unit_rows(unit, sheet=False):
         counted = sides is None or cls['sys_class'] in sides
         rows.extend(_class_rows(cls, counted, sheet))
     total_row = None
+    counted_cls = [c for c in unit.get('classes') or []
+                   if sides is None or c['sys_class'] in sides]
+    esp_total = unit.get('esp_total')
+    if counted_cls:
+        # Safety factor once: sides' subtotals, a combined Subtotal when two
+        # sides, then the one factor row. Totals are the unit's own numbers,
+        # so the factor is total less subtotal, never recomputed.
+        names = [c['sys_class'] for c in counted_cls]
+        sub = sum(c['subtotal'] for c in counted_cls)
+        tot = (float(esp_total) if esp_total is not None
+               else sum(c['total'] for c in counted_cls))
+        det = next((c['safety_detail'] for c in counted_cls
+                    if c.get('safety_detail')), '')
+        if len(counted_cls) > 1:
+            rows.append(['Subtotal', ' + '.join(names), '', '', _f3(sub)])
+        rows.append(['Safety factor', det, '', '', _f3(tot - sub)])
+        if esp_total is None:
+            # One side only, no unit total row: the side total ends the table.
+            last = ['{} total'.format(' + '.join(names)), '', '', '', _f3(tot)]
+            rows.append({'cells': last, 'bold': True} if sheet else last)
     if unit.get('esp_total') is not None:
         mr_label = (VAVBOX_ESP_LABEL + MR_TAG if unit.get('caution') else MR_LABEL)
         if unit.get('ranked'):
