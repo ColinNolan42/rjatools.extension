@@ -7535,9 +7535,10 @@ def main():
                         duct_perf_console.and_join(_lbl(r) for r in [c] + _shown_ties))
                 else:
                     total_det = 'worst run ends at {}'.format(_lbl(c))
-                summary_lines.append(_esp_text_line('Subtotal', c['subtotal_inwc']))
-                summary_lines.append(_esp_text_line('Safety factor', safety_inwc, safety_det))
-                summary_lines.append(_esp_text_line('TOTAL', c['total_inwc'], total_det))
+                # One safety factor on the unit total, not per side (Colin,
+                # 2026-11-12): the side ends at its subtotal.
+                summary_lines.append(_esp_text_line('{} subtotal'.format(sys_class),
+                                                    c['subtotal_inwc'], total_det))
                 for u in c['unpriced']:
                     # A FALLBACK note is priced (RJA worksheet C), not missing.
                     # A NOTE (a lookup read at a table edge, tap order
@@ -7655,6 +7656,13 @@ def main():
             if sides:
                 unit_rec['mr_text'] = '{}, plus {:.0f}%'.format(
                     ' + '.join(mr_parts), float(safety_pct))
+                # Plain text: the combined subtotal and the one safety factor
+                # (Colin, 2026-11-12), printed before the total line below.
+                _sub_all = mr_total / (1.0 + float(safety_pct) / 100.0)
+                summary_lines.append(_esp_text_line('Subtotal', _sub_all,
+                                                    ' + '.join(sides)))
+                summary_lines.append(_esp_text_line('Safety factor', mr_total - _sub_all,
+                                                    '+{:.0f}%'.format(float(safety_pct))))
             if ranked_set and sides:
                 unit_rec['ranked'] = True
                 unit_rec['ranked_text'] = ' + '.join(rk_parts)
