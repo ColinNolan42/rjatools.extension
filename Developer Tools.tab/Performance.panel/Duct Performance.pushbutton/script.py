@@ -2649,7 +2649,13 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
             return None
         return math.sqrt(4.0 * dr.area_ft2 / math.pi) * 12.0
 
-    def _is_45_tap(fam):
+    def _is_45_tap(fam, main_round=True):
+        # Every tap on a rect main is a 45 deg entry: RJA taps branches and
+        # sub mains at 45 deg, so a rect supply main reads SR5-13 for any tap
+        # (Colin, 2026-11-12). Return tables on a rect main have no 45 entry
+        # version, so this changes supply only. Round mains go by family name.
+        if not main_round:
+            return True
         f = (fam or '').lower()
         return 'shoe' in f or 'bevel' in f or '45' in f
 
@@ -2821,7 +2827,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                     vav_checks.is_supply_class(dr.sys_class),
                     'round' if hvac_graph.fitting_is_round(elem) else 'rect',
                     'round' if _is_round_duct(dr) else 'rect',
-                    _is_45_tap(fam), ab / dr.area_ft2, min(qb / qc, 1.0),
+                    _is_45_tap(fam, _is_round_duct(dr)), ab / dr.area_ft2, min(qb / qc, 1.0),
                     main_d_in=_round_d_in(dr))
                 if cb is not None:
                     vc = qc / dr.area_ft2
@@ -2875,7 +2881,7 @@ def _critical_path_loss(all_root_ids, all_children, all_duct_results,
                 vav_checks.is_supply_class(dr.sys_class),
                 'round' if hvac_graph.fitting_is_round(elem) else 'rect',
                 'round' if _is_round_duct(dr) else 'rect',
-                _is_45_tap(fam), 1.0, qs / qc,
+                _is_45_tap(fam, _is_round_duct(dr)), 1.0, qs / qc,
                 ab / dr.area_ft2 if ab else None, main_d_in=_round_d_in(dr))
             if cs is not None:
                 vc = qc / dr.area_ft2
@@ -7776,9 +7782,9 @@ def main():
                    'main: As/Ac read on the 0.9 row. A tap C of 0 or less from the '
                    '2001 tables is replaced by the RJA worksheet C (FALLBACK). The '
                    '2001 book has no round shoe (boot) table on a round main; ED5-2 / '
-                   'SD5-1 (45 deg wye) stand in for it. A round shoe on a rect supply '
-                   'main has no 2001 table; SR5-13 (45 deg entry) stands in, read at '
-                   'the round tap area. RJA SP_LOSS_WORKSHEET C where '
+                   'SD5-1 (45 deg wye) stand in for it. Every tap on a rect supply main is '
+                   'a 45 deg entry (RJA standard), priced on SR5-13; a round tap is '
+                   'read at its own area, SR5-13 standing in. RJA SP_LOSS_WORKSHEET C where '
                    'geometry is unreadable (FALLBACK).'.format(
                        calc_basis['rigid_roughness'], calc_basis['flex_roughness'],
                        calc_basis['air_density']))
