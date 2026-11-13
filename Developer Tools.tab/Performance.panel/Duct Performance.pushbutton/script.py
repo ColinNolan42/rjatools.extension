@@ -521,7 +521,7 @@ def _show_velocity_settings_xaml(use_theme):
                 'Duct Performance',
                 'Checks duct sizing, velocity and friction against RJA design '
                 'standards, and calculates external static pressure.')))
-    win = forms.WPFWindow(xaml, literal_string=True)
+    win = ui_helpers.rja_wpf_window(xaml)
 
     N = lambda name: _wpf_named(win, name)
     img_logo = N('img_logo')
@@ -1979,7 +1979,7 @@ def _show_system_picker_xaml(display_names, scope_label, use_theme):
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
             .replace('@@HEADER@@', ui_helpers.rja_header_xaml(
                 'Duct Performance', 'Select the unit to analyze.')))
-    win = forms.WPFWindow(xaml, literal_string=True)
+    win = ui_helpers.rja_wpf_window(xaml)
 
     N = lambda name: _wpf_named(win, name)
     lst = N('lst')

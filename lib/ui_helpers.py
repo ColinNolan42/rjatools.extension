@@ -848,6 +848,31 @@ def rja_window_resources_xaml(use_theme=True):
         return ''
 
 
+_RJA_WINDOW_CLASS = []
+
+
+def rja_wpf_window(xaml):
+    """forms.WPFWindow for an RJA themed XAML string.
+
+    pyRevit 7.0.1 added apply_contrast_foregrounds() to WPFWindow.load_xaml.
+    It reads pyRevit's own pyRevitWindowForegroundBrush and
+    pyRevitWindowBackgroundBrush, which our <Window.Resources> (the RJA theme)
+    replaces, so it found None and raised, and every themed dialog fell back
+    to the plain one (2026-11-13). The RJA theme sets every color itself, so
+    the pass is skipped. On an older pyRevit the method is never called and
+    the override does nothing.
+    """
+    if not _RJA_WINDOW_CLASS:
+        from pyrevit import forms
+
+        class RJAWindow(forms.WPFWindow):
+            def apply_contrast_foregrounds(self):
+                return None
+
+        _RJA_WINDOW_CLASS.append(RJAWindow)
+    return _RJA_WINDOW_CLASS[0](xaml, literal_string=True)
+
+
 def rja_header_xaml(title, purpose=None):
     """XAML for the white header band: logo (x:Name img_logo), title, purpose.
 
