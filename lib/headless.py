@@ -107,8 +107,8 @@ class UiPrompter(object):
     def confirm(self, qid, text, title="", suggested="continue"):
         return bool(self.forms.alert(text, title=title, yes=True, no=True))
 
-    def notify(self, text, title=""):
-        self.forms.alert(text, title=title)
+    def notify(self, text, title="", **kwargs):
+        self.forms.alert(text, title=title, **kwargs)
 
 
 class HeadlessPrompter(object):
@@ -130,7 +130,7 @@ class HeadlessPrompter(object):
             raise NeedsDecision(qid, text, suggested)
         return self.decisions[qid] == "continue"
 
-    def notify(self, text, title=""):
+    def notify(self, text, title="", **kwargs):
         self.warnings.append(text)
 
 

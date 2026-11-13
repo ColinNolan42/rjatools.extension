@@ -316,8 +316,10 @@ def diagnose_water(element):
     # anything else is the RPZ.
     upstream = None
     if _category_id(element) == int(BuiltInCategory.OST_PipeFitting):
-        element, upstream = water_run._tee_origin(element, doc, output, forms)
-        if element is None:
+        element, upstream, stop = water_run._tee_origin(element, doc, output)
+        if stop:
+            forms.alert(stop, title="Size Water")
+            output.print_md("Stopped. Nothing was changed.")
             return
 
     try:

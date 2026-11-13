@@ -1403,3 +1403,38 @@ def run_in_transaction(doc, name, action):
     if status != TransactionStatus.Committed:
         return "; ".join(handler.errors) or "rolled back by Revit"
     return None
+
+
+def quiet_transaction_factory():
+    """(factory, check) for tools that take a transaction_factory(doc, name).
+
+    Each Transaction the factory makes carries rollback_on_error_preprocessor()
+    so a Revit warning never opens a dialog (headless runs). check() returns
+    one error text per transaction that did not commit, empty when all did."""
+    from Autodesk.Revit.DB import Transaction, TransactionStatus
+    made = []
+
+    def factory(doc, name):
+        t = Transaction(doc, name)
+        handler = rollback_on_error_preprocessor()
+        options = t.GetFailureHandlingOptions()
+        options.SetFailuresPreprocessor(handler)
+        options.SetClearAfterRollback(True)
+        t.SetFailureHandlingOptions(options)
+        made.append((name, t, handler))
+        return t
+
+    def check():
+        errors = []
+        for name, t, handler in made:
+            try:
+                status = t.GetStatus()
+            except Exception as exc:
+                errors.append("{}: {}".format(name, exc_text(exc)))
+                continue
+            if status != TransactionStatus.Committed:
+                errors.append("{}: rolled back by Revit ({})".format(
+                    name, "; ".join(handler.errors) or str(status)))
+        return errors
+
+    return factory, check
