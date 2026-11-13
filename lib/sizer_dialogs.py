@@ -120,7 +120,7 @@ def _build_window(title, heading, purpose, body_xaml, use_theme, width=560):
             .replace('@@RESOURCES@@', ui_helpers.rja_window_resources_xaml(use_theme))
             .replace('@@HEADER@@', ui_helpers.rja_header_xaml(heading, purpose))
             .replace('@@BODY@@', body_xaml))
-    win = forms.WPFWindow(xaml, literal_string=True)
+    win = ui_helpers.rja_wpf_window(xaml)
     ui_helpers.rja_apply_logo(win, _named(win, 'img_logo'))
     try:
         win.MaxHeight = SystemParameters.WorkArea.Height * 0.9
