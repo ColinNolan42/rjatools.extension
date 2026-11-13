@@ -85,10 +85,12 @@ class Recorder(object):
 
 SCRIPT = os.path.join(os.path.dirname(HERE), 'Developer Tools.tab', 'Performance.panel',
                       'Duct Performance.pushbutton', 'script.py')
+# The engine moved to lib/duct_perf_run.py (2026-11-12); read both files.
+ENGINE = os.path.join(HERE, 'duct_perf_run.py')
 
 
 def _load_drawers():
-    src = io.open(SCRIPT, encoding='utf-8').read()
+    src = (io.open(SCRIPT, encoding='utf-8').read() + '\n\n\n' + io.open(ENGINE, encoding='utf-8').read())
     m = re.search(r'^# Sheet column proportions.*?(?=^def _build_summary_view\()',
                   src, re.S | re.M)
     if not m:
@@ -329,7 +331,7 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertNotIn('700 CFM Exhaust Air', vals)
         for x0, _t, x1, _b, _c in self.rec.fills:
             self.assertLessEqual(x1, TOTAL_W + 1e-9)
-        src = io.open(SCRIPT, encoding='utf-8').read().replace('\r\n', '\n')
+        src = (io.open(SCRIPT, encoding='utf-8').read() + '\n\n\n' + io.open(ENGINE, encoding='utf-8').read()).replace('\r\n', '\n')
         m = re.search(r'^def _legend_rows\(.*?\n    \]\n', src, re.S | re.M)
         ns = {'duct_perf_console': dpc}
         exec(m.group(0), ns)

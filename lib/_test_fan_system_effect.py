@@ -24,6 +24,8 @@ import vav_checks              # noqa: E402
 
 SCRIPT = os.path.join(os.path.dirname(HERE), 'Developer Tools.tab', 'Performance.panel',
                       'Duct Performance.pushbutton', 'script.py')
+# The engine moved to lib/duct_perf_run.py (2026-11-12); read both files.
+ENGINE = os.path.join(HERE, 'duct_perf_run.py')
 
 M_PER_FT = 0.3048
 
@@ -622,7 +624,7 @@ class DialogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         with io.open(SCRIPT, encoding='utf-8') as fh:
-            cls.src = fh.read()
+            cls.src = fh.read() + '\n\n\n' + io.open(ENGINE, encoding='utf-8').read()
 
     def test_xaml_parses_with_fan_controls(self):
         m = re.search(r"^_SETTINGS_XAML = '''(.*?)'''", self.src, re.S | re.M)

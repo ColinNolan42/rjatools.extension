@@ -13,7 +13,9 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(os.path.dirname(HERE), 'Developer Tools.tab', 'Performance.panel',
                       'Duct Performance.pushbutton', 'script.py')
-SRC = io.open(SCRIPT, encoding='utf-8').read().replace('\r\n', '\n')
+# The engine moved to lib/duct_perf_run.py (2026-11-12); read both files.
+ENGINE = os.path.join(HERE, 'duct_perf_run.py')
+SRC = (io.open(SCRIPT, encoding='utf-8').read() + '\n\n\n' + io.open(ENGINE, encoding='utf-8').read()).replace('\r\n', '\n')
 
 
 def _load(*names):

@@ -29,6 +29,8 @@ SCRIPT_PATH = os.path.join(
     EXT_ROOT, "Developer Tools.tab", "Performance.panel",
     "Duct Performance.pushbutton", "script.py")
 LIB_DIR = os.path.join(EXT_ROOT, "lib")
+# The engine moved to lib/duct_perf_run.py (2026-11-12); read both files.
+ENGINE = os.path.join(LIB_DIR, "duct_perf_run.py")
 
 # fitting_tables.py has no Revit imports -> import the real thing.
 sys.path.insert(0, LIB_DIR)
@@ -39,7 +41,7 @@ import fan_system_effect  # noqa: E402  (real module, pure Python)
 import duct_perf_console  # noqa: E402  (real module, pure Python)
 import math            # noqa: E402
 
-src = io.open(SCRIPT_PATH, encoding="utf-8").read()
+src = io.open(SCRIPT_PATH, encoding="utf-8").read() + '\n\n\n' + io.open(ENGINE, encoding='utf-8').read()
 m = re.search(r"^def _critical_path_loss\(.*?\n    return result$", src, re.S | re.M)
 if not m:
     raise SystemExit("Could not find _critical_path_loss() in script.py - "
