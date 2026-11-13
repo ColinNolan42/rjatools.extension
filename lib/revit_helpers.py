@@ -1324,3 +1324,82 @@ def file_like_source_sheet(doc, new_sheet, source_sheet):
     except Exception as ex:
         return str(ex)
     return None
+
+
+# ---------------------------------------------------------------------------
+# One element per transaction, no Revit dialogs (moved from duct_size_run,
+# 2026-11-13, shared by every sizer and the headless entry points)
+# ---------------------------------------------------------------------------
+
+_PREPROCESSOR_CLASS = []
+
+
+def rollback_on_error_preprocessor():
+    """New IFailuresPreprocessor that deletes warnings and, on an error, rolls
+    back its transaction and keeps the message in .errors. Never shows a Revit
+    dialog. The class is built on first use so the CPython test stubs of
+    Autodesk.Revit.DB need none of the failure API names."""
+    if not _PREPROCESSOR_CLASS:
+        from Autodesk.Revit.DB import (
+            FailureProcessingResult, FailureSeverity, IFailuresPreprocessor)
+
+        class RollbackOnErrorPreprocessor(IFailuresPreprocessor):
+            def __init__(self):
+                self.errors = []
+
+            def PreprocessFailures(self, accessor):
+                rollback = False
+                for message in accessor.GetFailureMessages():
+                    if message.GetSeverity() == FailureSeverity.Warning:
+                        accessor.DeleteWarning(message)
+                    else:
+                        rollback = True
+                        try:
+                            self.errors.append(message.GetDescriptionText())
+                        except Exception:
+                            self.errors.append("Revit error")
+                if rollback:
+                    return FailureProcessingResult.ProceedWithRollBack
+                return FailureProcessingResult.Continue
+
+        _PREPROCESSOR_CLASS.append(RollbackOnErrorPreprocessor)
+    return _PREPROCESSOR_CLASS[0]()
+
+
+def exc_text(exc):
+    """Exception text that never raises (IronPython .NET exceptions)."""
+    try:
+        return str(exc)
+    except Exception:
+        return repr(exc)
+
+
+def run_in_transaction(doc, name, action):
+    """Run action() in its own transaction with rollback_on_error_preprocessor().
+    Returns None when committed, else the error text (nothing kept)."""
+    from Autodesk.Revit.DB import Transaction, TransactionStatus
+    t = Transaction(doc, name)
+    handler = rollback_on_error_preprocessor()
+    options = t.GetFailureHandlingOptions()
+    options.SetFailuresPreprocessor(handler)
+    options.SetClearAfterRollback(True)
+    t.SetFailureHandlingOptions(options)
+    t.Start()
+    try:
+        action()
+        doc.Regenerate()
+    except Exception as exc:
+        t.RollBack()
+        return exc_text(exc)
+    try:
+        status = t.Commit()
+    except Exception as exc:
+        try:
+            if t.HasStarted() and not t.HasEnded():
+                t.RollBack()
+        except Exception:
+            pass
+        return exc_text(exc)
+    if status != TransactionStatus.Committed:
+        return "; ".join(handler.errors) or "rolled back by Revit"
+    return None

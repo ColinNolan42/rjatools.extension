@@ -26,8 +26,7 @@
 from Autodesk.Revit.DB.Mechanical import MechanicalUtils
 from Autodesk.Revit.DB import (
     BuiltInCategory, BuiltInParameter, ConnectorProfileType, ConnectorType,
-    FailureProcessingResult, FailureSeverity, FilteredElementCollector,
-    IFailuresPreprocessor, MEPSystem, Transaction, TransactionGroup,
+    FilteredElementCollector, MEPSystem, Transaction, TransactionGroup,
     TransactionStatus)
 from Autodesk.Revit.UI.Selection import ISelectionFilter, ObjectType
 
@@ -436,63 +435,9 @@ def _param_ft(elem, bip):
 # Write
 # ---------------------------------------------------------------------------
 
-class _Failures(IFailuresPreprocessor):
-    """Delete warnings; on an error, roll back this one element and keep the
-    message so it can be reported. Never shows a Revit dialog."""
-
-    def __init__(self):
-        self.errors = []
-
-    def PreprocessFailures(self, accessor):
-        rollback = False
-        for message in accessor.GetFailureMessages():
-            if message.GetSeverity() == FailureSeverity.Warning:
-                accessor.DeleteWarning(message)
-            else:
-                rollback = True
-                try:
-                    self.errors.append(message.GetDescriptionText())
-                except Exception:
-                    self.errors.append("Revit error")
-        if rollback:
-            return FailureProcessingResult.ProceedWithRollBack
-        return FailureProcessingResult.Continue
-
-
-def _one(doc, name, action):
-    """Run action() in its own transaction. Returns None or the error text."""
-    t = Transaction(doc, name)
-    handler = _Failures()
-    options = t.GetFailureHandlingOptions()
-    options.SetFailuresPreprocessor(handler)
-    options.SetClearAfterRollback(True)
-    t.SetFailureHandlingOptions(options)
-    t.Start()
-    try:
-        action()
-        doc.Regenerate()
-    except Exception as exc:
-        t.RollBack()
-        return _text(exc)
-    try:
-        status = t.Commit()
-    except Exception as exc:
-        try:
-            if t.HasStarted() and not t.HasEnded():
-                t.RollBack()
-        except Exception:
-            pass
-        return _text(exc)
-    if status != TransactionStatus.Committed:
-        return "; ".join(handler.errors) or "rolled back by Revit"
-    return None
-
-
-def _text(exc):
-    try:
-        return str(exc)
-    except Exception:
-        return repr(exc)
+# Failure handling lives in revit_helpers (shared with the headless tools).
+_one = revit_helpers.run_in_transaction
+_text = revit_helpers.exc_text
 
 
 def _write_ducts(doc, net, plans, pieces):
