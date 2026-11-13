@@ -128,6 +128,81 @@ def size_rect(cfm, drawn_h_in, max_fpm, max_fric, friction_fn, min_wh=None):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Sizing to the space (AI design pathway, Colin 2026-11-13)
+#
+# The designer agent sizes each duct up front: the smallest even size meeting
+# the firm velocity and friction limits that ALSO fits the depth available.
+# A low ceiling or shallow plenum pancakes the duct: the depth sets the
+# height, the limits set the width (4:1 max). Nothing fits -> None with the
+# reason; the agent stops and asks Colin, never upsizes or flags on its own.
+# ---------------------------------------------------------------------------
+
+HANGER_ALLOWANCE_IN = 4.0
+
+
+def available_depth_in(structure_bottom_ft, ceiling_ft,
+                       hanger_in=HANGER_ALLOWANCE_IN):
+    """Depth for the duct, inches: bottom of structure (linked model) minus
+    the room's ceiling height, minus the hanger allowance. Both heights in
+    feet from the same datum. Never below 0."""
+    depth = (float(structure_bottom_ft) - float(ceiling_ft)) * 12.0 \
+        - float(hanger_in)
+    return max(depth, 0.0)
+
+
+def _floor_even(inches):
+    """Largest even inch not above inches (a size shall fit, so round down)."""
+    n = int(math.floor(float(inches) + 1e-6))
+    if n % 2 != 0:
+        n -= 1
+    return n
+
+
+def size_in_depth(cfm, max_depth_in, max_fpm, max_fric, friction_fn,
+                  shape=SHAPE_RECT, preferred_h_in=None, min_size=None):
+    """Smallest size meeting both limits that fits max_depth_in.
+
+    shape round: the smallest firm round size meeting the limits, and it
+    shall not be deeper than the space. shape rect: height is the available
+    depth (rounded down to even), or preferred_h_in when that is shallower;
+    the width is solved at that height within 4:1. min_size: a diffuser neck
+    (round, inches) or face (w, h) the duct shall cover.
+
+    Returns (size, None) on success, size d or (w, h); else (None, reason).
+    """
+    if max_depth_in is None:
+        return None, "no available depth given"
+    if shape == SHAPE_ROUND:
+        d = size_round(cfm, max_fpm, max_fric, friction_fn, min_d=min_size)
+        if d is None:
+            return None, "no round size up to {} in meets the limits".format(
+                ROUND_SIZES[-1])
+        if d > float(max_depth_in) + 0.01:
+            return None, ("{} in round meets the limits but the space is "
+                          "{:.1f} in deep".format(d, float(max_depth_in)))
+        return d, None
+
+    h = _floor_even(max_depth_in)
+    if preferred_h_in is not None:
+        h = min(h, _floor_even(preferred_h_in))
+    if h < MIN_DUCT_DIM:
+        return None, ("the space is {:.1f} in deep, under the {} in minimum "
+                      "duct".format(float(max_depth_in), MIN_DUCT_DIM))
+    w_min = max(snap_even(h / MAX_ASPECT), MIN_DUCT_DIM)
+    w_max = min(int(h * MAX_ASPECT), MAX_RECT_DIM)
+    w = w_min
+    while w <= w_max:
+        if _covers(w, h, min_size) and _passes(
+                cfm, rect_area_ft2(w, h), rect_dh_in(w, h), max_fpm,
+                max_fric, friction_fn):
+            return (w, h), None
+        w += 2
+    return None, ("no width up to {} in (4:1) at {} in high meets {} fpm and "
+                  "{} in. wc/100 ft for {:.0f} cfm".format(
+                      w_max, h, max_fpm, max_fric, float(cfm)))
+
+
 class DuctPlan(object):
     """What Size Duct decided for one duct."""
 
