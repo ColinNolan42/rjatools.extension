@@ -46,7 +46,8 @@ _COLORS = {
 
 
 def run(doc, uidoc, output, forms):
-    """Run the tool. Returns True if it finished."""
+    """Run the tool (button path): dialog, plan view check, start point pick,
+    then the same core the headless entry uses. Returns True if it finished."""
     output.print_md("# Water Performance")
 
     view = doc.ActiveView
@@ -55,20 +56,46 @@ def run(doc, uidoc, output, forms):
     if settings is None:
         output.print_md("Cancelled. Nothing was changed.")
         return False
-    # Only the size and velocity check colors a copy of the plan.
-    if settings["velocity"] and (not isinstance(view, ViewPlan) or
-                                 view.IsTemplate):
-        forms.alert("Open the floor plan to check, then run again. Pipe size "
-                    "and velocity colors a copy of the active plan view.",
-                    title="Water Performance")
+    stop = check_plan_view(view, settings)
+    if stop:
+        forms.alert(stop, title="Water Performance")
         return False
 
     origin, upstream = water_run.pick_origin(uidoc, doc, output, forms)
     if origin is None:
         return False
 
+    outcome = perf_core(doc, settings, origin, upstream, view, output)
+    return outcome["status"] == "ok"
+
+
+def check_plan_view(view, settings, make_sheets=True):
+    """None when the view can take the colored copy, else why not. Only the
+    size and velocity check with sheets colors a copy of the plan."""
+    if not (make_sheets and settings.get("velocity")):
+        return None
+    if not isinstance(view, ViewPlan) or view.IsTemplate:
+        return ("Open the floor plan to check, then run again. Pipe size "
+                "and velocity colors a copy of the active plan view.")
+    return None
+
+
+def perf_core(doc, settings, origin, upstream, view, output, make_sheets=True):
+    """Traverse, size in memory, judge, and (make_sheets=True) make the
+    colored view and sheets. Shared by the button and run_headless.
+
+    Returns dict: status ("ok" or "refused"), message, graph, sizing, recirc,
+    results, items, checks, system_errors, pressure, pumps, warnings and
+    created (view and sheet ids made this run).
+    """
+    outcome = {"status": "ok", "message": "", "graph": None, "sizing": None,
+               "recirc": None, "results": {}, "items": [], "checks": None,
+               "system_errors": [], "pressure": None, "pumps": None,
+               "warnings": [], "created": {}}
+
     revit_helpers.reset_pipe_diameter_approach()
     graph = water_graph.build_water_network(origin, doc, upstream)
+    outcome["graph"] = graph
 
     # Same order as Size Water, so the return is out of the supply tree
     # before demand is counted.
@@ -83,16 +110,20 @@ def run(doc, uidoc, output, forms):
             graph,
             heat_loss_btu_per_100ft=settings["recirc_heat_loss_btu_per_100ft"],
             delta_t_f=settings["recirc_delta_t_f"])
+    outcome["recirc"] = recirc
 
     # In memory only. write_sizes is never called.
     sizing = water_sizing_engine.size_network(
         graph, apply_minimums=True, return_system_type_ids=return_ids,
         recirc=recirc)
+    outcome["sizing"] = sizing
 
     if not sizing["segments"]:
         output.print_md("No pipes were found on this system. Nothing was "
                         "changed.")
-        return False
+        outcome["status"] = "refused"
+        outcome["message"] = "No pipes were found on this system."
+        return outcome
     if sizing.get("flush_valve_system"):
         output.print_md("The system serves a flush valve fixture: cold water "
                         "demand uses the flush valve column of Table "
@@ -109,6 +140,7 @@ def run(doc, uidoc, output, forms):
             key = water_tables.SYSTEM_HOT if hot else water_tables.SYSTEM_COLD
             results[segment.element_id] = water_performance.classify(
                 segment, key, settings["speed_tolerance"])
+    outcome["results"] = results
 
     if settings.get("pressure_loss") or settings.get("pump_duty"):
         _read_device_drops(graph)
@@ -121,8 +153,10 @@ def run(doc, uidoc, output, forms):
             pressure = water_pressure.analyze(graph, sizing,
                                               settings["start_psi"])
         except Exception as exc:
-            output.print_md(":warning: Pressure loss failed, not reported: "
-                            "{}".format(str(exc)))
+            text = "Pressure loss failed, not reported: {}".format(str(exc))
+            outcome["warnings"].append(text)
+            output.print_md(":warning: " + text)
+    outcome["pressure"] = pressure
     pumps = None
     if settings.get("pump_duty") and recirc is not None:
         try:
@@ -130,8 +164,10 @@ def run(doc, uidoc, output, forms):
                 graph, recirc, settings["circuit_setter_psi"],
                 settings["pump_safety_factor"])
         except Exception as exc:
-            output.print_md(":warning: Pump duty point failed, not reported: "
-                            "{}".format(str(exc)))
+            text = "Pump duty point failed, not reported: {}".format(str(exc))
+            outcome["warnings"].append(text)
+            output.print_md(":warning: " + text)
+    outcome["pumps"] = pumps
 
     # The model checks and the numbered list of problem runs (one row per run,
     # the first pipe of it), then the system errors that can make the
@@ -140,13 +176,20 @@ def run(doc, uidoc, output, forms):
     items = water_flagging.flag_items(graph, results) if results else []
     system_errors = water_system_errors.collect(
         graph, sizing, recirc, checks, items, pressure, pumps)
+    outcome["checks"] = checks
+    outcome["items"] = items
+    outcome["system_errors"] = system_errors
 
     stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    created = outcome["created"]
     new_view = None
     if results:
-        fitting_labels = _fitting_labels(graph, results)
-        new_view = _make_colored_view(doc, output, view, graph, results,
-                                      fitting_labels, stamp, items)
+        if make_sheets:
+            fitting_labels = _fitting_labels(graph, results)
+            new_view = _make_colored_view(doc, output, view, graph, results,
+                                          fitting_labels, stamp, items)
+            if new_view is not None:
+                created["colored_view_id"] = revit_helpers.eid_int(new_view.Id)
         _print_report(output, results, sizing, settings["speed_tolerance"],
                       items, system_errors)
     if pressure is not None:
@@ -156,6 +199,11 @@ def run(doc, uidoc, output, forms):
     elif settings.get("pump_duty"):
         output.print_md("No hot water return was found, so there is no "
                         "recirculation pump duty point.")
+    if not make_sheets:
+        output.print_md("Results only (make_sheets=False): no view or sheet "
+                        "was made.")
+        return outcome
+
     extra = [t for t in [_pressure_table(pressure, settings["start_psi"])] +
              _pump_tables(pumps, settings) if t]
     # The WSFU take-off goes on the colored plan sheet, under the flagged
@@ -169,15 +217,239 @@ def run(doc, uidoc, output, forms):
             "by": settings["by"],
         }, recirc)
     if new_view is not None:
-        _make_sheet(doc, output, view, new_view, results, stamp,
-                    settings["speed_tolerance"], extra, wsfu, items,
-                    system_errors)
+        sheet = _make_sheet(doc, output, view, new_view, results, stamp,
+                            settings["speed_tolerance"], extra, wsfu, items,
+                            system_errors)
+        _record(created, "sheet", sheet)
     else:
         if extra:
-            _make_tables_sheet(doc, output, extra, stamp)
+            _record(created, "tables",
+                    _make_tables_sheet(doc, output, extra, stamp))
         if wsfu is not None:
-            _create_wsfu_view(doc, output, *wsfu)
-    return True
+            _record(created, "wsfu", _create_wsfu_view(doc, output, *wsfu))
+    return outcome
+
+
+def _record(created, key, made):
+    """Put the ids of what a builder made under created. made is a sheet, a
+    view, or a (view, sheet) pair; None is skipped."""
+    if made is None:
+        return
+    if isinstance(made, tuple):
+        view, sheet = made
+        if view is not None:
+            created[key + "_view_id"] = revit_helpers.eid_int(view.Id)
+        if sheet is not None:
+            created[key + "_sheet_id"] = revit_helpers.eid_int(sheet.Id)
+            created[key + "_sheet_number"] = sheet.SheetNumber
+        return
+    created[key + "_id"] = revit_helpers.eid_int(made.Id)
+    number = getattr(made, "SheetNumber", None)
+    if number:
+        created[key + "_number"] = number
+
+
+# ---------------------------------------------------------------------------
+# Headless entry (pyRevit agent runtime: no dialog, no pick, no alert)
+# ---------------------------------------------------------------------------
+
+TOOL = "water_performance"
+DETAILS = ("flagged", "all")
+
+
+def default_settings(doc=None):
+    """What the dialog prefills (checks ticked as the dialog opens: size and
+    velocity on, WSFU take-off on, pressure loss and pump duty off)."""
+    settings = water_run.default_settings(doc)
+    settings.update({
+        "velocity": True,
+        "speed_tolerance": float(water_performance.SPEED_TOLERANCE),
+        "wsfu_calcs": True,
+        "pressure_loss": False,
+        "start_psi": float(water_pressure.DEFAULT_START_PSI),
+        "pump_duty": False,
+        "circuit_setter_psi": float(water_pump.DEFAULT_CIRCUIT_SETTER_PSI),
+        "pump_safety_factor": float(water_pump.DEFAULT_SAFETY_FACTOR),
+    })
+    return settings
+
+
+def merge_settings(overrides, doc=None):
+    """default_settings with the caller's values on top; unknown keys raise."""
+    settings = default_settings(doc)
+    unknown = sorted(set(overrides or {}) - set(settings))
+    if unknown:
+        raise ValueError("unknown Water Performance setting(s): {}".format(
+            ", ".join(unknown)))
+    settings.update(overrides or {})
+    return settings
+
+
+def _num(settings, key, problems, low=None, high=None, low_open=False):
+    try:
+        value = float(settings[key])
+    except (TypeError, ValueError):
+        problems.append("{} is not a number".format(key))
+        return
+    if low is not None and (value <= low if low_open else value < low):
+        problems.append("{} shall be {} {}".format(
+            key, "above" if low_open else "at least", low))
+    if high is not None and value > high:
+        problems.append("{} shall be at most {}".format(key, high))
+
+
+def validate_settings(settings):
+    """Problems as text, empty when the settings can run. Same limits as the
+    dialog (tolerance and safety factor as fractions here)."""
+    problems = water_run.validate_settings(settings)
+    if not (settings.get("velocity") or settings.get("pressure_loss") or
+            settings.get("pump_duty") or settings.get("wsfu_calcs")):
+        problems.append("tick at least one check: velocity, pressure_loss, "
+                        "pump_duty or wsfu_calcs")
+    _num(settings, "speed_tolerance", problems, 0.0, 1.0)
+    if settings.get("pressure_loss"):
+        _num(settings, "start_psi", problems, 0.0, low_open=True)
+    if settings.get("pump_duty"):
+        _num(settings, "circuit_setter_psi", problems, 0.0)
+        _num(settings, "pump_safety_factor", problems, 0.0, 1.0)
+    return problems
+
+
+def run_headless(doc, start_id, start=water_run.START_RPZ, settings=None,
+                 decisions=None, make_sheets=False, view_id=None,
+                 detail="flagged", include_log=False, output=None):
+    """Water Performance with no UI. Returns the headless.result envelope.
+
+    start_id / start: the RPZ ("rpz") or the tee on the existing cold main
+    ("tee"). decisions: {"no_cold_connector": "continue" | "stop"}.
+    make_sheets=False (default) judges and reports only, nothing is made, so
+    it runs in run_query. make_sheets=True colors a copy of the plan view
+    (view_id, else the active view) and makes the sheets (run_modify).
+    detail "flagged" lists the pipes not green; "all" every judged pipe.
+    """
+    import headless
+    recorder = headless.RecordingOutput(forward=output)
+    state = {"prompter": None, "warnings": []}
+
+    def done(status, data=None, errors=None, created=None, decision_exc=None):
+        log = recorder.log if include_log else None
+        prompter = state["prompter"]
+        warnings = state["warnings"] + (list(prompter.warnings) if prompter
+                                        else [])
+        if decision_exc is not None:
+            return headless.needs_decision(TOOL, decision_exc, warnings, log)
+        return headless.result(TOOL, status, data=data, warnings=warnings,
+                               errors=errors, created=created, log=log)
+
+    try:
+        state["prompter"] = headless.HeadlessPrompter(decisions)
+        settings = merge_settings(settings, doc)
+    except ValueError as exc:
+        return done("refused", errors=[str(exc)])
+    problems = validate_settings(settings)
+    if start not in (water_run.START_RPZ, water_run.START_TEE):
+        problems.append("start shall be 'rpz' or 'tee'")
+    if detail not in DETAILS:
+        problems.append("detail shall be 'flagged' or 'all'")
+    if problems:
+        return done("refused", errors=problems)
+
+    view = None
+    if make_sheets and settings["velocity"]:
+        view = (water_run._element(doc, view_id) if view_id is not None
+                else doc.ActiveView)
+        stop = check_plan_view(view, settings, make_sheets)
+        if stop:
+            return done("refused", errors=[stop])
+
+    recorder.print_md("# Water Performance (headless)")
+    try:
+        origin, upstream, stop = water_run.resolve_origin(
+            doc, water_run._element(doc, start_id), start, state["prompter"],
+            recorder)
+        if stop == water_run._DECLINED:
+            return done("cancelled")
+        if stop:
+            return done("refused", errors=[stop])
+        outcome = perf_core(doc, settings, origin, upstream, view, recorder,
+                            make_sheets=make_sheets)
+    except headless.NeedsDecision as exc:
+        return done("needs_decision", decision_exc=exc)
+    except Exception as exc:
+        return done("error", errors=[revit_helpers.exc_text(exc)])
+
+    state["warnings"].extend(outcome["warnings"])
+    if outcome["status"] != "ok":
+        return done(outcome["status"], errors=[outcome["message"]])
+    data = _envelope_data(outcome, origin, upstream, start, settings,
+                          make_sheets, detail)
+    return done("ok", data=data, created=outcome["created"])
+
+
+def _envelope_data(outcome, origin, upstream, start, settings, make_sheets,
+                   detail):
+    """The JSON data block of the headless result."""
+    results = outcome["results"]
+    counts = water_performance.summarize(results.values()) if results else {}
+    pipes = []
+    for r in sorted(results.values(), key=lambda x: str(x.element_id)):
+        if detail == "flagged" and r.label == water_performance.GREEN:
+            continue
+        pipes.append({
+            "id": r.element_id, "label": r.label, "reason": r.reason,
+            "system": r.system, "is_return": r.is_return,
+            "drawn_in": r.drawn_in, "required": r.required_nominal,
+            "required_in": r.required_in, "gpm": r.gpm, "fps": r.fps,
+            "limit_fps": r.limit_fps, "length_ft": r.length_feet,
+            "existing": r.existing,
+        })
+    items = outcome["items"]
+    checks = outcome["checks"] or {"errors": [], "warnings": [],
+                                   "ready_for_sizing": None}
+    data = {
+        "origin": {"id": revit_helpers.eid_int(origin.Id), "start": start,
+                   "tee_reason": (upstream or {}).get("reason")},
+        "make_sheets": bool(make_sheets),
+        "checks_run": dict((k, bool(settings.get(k))) for k in
+                           ("velocity", "pressure_loss", "pump_duty",
+                            "wsfu_calcs")),
+        "counts": counts,
+        "pipes_listed": detail,
+        "pipes": pipes,
+        "attention": {"columns": list(water_flagging.CONSOLE_COLUMNS),
+                      "rows": [water_flagging.row_cells(i) for i in items]},
+        "system_errors": [{"severity": sev, "text": text}
+                          for sev, text in outcome["system_errors"]],
+        "ready_for_sizing": checks["ready_for_sizing"],
+        "check_errors": [f.message for f in checks["errors"]],
+        "check_warnings": [f.message for f in checks["warnings"]],
+        "totals": outcome["sizing"].get("totals"),
+    }
+    pressure = outcome["pressure"]
+    if pressure is not None:
+        critical = pressure["critical"]
+        data["pressure"] = {
+            "start_psi": settings["start_psi"],
+            "summary": water_pressure.outlet_summary(pressure),
+            "critical": _critical_line(critical) if critical else None,
+            "warnings": list(pressure["warnings"]),
+            "columns": [c[0] for c in water_pressure.TABLE_COLUMNS],
+            "failing": water_pressure.table_rows(pressure, failing_only=True),
+        }
+    pumps = outcome["pumps"]
+    if pumps:
+        data["pumps"] = {
+            "columns": [c[0] for c in water_pump.TABLE_COLUMNS],
+            "rows": water_pump.table_rows(pumps),
+            "flow_lines": [water_pump.flow_line(p) for p in pumps],
+        }
+    recirc = outcome["recirc"]
+    if recirc:
+        data["recirc"] = {
+            "total_gpm": recirc.get("total_gpm"),
+            "circuit_setters": len(recirc.get("legs") or []),
+        }
+    return data
 
 
 def _create_wsfu_view(doc, output, graph, sizing, header, recirc=None):
@@ -197,7 +469,7 @@ def _create_wsfu_view(doc, output, graph, sizing, header, recirc=None):
             output.print_md(
                 "Could not create the drafting view. The project needs a "
                 "Drafting view family type and at least one Text Note type.")
-            return
+            return None
 
         output.print_md("Created drafting view **{}**.".format(view.Name))
 
@@ -223,6 +495,8 @@ def _create_wsfu_view(doc, output, graph, sizing, header, recirc=None):
         output.print_md(
             "Drafting view failed, nothing was added to the model: "
             "{}".format(str(exc)))
+        return None
+    return view, sheet
 
 
 def _fitting_labels(graph, results):
@@ -621,12 +895,13 @@ def _make_tables_sheet(doc, output, tables, stamp):
         transaction.RollBack()
         output.print_md("Sheet failed, the results above are printed only: "
                         "{}".format(str(exc)))
-        return
+        return None
     if sheet is not None:
         output.print_md("Created sheet **{}**.".format(sheet.SheetNumber))
     else:
         output.print_md("Created drafting view **Water Performance Tables - "
                         "{}** (no title block for a sheet).".format(stamp))
+    return view, sheet
 
 
 def _make_sheet(doc, output, source_view, plan_view, results, stamp,
@@ -679,7 +954,7 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
             transaction.RollBack()
             output.print_md("No title block is loaded, so no sheet was made. "
                             "The colored view is kept.")
-            return
+            return None
         err = revit_helpers.file_like_source_sheet(doc, sheet, source_sheet)
         if err:
             output.print_md("Could not file the sheet in the sheet browser: "
@@ -689,10 +964,11 @@ def _make_sheet(doc, output, source_view, plan_view, results, stamp,
         transaction.RollBack()
         output.print_md("Sheet failed, the colored view is kept: {}".format(
             str(exc)))
-        return
+        return None
     output.print_md("Created sheet **{}**{}.".format(
         sheet.SheetNumber,
         ", WSFU take-off included" if wsfu is not None and wsfu_view else ""))
+    return sheet
 
 
 def _print_report(output, results, sizing, tolerance, items=None,
