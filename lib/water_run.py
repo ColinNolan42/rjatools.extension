@@ -236,8 +236,8 @@ def run_headless(doc, start_id, start=START_RPZ, settings=None,
     "continue" | "stop"}. write=False sizes and reports only (run_query);
     write=True writes pipes, fittings and fixture stubs, each transaction
     with the warning deleting failure handler (run_modify). detail "flagged"
-    lists pipes with a flag, unsized, held or over the table; "all" lists
-    every pipe. output: optional window to forward the report to.
+    lists pipes whose size changes, with a flag, unsized, over the table or
+    existing and too small; "all" lists every pipe. output: optional window to forward the report to.
     """
     import headless
     recorder = headless.RecordingOutput(forward=output)
@@ -313,8 +313,13 @@ def _envelope_data(outcome, origin, upstream, start, write, detail):
     recirc = outcome["recirc"]
     pipes = []
     for s in sizing["segments"]:
-        listed = (detail == "all" or s.flag or s.nominal_size is None
-                  or s.keep_existing or s.exceeds_table or s.upsize_needed)
+        # An existing pipe left at its size is listed only when it needs
+        # upsizing; a fine one is not a finding.
+        changed = (not s.keep_existing and s.size_inches is not None and
+                   s.existing_size_in is not None and
+                   abs(float(s.size_inches) - float(s.existing_size_in)) > 1e-6)
+        listed = (detail == "all" or changed or s.flag or s.nominal_size is None
+                  or s.exceeds_table or s.upsize_needed)
         if not listed:
             continue
         pipes.append({
@@ -322,7 +327,8 @@ def _envelope_data(outcome, origin, upstream, start, write, detail):
             "wsfu": s.demand_wsfu, "gpm": s.demand_gpm,
             "circ_gpm": s.circ_gpm, "is_return": s.is_return,
             "drawn_in": s.existing_size_in, "size": s.nominal_size,
-            "size_in": s.size_inches, "rule": s.rule, "flag": s.flag,
+            "size_in": s.size_inches, "changed": changed,
+            "rule": s.rule, "flag": s.flag,
             "length_ft": s.length_feet, "fixtures": s.fixture_count,
             "exceeds_table": s.exceeds_table,
             "keep_existing": s.keep_existing,

@@ -133,14 +133,14 @@ check("tee on a pipe", "TEE" in water_run.resolve_origin(
 
 # --- run_headless with a fake core -------------------------------------------
 class Seg(object):
-    def __init__(self, n, flag="", size='1"', keep=False):
+    def __init__(self, n, flag="", size='1"', keep=False, resized=False):
         self.element_id = n
         self.system = "DCW"
         self.demand_wsfu = 10.0
         self.demand_gpm = 8.0
         self.circ_gpm = None
         self.is_return = False
-        self.existing_size_in = 1.0
+        self.existing_size_in = 0.75 if resized else 1.0
         self.nominal_size = size
         self.size_inches = 1.0 if size else None
         self.rule = "table"
@@ -181,7 +181,7 @@ def fake_core(doc, settings, origin, upstream, output, prompter, write=True,
         "recirc": {"total_gpm": 1.5, "root_gpm": {9: 1.5}, "legs": [1, 2, 3],
                    "unrooted_pipe_ids": [], "heat_loss_btu_per_100ft": 5000.0,
                    "delta_t_f": 20.0},
-        "sizing": {"segments": [Seg(11), Seg(12, flag="min 3/4"),
+        "sizing": {"segments": [Seg(11), Seg(12, flag="min 3/4"), Seg(15, resized=True),
                                 Seg(13, size=None), Seg(14, keep=True)],
                    "totals": {"pipe_count": 4, "sized_count": 3},
                    "flags": ["min 3/4 on 12"]},
@@ -193,7 +193,8 @@ water_run.size_core = fake_core
 r = water_run.run_headless(None, 5, write=False)
 check("ok status", r["status"] == "ok")
 check("plan only, no factory", CALLS[-1] == (False, None))
-check("flagged pipes", [p["id"] for p in r["data"]["pipes"]] == [12, 13, 14])
+check("flagged pipes", [p["id"] for p in r["data"]["pipes"]] == [12, 15, 13])
+check("changed field", [p["changed"] for p in r["data"]["pipes"]] == [False, True, False])
 check("origin", r["data"]["origin"] == {"id": 5, "start": "rpz", "tee_reason": None})
 check("notify to warnings", r["warnings"] == ["2 pipe(s) over the table"])
 check("recirc summary", r["data"]["recirc"]["circuit_setters"] == 3
@@ -203,7 +204,7 @@ check("no log", "log" not in r)
 check("json", isinstance(json.dumps(r), str))
 
 r = water_run.run_headless(None, 5, write=False, detail="all", include_log=True)
-check("all pipes", len(r["data"]["pipes"]) == 4)
+check("all pipes", len(r["data"]["pipes"]) == 5)
 check("log kept", any(k == "md" and v == "core ran" for k, v in r["log"]))
 
 r = water_run.run_headless(None, 6, write=False)
