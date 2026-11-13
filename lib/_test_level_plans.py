@@ -143,8 +143,10 @@ class WiringTests(unittest.TestCase):
 
     def test_plan_pick_uses_overlap(self):
         self.assertIn('key = _plan_rank(rank, _view_crop_rect(v), level_rects.get(lid))', SRC)
-        self.assertIn('_target_plan_views(active_view, level_ids, sheets_by_view,\n'
-                      '                                                       level_rects)', SRC)
+        # Whitespace free: the call sits one level deeper inside perf_core's
+        # make_sheets guard since 2026-11-13.
+        self.assertRegex(SRC, r'_target_plan_views\(active_view, level_ids, sheets_by_view,'
+                              r'\s+level_rects\)')
 
     def test_unverified_api_is_guarded(self):
         # ViewPlan.Create and the CropBox read and write are wrapped and
