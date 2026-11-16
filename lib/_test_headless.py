@@ -134,5 +134,14 @@ check("needs_decision", nd["status"] == "needs_decision"
                              "suggested": "stop"})
 check("envelope dumps", isinstance(json.dumps(nd), str))
 
+# .NET numbers: ElementId.Value is System.Int64 in IronPython 2.7, which is
+# neither int nor long there, so it went out as text before (2026-11-16).
+Int64 = type("Int64", (object,), {"__int__": lambda self: 3592589})
+Double = type("Double", (object,), {"__float__": lambda self: 99.45})
+check("Int64 as int", h.jsonable(Int64()) == 3592589
+      and isinstance(h.jsonable(Int64()), int))
+check("Double as float", h.jsonable(Double()) == 99.45)
+check("Int64 dict key", h.jsonable({Int64(): 1}) == {"3592589": 1})
+
 print("{} checks, {} failed".format(COUNT[0], len(FAILS)))
 sys.exit(1 if FAILS else 0)

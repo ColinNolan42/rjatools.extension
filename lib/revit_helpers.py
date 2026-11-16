@@ -944,9 +944,17 @@ def is_pipe(element):
 
 
 def get_element_by_id(doc, element_id_int):
-    """Retrieve a Revit element by integer id. Returns None on failure."""
+    """Retrieve a Revit element by integer id. Returns None on failure.
+
+    Revit 2024+ ElementId takes an Int64; IronPython does not convert a
+    plain int to it, so Int64 is tried first and int is the 2022/2023 path."""
     try:
-        return doc.GetElement(ElementId(element_id_int))
+        try:
+            from System import Int64
+            eid = ElementId(Int64(int(element_id_int)))
+        except Exception:
+            eid = ElementId(int(element_id_int))
+        return doc.GetElement(eid)
     except Exception as e:
         _log_entry("ERROR", "get_element_by_id", element_id_int,
                    "doc.GetElement failed: {}".format(str(e)))

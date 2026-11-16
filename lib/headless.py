@@ -11,6 +11,9 @@
 #
 # IronPython 2.7 and CPython 3.
 
+_NET_INTS = ("Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64", "Byte")
+_NET_FLOATS = ("Double", "Single", "Decimal")
+
 STATUSES = ("ok", "cancelled", "refused", "needs_decision", "error")
 DECISIONS = ("continue", "stop")
 
@@ -184,6 +187,13 @@ def jsonable(obj, _depth=0):
         return obj
     if isinstance(obj, _STR_TYPES):
         return obj
+    # .NET numbers (ElementId.Value is System.Int64 in IronPython 2.7, which
+    # is neither int nor long there).
+    tname = type(obj).__name__
+    if tname in _NET_INTS:
+        return int(obj)
+    if tname in _NET_FLOATS:
+        return jsonable(float(obj), _depth + 1)
     if isinstance(obj, dict):
         return dict((_key(k), jsonable(v, _depth + 1)) for k, v in obj.items())
     if isinstance(obj, (list, tuple, set, frozenset)):

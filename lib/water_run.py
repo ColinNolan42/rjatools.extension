@@ -291,17 +291,8 @@ def run_headless(doc, start_id, start=START_RPZ, settings=None,
 
 
 def _element(doc, element_id):
-    """Element from an integer id (Int64 for Revit 2024+), None if absent."""
-    from Autodesk.Revit.DB import ElementId
-    try:
-        from System import Int64
-        eid = ElementId(Int64(int(element_id)))
-    except Exception:
-        eid = ElementId(int(element_id))
-    try:
-        return doc.GetElement(eid)
-    except Exception:
-        return None
+    """Element from an integer id, None if absent."""
+    return revit_helpers.get_element_by_id(doc, element_id)
 
 
 def _envelope_data(outcome, origin, upstream, start, write, detail):
