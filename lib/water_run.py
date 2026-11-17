@@ -177,6 +177,7 @@ TOOL = "size_water"
 START_RPZ = "rpz"
 START_TEE = "tee"
 DETAILS = ("flagged", "all")
+QIDS = ("incomplete_system", "no_cold_connector")  # prompter.confirm ids
 
 
 def default_settings(doc=None):

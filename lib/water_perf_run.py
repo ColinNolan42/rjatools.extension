@@ -255,6 +255,7 @@ def _record(created, key, made):
 
 TOOL = "water_performance"
 DETAILS = ("flagged", "all")
+QIDS = ("no_cold_connector",)  # prompter.confirm ids
 
 
 def default_settings(doc=None):

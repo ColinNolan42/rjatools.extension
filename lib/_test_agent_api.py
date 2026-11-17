@@ -1,5 +1,6 @@
 # Plain CPython tests for agent_api.py with fake tool modules.
 # Run: python _test_agent_api.py
+import io
 import os
 import sys
 import types
@@ -83,34 +84,34 @@ check("water_perf pass", kw["start"] == "tee" and kw["view_id"] == 9)
 api.diagnose("DOC", 7, include_report=True)
 check("diagnose pass", CALLS["diagnose_run"][1]["include_report"] is True)
 
-# gas table_id required and checked
-r = api.size_gas("DOC", 8)
-check("gas no table refused", r["status"] == "refused")
-check("gas lists ids once", r["data"]["table_ids"] == ["402.4(2)", "402.4(5)"])
-r = api.size_gas("DOC", 8, table_id="bogus")
-check("gas bad table refused", r["status"] == "refused")
+# gas: table_id from the argument or settings, refused only when both differ
 CALLS.pop("gas_run", None)
 r = api.size_gas("DOC", 8, table_id="402.4(5)", settings={"heat_content_btu_per_cf": 1000.0})
 args, kw = CALLS["gas_run"]
 check("gas ok", r["status"] == "ok")
 check("gas table merged", kw["settings"]["table_id"] == "402.4(5)" and kw["settings"]["heat_content_btu_per_cf"] == 1000.0)
 check("gas write off", kw["write"] is False)
+CALLS.pop("gas_run", None)
+api.size_gas("DOC", 8, settings={"table_id": "402.4(2)"})
+check("gas table in settings", CALLS["gas_run"][1]["settings"]["table_id"] == "402.4(2)")
+CALLS.pop("gas_run", None)
+api.size_gas("DOC", 8)
+check("gas no table left to gas_run", CALLS["gas_run"][1]["settings"].get("table_id") is None)
+CALLS.pop("gas_run", None)
+r = api.size_gas("DOC", 8, table_id="402.4(5)", settings={"table_id": "402.4(2)"})
+check("gas table twice refused", r["status"] == "refused" and "gas_run" not in CALLS)
 
-# engine check: CPython here runs; faked IronPython is refused before the call
+# duct passes straight through (duct_perf_run itself refuses IronPython)
 CALLS.pop("duct_perf_run", None)
 r = api.duct_performance("DOC", 10, scope="vav", fan_cfm=300)
-check("duct runs on cpython", r["status"] == "ok")
+check("duct ok", r["status"] == "ok")
 check("duct pass", CALLS["duct_perf_run"][1]["scope"] == "vav" and CALLS["duct_perf_run"][1]["fan_cfm"] == 300)
 check("duct sheets off", CALLS["duct_perf_run"][1]["make_sheets"] is False)
-real_platform = sys.platform
-CALLS.pop("duct_perf_run", None)
-try:
-    sys.platform = "cli"
-    r = api.duct_performance("DOC", 10)
-finally:
-    sys.platform = real_platform
-check("duct refused on ironpython", r["status"] == "refused" and "cpython" in r["errors"][0])
-check("duct not called on ironpython", "duct_perf_run" not in CALLS)
+
+# decisions are structured: qid plus how to answer it
+for row in listed:
+    for d in row["decisions"]:
+        check("decision shape " + row["operation"], set(d) == {"qid", "answer_with"} and d["answer_with"] in ("decisions", "fan_cfm"))
 
 # a failure inside a tool comes back as an error envelope
 def boom(*a, **k):
@@ -118,11 +119,50 @@ def boom(*a, **k):
 sys.modules["diagnose_run"].run_headless = boom
 r = api.diagnose("DOC", 1)
 check("error envelope", r["status"] == "error" and "revit said no" in r["errors"][0])
+check("error traceback", "traceback" in r["data"] and any("boom" in line or "revit said no" in line for line in r["data"]["traceback"]))
+def ask(*a, **k):
+    raise headless.NeedsDecision("incomplete_system", "System is incomplete. Continue?", "stop")
+sys.modules["diagnose_run"].run_headless = ask
+r = api.diagnose("DOC", 1)
+check("escaped question", r["status"] == "needs_decision" and r["decision"]["qid"] == "incomplete_system")
 check("envelope keys", set(r) >= {"tool", "status", "data", "warnings", "errors", "created"})
 del sys.modules["water_run"]
 sys.modules["water_run"] = None  # import of water_run now fails
 r = api.size_water("DOC", 5)
 check("import failure envelope", r["status"] == "error")
+
+
+# drift: the hand written TOOLS table against the real modules' source
+import ast
+HERE = os.path.dirname(os.path.abspath(__file__))
+def consts(module):
+    tree = ast.parse(io.open(os.path.join(HERE, module + ".py"), encoding="utf-8").read())
+    out = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                out[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                out[node.targets[0].id] = node.value
+    return out
+gas_c = consts("gas_run")
+for t in api.TOOLS:
+    c = consts(t["module"])
+    check("real TOOL " + t["operation"], c.get("TOOL") == t["operation"])
+    qids = c.get("QIDS")
+    if t["module"] == "gas_run":
+        qids = (gas_c["QID_WARNINGS"],)
+    check("real QIDS " + t["operation"], tuple(d["qid"] for d in t["decisions"]) == tuple(qids))
+duct_c = consts("duct_perf_run")
+check("real duct engine", duct_c["ENGINE"] == api._tool("duct_performance")["engine"])
+for sc in duct_c["SCOPES"]:
+    check("scope listed " + sc, sc in api._tool("duct_performance")["ids"])
+duct_src = io.open(os.path.join(HERE, "duct_perf_run.py"), encoding="utf-8").read()
+check("duct refuses ironpython", "if sys.platform == 'cli':\n        return done('refused'" in duct_src)
+for mod, qids in (("water_run", ("incomplete_system", "no_cold_connector")), ("water_perf_run", ("no_cold_connector",))):
+    src = io.open(os.path.join(HERE, mod + ".py"), encoding="utf-8").read()
+    for q in qids:
+        check("qid raised in %s %s" % (mod, q), '"%s"' % q in src.split("QIDS =", 1)[1])
 
 print("%d checks, %d failed" % (COUNT[0], len(FAILS)))
 sys.exit(1 if FAILS else 0)

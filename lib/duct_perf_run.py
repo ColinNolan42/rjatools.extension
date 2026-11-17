@@ -6502,6 +6502,8 @@ def _core_result():
 TOOL = 'duct_performance'
 SCOPES = ('rtu', 'fancoil', 'vav', 'vavbox', 'exhaust')
 DETAILS = ('flagged', 'all')
+QIDS = ('fan_cfm',)  # needs_decision ids; fan_cfm is answered with the fan_cfm argument
+ENGINE = 'cpython'  # the agent runtime's IronPython fails in _critical_path_loss
 
 
 def default_controls(scope='rtu'):
@@ -6729,9 +6731,6 @@ def run_headless(document, unit_id, scope='rtu', settings=None, fan_cfm=None,
     import headless
     recorder = headless.RecordingOutput(forward=output_window)
     warnings = []
-    if sys.platform == 'cli':
-        warnings.append("IronPython engine: run with engine='cpython'; external "
-                        "static fails under the agent runtime's IronPython.")
 
     def done(status, data=None, errors=None, created=None, decision=None):
         return headless.result(TOOL, status, data=data, warnings=warnings,
@@ -6739,6 +6738,11 @@ def run_headless(document, unit_id, scope='rtu', settings=None, fan_cfm=None,
                                log=recorder.log if include_log else None,
                                decision=decision)
 
+    if sys.platform == 'cli':
+        return done('refused', errors=[
+            "Duct Performance runs on CPython only: re-run with "
+            "run_query(engine='cpython') (run_modify(engine='cpython') when "
+            "make_sheets=True)."])
     dialog_result, errors = settings_from_controls(scope, settings)
     if detail not in DETAILS:
         errors = list(errors) + ["detail shall be 'flagged' or 'all'"]

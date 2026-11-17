@@ -9,8 +9,9 @@ logic lives here.
 - Writes are off by default: a check never writes. A designer passes
   write=True / make_sheets=True on purpose, in run_modify (Colin's Keep or
   Discard).
-- Duct Performance needs engine='cpython'; on IronPython it is refused before
-  it runs (the runtime's IronPython fails inside the external static walk).
+- Duct Performance needs engine='cpython'; on IronPython duct_perf_run
+  refuses it before it runs (the runtime's IronPython fails inside the
+  external static walk).
 - Gas table_id is required, never defaulted; ask Colin from table_options().
 - No reload_tools: the runtime re-imports workspace modules every run and
   each tool resets its own state (calc basis, pipe diameter, log) at entry.
@@ -27,13 +28,14 @@ TOOLS = (
             "main (start 'tee')",
      "engine": "ironpython", "mcp": "run_query; run_modify when write=True",
      "writes": "pipes, fittings, fixture stubs (write=True)",
-     "decisions": ["incomplete_system", "no_cold_connector"]},
+     "decisions": [{"qid": "incomplete_system", "answer_with": "decisions"},
+                   {"qid": "no_cold_connector", "answer_with": "decisions"}]},
     {"operation": "water_performance", "module": "water_perf_run",
      "ids": "start_id: the RPZ (start 'rpz') or the tee (start 'tee'); "
             "view_id for make_sheets (else the active view)",
      "engine": "ironpython", "mcp": "run_query; run_modify when make_sheets=True",
      "writes": "colored plan copy, sheet, schedule (make_sheets=True)",
-     "decisions": ["no_cold_connector"]},
+     "decisions": [{"qid": "no_cold_connector", "answer_with": "decisions"}]},
     {"operation": "duct_performance", "module": "duct_perf_run",
      "ids": "unit_id: the unit, VAV box or exhaust fan the scope lists "
             "(scope rtu, fancoil, vav, vavbox, exhaust)",
@@ -41,13 +43,13 @@ TOOLS = (
      "mcp": "run_query(engine='cpython'); run_modify(engine='cpython') when "
             "make_sheets=True",
      "writes": "colored plan copies, sheet (make_sheets=True)",
-     "decisions": ["fan_cfm (answer with the fan_cfm argument)"]},
+     "decisions": [{"qid": "fan_cfm", "answer_with": "fan_cfm"}]},
     {"operation": "size_gas", "module": "gas_run",
      "ids": "start_id: the gas meter, or the first new gas pipe at the "
             "connection to existing (then settings['existing'] is required)",
      "engine": "ironpython", "mcp": "run_query; run_modify when write=True",
      "writes": "pipes, fittings, stubs (write=True)",
-     "decisions": ["presizing_warnings"]},
+     "decisions": [{"qid": "presizing_warnings", "answer_with": "decisions"}]},
     {"operation": "diagnose", "module": "diagnose_run",
      "ids": "start_id: gas meter or first new gas pipe, water RPZ or tee, or "
             "HVAC equipment, duct or terminal (discipline detected)",
@@ -84,13 +86,24 @@ def _module(name):
 
 
 def _guard(operation, call):
-    """Run call(); an import or unexpected failure becomes an error envelope
-    instead of a traceback, so the agent always gets the envelope."""
+    """Run call(); a question that escapes a tool comes back as
+    needs_decision, any other failure (an import error, code outside a
+    tool's own try) as an error envelope with the traceback tail, so the
+    agent always gets an envelope it can act on."""
     try:
         return call()
+    except headless.NeedsDecision as exc:
+        return headless.needs_decision(operation, exc)
     except Exception as exc:  # the envelope carries the failure
+        import traceback
+        try:  # the shared helper; revit_helpers itself may be what failed
+            from revit_helpers import exc_text
+            text = exc_text(exc)
+        except Exception:
+            text = repr(exc)
         return headless.result(operation, "error", errors=[
-            "{}: {}".format(type(exc).__name__, exc)])
+            "{}: {}".format(type(exc).__name__, text)],
+            data={"traceback": traceback.format_exc().splitlines()[-12:]})
 
 
 def default_settings(operation, scope="rtu", doc=None):
@@ -135,11 +148,6 @@ def water_performance(doc, start_id, start="rpz", settings=None,
 def duct_performance(doc, unit_id, scope="rtu", settings=None, fan_cfm=None,
                      make_sheets=False, view_id=None, detail="flagged",
                      include_log=False):
-    if engine() != "cpython":
-        return headless.result("duct_performance", "refused", errors=[
-            "Duct Performance runs on CPython only: re-run with "
-            "run_query(engine='cpython') (run_modify(engine='cpython') when "
-            "make_sheets=True)."])
     return _guard("duct_performance",
                   lambda: _module("duct_perf_run").run_headless(
                       doc, unit_id, scope=scope, settings=settings,
@@ -150,20 +158,17 @@ def duct_performance(doc, unit_id, scope="rtu", settings=None, fan_cfm=None,
 
 def size_gas(doc, start_id, table_id=None, settings=None, decisions=None,
              write=False, detail="flagged", include_log=False):
-    """table_id is required: ask Colin from table_options(), never assume."""
+    """table_id is required (argument or settings): ask Colin from
+    table_options(), never assume. gas_run refuses a missing or unknown one."""
     def call():
-        options = table_options()
-        ids = []
-        for o in options:
-            if o["table_id"] not in ids:
-                ids.append(o["table_id"])
-        if table_id is None or table_id not in ids:
-            return headless.result("size_gas", "refused", errors=[
-                "table_id is required and shall be one of table_options(); "
-                "ask Colin which IFGC table applies (got {!r}).".format(
-                    table_id)], data={"table_ids": ids})
         merged = dict(settings or {})
-        merged["table_id"] = table_id
+        if table_id is not None:
+            if merged.get("table_id") not in (None, table_id):
+                return headless.result("size_gas", "refused", errors=[
+                    "table_id given twice with different values ({!r} and "
+                    "{!r}); pass it once.".format(table_id,
+                                                   merged["table_id"])])
+            merged["table_id"] = table_id
         return _module("gas_run").run_headless(
             doc, start_id, settings=merged, decisions=decisions, write=write,
             detail=detail, include_log=include_log)

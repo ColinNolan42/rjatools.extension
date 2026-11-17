@@ -40,6 +40,7 @@ from revit_helpers import eid_int
 
 
 TOOL = "diagnose"
+QIDS = ()
 
 WATER_SYSTEMS = (
     shared_params.SYSTEM_DOMESTIC_COLD_WATER,

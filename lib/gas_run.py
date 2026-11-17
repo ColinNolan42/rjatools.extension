@@ -30,6 +30,7 @@ START_METER = "meter"
 START_PIPE = "pipe"
 DETAILS = ("flagged", "all")
 QID_WARNINGS = "presizing_warnings"
+QIDS = (QID_WARNINGS,)
 
 
 # ---------------------------------------------------------------------------
