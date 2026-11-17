@@ -13,6 +13,8 @@ logic lives here.
   refuses it before it runs (the runtime's IronPython fails inside the
   external static walk).
 - Gas table_id is required, never defaulted; ask Colin from table_options().
+- duct_size_in_depth reads nothing from the model and runs on either engine;
+  a row with no fit is a question for Colin.
 - No reload_tools: the runtime re-imports workspace modules every run and
   each tool resets its own state (calc basis, pipe diameter, log) at entry.
 
@@ -55,6 +57,13 @@ TOOLS = (
             "HVAC equipment, duct or terminal (discipline detected)",
      "engine": "ironpython", "mcp": "run_query", "writes": "none",
      "decisions": []},
+    {"operation": "duct_size_in_depth", "module": "duct_depth_run",
+     "ids": "none: rows of {id, cfm, structure_bottom_elev_ft, "
+            "ceiling_elev_ft (both elevations in host feet), shape (rect or "
+            "round), preferred_h_in (rect rows, the design height), system "
+            "(Supply Air, Return Air, Exhaust Air, Outside Air, Transfer Air)}",
+     "engine": "both", "mcp": "run_query (either engine)", "writes": "none",
+     "decisions": [{"qid": "no_fit", "answer_with": "question to Colin"}]},
 )
 
 
@@ -173,6 +182,15 @@ def size_gas(doc, start_id, table_id=None, settings=None, decisions=None,
             doc, start_id, settings=merged, decisions=decisions, write=write,
             detail=detail, include_log=include_log)
     return _guard("size_gas", call)
+
+
+def duct_size_in_depth(doc=None, rows=None, settings=None):
+    """The duct space check: depth from structure bottom and ceiling, then
+    the smallest firm size that fits it. Read only; no_fit is a question
+    for Colin, never decided here."""
+    return _guard("duct_size_in_depth",
+                  lambda: _module("duct_depth_run").run_headless(
+                      doc, rows=rows, settings=settings))
 
 
 def diagnose(doc, start_id, include_report=False, include_log=False):

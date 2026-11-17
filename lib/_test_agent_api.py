@@ -49,10 +49,11 @@ fake("gas_run", "size_gas",
                                 {"table_id": "402.4(2)", "material": "b"},
                                 {"table_id": "402.4(5)", "material": "a"}]})
 fake("diagnose_run", "diagnose")
+fake("duct_depth_run", "duct_size_in_depth")
 
 # tools() matches each module's TOOL, no module key leaks
 listed = api.tools()
-check("tools count", len(listed) == 5)
+check("tools count", len(listed) == 6)
 for row in listed:
     mod = sys.modules[api._tool(row["operation"])["module"]]
     check("tool name " + row["operation"], mod.TOOL == row["operation"])
@@ -108,10 +109,19 @@ check("duct ok", r["status"] == "ok")
 check("duct pass", CALLS["duct_perf_run"][1]["scope"] == "vav" and CALLS["duct_perf_run"][1]["fan_cfm"] == 300)
 check("duct sheets off", CALLS["duct_perf_run"][1]["make_sheets"] is False)
 
+# duct space check passes rows and settings through, doc ignored
+CALLS.pop("duct_depth_run", None)
+rows = [{"id": "S1", "cfm": 1000}]
+r = api.duct_size_in_depth("DOC", rows=rows, settings={"hanger_in": 4})
+args, kw = CALLS["duct_depth_run"]
+check("depth ok", r["status"] == "ok")
+check("depth pass", kw["rows"] == rows and kw["settings"] == {"hanger_in": 4})
+check("depth engine both", api._tool("duct_size_in_depth")["engine"] == "both")
+
 # decisions are structured: qid plus how to answer it
 for row in listed:
     for d in row["decisions"]:
-        check("decision shape " + row["operation"], set(d) == {"qid", "answer_with"} and d["answer_with"] in ("decisions", "fan_cfm"))
+        check("decision shape " + row["operation"], set(d) == {"qid", "answer_with"} and d["answer_with"] in ("decisions", "fan_cfm", "question to Colin"))
 
 # a failure inside a tool comes back as an error envelope
 def boom(*a, **k):
@@ -155,6 +165,8 @@ for t in api.TOOLS:
     check("real QIDS " + t["operation"], tuple(d["qid"] for d in t["decisions"]) == tuple(qids))
 duct_c = consts("duct_perf_run")
 check("real duct engine", duct_c["ENGINE"] == api._tool("duct_performance")["engine"])
+depth_c = consts("duct_depth_run")
+check("real depth engine", depth_c["ENGINE"] == api._tool("duct_size_in_depth")["engine"])
 for sc in duct_c["SCOPES"]:
     check("scope listed " + sc, sc in api._tool("duct_performance")["ids"])
 duct_src = io.open(os.path.join(HERE, "duct_perf_run.py"), encoding="utf-8").read()
