@@ -30,9 +30,8 @@ PRV_MIDSTREAM_MIN_DOWNSTREAM_FT = 10.0
 ISOLATION_VALVE_KEYWORDS = ("valve", "ball", "gate", "check", "shutoff")
 
 # Equivalent length added to the developed length for each elbow on a path,
-# feet (IFGC Appendix A). Read by pipe_graph and the sizing basis text.
-# One-Line keeps its own copy until the One-Line fixes are taken up
-# (Colin, 2026-11-02); the two shall stay equal.
+# feet (IFGC Appendix A). Read by pipe_graph, the sizing basis text and the
+# One-Line (snapshot elbow_equiv_ft).
 ELBOW_EQUIV_LENGTH_FT = 5.0
 
 # =============================================================================
