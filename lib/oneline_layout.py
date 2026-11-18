@@ -18,8 +18,9 @@ Primitives (every one carries "box" = (x0, y0, x1, y1)):
      "seg" or "node"}
     {"t": "symbol", "role": "meter"|"equipment"|"cap"|"prv"|"iso"|
      "squiggle", "x", "y", "rot": 0|90|180|270, "node"}
-    x, y of a symbol is its center; of a text, the middle of its top edge
-    (align center) or its top left corner (align left).
+    x, y of a symbol is its center (its family insertion point, except the
+    cap, which carries "ix", "iy": the pipe end); of a text, the middle of
+    its top edge (align center) or its top left corner (align left).
 
 Rules (plan section 4, Colin 2026-11-18):
 - Left to right, meter at the far left. No scale horizontally: one column
@@ -59,8 +60,8 @@ LABEL_GAP_FT = 0.4
 LABEL_SIDE_FT = 0.6
 EQUIP_HALF_W = 1.0          # RJA - P Symbols - Equipment, 0.242 in. wide
 EQUIP_HALF_H = 0.56
-CAP_HALF_W = 1.0
-CAP_HALF_H = 0.5
+CAP_HALF_W = 0.85           # RJA- Equipment Cap: one 0.2 in. line at its insertion
+CAP_HALF_H = 0.15
 PRV_HALF_L = 1.0            # along the pipe
 PRV_HALF_T = 1.0            # across the pipe (dome side)
 ISO_HALF_L = 1.0
@@ -483,6 +484,7 @@ class _Engine(object):
             if sym_rot in (90, 270):
                 sym["box"] = (sx - CAP_HALF_H, sy - CAP_HALF_W,
                               sx + CAP_HALF_H, sy + CAP_HALF_W)
+            sym["ix"], sym["iy"] = ex, ey      # the cap line sits on the end
             extra.append(sym)
             far = sym["box"]
         else:
