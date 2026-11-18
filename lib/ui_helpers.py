@@ -604,16 +604,15 @@ def show_table_picker(title):
     return res["pipe_material"], res["table_label"], res["heat_content"]
 
 
-def show_oneline_picker(title, downstream_needed=False):
-    """The One-Line dialog (its own heading and basis, Plan B). With
-    downstream_needed the table downstream of the mid stream PRV is asked.
+def show_oneline_picker(title):
+    """The One-Line dialog (its own heading and basis, Plan B), shown before
+    the pick with the Size Gas Mid Stream PRV tick box.
 
     Returns the show_size_gas_dialog dict, or None if cancelled."""
     import sizer_dialogs
     return sizer_dialogs.themed_or(
-        lambda use_theme: sizer_dialogs.show_oneline_picker(
-            title, downstream_needed, use_theme),
-        lambda: _show_picker_legacy(title, downstream_needed))
+        lambda use_theme: sizer_dialogs.show_oneline_picker(title, use_theme),
+        lambda: _show_picker_legacy(title, True))
 
 
 def rja_alert(title, text, kind="info", yes_no=False):

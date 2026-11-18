@@ -42,6 +42,7 @@ import oneline_schematic           # noqa: E402
 import oneline_snapshot            # noqa: E402
 import pipe_graph                  # noqa: E402
 import revit_helpers               # noqa: E402
+import shared_params               # noqa: E402
 import sizing_engine               # noqa: E402
 import tie_in                      # noqa: E402
 import ui_helpers                  # noqa: E402
@@ -101,6 +102,23 @@ def _table(material, label):
 
 def main():
     revit_helpers.clear_log()
+
+    # dialog first, then the pick: the same order as Size Gas, Size Water
+    # and Duct Performance (Colin, 2026-11-18)
+    choice = ui_helpers.show_oneline_picker("Gas One-Line - Select IFGC Table")
+    if not choice:
+        output.print_md("Cancelled. Nothing drawn.")
+        return
+    opt = _table(choice["pipe_material"], choice["table_label"])
+    table_id = opt["table_id"]
+    down = None
+    if choice.get("mid_stream_prv"):
+        down = _table(choice["pipe_material"],
+                      choice.get("downstream_table_label"))
+    down_id = down["table_id"] if down else None
+    heat = choice["heat_content"]
+
+    ui_helpers.rja_alert(TITLE, "Select meter or new gas piping connection.")
     el, upstream = _pick()
     if el is None:
         return
@@ -115,17 +133,20 @@ def main():
         logger.error(traceback.format_exc())
         return
 
-    # dialog: the downstream table only when a mid stream PRV was found
-    choice = ui_helpers.show_oneline_picker(
-        "Gas One-Line - Table", bool(graph.midstream_prv_ids))
-    if not choice:
-        output.print_md("Cancelled. Nothing drawn.")
-        return
-    opt = _table(choice["pipe_material"], choice["table_label"])
-    table_id = opt["table_id"]
-    down = _table(choice["pipe_material"], choice.get("downstream_table_label"))
-    down_id = down["table_id"] if down else None
-    heat = choice["heat_content"]
+    # Mid Stream PRV box vs the walk, handled as Size Gas does
+    prv_notes = []
+    if down_id and not graph.midstream_prv_ids:
+        prv_notes.append(
+            "Mid Stream PRV was ticked but no regulator has more than {0:.0f} "
+            "ft of pipe downstream, so the downstream table was not "
+            "used.".format(
+                float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)))
+        down, down_id = None, None
+    elif graph.midstream_prv_ids and not down_id:
+        prv_notes.append(
+            "{0} mid stream PRV(s) found but Mid Stream PRV was not ticked: "
+            "the whole system is checked on {1}, as Size Gas sizes it with "
+            "the box off.".format(len(graph.midstream_prv_ids), table_id))
 
     existing = None
     if is_tie_in:
@@ -221,7 +242,8 @@ def main():
     _emit(gas_console.oneline_summary(sch, snap, view_name),
           gas_console.oneline_summary_md(sch, snap, view_name))
     _emit(gas_console.length_check(sch, snap), "")
-    warns = list(sch["warnings"]) + [w["text"] for w in res["warnings"]]
+    warns = prv_notes + list(sch["warnings"])
+    warns += [w["text"] for w in res["warnings"]]
     warns += draw_errors
     if counts.get("failed"):
         warns.append("{0} item(s) could not be drawn.".format(counts["failed"]))

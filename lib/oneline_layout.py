@@ -72,6 +72,8 @@ VALVE_PITCH_FT = 2.6
 METER_R = 1.04              # RJA - P Symbols - Meter Annotation, 1/4 in.
 UTILITY_RUN_FT = 5.0
 UTILITY_DROP_FT = 3.0
+SQUIGGLE_HALF_L = 0.5       # RJA - Squiggle along the line (0.97 ft at 1:100)
+SQUIGGLE_HALF_W = 0.2       # across the line (0.32 ft)
 NOTES_GAP_FT = 3.0
 MAX_STRETCH = 12
 MAX_ROWS_OUT = 12
@@ -285,6 +287,17 @@ def _symbol(role, x, y, rot, half_along, half_across, node=None):
         box = (x - half_along, y - half_across, x + half_along, y + half_across)
     return {"t": "symbol", "role": role, "x": x, "y": y, "rot": rot,
             "node": node, "box": box}
+
+
+def _squiggle(x, y_end):
+    """Break symbol hanging from the end of a downward line at (x, y_end),
+    drawn along the line (rot 0 is vertical) with its top on the line end.
+    "attach_top" lets the draw layer pin the family's real top edge there
+    (Colin, 2026-11-18: G1 drew it flat, below the line, with a gap)."""
+    s = _symbol("squiggle", x, y_end - SQUIGGLE_HALF_L, 0, SQUIGGLE_HALF_W,
+                SQUIGGLE_HALF_L)
+    s["attach_top"] = (x, y_end)
+    return s
 
 
 def _unit(ax, ay, bx, by):
@@ -661,18 +674,20 @@ def layout(sch, notes=None, origin_kind="meter"):
     oz = (sch.get("origin_xyz") or [0, 0, 0])[2]
     my = eng.y_equip(oz)
     # meter and utility stub
+    existing = sch.get("existing")
     occ.append(_symbol("meter", 0.0, my, 0, METER_R, METER_R, sch["origin"]))
     ux1 = -(METER_R + UTILITY_RUN_FT)
-    occ.append(_line(-METER_R, my, ux1, my, None))
-    occ.append(_line(ux1, my, ux1, my - UTILITY_DROP_FT, None))
-    occ.append(_symbol("squiggle", ux1, my - UTILITY_DROP_FT - 0.5, 90,
-                       0.5, 0.4))
-    occ.append(_text(ux1 - 1.0, my - UTILITY_DROP_FT - 1.4, UTILITY_TEXT,
-                     "left", "utility"))
+    # at a tie in the meter and its service are existing: thin, like the
+    # existing piping (Colin, 2026-11-18)
+    occ.append(_line(-METER_R, my, ux1, my, None, new=not existing))
+    occ.append(_line(ux1, my, ux1, my - UTILITY_DROP_FT, None,
+                     new=not existing))
+    occ.append(_squiggle(ux1, my - UTILITY_DROP_FT))
+    occ.append(_text(ux1 - 1.0, my - UTILITY_DROP_FT - 2 * SQUIGGLE_HALF_L
+                     - LABEL_GAP_FT, UTILITY_TEXT, "left", "utility"))
     root = sch.get("root")
     start_col = 0
     start_xy = (METER_R, my)
-    existing = sch.get("existing")
     if existing:
         # Colin 2026-10-13: start at the existing meter, the existing pipe
         # (thin, labelled) to the new connection, then the existing piping
@@ -685,10 +700,10 @@ def layout(sch, notes=None, origin_kind="meter"):
         occ.append(_text((METER_R + cx) / 2.0, my + LABEL_GAP_FT + h, lines,
                          "center", "existing"))
         occ.append(_line(cx, my, cx, my - UTILITY_DROP_FT, None, new=False))
-        occ.append(_symbol("squiggle", cx, my - UTILITY_DROP_FT - 0.5, 90,
-                           0.5, 0.4))
-        occ.append(_text(cx - 1.0, my - UTILITY_DROP_FT - 1.4,
-                         gas_labels.EXISTING_APPLIANCES, "left", "existing"))
+        occ.append(_squiggle(cx, my - UTILITY_DROP_FT))
+        occ.append(_text(cx - 1.0, my - UTILITY_DROP_FT - 2 * SQUIGGLE_HALF_L
+                         - LABEL_GAP_FT, gas_labels.EXISTING_APPLIANCES,
+                         "left", "existing"))
         start_xy = (cx, my)
     if root is not None:
         end = root["end"]

@@ -938,30 +938,29 @@ def show_gas_picker(title, prv_option, use_theme=True):
     return _gas_picker(title, "size" if prv_option else "plain", use_theme)
 
 
-def show_oneline_picker(title, downstream_needed=False, use_theme=True):
+def show_oneline_picker(title, use_theme=True):
     """Themed One-Line dialog (Plan B: a tool gets its own dialog). The
-    material, table and heat content shall be the ones Size Gas ran on, so
-    the gate's size check matches. The downstream table row shows only when
-    the walk found a mid stream PRV (Colin, 2026-11-18); there is no tick
-    box. Same return value as show_gas_picker."""
-    return _gas_picker(title, "oneline_prv" if downstream_needed else "oneline",
-                       use_theme)
+    material, table, heat content and Mid Stream PRV choice shall be the
+    ones Size Gas ran on, so the gate's size check matches. Shown BEFORE the
+    pick, like Size Gas (Colin, 2026-11-18), so it carries the same Mid
+    Stream PRV tick box. Same return value as show_gas_picker."""
+    return _gas_picker(title, "oneline", use_theme)
 
 
 def _gas_picker(title, mode, use_theme):
     """The gas table dialog. mode: "size" (Size Gas, Mid Stream PRV tick
-    box), "plain" (no PRV), "oneline" or "oneline_prv" (One-Line heading and
-    basis; with _prv the downstream table row is shown and required)."""
+    box), "plain" (no PRV), "oneline" (One-Line heading and basis, the same
+    Mid Stream PRV tick box)."""
     from System.Windows import Visibility
 
-    prv_option = mode == "size"
-    oneline = mode.startswith("oneline")
-    downstream_needed = mode == "oneline_prv"
+    oneline = mode == "oneline"
+    prv_option = mode in ("size", "oneline")
+    downstream_needed = False
     if oneline:
         heading = 'Gas One-Line'
         purpose = ('Draws the gas piping one-line diagram on a drafting view '
-                   'from the sizes Size Gas wrote. Pick the table and heat '
-                   'content Size Gas ran on.')
+                   'from the sizes Size Gas wrote. Pick the table, heat '
+                   'content and Mid Stream PRV setting Size Gas ran on.')
     elif prv_option:
         heading = 'Size Gas'
         purpose = ('Sizes gas piping by the IFGC Longest Run Method and writes '

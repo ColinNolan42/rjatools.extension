@@ -283,11 +283,43 @@ class TieIn(unittest.TestCase):
         self.assertNotIn("LAYOUT FAILED", " ".join(out["log"]))
         existing = [p for p in out["prims"] if p["t"] == "line"
                     and p["seg"] is None and not p["new"]]
-        self.assertEqual(len(existing), 2)
+        # the existing run, its drop to the squiggle, and the existing
+        # meter's service run and drop (thin, Colin 2026-11-18)
+        self.assertEqual(len(existing), 4)
+        self.assertEqual([p for p in out["prims"] if p["t"] == "line"
+                          and p["seg"] is None and p["new"]], [])
         texts = [p["lines"] for p in out["prims"] if p["t"] == "text"
                  and p["role"] == "existing"]
         self.assertIn(["TO EXISTING", "APPLIANCES"], texts)
         self.assertIn([EXISTING_LABEL, "670 MBH"], texts)
+        self.assertEqual(len(_of(out, t="symbol", role="squiggle")), 2)
+
+
+class Squiggle(unittest.TestCase):
+    """G1 2026-11-18: the squiggle drew flat, below its line, with a gap.
+    It hangs from the line end along the line."""
+
+    def test_hangs_from_utility_drop(self):
+        out = L.layout(G3C_SCH)
+        sq = _of(out, t="symbol", role="squiggle")
+        self.assertEqual(len(sq), 1)
+        sq = sq[0]
+        self.assertEqual(sq["rot"], 0)
+        ax, ay = sq["attach_top"]
+        self.assertAlmostEqual(sq["box"][3], ay)          # top on the end
+        self.assertAlmostEqual(sq["x"], ax)
+        drops = [p for p in out["prims"] if p["t"] == "line"
+                 and p["seg"] is None and abs(p["x0"] - p["x1"]) < 1e-9
+                 and abs(p["x0"] - ax) < 1e-9]
+        self.assertEqual(len(drops), 1)
+        self.assertAlmostEqual(min(drops[0]["y0"], drops[0]["y1"]), ay)
+
+    def test_new_meter_service_is_new(self):
+        out = L.layout(G3C_SCH)
+        service = [p for p in out["prims"] if p["t"] == "line"
+                   and p["seg"] is None]
+        self.assertTrue(service)
+        self.assertTrue(all(p["new"] for p in service))
 
 
 if __name__ == "__main__":

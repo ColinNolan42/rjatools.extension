@@ -47,6 +47,9 @@ ROLE_TITLES = {"meter": "Meter", "equipment": "Equipment", "prv": "PRV",
                "iso": "Isolation valve", "cap": "Cap", "squiggle": "Squiggle"}
 
 NEW_LINE_STYLE = "Line 4"          # new construction pipe (as before)
+# existing pipe and an existing meter's service: a named thin style, not the
+# default <Lines> (Colin, 2026-11-18: match the weights for existing vs new)
+EXISTING_LINE_STYLE = "Line 2"
 TEXT_TYPE_NAME = '3/32" Arial'
 TEXT_SIZE_FT = 0.09375 / 12.0
 # the notes block sits in a bordered text box (Colin, 2026-11-18): the base
@@ -109,6 +112,12 @@ def center_shift(x, y, box):
     """(dx, dy) moving a placed symbol so its view box (minx, miny, maxx,
     maxy) is centered on (x, y)."""
     return (x - (box[0] + box[2]) / 2.0, y - (box[1] + box[3]) / 2.0)
+
+
+def top_shift(x, y, box):
+    """(dx, dy) moving a placed symbol so the middle of its view box's top
+    edge sits on (x, y): the squiggle hanging from a line end."""
+    return (x - (box[0] + box[2]) / 2.0, y - box[3])
 
 
 def _rot(pts, x, y, deg):
@@ -311,13 +320,15 @@ def line_style(doc, name=NEW_LINE_STYLE):
 
 class _Drawer(object):
 
-    def __init__(self, doc, view, syms, tt_id, new_style, border_tt_id=None):
+    def __init__(self, doc, view, syms, tt_id, new_style, border_tt_id=None,
+                 existing_style=None):
         self.doc = doc
         self.view = view
         self.syms = syms or {}
         self.tt_id = tt_id
         self.border_tt_id = border_tt_id
         self.new_style = new_style
+        self.existing_style = existing_style
         self.counts = {"lines": 0, "texts": 0, "symbols": 0, "fallbacks": 0,
                        "failed": 0}
         self.errors = []
@@ -328,9 +339,10 @@ class _Drawer(object):
             return None
         dc = self.doc.Create.NewDetailCurve(
             self.view, DB.Line.CreateBound(DB.XYZ(x0, y0, 0), DB.XYZ(x1, y1, 0)))
-        if new and self.new_style is not None:
+        style = self.new_style if new else self.existing_style
+        if style is not None:
             try:
-                dc.LineStyle = self.new_style
+                dc.LineStyle = style
             except Exception:
                 pass
         self.counts["lines"] += 1
@@ -371,12 +383,18 @@ class _Drawer(object):
                 axis = DB.Line.CreateBound(DB.XYZ(x, y, 0), DB.XYZ(x, y, 1))
                 DB.ElementTransformUtils.RotateElement(
                     self.doc, inst.Id, axis, math.radians(rot))
-            if inst is not None and p["role"] in CENTER_BY_BOX:
+            fit = None
+            if p["role"] in CENTER_BY_BOX:
+                fit = center_shift
+            elif p.get("attach_top"):
+                ax, ay = p["attach_top"]
+                fit = lambda _x, _y, box: top_shift(ax, ay, box)  # noqa: E731
+            if inst is not None and fit is not None:
                 self.doc.Regenerate()
                 bb = inst.get_BoundingBox(self.view)
                 if bb is not None:
-                    dx, dy = center_shift(x, y, (bb.Min.X, bb.Min.Y,
-                                                 bb.Max.X, bb.Max.Y))
+                    dx, dy = fit(x, y, (bb.Min.X, bb.Min.Y,
+                                        bb.Max.X, bb.Max.Y))
                     if abs(dx) > 1e-3 or abs(dy) > 1e-3:
                         DB.ElementTransformUtils.MoveElement(
                             self.doc, inst.Id, DB.XYZ(dx, dy, 0))
@@ -425,7 +443,8 @@ def draw(doc, view, prims, syms, tt_id=None, new_style=None):
     if new_style is None:
         new_style = line_style(doc)
     border_id, border_note = border_text_type_id(doc, tt_id)
-    d = _Drawer(doc, view, syms, tt_id, new_style, border_id)
+    existing_style = line_style(doc, EXISTING_LINE_STYLE)
+    d = _Drawer(doc, view, syms, tt_id, new_style, border_id, existing_style)
     counts = d.draw(prims)
     if border_note and "created" not in border_note:
         d.errors.append(border_note)
