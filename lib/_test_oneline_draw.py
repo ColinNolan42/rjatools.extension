@@ -66,6 +66,32 @@ class TextType(unittest.TestCase):
         self.assertIsNone(D.pick_text_type([]))
 
 
+class BorderAndCentering(unittest.TestCase):
+
+    def test_border_type_name(self):
+        self.assertEqual(D.border_type_name('3/32" Arial'),
+                         '3/32" Arial - Border')
+        self.assertEqual(D.border_type_name('3/32" Arial - Border'),
+                         '3/32" Arial - Border')
+        self.assertEqual(D.border_type_name(None), '3/32" Arial - Border')
+
+    def test_center_shift_g1_equipment(self):
+        # G1 2026-11-18: inserted at (20, 19.44), the family drew down to
+        # 18.327 from its top line; the shift moves its center onto 19.44
+        dx, dy = D.center_shift(20.0, 19.44, (18.991, 18.327, 21.009, 19.44))
+        self.assertAlmostEqual(dx, 0.0, 3)
+        self.assertAlmostEqual(dy, 0.5565, 3)
+
+    def test_center_shift_already_centered(self):
+        self.assertEqual(D.center_shift(1.0, 2.0, (0.0, 1.0, 2.0, 3.0)),
+                         (0.0, 0.0))
+
+    def test_prv_and_cap_not_recentered(self):
+        self.assertNotIn("prv", D.CENTER_BY_BOX)
+        self.assertNotIn("cap", D.CENTER_BY_BOX)
+        self.assertIn("equipment", D.CENTER_BY_BOX)
+
+
 class Fallbacks(unittest.TestCase):
 
     def test_equipment_three_lines_rotated(self):

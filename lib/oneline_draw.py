@@ -19,7 +19,10 @@ Symbols (Colin, 2026-11-18): missing families load from
 REVIT FAM\\GENERIC FAMILIES by exact file name (never a .0001 backup); the
 console lists each as found, loaded or fallback. Insertion points, read from
 the families: Equipment, Gate Valve, PRV, Meter Annotation centered; Cap a
-single line on its insertion point; Squiggle centered.
+single line on its insertion point; Squiggle centered. A project's older copy
+may differ, so Equipment, Gate Valve and Meter are re-centered on their view
+box after placing (CENTER_BY_BOX). The notes block uses the bordered text
+type (border_text_type_id).
 
 IronPython 2.7 and CPython 3 for the pure part. ASCII source.
 """
@@ -46,6 +49,16 @@ ROLE_TITLES = {"meter": "Meter", "equipment": "Equipment", "prv": "PRV",
 NEW_LINE_STYLE = "Line 4"          # new construction pipe (as before)
 TEXT_TYPE_NAME = '3/32" Arial'
 TEXT_SIZE_FT = 0.09375 / 12.0
+# the notes block sits in a bordered text box (Colin, 2026-11-18): the base
+# type's " - Border" sibling, made by duplicating the base type when missing
+BORDER_SUFFIX = " - Border"
+
+# Symbols centered on their bounding box after placing, so a project's copy
+# of the family with a different insertion point still lands where the
+# layout put it (G1, 2026-11-18: an Equipment family inserted on its top
+# line dropped onto its label). These are symmetric about the pipe. The PRV
+# (dome to one side) and the cap (sits on the pipe end) keep the insertion.
+CENTER_BY_BOX = ("equipment", "iso", "meter")
 
 # fallback geometry, drafting view feet at 1:100
 _EQ_HALF_W = 1.0
@@ -82,6 +95,20 @@ def pick_text_type(types):
         if size is not None and abs(size - TEXT_SIZE_FT) < 1e-6:
             return tid
     return types[0][0]
+
+
+def border_type_name(base_name):
+    """Name of the bordered sibling of a text type."""
+    base = base_name or TEXT_TYPE_NAME
+    if base.endswith(BORDER_SUFFIX):
+        return base
+    return base + BORDER_SUFFIX
+
+
+def center_shift(x, y, box):
+    """(dx, dy) moving a placed symbol so its view box (minx, miny, maxx,
+    maxy) is centered on (x, y)."""
+    return (x - (box[0] + box[2]) / 2.0, y - (box[1] + box[3]) / 2.0)
 
 
 def _rot(pts, x, y, deg):
@@ -251,6 +278,29 @@ def text_type_id(doc):
     return pick_text_type(types)
 
 
+def border_text_type_id(doc, base_id):
+    """The bordered sibling of the base text type ('3/32" Arial - Border'),
+    duplicated from the base with Show Border on when the project has none.
+    Call inside a transaction. Returns (id or None, note or None)."""
+    DB = _db()
+    if base_id is None:
+        return None, "No text type for the notes border."
+    base = doc.GetElement(base_id)
+    want = border_type_name(_name(base))
+    for t in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType):
+        if _name(t) == want:
+            p = t.get_Parameter(DB.BuiltInParameter.TEXT_BOX_VISIBILITY)
+            if p is not None and p.AsInteger() == 1:
+                return t.Id, None
+            return t.Id, "Text type '{0}' has Show Border off.".format(want)
+    try:
+        new = base.Duplicate(want)
+        new.get_Parameter(DB.BuiltInParameter.TEXT_BOX_VISIBILITY).Set(1)
+        return new.Id, "Text type '{0}' created for the notes.".format(want)
+    except Exception as ex:
+        return None, "Could not make text type '{0}': {1}".format(want, ex)
+
+
 def line_style(doc, name=NEW_LINE_STYLE):
     DB = _db()
     for gs in DB.FilteredElementCollector(doc).OfClass(DB.GraphicsStyle):
@@ -261,11 +311,12 @@ def line_style(doc, name=NEW_LINE_STYLE):
 
 class _Drawer(object):
 
-    def __init__(self, doc, view, syms, tt_id, new_style):
+    def __init__(self, doc, view, syms, tt_id, new_style, border_tt_id=None):
         self.doc = doc
         self.view = view
         self.syms = syms or {}
         self.tt_id = tt_id
+        self.border_tt_id = border_tt_id
         self.new_style = new_style
         self.counts = {"lines": 0, "texts": 0, "symbols": 0, "fallbacks": 0,
                        "failed": 0}
@@ -287,7 +338,10 @@ class _Drawer(object):
 
     def text(self, p):
         DB = _db()
-        opts = DB.TextNoteOptions(self.tt_id)
+        tid = self.tt_id
+        if p.get("role") == "notes" and self.border_tt_id is not None:
+            tid = self.border_tt_id
+        opts = DB.TextNoteOptions(tid)
         opts.HorizontalAlignment = (DB.HorizontalTextAlignment.Center
                                     if p["align"] == "center"
                                     else DB.HorizontalTextAlignment.Left)
@@ -317,6 +371,15 @@ class _Drawer(object):
                 axis = DB.Line.CreateBound(DB.XYZ(x, y, 0), DB.XYZ(x, y, 1))
                 DB.ElementTransformUtils.RotateElement(
                     self.doc, inst.Id, axis, math.radians(rot))
+            if inst is not None and p["role"] in CENTER_BY_BOX:
+                self.doc.Regenerate()
+                bb = inst.get_BoundingBox(self.view)
+                if bb is not None:
+                    dx, dy = center_shift(x, y, (bb.Min.X, bb.Min.Y,
+                                                 bb.Max.X, bb.Max.Y))
+                    if abs(dx) > 1e-3 or abs(dy) > 1e-3:
+                        DB.ElementTransformUtils.MoveElement(
+                            self.doc, inst.Id, DB.XYZ(dx, dy, 0))
             self.counts["symbols"] += 1
             return
         # fallback
@@ -361,8 +424,11 @@ def draw(doc, view, prims, syms, tt_id=None, new_style=None):
         tt_id = text_type_id(doc)
     if new_style is None:
         new_style = line_style(doc)
-    d = _Drawer(doc, view, syms, tt_id, new_style)
+    border_id, border_note = border_text_type_id(doc, tt_id)
+    d = _Drawer(doc, view, syms, tt_id, new_style, border_id)
     counts = d.draw(prims)
+    if border_note and "created" not in border_note:
+        d.errors.append(border_note)
     if new_style is None:
         d.errors.append("Line style '{0}' not found; pipes drawn thin.".format(
             NEW_LINE_STYLE))
