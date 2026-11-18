@@ -434,7 +434,17 @@ def build(snap):
     if legs:
         root = b.branch(origin, legs[0], "root")
         b.finish(root)
+    existing = snap.get("existing")
+    if existing:
+        root_mbh = 0.0
+        if root and root["segments"]:
+            root_mbh = b.segments[root["segments"][0]]["mbh"] or 0.0
+        existing = dict(existing)
+        existing["label"] = gas_labels.segment_label(
+            existing.get("size_nominal"), existing.get("length_ft"),
+            float(existing.get("load_mbh") or 0.0) + root_mbh)
     return {"origin": origin, "root": root, "segments": b.segments,
+            "existing": existing,
             "warnings": b.warnings,
             "origin_xyz": b.g.node(origin).get("xyz"),
             "levels": list(snap.get("levels") or []),
@@ -486,7 +496,12 @@ def trunk_segments(sch):
 
 
 def trunk_sum_ft(sch):
-    return sum(s["length_ft"] for s in trunk_segments(sch))
+    """Trunk Segments plus, on a tie in, the entered existing run (Size Gas
+    adds that length to the longest run)."""
+    total = sum(s["length_ft"] for s in trunk_segments(sch))
+    if sch.get("existing"):
+        total += float(sch["existing"].get("length_ft") or 0.0)
+    return total
 
 
 def eid_counts(sch):

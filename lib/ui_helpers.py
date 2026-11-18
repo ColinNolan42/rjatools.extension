@@ -604,6 +604,38 @@ def show_table_picker(title):
     return res["pipe_material"], res["table_label"], res["heat_content"]
 
 
+def show_oneline_picker(title, downstream_needed=False):
+    """The One-Line dialog (its own heading and basis, Plan B). With
+    downstream_needed the table downstream of the mid stream PRV is asked.
+
+    Returns the show_size_gas_dialog dict, or None if cancelled."""
+    import sizer_dialogs
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_oneline_picker(
+            title, downstream_needed, use_theme),
+        lambda: _show_picker_legacy(title, downstream_needed))
+
+
+def rja_alert(title, text, kind="info", yes_no=False):
+    """Themed in-run message in place of forms.alert (Plan B). kind: info,
+    warn or error. OK only returns True; yes_no returns True or False.
+    Falls back to forms.alert when the themed window cannot be built."""
+    import sizer_dialogs
+
+    def _legacy():
+        from pyrevit import forms
+        if yes_no:
+            return bool(forms.alert(text, title=title, yes=True, no=True))
+        forms.alert(text, title=title)
+        return True
+
+    res = sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_message(
+            title, text, kind, yes_no, use_theme=use_theme),
+        _legacy)
+    return bool(res)
+
+
 def show_size_gas_dialog(title):
     """show_table_picker() plus a "Mid Stream PRV" check box.
 

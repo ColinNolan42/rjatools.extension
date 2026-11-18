@@ -119,6 +119,13 @@ def check(snap):
                          e["id"], drawn, need))
 
     # --- warnings ----------------------------------------------------------
+    ex = snap.get("existing_check")
+    if ex and not ex.get("adequate"):
+        warnings.append({"code": "existing_pipe", "id": origin,
+                         "text": "Existing {0} pipe is not adequate for the "
+                                 "existing plus new load on table {1} (Size "
+                                 "Gas warns the same).".format(
+                                     ex.get("size_nominal"), ex.get("table_id"))})
     for item in snap.get("non_gas_skipped") or []:
         warnings.append({"code": "non_gas", "id": item[0],
                          "text": "Walk stopped at element {0} on a non gas "

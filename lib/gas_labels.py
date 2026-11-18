@@ -43,6 +43,22 @@ NOTES_TEMPLATE = [
     "TOTAL DEVELOPED LENGTH: {developed_ft}'",
 ]
 
+# Tie in to an existing system (Colin, 2026-10-13): the meter is existing,
+# so the new meter note is replaced and the loads are split.
+NOTES_TEMPLATE_TIE_IN = [
+    "CONTRACTOR SHALL FIELD VERIFY EXISTING GAS PIPE SIZE, LENGTH AND "
+    "CONNECTED LOAD PRIOR TO CONNECTION OF NEW GAS PIPING",
+    "GAS PIPING SIZED FOR {inlet_text}",
+    "MAX PRESSURE LOSS OF {drop_text} PER IFGC TABLE {table_id}",
+    "PIPING MATERIAL: {material_text}",
+    "EXISTING CONNECTED LOAD: {existing_mbh} MBH",
+    "NEW CONNECTED LOAD: {new_mbh} MBH",
+    "TOTAL CONNECTED LOAD: {total_mbh} MBH",
+    "TOTAL DEVELOPED LENGTH: {developed_ft}'",
+]
+
+EXISTING_APPLIANCES = ["TO EXISTING", "APPLIANCES"]
+
 NOTES_PRV_LINE = ("DOWNSTREAM OF PRV: {inlet_text}, MAX PRESSURE LOSS OF "
                   "{drop_text} PER IFGC TABLE {table_id}")
 
@@ -176,22 +192,31 @@ def _table_texts(table_id):
 
 
 def notes_lines(table_id, total_mbh, developed_ft, downstream_table_id=None,
-                template=None):
+                template=None, existing_mbh=None):
     """Notes block lines from NOTES_TEMPLATE and the table's own text.
 
     Inlet pressure and drop come from the table JSON (402.4(2): LESS THAN
     2 PSI, 0.5 IN. W.C.), never from the TABLE_OPTIONS 0.7 placeholder.
+    With existing_mbh (a tie in), total_mbh is the NEW load and the tie in
+    template states existing, new and total.
     """
     inlet, drop, material = _table_texts(table_id)
+    new_mbh = float(total_mbh or 0.0)
+    total = new_mbh + float(existing_mbh or 0.0)
     fields = {
         "inlet_text": inlet,
         "drop_text": drop,
         "table_id": table_id,
         "material_text": material,
-        "total_mbh": mbh_number(total_mbh),
+        "total_mbh": mbh_number(total),
+        "new_mbh": mbh_number(new_mbh),
+        "existing_mbh": mbh_number(existing_mbh or 0.0),
         "developed_ft": feet(developed_ft) if developed_ft else 0,
     }
-    lines = [ln.format(**fields) for ln in (template or NOTES_TEMPLATE)]
+    if template is None:
+        template = (NOTES_TEMPLATE_TIE_IN if existing_mbh is not None
+                    else NOTES_TEMPLATE)
+    lines = [ln.format(**fields) for ln in template]
     if downstream_table_id:
         d_inlet, d_drop, _m = _table_texts(downstream_table_id)
         lines.append(NOTES_PRV_LINE.format(

@@ -120,6 +120,15 @@ class Notes(unittest.TestCase):
             "DOWNSTREAM OF PRV: LESS THAN 2 PSI, MAX PRESSURE LOSS OF "
             "0.5 IN. W.C. PER IFGC TABLE 402.4(2)")
 
+    def test_tie_in_notes(self):
+        lines = gl.notes_lines("402.4(9)", 270, 120, existing_mbh=400)
+        self.assertTrue(lines[0].startswith("CONTRACTOR SHALL FIELD VERIFY"))
+        self.assertIn("EXISTING CONNECTED LOAD: 400 MBH", lines)
+        self.assertIn("NEW CONNECTED LOAD: 270 MBH", lines)
+        self.assertIn("TOTAL CONNECTED LOAD: 670 MBH", lines)
+        self.assertIn("TOTAL DEVELOPED LENGTH: 120'", lines)
+        self.assertNotIn("METER SERVICE", " ".join(lines))
+
     def test_template_swappable(self):
         lines = gl.notes_lines("402.4(2)", 10, 5,
                                template=["TABLE {table_id}", "{total_mbh}"])

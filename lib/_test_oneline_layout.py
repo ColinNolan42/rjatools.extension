@@ -252,5 +252,43 @@ class ForcedCollision(unittest.TestCase):
         self.assertTrue(out["log"], "expected a stretch or a row move")
 
 
+EXISTING_LABEL = '2"G, 60' + "'"
+
+
+class TieIn(unittest.TestCase):
+    """Start at a new pipe on an existing building (G6 shape): existing
+    meter, the entered existing run (thin, labelled), the squiggle to the
+    existing appliances, then the new piping."""
+
+    def _snap(self):
+        nodes = [(-50, "meter", [0, 0, 9.5]), (2, "tee", [10, 0, 9.5]),
+                 (5, "fixture", [10, 8, 2.0], {"name": "WH-2", "load_mbh": 150.0}),
+                 (6, "fixture", [30, 0, 9.5], {"name": "RTU-9", "load_mbh": 120.0})]
+        edges = [(50, -50, 2, 10.0, "1-1/4", 270.0),
+                 (51, 2, 5, 15.0, "1", 150.0), (52, 2, 6, 20.0, "1", 120.0)]
+        snap = _snap(nodes, edges, path=[-50, 50, 2, 52, 6])
+        snap["levels"] = [{"name": "FIRST", "elev": 0.0}]
+        snap["existing"] = {"size_nominal": "2", "length_ft": 60.0,
+                            "load_mbh": 400.0}
+        snap["origin_kind"] = "tie_in"
+        return snap
+
+    def test_existing_run_drawn_and_counted(self):
+        sch = S.build(self._snap())
+        self.assertEqual(sch["existing"]["label"], [EXISTING_LABEL, "670 MBH"])
+        root_len = sum(s["length_ft"] for s in S.trunk_segments(sch))
+        self.assertAlmostEqual(S.trunk_sum_ft(sch), root_len + 60.0)
+        out = L.layout(sch)
+        self.assertEqual(L.all_clashes(out["prims"]), [])
+        self.assertNotIn("LAYOUT FAILED", " ".join(out["log"]))
+        existing = [p for p in out["prims"] if p["t"] == "line"
+                    and p["seg"] is None and not p["new"]]
+        self.assertEqual(len(existing), 2)
+        texts = [p["lines"] for p in out["prims"] if p["t"] == "text"
+                 and p["role"] == "existing"]
+        self.assertIn(["TO EXISTING", "APPLIANCES"], texts)
+        self.assertIn([EXISTING_LABEL, "670 MBH"], texts)
+
+
 if __name__ == "__main__":
     unittest.main()

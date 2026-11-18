@@ -79,6 +79,7 @@ BAND_FT = 20.0             # one level band: equipment row, drop, header row
 LEVEL_TOL_FT = 0.25        # an element this close below a level is on it
 INLINE_Z_FT = 1.0          # a run end this close to the tee height is inline
 ROOT_RISER_COL = 0.5       # meter outlet riser, in columns from the meter
+EXISTING_COLS = 2          # tie in: existing meter to the new connection
 EPS = 0.05
 
 UTILITY_TEXT = ["GAS FROM UTILITY"]
@@ -669,6 +670,26 @@ def layout(sch, notes=None, origin_kind="meter"):
     occ.append(_text(ux1 - 1.0, my - UTILITY_DROP_FT - 1.4, UTILITY_TEXT,
                      "left", "utility"))
     root = sch.get("root")
+    start_col = 0
+    start_xy = (METER_R, my)
+    existing = sch.get("existing")
+    if existing:
+        # Colin 2026-10-13: start at the existing meter, the existing pipe
+        # (thin, labelled) to the new connection, then the existing piping
+        # on to a squiggle, to the existing appliances.
+        start_col = EXISTING_COLS
+        cx = X(EXISTING_COLS)
+        occ.append(_line(METER_R, my, cx, my, None, new=False))
+        lines = existing["label"]
+        w, h = _text_size(lines)
+        occ.append(_text((METER_R + cx) / 2.0, my + LABEL_GAP_FT + h, lines,
+                         "center", "existing"))
+        occ.append(_line(cx, my, cx, my - UTILITY_DROP_FT, None, new=False))
+        occ.append(_symbol("squiggle", cx, my - UTILITY_DROP_FT - 0.5, 90,
+                           0.5, 0.4))
+        occ.append(_text(cx - 1.0, my - UTILITY_DROP_FT - 1.4,
+                         gas_labels.EXISTING_APPLIANCES, "left", "existing"))
+        start_xy = (cx, my)
     if root is not None:
         end = root["end"]
         if end["type"] == "junction":
@@ -677,8 +698,8 @@ def layout(sch, notes=None, origin_kind="meter"):
             ty = my
         else:
             ty = eng.y_equip(eng._z(end)) + ROW_FT
-        res = eng.header(root, 0, ty, occ, from_y=my, riser_dx=ROOT_RISER_COL,
-                         start_xy=(METER_R, my))
+        res = eng.header(root, start_col, ty, occ, from_y=my,
+                         riser_dx=ROOT_RISER_COL, start_xy=start_xy)
         if res is None:
             eng.log.append("LAYOUT FAILED: no clash free placement found")
             res = occ

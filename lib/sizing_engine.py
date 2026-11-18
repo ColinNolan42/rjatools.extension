@@ -694,6 +694,34 @@ def basis_of_design_rows():
     ]
 
 
+def oneline_basis_rows():
+    """The One-Line basis for its own dialog (Plan B): what the diagram
+    shows and where each number comes from. It sizes nothing."""
+    return [
+        ("Runs after", "Size Gas. The diagram is drawn only for a complete "
+                       "system whose every pipe is at the size Size Gas "
+                       "requires on the table and heat content picked here; "
+                       "otherwise it lists why and draws nothing."),
+        ("Pipe labels", "Size and G, then the segment's centerline length "
+                        "(pipe plus the length inside its fittings, plus "
+                        "{:g} ft per elbow), then the MBH it carries. No "
+                        "material on a label.".format(
+                            float(shared_params.ELBOW_EQUIV_LENGTH_FT))),
+        ("Developed length", "The trunk labels add up to the longest run "
+                             "Size Gas used, shown in the notes block."),
+        ("Loads", "GAS_LOAD_MBH on each gas fixture. An unnamed or FUTURE "
+                  "cap at 0 MBH reads FUTURE CONNECTION."),
+        ("Regulators", "A PRV symbol is shown before every piece of "
+                       "equipment. A mid stream PRV (more than {:g} ft of "
+                       "pipe after it) is shown on its pipe and its table "
+                       "is added to the notes.".format(
+                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
+        ("Layout", "Left to right from the meter, no scale. Elevation by "
+                   "level: first level equipment on the meter row, ceiling "
+                   "headers above it, rooftop units higher."),
+    ]
+
+
 def _min_size_label():
     """Nominal label of the firm minimum pipe size, e.g. '3/4'."""
     for nominal in ("1/2", "3/4", "1", "1-1/4", "1-1/2", "2"):

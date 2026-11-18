@@ -929,15 +929,40 @@ def heat_content_note(table_id):
 
 
 def show_gas_picker(title, prv_option, use_theme=True):
-    """Themed pipe material / IFGC table dialog for Size Gas and One-Line.
+    """Themed pipe material / IFGC table dialog for Size Gas.
 
     Same return value as ui_helpers._show_picker: a dict with
     "pipe_material", "table_label", "heat_content", "mid_stream_prv" and
     "downstream_table_label", or None if cancelled.
     """
+    return _gas_picker(title, "size" if prv_option else "plain", use_theme)
+
+
+def show_oneline_picker(title, downstream_needed=False, use_theme=True):
+    """Themed One-Line dialog (Plan B: a tool gets its own dialog). The
+    material, table and heat content shall be the ones Size Gas ran on, so
+    the gate's size check matches. The downstream table row shows only when
+    the walk found a mid stream PRV (Colin, 2026-11-18); there is no tick
+    box. Same return value as show_gas_picker."""
+    return _gas_picker(title, "oneline_prv" if downstream_needed else "oneline",
+                       use_theme)
+
+
+def _gas_picker(title, mode, use_theme):
+    """The gas table dialog. mode: "size" (Size Gas, Mid Stream PRV tick
+    box), "plain" (no PRV), "oneline" or "oneline_prv" (One-Line heading and
+    basis; with _prv the downstream table row is shown and required)."""
     from System.Windows import Visibility
 
-    if prv_option:
+    prv_option = mode == "size"
+    oneline = mode.startswith("oneline")
+    downstream_needed = mode == "oneline_prv"
+    if oneline:
+        heading = 'Gas One-Line'
+        purpose = ('Draws the gas piping one-line diagram on a drafting view '
+                   'from the sizes Size Gas wrote. Pick the table and heat '
+                   'content Size Gas ran on.')
+    elif prv_option:
         heading = 'Size Gas'
         purpose = ('Sizes gas piping by the IFGC Longest Run Method and writes '
                    'the sizes into the model.')
@@ -1015,6 +1040,9 @@ def show_gas_picker(title, prv_option, use_theme=True):
     if prv_option:
         cb_prv.Visibility = Visibility.Visible
         populate_downstream()
+    if downstream_needed:
+        pnl_prv.Visibility = Visibility.Visible
+        populate_downstream()
 
     def on_material_changed(sender, args):
         if cb_material.SelectedItem is not None:
@@ -1023,7 +1051,7 @@ def show_gas_picker(title, prv_option, use_theme=True):
 
     def on_table_changed(sender, args):
         update_heat_box()
-        if prv_option:
+        if prv_option or downstream_needed:
             populate_downstream()
 
     def on_prv_toggled(sender, args):
@@ -1035,14 +1063,16 @@ def show_gas_picker(title, prv_option, use_theme=True):
     cb_prv.Checked += on_prv_toggled
     cb_prv.Unchecked += on_prv_toggled
 
-    _fill_basis(win, sizing_engine.basis_of_design_rows())
+    _fill_basis(win, sizing_engine.oneline_basis_rows() if oneline
+                else sizing_engine.basis_of_design_rows())
 
     def collect(errors):
         heat_content = _number(tb_heat, 'Heat content of gas', errors)
         if not cb_material.SelectedItem or not cb_table.SelectedItem:
             errors.append((None, 'Pick a pipe material and an IFGC table.'))
 
-        use_prv = bool(cb_prv.IsChecked) if prv_option else False
+        use_prv = (bool(cb_prv.IsChecked) if prv_option
+                   else downstream_needed)
         downstream_label = None
         if use_prv:
             up = upstream_option()
@@ -1152,3 +1182,49 @@ def show_existing_gas_dialog(title, pipe_sizes, defaults=None, use_theme=True):
         }
 
     return _run(win, [tb_length, tb_load], collect)
+
+
+# ---------------------------------------------------------------------------
+# In-run messages (Plan B): the themed replacement for forms.alert
+# ---------------------------------------------------------------------------
+
+_MESSAGE_BODY = (
+    '<Border x:Name="bd_kind" BorderThickness="4,0,0,0" Padding="10,6,6,6"'
+    ' Margin="0,10,0,0">'
+    '<TextBlock x:Name="tb_message" TextWrapping="Wrap" FontSize="12"/>'
+    '</Border>'
+)
+
+# kind: (heading, accent color), the console callout colors
+MESSAGE_KINDS = {
+    "info": ("Note", "#0070C0"),
+    "warn": ("Warning", "#E0A800"),
+    "error": ("Error", "#D22828"),
+}
+
+
+def show_message(title, text, kind="info", yes_no=False, heading=None,
+                 use_theme=True):
+    """Themed message. OK only returns True; Yes/No returns True for Yes and
+    None for No or close (ui_helpers.rja_alert turns None into False)."""
+    from System.Windows import Visibility
+    from System.Windows.Media import BrushConverter
+
+    kind_heading, color = MESSAGE_KINDS.get(kind, MESSAGE_KINDS["info"])
+    win = _build_window(title, heading or kind_heading, None, _MESSAGE_BODY,
+                        use_theme, width=480)
+    _named(win, 'tb_message').Text = text
+    _named(win, 'bd_kind').BorderBrush = BrushConverter().ConvertFromString(color)
+    btn_ok = _named(win, 'btn_ok')
+    btn_cancel = _named(win, 'btn_cancel')
+    if yes_no:
+        btn_ok.Content = 'Yes'
+        btn_cancel.Content = 'No'
+    else:
+        btn_cancel.Visibility = Visibility.Collapsed
+
+    def collect(errors):
+        return True
+
+    return _run(win, [], collect)
+

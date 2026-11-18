@@ -51,6 +51,8 @@ X_NAME = "{http://schemas.microsoft.com/winfx/2006/xaml}Name"
 BODIES = {
     "water": sizer_dialogs._WATER_BODY,
     "gas": sizer_dialogs._GAS_BODY,
+    "oneline": sizer_dialogs._GAS_BODY,
+    "message": sizer_dialogs._MESSAGE_BODY,
     "existing": sizer_dialogs._EXISTING_BODY,
     "performance": sizer_dialogs._PERF_BODY,
     "start": sizer_dialogs._START_BODY,
@@ -60,13 +62,15 @@ BODIES = {
 
 # The start point picker is a choice, not a calculation, so it carries no
 # Calculation basis block.
-NO_BASIS = set(["start"])
+NO_BASIS = set(["start", "message"])
 
 # Every name each dialog function looks up, read from its source so the test
 # cannot drift from the code.
 FUNCTIONS = {
     "water": ["show_water_dialog", "_init_project", "_init_recirc"],
-    "gas": ["show_gas_picker"],
+    "gas": ["show_gas_picker", "_gas_picker"],
+    "oneline": ["show_oneline_picker", "_gas_picker"],
+    "message": ["show_message"],
     "existing": ["show_existing_gas_dialog"],
     "performance": ["show_water_performance_dialog", "_init_project",
                     "_init_recirc"],
