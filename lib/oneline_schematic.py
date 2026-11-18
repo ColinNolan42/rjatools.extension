@@ -436,6 +436,8 @@ def build(snap):
         b.finish(root)
     return {"origin": origin, "root": root, "segments": b.segments,
             "warnings": b.warnings,
+            "origin_xyz": b.g.node(origin).get("xyz"),
+            "levels": list(snap.get("levels") or []),
             "longest_run_ft": float(snap.get("longest_run_ft") or 0.0)}
 
 

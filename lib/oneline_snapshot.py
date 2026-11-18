@@ -68,6 +68,27 @@ def _phase_name(doc, element):
         return None
 
 
+def read_levels(doc):
+    """[{"name", "elev"}] for every level in the model, lowest first. The
+    One-Line draws elevation vertical by level band (Colin, 2026-11-18)."""
+    out = []
+    if doc is None:
+        return out
+    try:
+        from Autodesk.Revit.DB import FilteredElementCollector, Level, \
+            Element as _E
+        for lv in FilteredElementCollector(doc).OfClass(Level):
+            try:
+                name = _E.Name.GetValue(lv)
+            except Exception:
+                name = str(getattr(lv, "Name", ""))
+            out.append({"name": name, "elev": _r(lv.Elevation)})
+    except Exception:
+        return []
+    out.sort(key=lambda d: d["elev"])
+    return out
+
+
 def _edge_table(edge, table_id, downstream_table_id, sizing_result):
     ctx = (sizing_result or {}).get("edge_context") or {}
     c = ctx.get(edge.element_id)
@@ -158,6 +179,7 @@ def snapshot(graph, doc, table_id, sizing_result=None,
         "existing_connections": list(graph.existing_connections or []),
         "non_gas_skipped": [list(x) for x in (graph.non_gas_skipped or [])],
         "existing": graph.existing,
+        "levels": read_levels(doc),
         "sizing": None,
     }
     if sizing_result:

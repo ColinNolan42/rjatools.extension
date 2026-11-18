@@ -1,8 +1,9 @@
 # -*- coding: ascii -*-
 """Tests for oneline_layout.py (One-Line rebuild step 4, 2026-11-18).
 
-Checks (plan section 8): no two primitives clash on either bench; nothing
-but the trunk on the meter row (item 9); every Segment has one label,
+Checks (plan section 8): no two primitives clash on either bench; elevation
+by level band, first floor equipment on the meter row, roof units higher,
+no header along the meter row (item 9, Colin 2026-11-18); every Segment has one label,
 centered on its last drawn line (item 4); inline terminal labels sit right
 of the symbol (item 7); every equipment end has its PRV symbol; a forced
 collision moves a junction or a header instead of overlapping.
@@ -136,12 +137,13 @@ class Benches(unittest.TestCase):
         eq_prvs = [p for p in prims if p["t"] == "symbol" and
                    p["role"] == "prv" and p.get("equipment_prv")]
         self.assertEqual(len(eq_prvs), n_eq)
-        # meter row: only trunk lines and the meter's utility stub
+        # meter row: no header runs along it, only the meter outlet stub
+        meter = _of(out, t="symbol", role="meter")[0]
+        root_first = sch["root"]["segments"][0]
         for l in _of(out, t="line"):
-            if abs(l["y0"]) < 1e-6 and abs(l["y1"]) < 1e-6:
-                if l["seg"] is not None:
-                    self.assertTrue(sch["segments"][l["seg"]]["on_longest"],
-                                    l["seg"])
+            if abs(l["y0"] - meter["y"]) < 1e-6 and \
+                    abs(l["y1"] - meter["y"]) < 1e-6 and l["seg"] is not None:
+                self.assertEqual(l["seg"], root_first)
         # notes block top left, above everything else
         notes = _of(out, t="text", role="notes")[0]
         others = [p for p in prims if p is not notes]
@@ -173,18 +175,39 @@ class Benches(unittest.TestCase):
         self._inline(G3C_SCH, G3C, "FUTURE")
         self._inline(G2_SCH, G2, "RTU-5")
 
-    def test_item9_kitchen_header_off_meter_row(self):
-        # the kitchen header (915 down to 120 MBH) sits two rows or more
-        # from the meter row; WH-1 hangs below the meter row
+    def _eq_sym(self, sch, out, name):
+        t = [x for x in S.terminals_in_order(sch) if x["name"] == name][0]
+        role = "equipment" if t["kind"] == "equipment" else "cap"
+        return _of(out, t="symbol", role=role, node=t["node_id"])[0]
+
+    def test_elevation_first_floor_on_meter_row(self):
+        # Colin 2026-11-18: the meter is on the first level, shown at the
+        # same elevation as the kitchen equipment and WH-1
+        meter = _of(G3C, t="symbol", role="meter")[0]
+        for name in ("WH-1", "OVEN-1", "CB-1", "GRIDDLE-1", "RANGE-1",
+                     "FRY-2", "FRY-1", "SP-1"):
+            sym = self._eq_sym(G3C_SCH, G3C, name)
+            self.assertAlmostEqual(sym["box"][3], meter["y"], places=6, msg=name)
+
+    def test_item9_kitchen_header_above_meter_row(self):
         segs = [s for s in G3C_SCH["segments"].values()
                 if s["mbh"] in (855.0, 755.0, 665.0, 450.0, 330.0, 210.0)
                 and s["branch_kind"] == "run"]
+        self.assertEqual(len(segs), 6)
         for s in segs:
             for l in _of(G3C, t="line", seg=s["id"]):
-                self.assertLessEqual(max(l["y0"], l["y1"]), -2 * L.ROW_FT + 1e-6)
-        wh = [t for t in S.terminals_in_order(G3C_SCH) if t["name"] == "WH-1"][0]
-        sym = _of(G3C, t="symbol", role="equipment", node=wh["node_id"])[0]
-        self.assertLess(sym["box"][3], -L.ROW_FT / 2.0)
+                self.assertAlmostEqual(l["y0"], L.ROW_FT)
+                self.assertAlmostEqual(l["y1"], L.ROW_FT)
+
+    def test_elevation_roof_units_higher(self):
+        kitchen_header_y = L.ROW_FT
+        for name in ("MAU-1", "RTU-2", "RTU-1"):
+            sym = self._eq_sym(G3C_SCH, G3C, name)
+            self.assertGreater(sym["box"][1], kitchen_header_y, name)
+        for name in ("RTU-1", "RTU-2", "RTU-3", "RTU-4", "RTU-5", "RTU-6",
+                     "AHU-1", "AHU-2", "ERV-1", "B-1", "B-2", "B-3"):
+            sym = self._eq_sym(G2_SCH, G2, name)
+            self.assertGreater(sym["box"][1], L.ROW_FT, name)
 
     def test_drops_hang_from_their_tee_column(self):
         # drops are vertical, one row
@@ -220,6 +243,8 @@ class ForcedCollision(unittest.TestCase):
                  (106, 3, 7, 20.0, "1", 20.0), (107, 7, 8, 5.0, "1", 10.0),
                  (108, 7, 10, 10.0, "1", 10.0)]
         snap = _snap(nodes, edges, path=[1, 100, 2, 101, 3, 102, 9])
+        snap["levels"] = [{"name": "FIRST", "elev": 0.0},
+                          {"name": "ROOF", "elev": 18.0}]
         sch = S.build(snap)
         out = L.layout(sch)
         self.assertEqual(L.all_clashes(out["prims"]), [])

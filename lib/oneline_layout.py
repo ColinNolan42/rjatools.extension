@@ -22,21 +22,27 @@ Primitives (every one carries "box" = (x0, y0, x1, y1)):
     (align center) or its top left corner (align left).
 
 Rules (plan section 4, Colin 2026-11-18):
-- Left to right, meter at the far left on row 0. No scale: one column per
-  Segment, one row per drop.
-- The trunk (the longest path) runs along row 0. No other header ever sits
-  on row 0 (item 9).
-- A tap that ends at equipment is a vertical drop of one row; a tap that
-  holds more junctions rises or drops to its own header row, at least two
-  rows away so the parent's drops keep the row next to it. Up when its
-  equipment sits above the tee, else down (elevation vertical).
+- Left to right, meter at the far left. No scale horizontally: one column
+  per Segment.
+- Elevation vertical by level band (Colin, 2026-11-18): the levels the
+  meter and the equipment sit on each get a band. A band draws its
+  equipment on its base row and the headers that run at that level's
+  ceiling one row above, with drops down to the equipment. The meter sits
+  on the base row of its level, so first floor equipment (kitchen, WH-1)
+  shares the meter row and rooftop units sit higher.
+- No header ever runs along the meter row (item 9); the meter outlet rises
+  to its header.
+- A tap to equipment is a vertical drop to its band's equipment row; a tap
+  holding more junctions rises or drops to its own level's header row. A
+  run that changes level becomes a riser too. A second leg the same way
+  from one tee steps right first.
 - A Segment label sits on the Segment's LAST drawn line: centered above a
   horizontal line, right of and centered on a vertical one (item 4).
 - An inline terminal (a header running straight into equipment) has its
   symbol turned 90 deg and its label to the right (item 7).
 - Every equipment end has a PRV symbol on the pipe just before it.
 - Any clash of a line, label or symbol with what is already placed moves
-  the junction one column right, or the header one row further out.
+  the junction one column right, or steps the leg further right.
 """
 
 import gas_labels
@@ -68,6 +74,10 @@ UTILITY_DROP_FT = 3.0
 NOTES_GAP_FT = 3.0
 MAX_STRETCH = 12
 MAX_ROWS_OUT = 12
+BAND_FT = 20.0             # one level band: equipment row, drop, header row
+LEVEL_TOL_FT = 0.25        # an element this close below a level is on it
+INLINE_Z_FT = 1.0          # a run end this close to the tee height is inline
+ROOT_RISER_COL = 0.5       # meter outlet riser, in columns from the meter
 EPS = 0.05
 
 UTILITY_TEXT = ["GAS FROM UTILITY"]
@@ -295,6 +305,46 @@ class _Engine(object):
         self.sch = sch
         self.segs = sch["segments"]
         self.log = []
+        self._bands(sch)
+
+    # -- elevation bands (Colin, 2026-11-18) ------------------------------
+    def _bands(self, sch):
+        """Bands come from the levels the meter and the equipment sit on:
+        band i draws its equipment at y = i * BAND_FT and the headers that
+        run at that level's ceiling one row above. The meter shares the
+        band of the first level equipment."""
+        levels = sorted([float(l["elev"]) for l in sch.get("levels") or []])
+        zs = [(sch.get("origin_xyz") or [0, 0, 0])[2]]
+        for t in self._terms(sch.get("root")):
+            if t.get("xyz"):
+                zs.append(t["xyz"][2])
+        used = set()
+        for z in zs:
+            used.add(self._level_of(z, levels))
+        self.band_elevs = sorted(used)
+
+    @staticmethod
+    def _level_of(z, levels):
+        if not levels:
+            return 0.0
+        best = levels[0]
+        for e in levels:
+            if e <= z + LEVEL_TOL_FT:
+                best = e
+        return best
+
+    def band(self, z):
+        b = 0
+        for i, e in enumerate(self.band_elevs):
+            if e <= z + LEVEL_TOL_FT:
+                b = i
+        return b
+
+    def y_equip(self, z):
+        return self.band(z) * BAND_FT
+
+    def y_header(self, z):
+        return self.band(z) * BAND_FT + ROW_FT
 
     # -- helpers -----------------------------------------------------------
     def fits(self, new, occ):
@@ -310,9 +360,9 @@ class _Engine(object):
 
     def _terms(self, br, out=None):
         out = [] if out is None else out
-        end = br["end"]
-        if end is None:
+        if br is None or br.get("end") is None:
             return out
+        end = br["end"]
         if end["type"] == "terminal":
             out.append(end)
         else:
@@ -321,26 +371,9 @@ class _Engine(object):
                 self._terms(t, out)
         return out
 
-    def _dir(self, tap, j):
-        """+1 up when the tap's equipment sits above the tee, else -1."""
-        jz = (j.get("xyz") or [0, 0, 0])[2]
-        zs = [(t.get("xyz") or [0, 0, jz])[2] for t in self._terms(tap)]
-        if not zs:
-            return -1
-        mz = sum(zs) / float(len(zs))
-        return 1 if mz > jz + 0.5 else -1
-
-    def _split(self, j, trunk):
-        """Continuation along this header, and the taps in drawing order."""
-        legs = list(j["taps"]) + [j["run"]]
-        cont = j["run"]
-        if trunk:
-            for b in legs:
-                if self.segs[b["segments"][0]]["on_longest"]:
-                    cont = b
-                    break
-        taps = [b for b in legs if b is not cont]
-        return cont, taps
+    @staticmethod
+    def _z(item):
+        return (item.get("xyz") or [0, 0, 0])[2]
 
     # -- one Segment drawn along a polyline -------------------------------
     def _seg_prims(self, seg, pts, end_inserts=None, start_trim=0.0):
@@ -496,10 +529,12 @@ class _Engine(object):
                                      start_trim if i == 0 else 0.0)
         return prims
 
-    # -- headers, taps, junctions -----------------------------------------
-    def header(self, br, cx, r, occ, trunk, from_row=None, start_trim=0.0):
-        """Lay br out from grid point (cx, r) to the right along row r. With
-        from_row, the first Segment first runs vertically from (cx, from_row).
+    # -- headers, legs, junctions -----------------------------------------
+    def header(self, br, cx, y, occ, from_y=None, riser_dx=0.0,
+               start_xy=None):
+        """Lay br out from column cx to the right at height y. With from_y,
+        the first Segment first runs vertically from from_y at column
+        cx + riser_dx (reached from start_xy horizontally, for the meter).
         Returns the new occupancy list, or None."""
         n = len(br["segments"])
         end = br["end"]
@@ -508,13 +543,17 @@ class _Engine(object):
             for i in range(n):
                 c0 = cx + i
                 c1 = cx + i + 1 + (stretch if i == n - 1 else 0)
-                pts = [(X(c0), Y(r)), (X(c1), Y(r))]
-                if i == 0 and from_row is not None:
-                    pts = [(X(cx), Y(from_row))] + pts
+                pts = [(X(c0), y), (X(c1), y)]
+                if i == 0 and from_y is not None and abs(from_y - y) > 1e-6:
+                    xr = X(cx + riser_dx)
+                    pts = [(xr, from_y), (xr, y), (X(c1), y)]
+                    if start_xy is not None:
+                        pts = [start_xy] + pts
+                elif i == 0 and start_xy is not None:
+                    pts = [start_xy, (X(c1), y)]
                 pts_list.append(pts)
             ce = cx + n + stretch
-            new = self._branch_prims(br, pts_list, (X(ce), Y(r)), (1.0, 0.0),
-                                     start_trim)
+            new = self._branch_prims(br, pts_list, (X(ce), y), (1.0, 0.0))
             if not self.fits(new, occ):
                 continue
             trial = occ + new
@@ -523,7 +562,7 @@ class _Engine(object):
                     self.log.append("stretch {0} col(s) before {1}".format(
                         stretch, end.get("name")))
                 return trial
-            res = self.junction(end, ce, r, trial, trunk)
+            res = self.junction(end, ce, y, trial)
             if res is not None:
                 if stretch:
                     self.log.append("stretch {0} col(s) before junction "
@@ -531,41 +570,84 @@ class _Engine(object):
                 return res
         return None
 
-    def junction(self, j, c, r, occ, trunk):
-        cont, taps = self._split(j, trunk)
+    def _is_inline(self, leg, j):
+        end = leg["end"]
+        return (end["type"] == "terminal" and
+                abs(self._z(end) - self._z(j)) <= INLINE_Z_FT)
+
+    def junction(self, j, c, y, occ):
+        legs = list(j["taps"]) + [j["run"]]
+        run = j["run"]
+        cont = None
+        if self._is_inline(run, j):
+            cont = run
+        elif run["end"]["type"] == "junction" and \
+                abs(self.y_header(self._z(run["end"])) - y) < 1e-6:
+            cont = run
         trial = occ
-        for tap in taps:
-            res = self.tap(tap, j, c, r, trial)
+        used = {}          # direction -> vertical legs already at this tee
+        for leg in legs:
+            if leg is cont:
+                continue
+            res = None
+            d_key = None
+            jogs = MAX_STRETCH if leg["end"]["type"] == "junction" else 4
+            for jog in range(0, jogs):
+                res, d_key = self.leg(leg, c, y, trial, jog, used)
+                if res is not None:
+                    break
             if res is None:
                 return None
+            used[d_key] = used.get(d_key, 0) + 1
             trial = res
-        cont_trunk = trunk and self.segs[cont["segments"][0]]["on_longest"]
-        return self.header(cont, c, r, trial, cont_trunk)
+        if cont is None:
+            return trial
+        return self.header(cont, c, y, trial)
 
-    def tap(self, tap, j, c, r, occ):
-        d = self._dir(tap, j)
-        end = tap["end"]
-        n = len(tap["segments"])
+    def leg(self, leg, c, y, occ, jog, used):
+        """A leg leaving the header vertically: a drop or riser to its
+        equipment, or a riser to its own header at its level. Returns
+        (occupancy or None, direction)."""
+        end = leg["end"]
+        n = len(leg["segments"])
         if end["type"] == "terminal":
+            ty = self.y_equip(self._z(end))
+            if abs(ty - y) < ROW_FT - 1e-6:
+                ty = y - ROW_FT
+            d = 1 if ty > y else -1
+            if jog < used.get(d, 0):
+                return None, d
+            x = X(c + jog)
             pts_list = []
             for i in range(n):
-                pts_list.append([(X(c), Y(r + d * i)), (X(c), Y(r + d * (i + 1)))])
-            new = self._branch_prims(tap, pts_list, (X(c), Y(r + d * n)),
-                                     (0.0, float(d)))
+                y0 = y + (ty - y) * i / float(n)
+                y1 = y + (ty - y) * (i + 1) / float(n)
+                pts = [(x, y0), (x, y1)]
+                if i == 0 and jog:
+                    pts = [(X(c), y)] + pts
+                pts_list.append(pts)
+            new = self._branch_prims(leg, pts_list, (x, ty), (0.0, float(d)))
             if self.fits(new, occ):
-                return occ + new
-            return None
-        for k in range(2, MAX_ROWS_OUT + 1):
-            rr = r + d * k
-            if rr == 0:
-                continue
-            res = self.header(tap, c, rr, occ, False, from_row=r)
+                return occ + new, d
+            return None, d
+        ty = self.y_header(self._z(end))
+        cands = [ty]
+        if abs(ty - y) < 1e-6:
+            cands = []
+            for k in range(1, MAX_ROWS_OUT + 1):
+                cands += [y + k * ROW_FT, y - k * ROW_FT]
+        d = 1 if cands[0] > y else -1
+        if jog < used.get(d, 0):
+            return None, d
+        for cy in cands:
+            res = self.header(leg, c + jog, cy, occ, from_y=y,
+                              start_xy=(X(c), y) if jog else None)
             if res is not None:
-                if k > 2:
-                    self.log.append("header {0} placed {1} rows out".format(
-                        end["node_id"], k))
-                return res
-        return None
+                if cy != ty:
+                    self.log.append("header {0} moved off its level "
+                                    "row".format(end["node_id"]))
+                return res, (1 if cy > y else -1)
+        return None, d
 
 
 def layout(sch, notes=None, origin_kind="meter"):
@@ -573,18 +655,28 @@ def layout(sch, notes=None, origin_kind="meter"):
     (gas_labels.notes_lines)."""
     eng = _Engine(sch)
     occ = []
-    # meter and utility stub on the reserved meter row
-    occ.append(_symbol("meter", 0.0, 0.0, 0, METER_R, METER_R, sch["origin"]))
-    ux0 = -METER_R
+    oz = (sch.get("origin_xyz") or [0, 0, 0])[2]
+    my = eng.y_equip(oz)
+    # meter and utility stub
+    occ.append(_symbol("meter", 0.0, my, 0, METER_R, METER_R, sch["origin"]))
     ux1 = -(METER_R + UTILITY_RUN_FT)
-    occ.append(_line(ux0, 0.0, ux1, 0.0, None))
-    occ.append(_line(ux1, 0.0, ux1, -UTILITY_DROP_FT, None))
-    occ.append(_symbol("squiggle", ux1, -UTILITY_DROP_FT - 0.5, 90, 0.5, 0.4))
-    occ.append(_text(ux1 - 1.0, -UTILITY_DROP_FT - 1.4, UTILITY_TEXT, "left",
-                     "utility"))
+    occ.append(_line(-METER_R, my, ux1, my, None))
+    occ.append(_line(ux1, my, ux1, my - UTILITY_DROP_FT, None))
+    occ.append(_symbol("squiggle", ux1, my - UTILITY_DROP_FT - 0.5, 90,
+                       0.5, 0.4))
+    occ.append(_text(ux1 - 1.0, my - UTILITY_DROP_FT - 1.4, UTILITY_TEXT,
+                     "left", "utility"))
     root = sch.get("root")
     if root is not None:
-        res = eng.header(root, 0, 0, occ, True, start_trim=METER_R)
+        end = root["end"]
+        if end["type"] == "junction":
+            ty = eng.y_header(eng._z(end))
+        elif eng.y_equip(eng._z(end)) == my:
+            ty = my
+        else:
+            ty = eng.y_equip(eng._z(end)) + ROW_FT
+        res = eng.header(root, 0, ty, occ, from_y=my, riser_dx=ROOT_RISER_COL,
+                         start_xy=(METER_R, my))
         if res is None:
             eng.log.append("LAYOUT FAILED: no clash free placement found")
             res = occ
