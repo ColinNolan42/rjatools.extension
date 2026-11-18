@@ -24,6 +24,11 @@ PRV_FAMILY_KEYWORDS = ("prv", "regulator", "regulating")
 # equipment's own regulator: it is ignored for sizing.
 PRV_MIDSTREAM_MIN_DOWNSTREAM_FT = 10.0
 
+# Isolation valves on the One-Line: a case-insensitive match of these words in
+# a fitting's family name, checked only after the PRV words (a "Pressure
+# Regulating Valve" is a PRV). Moved here from the One-Line script.
+ISOLATION_VALVE_KEYWORDS = ("valve", "ball", "gate", "check", "shutoff")
+
 # Equivalent length added to the developed length for each elbow on a path,
 # feet (IFGC Appendix A). Read by pipe_graph and the sizing basis text.
 # One-Line keeps its own copy until the One-Line fixes are taken up
