@@ -932,7 +932,7 @@ class WidthTests(unittest.TestCase):
 class SourceTests(unittest.TestCase):
 
     def test_no_f_strings_and_no_revit(self):
-        for name in ('console_report.py', 'duct_perf_console.py'):
+        for name in ('console_report.py', 'duct_perf_console.py', 'gas_console.py'):
             with io.open(os.path.join(HERE, name), encoding='utf-8') as fh:
                 src = fh.read()
             self.assertIsNone(re.search(r"""(?<![\w])[fF][rR]?['"]""", src), name)

@@ -52,6 +52,7 @@ STATUS_ALIASES = {
     'OK': 'GREEN', 'PASS': 'GREEN', 'WITHIN': 'GREEN',
     'LOW': 'RED', 'FAIL': 'RED', 'EXCEEDS': 'RED',
     'GREY': 'GRAY', 'N/A': 'GRAY', 'NOT': 'GRAY',
+    'FALLBACK': 'YELLOW',
 }
 
 # (border, background, text) per callout kind.
@@ -278,6 +279,29 @@ def paragraph(text, bold_lead=None):
     if bold_lead:
         lead = '<b>{}</b> '.format(esc(bold_lead))
     return _wrap(lead + esc(text), margin='4px 0')
+
+
+def emit(output, html, fallback, logger=None, tool='RJA tool'):
+    """Print one themed section with output.print_html, or run fallback()
+    (plain print_md text) when print_html is missing or throws. A failure is
+    logged, never silent. Returns True when the HTML printed.
+
+    The one emit path for themed consoles (Plan B, 2026-11-18). Duct
+    Performance still has its own copy in duct_perf_run._emit_html."""
+    try:
+        output.print_html(html)
+        return True
+    except Exception as ex:
+        if logger is not None:
+            logger.warning('{}: output.print_html failed ({}: {}), plain text '
+                           'printed instead.'.format(tool, type(ex).__name__, ex))
+    try:
+        fallback()
+    except Exception as ex:
+        if logger is not None:
+            logger.error('{}: plain text fallback failed too ({}: {}).'.format(
+                tool, type(ex).__name__, ex))
+    return False
 
 
 def markdown_table(headers, rows):
