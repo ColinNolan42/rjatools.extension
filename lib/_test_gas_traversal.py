@@ -170,6 +170,97 @@ class TestWalkStaysInGasPiping(unittest.TestCase):
         self.assertNotIn(20, g.disconnected)
         self.assertTrue(any(s.startswith("SKIP: pipe 20")
                             for s in g.traversal_log))
+        # F1: the stop is recorded for the Size Gas warning
+        self.assertEqual(g.non_gas_skipped, [(20, "DomesticColdWater")])
+
+    def test_water_connector_on_a_fitting_is_recorded(self):
+        # F1: the element side SKIP names the element that was not followed
+        g = self._build(_water_heater_model({"family": "Water Heater"}))
+        self.assertEqual(sorted(g.non_gas_skipped),
+                         [(20, "DomesticColdWater"), (30, "DomesticHotWater")])
+
+    def test_appliance_terminal_is_not_a_non_gas_stop(self):
+        # A gas appliance's water connectors are by design (S21), no F1 line
+        g = self._build(_water_heater_model())
+        self.assertEqual(g.non_gas_skipped, [])
+
+
+def _tee_model(cap_params, elbow_family=None):
+    """meter 1 -> pipe 10 -> tee 2 -> pipe 11 -> RTU 4
+                                   -> pipe 12 (-> elbow 5 -> pipe 13) -> cap 6
+    """
+    meter = _Elem(1, "FamilyInstance", [_c(0, 10, direction="Out")],
+                  {"family": "Gas Meter"})
+    gas = _Elem(10, "Pipe", [_c(0, 1), _c(1, 2)])
+    tee = _Elem(2, "FamilyInstance", [_c(0, 10), _c(1, 11), _c(2, 12)],
+                {"family": "Tee"})
+    gas2 = _Elem(11, "Pipe", [_c(0, 2), _c(1, 4)])
+    rtu = _Elem(4, "FamilyInstance", [_c(0, 11)],
+                {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 100.0,
+                 "FIXTURE_NAME": "RTU-1"})
+    elements = [meter, gas, tee, gas2, rtu]
+    if elbow_family:
+        elements += [
+            _Elem(12, "Pipe", [_c(0, 2), _c(1, 5)], length=30.0),
+            _Elem(5, "FamilyInstance", [_c(0, 12), _c(1, 13)],
+                  {"family": elbow_family}),
+            _Elem(13, "Pipe", [_c(0, 5), _c(1, 6)], length=30.0),
+        ]
+    else:
+        elements.append(_Elem(12, "Pipe", [_c(0, 2), _c(1, 6)]))
+    elements.append(_Elem(6, "FamilyInstance", [_c(0, 13 if elbow_family
+                                                   else 12)], cap_params))
+    return elements
+
+
+class TestBenchFixes(unittest.TestCase):
+    """F2, F3 and F5 from the gas bench fix list (2026-11-18)."""
+
+    def _build(self, elements):
+        with _Model(elements) as m:
+            return pipe_graph.build_network(m.elements[1], None)
+
+    def test_cap_without_flag_is_listed(self):
+        g = self._build(_tee_model({"family": "Cap - Generic"}))
+        ends = pipe_graph.non_fixture_ends(g)
+        self.assertEqual([n.element_id for n in ends], [6])
+
+    def test_flagged_cap_is_not_listed(self):
+        g = self._build(_tee_model({"IS_GAS_FIXTURE": True,
+                                    "GAS_LOAD_MBH": 0.0,
+                                    "FIXTURE_NAME": "FUTURE",
+                                    "family": "RJA- Gas Equipment Cap"}))
+        self.assertEqual(pipe_graph.non_fixture_ends(g), [])
+
+    def _run_with_elbow(self, family):
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        return self._build(_tee_model(cap, elbow_family=family)).longest_run
+
+    def test_elbow_detection_ignores_case(self):
+        for family in ("Elbow - Generic", "ELBOW - Threaded",
+                       "gas elbow", "RJA Long Radius elbow"):
+            run = self._run_with_elbow(family)
+            self.assertEqual(run["elbow_equiv_length_feet"], 5.0, family)
+            self.assertAlmostEqual(run["total_length_feet"], 75.0)
+
+    def test_not_an_elbow(self):
+        run = self._run_with_elbow("Coupling - Generic")
+        self.assertEqual(run["elbow_equiv_length_feet"], 0.0)
+
+    def test_log_digest(self):
+        g = self._build(_water_heater_model({"family": "Water Heater"}))
+        g.log("SKIP: Element 99 already visited.")
+        helper_log = [
+            {"level": "INFO", "function": "f", "element_id": 1,
+             "message": "found"},
+            {"level": "WARNING", "function": "get_x", "element_id": 7,
+             "message": "NOT FOUND"},
+        ]
+        walk, helpers = pipe_graph.log_digest(g, helper_log)
+        self.assertEqual(len([s for s in walk if s.startswith("SKIP")]), 2)
+        self.assertFalse(any("already visited" in s for s in walk))
+        self.assertEqual(helpers, ["WARNING: get_x element 7: NOT FOUND"])
 
 
 class TestZeroDemandOnCopper(unittest.TestCase):

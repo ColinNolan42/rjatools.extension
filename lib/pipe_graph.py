@@ -41,9 +41,10 @@ class NetworkNode(object):
         self.fixture_name       = ""
         self.is_gas_fixture     = False
 
-        # Elbow detection  -  True if family name contains "Elbow"
-        # Used by _find_longest_run to add 5ft equivalent length per elbow
-        self.is_elbow           = "Elbow" in self.family_name
+        # Elbow detection  -  True if family name contains "elbow", any case
+        # (F3: a family named "ELBOW" or "elbow" was missed and lost its
+        # 5 ft). Used by _find_longest_run to add 5ft equivalent length.
+        self.is_elbow           = "elbow" in (self.family_name or "").lower()
 
         # Cumulative load at this node  -  sum of all downstream fixture loads
         self.cumulative_load_mbh = 0.0
@@ -129,6 +130,9 @@ class NetworkGraph(object):
                                         # for the system that node feeds. Only
                                         # filled when the graph has a mid-stream
                                         # PRV.
+        self.non_gas_skipped    = []    # (element_id, classification) of each
+                                        # pipe or element on a system that is
+                                        # not gas, where the walk stopped (F1)
 
     def add_node(self, node):
         self.nodes[node.element_id] = node
@@ -267,6 +271,45 @@ def _not_gas_classification(connector):
     if system_type in _NOT_GAS_CLASSIFICATIONS:
         return system_type
     return None
+
+
+def _record_non_gas(graph, element_id, classification):
+    """Note where the walk stopped at a system that is not gas (F1), once
+    per element."""
+    if any(eid == element_id for eid, _ in graph.non_gas_skipped):
+        return
+    graph.non_gas_skipped.append((element_id, classification))
+
+
+def non_fixture_ends(graph):
+    """One connector ends that are not gas fixtures (F2): a cap or an
+    appliance with IS_GAS_FIXTURE not set. They carry no load, so the pipe
+    to them is sized at the minimum. Returns the nodes, by element id."""
+    ends = [n for n in graph.nodes.values()
+            if n.node_type == "fixture" and not n.is_gas_fixture]
+    return sorted(ends, key=lambda n: n.element_id)
+
+
+_LOG_DIGEST_PREFIXES = ("SKIP", "WARNING", "TERMINAL", "EXISTING", "UNKNOWN")
+
+
+def log_digest(graph, helper_log=None):
+    """The traversal and helper log lines worth reading (F5, Rule 6).
+
+    Traversal lines that start with SKIP, WARNING, TERMINAL, EXISTING or
+    UNKNOWN, except the routine "already visited" SKIPs, and every WARNING or
+    ERROR entry of revit_helpers.get_log(). Returns two lists of strings.
+    """
+    walk = [s for s in (graph.traversal_log or [])
+            if s.startswith(_LOG_DIGEST_PREFIXES)
+            and "already visited" not in s]
+    helpers = []
+    for e in helper_log or []:
+        if e.get("level") in ("WARNING", "ERROR"):
+            helpers.append("{}: {} element {}: {}".format(
+                e.get("level"), e.get("function"),
+                e.get("element_id"), e.get("message")))
+    return walk, helpers
 
 
 def check_gas_pipe(pipe):
@@ -451,6 +494,7 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
             graph.log(
                 "SKIP: pipe {} is {}, not gas. Not sized, not "
                 "followed.".format(pipe_id, not_gas))
+            _record_non_gas(graph, pipe_id, not_gas)
             return
 
     # Identify which connector leads back to parent and which goes forward
@@ -584,6 +628,7 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
                     "SKIP: element {} connector {} is {}, not gas. Element "
                     "{} not followed.".format(
                         eid, c.get("connector_index"), not_gas, next_id))
+                _record_non_gas(graph, next_id, not_gas)
                 continue
             if next_id not in visited:
                 next_element = _get_element(doc, next_id)

@@ -663,8 +663,11 @@ def main():
         sizing_engine.mbh_to_cfh(total_mbh, heat_content_btu_per_cf),
         total_mbh)
 
+    non_gas  = list(graph.non_gas_skipped)              # F1
+    bare_end = pipe_graph.non_fixture_ends(graph)       # F2
+
     if (no_load or unnamed or graph.disconnected or prv_warnings
-            or existing_warnings or table_warnings):
+            or existing_warnings or table_warnings or non_gas or bare_end):
         output.print_md("---")
         output.print_md("## :warning: Pre-Sizing Warnings")
 
@@ -694,6 +697,24 @@ def main():
             for n in unnamed:
                 output.print_md("  - ID {}  {:.1f} MBH".format(
                     n.element_id, n.gas_load_mbh))
+
+        if non_gas:
+            output.print_md(
+                "**{} pipe(s) on a system that is not gas ended the walk** - "
+                "nothing past them was sized. Check the System Type:".format(
+                    len(non_gas)))
+            for eid, classification in non_gas:
+                output.print_md("  - Element ID {} ({})".format(
+                    eid, classification))
+
+        if bare_end:
+            output.print_md(
+                "**{} end(s) are not gas fixtures (IS_GAS_FIXTURE not set)** "
+                "- their pipes carry no load and were sized at minimum "
+                "(3/4\"):".format(len(bare_end)))
+            for n in bare_end:
+                output.print_md("  - Element ID {} ({})".format(
+                    n.element_id, n.family_name or "unknown family"))
 
         if graph.disconnected:
             output.print_md(
