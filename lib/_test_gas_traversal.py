@@ -302,9 +302,9 @@ class TestBenchFixes(unittest.TestCase):
     def test_meter_and_appliance_add_no_takeout(self):
         g = self._centerline_build(self._centerline_model(0.1))
         self.assertEqual(
-            pipe_graph._fitting_takeout_ft(g.nodes[1], 10), 0.0)
+            pipe_graph.fitting_takeout_ft(g.nodes[1], 10), 0.0)
         self.assertEqual(
-            pipe_graph._fitting_takeout_ft(g.nodes[6], 13), 0.0)
+            pipe_graph.fitting_takeout_ft(g.nodes[6], 13), 0.0)
 
     def test_not_an_elbow(self):
         run = self._run_with_elbow("Coupling - Generic")

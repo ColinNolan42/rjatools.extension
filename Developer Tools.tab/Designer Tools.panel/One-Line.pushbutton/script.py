@@ -86,8 +86,8 @@ TEXT_CHAR_WIDTH_FT = TEXT_HEIGHT_FT * 0.6  # ft  approx glyph width for centerin
 NOTES_X_BASE     = -(UPSTREAM_H + SYMBOL_RADIUS + 2.0)
 NOTES_Y_BASE     = LEVEL_HEIGHT + 4.0
 
-ELBOW_EQUIV_FT   = 5.0  # ft per elbow, per IFGC A103.1 -- must match
-                        # pipe_graph._find_longest_run's ELBOW_EQUIV_FT
+ELBOW_EQUIV_FT   = shared_params.ELBOW_EQUIV_LENGTH_FT  # ft per elbow, the
+                        # same constant pipe_graph._find_longest_run uses
 
 _PRV_KW       = shared_params.PRV_FAMILY_KEYWORDS
 _ISOLATION_KW = ("valve", "ball", "gate", "check", "shutoff")
@@ -109,15 +109,39 @@ def _edges_from(graph, node_id):
     return [e for e in graph.edges.values() if e.from_node_id == node_id]
 
 
-def _edge_developed_length(graph, edge):
-    """Pipe length + 5ft if this edge's downstream node is an elbow.
+def _hop_takeouts(graph, a_id, b_id):
+    """Length inside the fittings at both ends of a hop between elements
+    a_id and b_id: a's center to its connector toward b, plus b's center to
+    its connector toward a (centerline, F10). Same helper pipe_graph uses,
+    so the labels sum to the notes block TOTAL DEVELOPED LENGTH."""
+    total = 0.0
+    a = graph.nodes.get(a_id)
+    b = graph.nodes.get(b_id)
+    if a is not None:
+        total += pipe_graph.fitting_takeout_ft(a, b_id)
+    if b is not None:
+        total += pipe_graph.fitting_takeout_ft(b, a_id)
+    return total
 
-    Matches pipe_graph._find_longest_run's elbow attribution: each is_elbow
-    node is counted exactly once, via the single edge that terminates at it
-    (the network is a tree, so every node has at most one parent edge).
+
+def _edge_developed_length(graph, edge):
+    """Centerline length of one pipe hop + 5ft if its downstream node is an
+    elbow.
+
+    Centerline: the pipe plus the length inside the fitting at each end,
+    toward this pipe (F10, Colin 2026-11-18). Matches
+    pipe_graph._find_longest_run: each fitting's halves are counted on the
+    hop each half faces, and each is_elbow node's 5 ft exactly once, via the
+    single edge that terminates at it (the network is a tree, so every node
+    has at most one parent edge).
     """
     length = edge.length_feet
+    from_node = graph.nodes.get(edge.from_node_id)
     to_node = graph.nodes.get(edge.to_node_id)
+    if from_node is not None:
+        length += pipe_graph.fitting_takeout_ft(from_node, edge.element_id)
+    if to_node is not None:
+        length += pipe_graph.fitting_takeout_ft(to_node, edge.element_id)
     if to_node is not None and to_node.is_elbow:
         length += ELBOW_EQUIV_FT
     return length
@@ -137,6 +161,7 @@ def _trunk_edge_developed_lengths(graph, trunk_all_ids):
     dev = {}
     last_edge_id = None
     pending_elbow_ft = 0.0
+    prev_item = None
     for item in trunk_all_ids:
         if item in graph.edges:
             edge = graph.edges[item]
@@ -146,15 +171,24 @@ def _trunk_edge_developed_lengths(graph, trunk_all_ids):
         else:
             node = graph.nodes.get(item)
             if node is None:
+                prev_item = item
                 continue
             if (last_edge_id is not None
                     and graph.edges[last_edge_id].to_node_id == item):
+                prev_item = item
                 continue  # already counted via _edge_developed_length
+            # Direct fitting to fitting hop: the fitting halves facing each
+            # other (centerline, F10) plus this node's elbow equivalent.
+            extra = 0.0
+            if prev_item is not None and prev_item in graph.nodes:
+                extra += _hop_takeouts(graph, prev_item, item)
             if node.is_elbow:
-                if last_edge_id is not None:
-                    dev[last_edge_id] += ELBOW_EQUIV_FT
-                else:
-                    pending_elbow_ft += ELBOW_EQUIV_FT
+                extra += ELBOW_EQUIV_FT
+            if last_edge_id is not None:
+                dev[last_edge_id] += extra
+            else:
+                pending_elbow_ft += extra
+        prev_item = item
     return dev
 
 
@@ -215,6 +249,7 @@ def _branch_children(graph, nid, trunk_set, seen):
         if child not in seen:
             child_node = graph.nodes.get(child)
             extra = ELBOW_EQUIV_FT if (child_node and child_node.is_elbow) else 0.0
+            extra += _hop_takeouts(graph, nid, child)   # centerline, F10
             out.append((child, extra, []))
     return out
 

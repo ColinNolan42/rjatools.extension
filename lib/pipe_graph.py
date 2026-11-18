@@ -48,7 +48,7 @@ class NetworkNode(object):
 
         # Transition (reducer): Revit places one where a resized tee meets a
         # smaller pipe. Its length is counted like any fitting's (F10,
-        # _fitting_takeout_ft); the flag is for reporting.
+        # fitting_takeout_ft); the flag is for reporting.
         self.is_transition      = "transition" in (self.family_name or "").lower()
 
         # Cumulative load at this node  -  sum of all downstream fixture loads
@@ -781,7 +781,7 @@ def _longest_run_from(graph, start_id, stop_at_prv):
 
         # The half of this fitting the path comes in through
         if len(current_path) > 1:
-            fit_length += _fitting_takeout_ft(node, current_path[-2])
+            fit_length += fitting_takeout_ft(node, current_path[-2])
 
         total_length = (pipe_length + fit_length
                         + (local_elbow_count * ELBOW_EQUIV_FT))
@@ -816,7 +816,7 @@ def _longest_run_from(graph, start_id, stop_at_prv):
                 _dfs(
                     edge.to_node_id,
                     pipe_length + edge.length_feet,
-                    fit_length + _fitting_takeout_ft(node, edge.element_id),
+                    fit_length + fitting_takeout_ft(node, edge.element_id),
                     local_elbow_count,
                     current_path + [edge.element_id, edge.to_node_id]
                 )
@@ -824,14 +824,14 @@ def _longest_run_from(graph, start_id, stop_at_prv):
         # Traverse direct node-to-node connections (no pipe between them)
         for child_id in graph.node_children.get(node_id, []):
             _dfs(child_id, pipe_length,
-                 fit_length + _fitting_takeout_ft(node, child_id),
+                 fit_length + fitting_takeout_ft(node, child_id),
                  local_elbow_count, current_path + [child_id])
 
     _dfs(start_id, 0.0, 0.0, 0, [start_id])
     return longest
 
 
-def _fitting_takeout_ft(node, other_id):
+def fitting_takeout_ft(node, other_id):
     """Length inside a fitting from its center to the connector joined to
     other_id (F10). The meter and gas appliances are not piping and add
     nothing; nor does a fitting with no readable center or connector."""
