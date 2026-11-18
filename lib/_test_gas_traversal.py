@@ -244,6 +244,68 @@ class TestBenchFixes(unittest.TestCase):
             self.assertEqual(run["elbow_equiv_length_feet"], 5.0, family)
             self.assertAlmostEqual(run["total_length_feet"], 75.0)
 
+    def _centerline_model(self, takeout, reducer=False):
+        """meter 1 -> pipe 10 -> tee 2 (center x 10) -> pipe 12 -> elbow 5
+        (center x 40) -> pipe 13 -> UH-1 6. A fitting sized up takes
+        `takeout` ft of each pipe end it meets; the centers never move.
+        reducer=True puts a 0.3 ft transition 7 between tee 2 and pipe 12."""
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        els = _tee_model(cap, elbow_family="Elbow - Generic")
+        by = dict((e.Id.Value, e) for e in els)
+        tee, elbow = by[2], by[5]
+        tee.location = [10.0, 0.0, 0.0]
+        elbow.location = [40.0, 0.0, 0.0]
+        tee.connectors[0]["origin_xyz"] = [10.0 - takeout, 0.0, 0.0]
+        tee.connectors[1]["origin_xyz"] = [10.0, takeout, 0.0]
+        tee.connectors[2]["origin_xyz"] = [10.0 + takeout, 0.0, 0.0]
+        elbow.connectors[0]["origin_xyz"] = [40.0 - takeout, 0.0, 0.0]
+        elbow.connectors[1]["origin_xyz"] = [40.0, takeout, 0.0]
+        by[10].length = 10.0 - takeout
+        extra = []
+        if reducer:
+            red = _Elem(7, "FamilyInstance", [_c(0, 2), _c(1, 12)],
+                        {"family": "Transition - Generic"})
+            red.location = [10.0 + takeout + 0.15, 0.0, 0.0]
+            red.connectors[0]["origin_xyz"] = [10.0 + takeout, 0.0, 0.0]
+            red.connectors[1]["origin_xyz"] = [10.0 + takeout + 0.3, 0.0, 0.0]
+            tee.connectors[2]["connected_element_id"] = 7
+            by[12].connectors[0]["connected_element_id"] = 7
+            by[12].length = 30.0 - 2 * takeout - 0.3
+            extra.append(red)
+        else:
+            by[12].length = 30.0 - 2 * takeout
+        by[13].length = 30.0 - takeout
+        return els + extra
+
+    def _centerline_build(self, elements):
+        saved = revit_helpers.get_element_location
+        try:
+            with _Model(elements) as m:
+                revit_helpers.get_element_location = (
+                    lambda el: getattr(el, "location", None))
+                return pipe_graph.build_network(m.elements[1], None)
+        finally:
+            revit_helpers.get_element_location = saved
+
+    def test_centerline_holds_when_fittings_grow(self):
+        # F10: 1 in. fittings (0.1 ft) vs fittings sized up (0.6 ft) with a
+        # reducer: the same centerline, 10 + 30 + 30 ft + 5 ft for the elbow.
+        small = self._centerline_build(self._centerline_model(0.1))
+        big = self._centerline_build(self._centerline_model(0.6, True))
+        for g in (small, big):
+            self.assertAlmostEqual(g.longest_run["total_length_feet"], 75.0)
+            self.assertEqual(g.longest_run["elbow_count"], 1)
+        self.assertAlmostEqual(big.longest_run["fitting_length_feet"],
+                               0.6 * 4 + 0.3)
+
+    def test_meter_and_appliance_add_no_takeout(self):
+        g = self._centerline_build(self._centerline_model(0.1))
+        self.assertEqual(
+            pipe_graph._fitting_takeout_ft(g.nodes[1], 10), 0.0)
+        self.assertEqual(
+            pipe_graph._fitting_takeout_ft(g.nodes[6], 13), 0.0)
+
     def test_not_an_elbow(self):
         run = self._run_with_elbow("Coupling - Generic")
         self.assertEqual(run["elbow_equiv_length_feet"], 0.0)
@@ -256,6 +318,12 @@ class TestBenchFixes(unittest.TestCase):
              "message": "found"},
             {"level": "WARNING", "function": "get_x", "element_id": 7,
              "message": "NOT FOUND"},
+        ]
+        helper_log += [
+            # fitting 3 without the fixture params: routine, dropped
+            {"level": "WARNING", "function": "get_parameter_value",
+             "element_id": 3,
+             "message": "Parameter 'IS_GAS_FIXTURE' NOT FOUND on element."},
         ]
         walk, helpers = pipe_graph.log_digest(g, helper_log)
         self.assertEqual(len([s for s in walk if s.startswith("SKIP")]), 2)

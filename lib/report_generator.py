@@ -135,7 +135,9 @@ def format_diagnostic_output(graph, origin_element):
         lr = graph.longest_run
         lines.append("  Total:          {:.1f}'".format(lr["total_length_feet"]))
         lines.append("  Pipe length:    {:.1f}'".format(lr["pipe_length_feet"]))
-        lines.append("  Elbows:         {}  ({:.1f}' equiv)".format(
+        lines.append("  In fittings:    {:.1f}'  (centerline)".format(
+            lr.get("fitting_length_feet", 0.0)))
+        lines.append("  Elbows:        {}  ({:.1f}' equiv)".format(
             lr["elbow_count"], lr["elbow_equiv_length_feet"]))
         lines.append("  Farthest:       {} (ID {})".format(
             lr["farthest_fixture_name"], lr["farthest_fixture_id"]))
