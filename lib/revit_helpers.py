@@ -1043,6 +1043,104 @@ def find_replacement_fitting(pipes, location_xyz, known_ids):
     return best, best_d
 
 
+_PART_UNDEFINED = ("", "Undefined", "UndefinedPartType")
+
+
+def _part_type_text(element):
+    """The fitting's MEPModel.PartType as text ("Transition", "Elbow"...),
+    or None when it cannot be read or is Undefined."""
+    try:
+        text = str(element.MEPModel.PartType)
+    except Exception:
+        return None
+    return None if text in _PART_UNDEFINED else text
+
+
+def _family_part_type_text(element):
+    """The family's FAMILY_CONTENT_PART_TYPE parameter (Family level, so it
+    is read from element.Symbol.Family) as the PartType name, or None."""
+    try:
+        from Autodesk.Revit.DB import PartType
+        param = element.Symbol.Family.get_Parameter(
+            BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
+        if param is None:
+            return None
+        value = int(param.AsInteger())
+        for name in ("Transition", "Elbow", "Tee", "Cross", "Union", "Cap",
+                     "Valve", "Wye", "Coupling"):
+            member = getattr(PartType, name, None)
+            if member is not None and int(member) == value:
+                return name
+    except Exception:
+        return None
+    return None
+
+
+def is_transition(element):
+    """True when a fitting is a transition (reducer), whose two sizes come
+    from its pipes and which Revit updates or removes itself when they change.
+
+    Read in order: the fitting's MEPModel.PartType, then the family's
+    FAMILY_CONTENT_PART_TYPE parameter, and only when neither reads a defined
+    part type, "transition" in the family name (case insensitive). A part
+    type that reads as anything else is trusted (an elbow named
+    "Transition Elbow" is an elbow). Never raises.
+
+    Not verified live in Revit yet (2026-11-19): MEPModel.PartType and
+    PartType.Transition are the documented API; the first Size Gas run shall
+    confirm which of the three reads answers (the log line says which).
+    """
+    fn = "is_transition"
+    eid = _safe_eid(element)
+    if element is None or not is_valid_element(element):
+        return False
+    text = _part_type_text(element)
+    source = "MEPModel.PartType"
+    if text is None:
+        text = _family_part_type_text(element)
+        source = "FAMILY_CONTENT_PART_TYPE"
+    if text is not None:
+        result = (text == "Transition")
+        _log_entry("INFO", fn, eid, "Part type {} (read from {}): {}.".format(
+            text, source, "transition" if result else "not a transition"))
+        return result
+    name = get_element_family_name(element) or ""
+    result = "transition" in name.lower()
+    _log_entry("INFO", fn, eid,
+               "No part type readable; family name '{}': {}.".format(
+                   name, "transition" if result else "not a transition"))
+    return result
+
+
+def pipes_joined(pipes):
+    """True when two of the given pipes now connect to each other.
+
+    Used after a resize: a transition Revit removed (its pipes are now the
+    same size) leaves its two pipes joined end to end. Deleted pipes are
+    ignored. Never raises.
+    """
+    live = [p for p in pipes if is_valid_element(p)]
+    for i, a in enumerate(live):
+        ida = _safe_eid(a)
+        manager = _get_connector_manager(a)
+        if manager is None:
+            continue
+        for b in live[i + 1:]:
+            idb = _safe_eid(b)
+            try:
+                for connector in manager.Connectors:
+                    if not connector.IsConnected:
+                        continue
+                    for ref in connector.AllRefs:
+                        owner = ref.Owner
+                        if (owner is not None and is_valid_element(owner)
+                                and _safe_eid(owner) == idb and idb != ida):
+                            return True
+            except Exception:
+                continue
+    return False
+
+
 def get_last_phase_id(doc):
     """Id of the project's LAST phase (normally New Construction), as an int.
 

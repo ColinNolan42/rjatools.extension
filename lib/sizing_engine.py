@@ -857,6 +857,87 @@ def _downstream_fixtures(start_node_id, graph):
     return names
 
 
+def serves_text(edge, graph):
+    """What a pipe serves: one fixture name, "trunk (N: A, B, C ...)" for
+    several, or "" for an open end or no fixture."""
+    if edge is None or edge.to_node_id is None:
+        return ""
+    fixtures = _downstream_fixtures(edge.to_node_id, graph)
+    if len(fixtures) == 1:
+        return fixtures[0]
+    if len(fixtures) > 1:
+        return "trunk ({}: {})".format(
+            len(fixtures), ", ".join(fixtures[:3]) +
+            (" ..." if len(fixtures) > 3 else ""))
+    return ""
+
+
+def sizing_rows(sizing_result, graph):
+    """One dict per sized pipe, for the Size Gas console table.
+
+    The same numbers format_sizing_output prints, as data (Plan B). Keys:
+    pipe_id, serves, mbh, cfh (None on a table in MBH), units, size,
+    capacity (table units, None when unsized), length_ft, status, note,
+    table_id, zone (the system label). status is OK, MIN SIZE (zero load,
+    minimum size assigned) or OVER TABLE (no size carries the load; the
+    engine raises before this in practice, kept so a pipe is never dropped
+    silently). Open ended pipes carry no size and have no row.
+    """
+    zones = sizing_result.get("zones") or []
+    meter_label = zones[0]["label"] if zones else "Meter"
+    labels = set(z["label"] for z in zones)
+    zoned = bool(sizing_result.get("downstream_table_id"))
+
+    def _zone(edge):
+        if not zoned or edge is None:
+            return meter_label
+        label = _zone_label(graph, getattr(edge, "run_key", None))
+        return label if label in labels else meter_label
+
+    rows = []
+    for d in sizing_result["segment_detail"]:
+        edge = graph.edges.get(d["pipe_id"])
+        units = d.get("units", "CFH")
+        mbh = float(d["demand_mbh"])
+        cfh = None
+        if units != "MBH":
+            cfh = float(d.get("demand_cfh", mbh))
+        cap = d.get("capacity_mbh")
+        rows.append({
+            "pipe_id": d["pipe_id"],
+            "serves": serves_text(edge, graph),
+            "mbh": mbh,
+            "cfh": cfh,
+            "units": units,
+            "size": d["selected_size"],
+            "capacity": None if cap is None else float(cap),
+            "length_ft": float(edge.length_feet) if edge else None,
+            "status": "MIN SIZE" if mbh <= 0 else "OK",
+            "note": d.get("note") or "",
+            "table_id": d.get("table_id") or sizing_result["table_id"],
+            "zone": _zone(edge),
+        })
+    sized = set(sizing_result["sizes"])
+    for edge in graph.edges.values():
+        if edge.to_node_id is None or edge.element_id in sized:
+            continue
+        rows.append({
+            "pipe_id": edge.element_id,
+            "serves": serves_text(edge, graph),
+            "mbh": float(edge.cumulative_load_mbh),
+            "cfh": None,
+            "units": "CFH",
+            "size": "",
+            "capacity": None,
+            "length_ft": float(edge.length_feet),
+            "status": "OVER TABLE",
+            "note": "no size in the table carries this load",
+            "table_id": sizing_result["table_id"],
+            "zone": _zone(edge),
+        })
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Diagnostic formatter
 # ---------------------------------------------------------------------------
@@ -915,15 +996,8 @@ def format_sizing_output(sizing_result, graph):
         length_str = "{:.1f}'".format(edge.length_feet) if edge else "?"
 
         # Downstream fixture label
-        fixture_label = ""
-        if edge and edge.to_node_id is not None:
-            fixtures = _downstream_fixtures(edge.to_node_id, graph)
-            if len(fixtures) == 1:
-                fixture_label = "  -> {}".format(fixtures[0])
-            elif len(fixtures) > 1:
-                fixture_label = "  -> trunk ({}: {})".format(
-                    len(fixtures), ", ".join(fixtures[:3]) +
-                    (" ..." if len(fixtures) > 3 else ""))
+        serves = serves_text(edge, graph)
+        fixture_label = "  -> {}".format(serves) if serves else ""
 
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
         if (sizing_result.get("downstream_table_id")

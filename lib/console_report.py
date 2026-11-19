@@ -53,6 +53,8 @@ STATUS_ALIASES = {
     'LOW': 'RED', 'FAIL': 'RED', 'EXCEEDS': 'RED',
     'GREY': 'GRAY', 'N/A': 'GRAY', 'NOT': 'GRAY',
     'FALLBACK': 'YELLOW',
+    # Size Gas pipe status: OVER TABLE (unsized) and MIN SIZE (zero load).
+    'OVER': 'RED', 'MIN': 'YELLOW',
 }
 
 # (border, background, text) per callout kind.
