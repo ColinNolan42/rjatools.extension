@@ -29,7 +29,7 @@ from Autodesk.Revit.DB import (
     FailureProcessingResult, FailureSeverity, FilteredElementCollector,
     IFailuresPreprocessor, MEPSystem, Transaction, TransactionGroup,
     TransactionStatus)
-from Autodesk.Revit.UI.Selection import ISelectionFilter, ObjectType
+from Autodesk.Revit.UI.Selection import ISelectionFilter
 
 import duct_sizing
 import hvac_graph
@@ -179,17 +179,10 @@ def _pick(uidoc, doc, output, forms):
     is refused with a message: a run rooted there sizes only part of the
     system, and a box root never sees the MP mains above it."""
     prompt = "Select the unit (RTU or AHU) that serves the system"
-    try:
-        try:
-            ref = uidoc.Selection.PickObject(ObjectType.Element,
-                                             _UnitFilter(), prompt)
-        except TypeError:
-            ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
-    except Exception:
-        output.print_md("Cancelled. Nothing was changed.")
-        return None
-    elem = doc.GetElement(ref.ElementId)
+    elem = ui_helpers.pick_element(uidoc, doc, "Size Duct", prompt,
+                                   _UnitFilter())
     if elem is None:
+        output.print_md("Cancelled. Nothing was changed.")
         return None
     output.print_md("Picked element **{}**.".format(eid_int(elem.Id)))
     if not hvac_graph.is_equipment(elem):

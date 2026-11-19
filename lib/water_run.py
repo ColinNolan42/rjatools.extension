@@ -26,7 +26,6 @@
 import datetime
 
 from Autodesk.Revit.DB import BuiltInParameter, Transaction
-from Autodesk.Revit.UI.Selection import ObjectType
 
 import shared_params
 import revit_helpers
@@ -145,15 +144,9 @@ def pick_origin(uidoc, doc, output, forms):
 
     prompt = ("Select the RPZ / backflow preventer" if choice == ORIGIN_RPZ
               else "Select the tee on the existing cold water main")
-    try:
-        reference = uidoc.Selection.PickObject(ObjectType.Element, prompt)
-    except Exception:
-        output.print_md("Cancelled. Nothing was changed.")
-        return None, None
-
-    origin = doc.GetElement(reference.ElementId)
+    origin = ui_helpers.pick_element(uidoc, doc, "Domestic Water", prompt)
     if origin is None:
-        forms.alert("Could not read the selected element.", title="Water")
+        output.print_md("Cancelled. Nothing was changed.")
         return None, None
 
     output.print_md("Origin: element **{}**".format(

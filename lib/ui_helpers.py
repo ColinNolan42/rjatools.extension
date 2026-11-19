@@ -635,6 +635,35 @@ def rja_alert(title, text, kind="info", yes_no=False):
     return bool(res)
 
 
+# The one pick step every tool uses (Colin, 2026-11-19): a themed "Select
+# ..." message, then the pick with the same words in Revit's status bar.
+# Diagnose passes popup=False (zero input rule). The gas wording is shared by
+# Size Gas and One-Line.
+PICK_GAS = "Select the gas meter or the new gas pipe connection"
+
+
+def pick_element(uidoc, doc, title, prompt, sel_filter=None, popup=True):
+    """Themed prompt, then one PickObject. sel_filter: an ISelectionFilter
+    or None. Returns the picked element, or None when the pick is cancelled
+    (Esc) or the element cannot be read. The caller reports the cancel."""
+    from Autodesk.Revit.UI.Selection import ObjectType
+    if popup:
+        rja_alert(title, prompt + ".", "info")
+    try:
+        ref = None
+        if sel_filter is not None:
+            try:
+                ref = uidoc.Selection.PickObject(ObjectType.Element,
+                                                 sel_filter, prompt)
+            except TypeError:
+                ref = None
+        if ref is None:
+            ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
+    except Exception:
+        return None
+    return doc.GetElement(ref.ElementId)
+
+
 def show_size_gas_dialog(title):
     """show_table_picker() plus a "Mid Stream PRV" check box.
 

@@ -19,7 +19,6 @@ import traceback
 
 from pyrevit import script
 from Autodesk.Revit.DB import Transaction, TransactionGroup
-from Autodesk.Revit.UI.Selection import ObjectType
 
 doc = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
@@ -61,16 +60,9 @@ def _emit(html, md):
 def _pick():
     """The meter, or the first new gas pipe at an existing building.
     Returns (element, upstream or None) or (None, None)."""
-    try:
-        ref = uidoc.Selection.PickObject(
-            ObjectType.Element, "Select the gas meter, or the first new gas "
-            "pipe at the connection to existing")
-    except Exception:
-        output.print_md("Selection cancelled. Nothing drawn.")
-        return None, None
-    el = doc.GetElement(ref.ElementId)
+    el = ui_helpers.pick_element(uidoc, doc, TITLE, ui_helpers.PICK_GAS)
     if el is None:
-        _alert("Could not read the picked element.")
+        output.print_md("Selection cancelled. Nothing drawn.")
         return None, None
     if revit_helpers.is_pipe(el):
         chk = pipe_graph.check_gas_pipe(el)
@@ -118,7 +110,6 @@ def main():
     down_id = down["table_id"] if down else None
     heat = choice["heat_content"]
 
-    ui_helpers.rja_alert(TITLE, "Select meter or new gas piping connection.")
     el, upstream = _pick()
     if el is None:
         return

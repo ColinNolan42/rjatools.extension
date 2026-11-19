@@ -40,7 +40,6 @@ import sys
 import datetime
 
 from pyrevit import script, forms
-from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.DB import Domain, BuiltInCategory
 
 doc    = __revit__.ActiveUIDocument.Document
@@ -62,6 +61,7 @@ import water_checks
 import water_recirc
 import water_run
 import water_report
+import ui_helpers
 from revit_helpers import eid_int
 
 
@@ -685,19 +685,13 @@ def main():
 
     revit_helpers.clear_log()
 
-    try:
-        ref = uidoc.Selection.PickObject(
-            ObjectType.Element,
-            'Select the gas meter, the water RPZ, or HVAC equipment/a duct/terminal'
-        )
-        selected_element = doc.GetElement(ref.ElementId)
-    except Exception:
-        output.print_md('**Cancelled.**')
-        return
-
+    # the shared pick step without the popup: Diagnose takes zero input
+    selected_element = ui_helpers.pick_element(
+        uidoc, doc, 'Diagnose',
+        'Select the gas meter, the water RPZ, or HVAC equipment/a duct/terminal',
+        popup=False)
     if selected_element is None:
-        forms.alert("Could not retrieve the selected element. Please try again.",
-                    title="Diagnose - Selection Error")
+        output.print_md('**Cancelled.**')
         return
 
     sel_id = eid_int(selected_element.Id)

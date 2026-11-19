@@ -11,7 +11,6 @@ import sys
 
 from pyrevit import script, forms
 from Autodesk.Revit.DB import BuiltInParameter, ElementId, Transaction
-from Autodesk.Revit.UI.Selection import ObjectType
 
 doc   = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
@@ -391,24 +390,12 @@ def main():
     # building (Colin, 2026-10-13). A meter runs exactly as before. A pipe
     # starts the run at the connection to existing.
     # ------------------------------------------------------------------
-    forms.alert(
-        "Select meter or new gas piping connection.",
-        title="Size Gas")
-    try:
-        ref = uidoc.Selection.PickObject(
-            ObjectType.Element,
-            "Select meter or new gas piping connection"
-        )
-        selected_element = doc.GetElement(ref.ElementId)
-    except Exception:
-        output.print_md("Selection cancelled. No element was picked.")
-        return
-
+    # the shared pick step, same words and window as One-Line (2026-11-19)
+    selected_element = ui_helpers.pick_element(
+        uidoc, doc, "Size Gas", ui_helpers.PICK_GAS)
     if selected_element is None:
-        forms.alert(
-            "Could not retrieve selected element.",
-            title="Size Gas - Selection Error"
-        )
+        output.print_md("Selection cancelled. No changes were made to the "
+                        "model.")
         return
 
     output.print_md("**Selected:** Element ID {}".format(
