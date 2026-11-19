@@ -57,8 +57,8 @@ import gas_labels
 # ---------------------------------------------------------------------------
 COL_FT = 10.0
 ROW_FT = 9.0
-TEXT_H_FT = 0.78
-LINE_PITCH_FT = 1.3
+TEXT_H_FT = 1.39            # first line, measured in Revit 2026-11-19 (3/32" Arial, 1:100)
+LINE_PITCH_FT = 1.26        # each further line, measured (was 0.78 and 1.3: labels hit symbols)
 CHAR_W_FT = 0.52
 LABEL_GAP_FT = 0.4
 LABEL_SIDE_FT = 0.6

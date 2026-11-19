@@ -68,6 +68,13 @@ class ClashRules(unittest.TestCase):
         self.assertFalse(L.clash(self.L(0, 0, 10, 0), self.L(10, 0, 10, -9)))
         self.assertFalse(L.clash(self.L(0, 0, 10, 0), self.L(10, 0, 20, 0)))
 
+    def test_text_box_matches_revit(self):
+        # measured on G2 2026-11-19 (3/32" Arial, 1:100): 1 line 1.39 ft,
+        # 2 lines 2.65, 6 lines 7.68 below the top; the old 0.78 / 1.3
+        # estimate put roof unit labels onto their symbols
+        for n, ft in ((1, 1.39), (2, 2.65), (6, 7.683)):
+            self.assertAlmostEqual(L._text_size(["X"] * n)[1], ft, delta=0.05)
+
     def test_unconnected_segments_shall_not_meet(self):
         # G2 2026-11-19: AHU-2 turning up met the boiler riser end to end
         a = self.L(0, 0, 10, 0, "S6")
