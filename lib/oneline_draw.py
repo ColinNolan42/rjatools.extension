@@ -106,6 +106,21 @@ def pick_text_type(types):
     return types[0][0]
 
 
+# Symbol files saved before this Revit year are not loaded by the button:
+# Revit upgrades them inside the run and a workshared model can raise a modal
+# version dialog that the button cannot answer, so Revit looks frozen
+# (Grantham 4, Revit 2024, 2026-11-19). Re-save them in Revit 2022.
+MIN_FAMILY_YEAR = 2022
+
+
+def family_year_ok(fmt, min_year=MIN_FAMILY_YEAR):
+    """fmt: BasicFileInfo.Format ('2012', '2022'...). Unknown passes."""
+    try:
+        return int(str(fmt).strip()[:4]) >= min_year
+    except (TypeError, ValueError):
+        return True
+
+
 def border_type_name(base_name):
     """Name of the bordered sibling of a text type."""
     base = base_name or TEXT_TYPE_NAME
@@ -191,6 +206,15 @@ def _first_symbol(doc, fam):
     return None
 
 
+def _file_year(path):
+    """The Revit year a family file was saved in, read without opening it."""
+    DB = _db()
+    try:
+        return DB.BasicFileInfo.Extract(path).Format
+    except Exception:
+        return None
+
+
 def _load(doc, path):
     """Load a family file; returns the Family or None. Inside a transaction."""
     try:
@@ -227,6 +251,12 @@ def ensure_symbols(doc, symbol_dir=SYMBOL_DIR):
                 row.update({"family": name, "status": "found", "reason": ""})
                 break
             if path is None:
+                continue
+            fmt = _file_year(path)
+            if not family_year_ok(fmt):
+                row["reason"] = ("{0}.rfa is saved in Revit {1}; open and save "
+                                 "it in Revit {2} to load it".format(
+                                     name, fmt, MIN_FAMILY_YEAR))
                 continue
             try:
                 fam = _load(doc, path)

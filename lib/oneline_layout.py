@@ -50,6 +50,8 @@ Rules (plan section 4, Colin 2026-11-18):
   the junction one column right, or steps the leg further right.
 """
 
+import time
+
 import gas_labels
 
 # ---------------------------------------------------------------------------
@@ -91,6 +93,12 @@ EPS = 0.05
 # out fails in seconds instead of hanging Revit. G2 and G3C need well under
 # a tenth of this.
 MAX_CHECKS = 20000
+# and a wall clock limit: the button runs on Revit's main thread and cannot
+# be interrupted (Grantham 4 froze Revit 2024, 2026-11-19)
+MAX_SECONDS = 20.0
+# two primitives farther apart than this cannot clash (largest margin used by
+# clash() is SYMBOL_MARGIN_FT)
+NEAR_FT = 1.0
 
 
 class _OutOfBudget(Exception):
@@ -352,6 +360,7 @@ class _Engine(object):
         self.segs = sch["segments"]
         self.log = []
         self.checks = 0
+        self.t0 = time.time()
         self._bands(sch)
         self._adjacency(sch.get("root"))
 
@@ -456,11 +465,21 @@ class _Engine(object):
     # -- helpers -----------------------------------------------------------
     def fits(self, new, occ):
         self.checks += 1
-        if self.checks > MAX_CHECKS:
+        if self.checks > MAX_CHECKS or \
+                time.time() - self.t0 > MAX_SECONDS:
             raise _OutOfBudget()
         self.tag(new)
+        # only primitives near each other can clash: a box test first keeps
+        # a large system (Grantham 4, 2026-11-19) from comparing every new
+        # piece with everything already drawn
+        m = NEAR_FT
         for a in new:
+            ab = a["box"]
+            x0, y0, x1, y1 = ab[0] - m, ab[1] - m, ab[2] + m, ab[3] + m
             for b in occ:
+                bb = b["box"]
+                if bb[0] > x1 or bb[2] < x0 or bb[1] > y1 or bb[3] < y0:
+                    continue
                 if clash(a, b):
                     return False
         for i in range(len(new)):
@@ -861,8 +880,9 @@ def layout(sch, notes=None, origin_kind="meter"):
         except _OutOfBudget:
             # the search stops rather than hang Revit (G3C 2026-11-19 ran
             # past five minutes in IronPython)
-            eng.log.append("search stopped after {0} placement checks".format(
-                MAX_CHECKS))
+            eng.log.append("search stopped after {0} placement checks, "
+                           "{1:.0f} s".format(eng.checks,
+                                              time.time() - eng.t0))
             res = None
         if res is None:
             eng.log.append("LAYOUT FAILED: no clash free placement found")

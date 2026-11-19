@@ -103,6 +103,17 @@ class BorderAndCentering(unittest.TestCase):
         self.assertIn("equipment", D.CENTER_BY_BOX)
 
 
+class FamilyYear(unittest.TestCase):
+
+    def test_old_files_not_loaded(self):
+        # Grantham 4 (Revit 2024) froze loading 2012 symbol files, 2026-11-19
+        self.assertFalse(D.family_year_ok("2012"))
+        self.assertFalse(D.family_year_ok("2021"))
+        self.assertTrue(D.family_year_ok("2022"))
+        self.assertTrue(D.family_year_ok("2027"))
+        self.assertTrue(D.family_year_ok(None))
+
+
 class Fallbacks(unittest.TestCase):
 
     def test_equipment_three_lines_rotated(self):
