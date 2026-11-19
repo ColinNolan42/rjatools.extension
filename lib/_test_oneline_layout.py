@@ -210,6 +210,27 @@ class Benches(unittest.TestCase):
         for name in ("RTU-1", "RTU-5", "AHU-2", "B-2", "ERV-1"):
             self.assertEqual(self._hang(G2_SCH, G2, name), "up", name)
 
+    def test_g2_first_floor_boilers(self):
+        # G2 2026-11-19: boilers moved to the first floor off the first
+        # floor main. The layout failed (the header tried up into the roof
+        # labels first); it shall drop below the main and stay on one row
+        snap = _load("oneline_g2.json")
+        for n in snap["nodes"].values():
+            xyz = n.get("xyz")
+            if xyz and 188 <= xyz[0] <= 212 and xyz[1] <= 15 and xyz[2] > 20:
+                xyz[2] = 4.0
+        sch = S.build(snap)
+        out = L.layout(sch, notes=["x"] * 6)
+        self.assertNotIn("LAYOUT FAILED", " ".join(out["log"]))
+        self.assertEqual(L.all_clashes(out["prims"]), [])
+        rows = set()
+        for name in ("B-1", "B-2", "B-3"):
+            self.assertEqual(self._hang(sch, out, name), "down", name)
+            rows.add(round(self._eq_sym(sch, out, name)["y"], 6))
+        self.assertEqual(len(rows), 1)                    # one header row
+        for name in ("RTU-5", "AHU-2"):
+            self.assertEqual(self._hang(sch, out, name), "up", name)
+
     def test_one_level_building_hangs_down(self):
         # meter and every unit on one level: nothing is a roof
         nodes = [(1, "meter", [0, 0, 1.0]), (2, "tee", [10, 0, 9.0]),

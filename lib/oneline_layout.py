@@ -691,8 +691,12 @@ class _Engine(object):
         legs = list(j["taps"]) + [j["run"]]
         run = j["run"]
         cont = None
-        if run["end"]["type"] == "junction" and \
-                abs(self.y_header(self._z(run["end"])) - y) < 1e-6:
+        # the run carries on along this row when its next tee is on this
+        # row, or on this tee's level (a header moved off its row keeps
+        # going on the moved row: G2 first floor boilers, 2026-11-19)
+        if run["end"]["type"] == "junction" and (
+                abs(self.y_header(self._z(run["end"])) - y) < 1e-6 or
+                self.band(self._z(run["end"])) == self.band(self._z(j))):
             cont = run
         trial = occ
         used = {}          # direction -> vertical legs already at this tee
@@ -745,9 +749,13 @@ class _Engine(object):
         ty = self.y_header(self._z(end))
         cands = [ty]
         if abs(ty - y) < 1e-6:
+            # a header on its parent's row moves off it, first the way its
+            # units hang (G2 2026-11-19: first floor boilers off the first
+            # floor main went up into the roof labels and failed)
+            s = 1 if self.hangs_up(self._z(end)) else -1
             cands = []
             for k in range(1, MAX_ROWS_OUT + 1):
-                cands += [y + k * ROW_FT, y - k * ROW_FT]
+                cands += [y + s * k * ROW_FT, y - s * k * ROW_FT]
         d = 1 if cands[0] > y else -1
         if jog < used.get(d, 0):
             return None, d
