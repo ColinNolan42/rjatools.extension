@@ -249,10 +249,17 @@ def main():
     _emit(gas_console.layout_diagnostic(sch, lay),
           gas_console.layout_diagnostic_text(sch, lay))
 
+    # Open the new view only AFTER the command returns. Setting
+    # uidoc.ActiveView inside the command left Revit 2024 (Grantham 4) and
+    # Revit 2025 (Horse Creek) stuck: the journal showed the view open and
+    # the command never ending, Revit taking no input (2026-11-19).
+    # RequestViewChange queues the switch for when Revit regains control.
     try:
-        uidoc.ActiveView = view
+        uidoc.RequestViewChange(view)
     except Exception as ex:
         logger.warning("Could not open the new view: {0}".format(ex))
+        output.print_md("Open **{0}** from the Project Browser, Drafting "
+                        "Views.".format(view_name))
 
 
 main()

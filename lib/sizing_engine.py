@@ -872,6 +872,54 @@ def serves_text(edge, graph):
     return ""
 
 
+def fitting_target_size(node_id, graph, new_sizes, transition_ids=()):
+    """Size a fitting or valve shall take: the highest load new pipe sized
+    this run that touches it.
+
+    A valve drawn at another size than its line has a transition on each
+    side and touches no pipe (Horse Creek ball valve, 1-1/4" on a 2" line,
+    2026-11-19). When no sized pipe touches the node, the pipes on the far
+    side of a directly joined transition are used, so the valve takes the
+    line size and Revit removes the transitions.
+
+    Args:
+        node_id:        the fitting's element id.
+        graph:          the sized NetworkGraph (edges, node_children).
+        new_sizes:      {pipe element id: nominal size}, new pipes only.
+        transition_ids: ids of the transitions in the graph.
+
+    Returns:
+        (nominal size or None, True when read through a transition).
+    """
+    def best_on(nid):
+        size, load = None, -1
+        for edge in graph.edges.values():
+            if nid not in (edge.from_node_id, edge.to_node_id):
+                continue
+            if (edge.element_id in new_sizes
+                    and edge.cumulative_load_mbh > load):
+                load = edge.cumulative_load_mbh
+                size = new_sizes[edge.element_id]
+        return size, load
+
+    size, _load = best_on(node_id)
+    if size is not None or not transition_ids:
+        return size, False
+    children = getattr(graph, "node_children", None) or {}
+    linked = set(children.get(node_id, []))
+    for parent, kids in children.items():
+        if node_id in kids:
+            linked.add(parent)
+    best, best_load = None, -1
+    for nid in linked:
+        if nid not in transition_ids:
+            continue
+        s, load = best_on(nid)
+        if s is not None and load > best_load:
+            best, best_load = s, load
+    return best, best is not None
+
+
 def sizing_rows(sizing_result, graph):
     """One dict per sized pipe, for the Size Gas console table.
 

@@ -199,11 +199,14 @@ def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
         # A transition Revit removed because its pipes became the same size
         # is the expected result, not a failure: its pipes now join.
         if (node.element_id in transition_ids
-                and revit_helpers.pipes_joined(pipes)):
+                and (revit_helpers.pipes_joined(pipes)
+                     or revit_helpers.ends_connected(pipes,
+                                                     node.location_xyz))):
             counts["transitions_removed"] += 1
             revit_helpers._log_entry(
                 "INFO", "_resize_fittings", node.element_id,
-                "Transition removed by Revit (pipes now the same size).")
+                "Transition removed or replaced by Revit, its pipe ends "
+                "are connected.")
             return
         element, _d = revit_helpers.find_replacement_fitting(
             pipes, node.location_xyz, set(graph.nodes.keys()) | done_ids)
@@ -233,16 +236,15 @@ def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
             "Existing phase (or phase unreadable): not resized.")
         return
 
-    # Find the highest-load connected new pipe to determine target size
-    target_size = None
-    max_load    = -1
-    for edge in graph.edges.values():
-        if (edge.from_node_id == node.element_id or
-                edge.to_node_id == node.element_id):
-            if (edge.element_id in new_sizes and
-                    edge.cumulative_load_mbh > max_load):
-                max_load    = edge.cumulative_load_mbh
-                target_size = new_sizes[edge.element_id]
+    # The highest-load new pipe that touches it sets the size; a valve with
+    # a transition on each side reads the pipes past them (Horse Creek).
+    target_size, via_transition = sizing_engine.fitting_target_size(
+        node.element_id, graph, new_sizes, transition_ids)
+    if via_transition:
+        revit_helpers._log_entry(
+            "INFO", "_resize_fittings", node.element_id,
+            "No sized pipe touches it; size {} read through a transition."
+            .format(target_size))
 
     if target_size is None:
         counts["no_sized_pipe"] += 1

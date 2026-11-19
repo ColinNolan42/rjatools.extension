@@ -3930,8 +3930,15 @@ def main():
 
     _emit_html(duct_perf_console.sheets_created(sheet_numbers), _sheets_text)
 
+    # Switch only after the command returns (RequestViewChange): setting
+    # ActiveView inside a command left Revit 2024 and 2025 stuck after the
+    # One-Line (2026-11-19).
     if new_sheets:
-        uidoc.ActiveView = new_sheets[0]
+        try:
+            uidoc.RequestViewChange(new_sheets[0])
+        except Exception:
+            output.print_md('Open sheet **{}** from the Project Browser.'.format(
+                sheet_numbers[0]))
 
 
 main()

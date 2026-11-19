@@ -1141,6 +1141,50 @@ def pipes_joined(pipes):
     return False
 
 
+def ends_connected(pipes, location_xyz):
+    """True when every live pipe's end nearest location_xyz is connected to
+    another element, and at least one pipe is live.
+
+    Used for a transition Revit removed or replaced while the pipes were
+    resized (Horse Creek, 2026-11-19): the pipe end where it sat now joins a
+    tee, a valve, another pipe or a new transition, so nothing is open. A
+    pipe end left open means a real break. Never raises.
+    """
+    if not location_xyz:
+        return False
+    live = [p for p in pipes if is_valid_element(p)]
+    if not live:
+        return False
+    for pipe in live:
+        manager = _get_connector_manager(pipe)
+        if manager is None:
+            return False
+        nearest, nearest_d = None, None
+        try:
+            for connector in manager.Connectors:
+                d = _distance(connector.Origin, location_xyz)
+                if nearest_d is None or d < nearest_d:
+                    nearest, nearest_d = connector, d
+        except Exception:
+            return False
+        if nearest is None or not nearest.IsConnected:
+            return False
+        pid = _safe_eid(pipe)
+        others = 0
+        try:
+            for ref in nearest.AllRefs:
+                owner = ref.Owner
+                if (owner is None or _is_mep_system(owner)
+                        or _safe_eid(owner) == pid):
+                    continue
+                others += 1
+        except Exception:
+            return False
+        if others == 0:
+            return False
+    return True
+
+
 def get_last_phase_id(doc):
     """Id of the project's LAST phase (normally New Construction), as an int.
 

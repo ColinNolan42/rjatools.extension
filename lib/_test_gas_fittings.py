@@ -307,6 +307,76 @@ class TestPipesJoined(unittest.TestCase):
         self.assertFalse(revit_helpers.pipes_joined([a, b]))
 
 
+class TestEndsConnected(unittest.TestCase):
+    """A transition Revit removed or replaced: the pipe end where it sat is
+    joined to something (Horse Creek, 2026-11-19)."""
+
+    def test_end_joined_to_a_new_fitting(self):
+        new_fit = _Elem(77)
+        pipe = _pipe_with_new_fitting(new_fit)
+        self.assertTrue(revit_helpers.ends_connected([pipe], [5.1, 0, 0]))
+
+    def test_open_end_is_a_break(self):
+        pipe = _Elem(10, "Pipe")
+        pipe.connectors = [_Conn((0, 0, 0), []), _Conn((5, 0, 0), [])]
+        self.assertFalse(revit_helpers.ends_connected([pipe], [5.0, 0, 0]))
+
+    def test_only_itself_on_the_connector_is_open(self):
+        pipe = _Elem(10, "Pipe")
+        pipe.connectors = [_Conn((0, 0, 0), []), _Conn((5, 0, 0), [pipe])]
+        self.assertFalse(revit_helpers.ends_connected([pipe], [5.0, 0, 0]))
+
+    def test_no_live_pipe_or_no_location(self):
+        pipe = _pipe_with_new_fitting(_Elem(77))
+        pipe.IsValidObject = False
+        self.assertFalse(revit_helpers.ends_connected([pipe], [5.0, 0, 0]))
+        self.assertFalse(revit_helpers.ends_connected([], [5.0, 0, 0]))
+        self.assertFalse(revit_helpers.ends_connected(
+            [_pipe_with_new_fitting(_Elem(77))], None))
+
+
+class _Edge(object):
+    def __init__(self, eid, a, b, load):
+        self.element_id, self.from_node_id, self.to_node_id = eid, a, b
+        self.cumulative_load_mbh = load
+
+
+class _Graph(object):
+    def __init__(self, edges, children):
+        self.edges = dict((e.element_id, e) for e in edges)
+        self.node_children = children
+
+
+class TestFittingTargetSize(unittest.TestCase):
+    """Horse Creek 2026-11-19: ball valve 3633493 drawn 1-1/4" on a 2" line,
+    a transition on each side (3661791, 3661818), no pipe touching it."""
+
+    def _valve_between_transitions(self):
+        # tee 1 -> pipe 100 (2") -> T 2 -> valve 3 -> T 4 -> pipe 101 -> cap
+        edges = [_Edge(100, 1, 2, 400.0), _Edge(101, 4, 5, 400.0)]
+        return _Graph(edges, {2: [3], 3: [4]})
+
+    def test_direct_pipe_wins(self):
+        g = _Graph([_Edge(100, 1, 3, 400.0), _Edge(102, 3, 9, 90.0)], {})
+        self.assertEqual(sizing_engine.fitting_target_size(
+            3, g, {100: '2"', 102: '1"'}, {2}), ('2"', False))
+
+    def test_valve_reads_through_its_transitions(self):
+        g = self._valve_between_transitions()
+        self.assertEqual(sizing_engine.fitting_target_size(
+            3, g, {100: '2"', 101: '2"'}, {2, 4}), ('2"', True))
+
+    def test_not_through_a_fitting_that_is_not_a_transition(self):
+        g = self._valve_between_transitions()
+        self.assertEqual(sizing_engine.fitting_target_size(
+            3, g, {100: '2"', 101: '2"'}, set([99])), (None, False))
+
+    def test_unsized_pipes_give_nothing(self):
+        g = self._valve_between_transitions()
+        self.assertEqual(sizing_engine.fitting_target_size(
+            3, g, {}, {2, 4}), (None, False))
+
+
 class TestTableLimitWarnings(unittest.TestCase):
     """2024 IFGC Table 402.4(13) Intended Use: 150 CFH single house line
     regulator load (S38, Colin approved 2026-11-04)."""
