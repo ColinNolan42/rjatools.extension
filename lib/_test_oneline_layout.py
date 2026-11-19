@@ -4,8 +4,9 @@
 Checks (plan section 8): no two primitives clash on either bench; elevation
 by level band, first floor equipment on the meter row, roof units higher,
 no header along the meter row (item 9, Colin 2026-11-18); every Segment has one label,
-centered on its last drawn line (item 4); inline terminal labels sit right
-of the symbol (item 7); every equipment end has its PRV symbol; a forced
+centered on its last drawn line (item 4); every unit turns up or down,
+roof units up and the rest down, the last unit on a header included (Colin
+2026-11-19, supersedes item 7); every equipment end has its PRV symbol; a forced
 collision moves a junction or a header instead of overlapping.
 
 Rigor: geometry is checked on estimated text boxes (3/32 in. Arial at 1:100,
@@ -67,6 +68,16 @@ class ClashRules(unittest.TestCase):
         self.assertFalse(L.clash(self.L(0, 0, 10, 0), self.L(10, 0, 10, -9)))
         self.assertFalse(L.clash(self.L(0, 0, 10, 0), self.L(10, 0, 20, 0)))
 
+    def test_unconnected_segments_shall_not_meet(self):
+        # G2 2026-11-19: AHU-2 turning up met the boiler riser end to end
+        a = self.L(0, 0, 10, 0, "S6")
+        b = self.L(10, 0, 10, 9, "S19")
+        a["joins"], b["joins"] = {"S6", "S4"}, {"S19", "S7"}
+        self.assertTrue(L.clash(a, b))
+        b["joins"] = {"S19", "S6"}
+        a["joins"] = {"S6", "S19"}
+        self.assertFalse(L.clash(a, b))
+
     def test_t_touch_is_a_clash(self):
         # one line ending in the middle of another is not a drawn tee
         self.assertTrue(L.clash(self.L(0, 0, 20, 0), self.L(10, 0, 10, 9)))
@@ -119,7 +130,10 @@ class Benches(unittest.TestCase):
                 xs += [l["x1"] for l in lines if abs(l["y0"] - last["y0"]) < 1e-6
                        and abs(l["y0"] - l["y1"]) < 1e-6]
                 self.assertTrue(min(xs) <= lab["x"] <= max(xs), sid)
-                self.assertGreater(lab["box"][1], last["y0"], sid)
+                # above the line; below it on a header whose units hang up
+                # (Colin 2026-11-19)
+                self.assertTrue(lab["box"][1] > last["y0"] or
+                                lab["box"][3] < last["y0"], sid)
             else:                                             # vertical
                 self.assertGreater(lab["box"][0], last["x0"], sid)
         # every terminal: a symbol, a label; equipment: a PRV before it
@@ -158,22 +172,52 @@ class Benches(unittest.TestCase):
     def test_g2(self):
         self._common(G2_SCH, G2)
 
-    def _inline(self, sch, out, name):
+    def _hang(self, sch, out, name):
+        """'up' or 'down': the label sits above or below its symbol, on its
+        center line, the way every unit on a header hangs."""
         t = [x for x in S.terminals_in_order(sch) if x["name"] == name][0]
-        self.assertTrue(t["inline"])
         role = "equipment" if t["kind"] == "equipment" else "cap"
         sym = _of(out, t="symbol", role=role, node=t["node_id"])[0]
         lab = _of(out, t="text", role="fixture", node=t["node_id"])[0]
-        self.assertGreater(lab["box"][0], sym["box"][2])       # right of it
-        mid = (lab["box"][1] + lab["box"][3]) / 2.0
-        self.assertAlmostEqual(mid, sym["y"], places=6)        # centered
-        return sym
+        self.assertIn(sym["rot"], (0, 180), name)        # pipe vertical
+        self.assertAlmostEqual(lab["x"], sym.get("ix", sym["x"]), places=6,
+                               msg=name)
+        if lab["box"][1] >= sym["box"][3]:
+            return "up"
+        self.assertLessEqual(lab["box"][3], sym["box"][1], name)
+        return "down"
 
-    def test_item7_inline_labels_right(self):
-        sym = self._inline(G3C_SCH, G3C, "RTU-1")
-        self.assertEqual(sym["rot"], 90)
-        self._inline(G3C_SCH, G3C, "FUTURE")
-        self._inline(G2_SCH, G2, "RTU-5")
+    def test_last_unit_on_a_header_turns(self):
+        # Colin 2026-11-19 (supersedes item 7): AHU-2, B-2, RTU-5 and the
+        # other header end units turn like their neighbours
+        for sch, out in ((G3C_SCH, G3C), (G2_SCH, G2)):
+            for t in S.terminals_in_order(sch):
+                self._hang(sch, out, t["name"])
+
+    def test_roof_hangs_up_rest_hangs_down(self):
+        # Colin 2026-11-19: roof (highest level above the meter) hangs up
+        for name in ("MAU-1", "RTU-1", "RTU-2"):
+            self.assertEqual(self._hang(G3C_SCH, G3C, name), "up", name)
+        for name in ("WH-1", "OVEN-1", "FRY-1", "SP-1", "FUTURE"):
+            self.assertEqual(self._hang(G3C_SCH, G3C, name), "down", name)
+        for name in ("RTU-1", "RTU-5", "AHU-2", "B-2", "ERV-1"):
+            self.assertEqual(self._hang(G2_SCH, G2, name), "up", name)
+
+    def test_one_level_building_hangs_down(self):
+        # meter and every unit on one level: nothing is a roof
+        nodes = [(1, "meter", [0, 0, 1.0]), (2, "tee", [10, 0, 9.0]),
+                 (5, "fixture", [10, 8, 1.0], {"name": "WH-2", "load_mbh": 150.0}),
+                 (6, "fixture", [30, 0, 1.0], {"name": "OVEN-9", "load_mbh": 90.0})]
+        edges = [(50, 1, 2, 10.0, "1-1/4", 240.0),
+                 (51, 2, 5, 15.0, "1", 150.0), (52, 2, 6, 20.0, "1", 90.0)]
+        snap = _snap(nodes, edges, path=[1, 50, 2, 52, 6])
+        snap["levels"] = [{"name": "FIRST", "elev": 0.0},
+                          {"name": "ROOF", "elev": 20.0}]
+        sch = S.build(snap)
+        out = L.layout(sch)
+        self.assertEqual(L.all_clashes(out["prims"]), [])
+        for name in ("WH-2", "OVEN-9"):
+            self.assertEqual(self._hang(sch, out, name), "down", name)
 
     def _eq_sym(self, sch, out, name):
         t = [x for x in S.terminals_in_order(sch) if x["name"] == name][0]
@@ -299,20 +343,22 @@ class Squiggle(unittest.TestCase):
     """G1 2026-11-18: the squiggle drew flat, below its line, with a gap.
     It hangs from the line end along the line."""
 
-    def test_hangs_from_utility_drop(self):
+    def test_across_the_line_end(self):
+        # Colin 2026-11-19: turned across the line, the line runs into its
+        # center
         out = L.layout(G3C_SCH)
         sq = _of(out, t="symbol", role="squiggle")
         self.assertEqual(len(sq), 1)
         sq = sq[0]
-        self.assertEqual(sq["rot"], 0)
-        ax, ay = sq["attach_top"]
-        self.assertAlmostEqual(sq["box"][3], ay)          # top on the end
-        self.assertAlmostEqual(sq["x"], ax)
+        self.assertEqual(sq["rot"], 90)
+        b = sq["box"]
+        self.assertGreater(b[2] - b[0], b[3] - b[1])      # wide, across
         drops = [p for p in out["prims"] if p["t"] == "line"
                  and p["seg"] is None and abs(p["x0"] - p["x1"]) < 1e-9
-                 and abs(p["x0"] - ax) < 1e-9]
+                 and abs(p["x0"] - sq["x"]) < 1e-9]
         self.assertEqual(len(drops), 1)
-        self.assertAlmostEqual(min(drops[0]["y0"], drops[0]["y1"]), ay)
+        self.assertAlmostEqual(min(drops[0]["y0"], drops[0]["y1"]), sq["y"])
+        self.assertEqual(L.all_clashes(out["prims"]), [])
 
     def test_new_meter_service_is_new(self):
         out = L.layout(G3C_SCH)

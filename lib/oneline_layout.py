@@ -31,6 +31,9 @@ Rules (plan section 4, Colin 2026-11-18):
   ceiling one row above, with drops down to the equipment. The meter sits
   on the base row of its level, so first floor equipment (kitchen, WH-1)
   shares the meter row and rooftop units sit higher.
+- The highest band, when above the meter's (a roof), hangs UP: its header
+  runs on the band's base row and the units rise from it, with the header
+  labels below the line (Colin, 2026-11-19). Every other band hangs down.
 - No header ever runs along the meter row (item 9); the meter outlet rises
   to its header.
 - A tap to equipment is a vertical drop to its band's equipment row; a tap
@@ -39,8 +42,9 @@ Rules (plan section 4, Colin 2026-11-18):
   from one tee steps right first.
 - A Segment label sits on the Segment's LAST drawn line: centered above a
   horizontal line, right of and centered on a vertical one (item 4).
-- An inline terminal (a header running straight into equipment) has its
-  symbol turned 90 deg and its label to the right (item 7).
+- The last unit on a header turns up or down like the other units on that
+  line, one column past the last tap; nothing runs straight into a unit
+  (Colin, 2026-11-19, supersedes item 7).
 - Every equipment end has a PRV symbol on the pipe just before it.
 - Any clash of a line, label or symbol with what is already placed moves
   the junction one column right, or steps the leg further right.
@@ -240,10 +244,20 @@ def _inside(x, y, b):
 def clash(a, b):
     """True when two primitives overlap in a way a reader would notice."""
     if a["t"] == "line" and b["t"] == "line":
+        if "joins" in a and "joins" in b and \
+                b.get("seg") not in a["joins"] and _ends_touch(a, b):
+            # G2 2026-11-19: AHU-2 turning up and the boiler riser met end
+            # to end and read as one header; only connected Segments meet
+            return True
         return _lines_clash(_pts(a), _pts(b))
     if a["t"] == "line" or b["t"] == "line":
         l, o = (a, b) if a["t"] == "line" else (b, a)
         if o["t"] == "symbol":
+            if o.get("line_to_center"):
+                p = _pts(l)
+                c = (o["x"], o["y"])
+                if _near((p[0], p[1]), c) or _near((p[2], p[3]), c):
+                    return False
             return _line_vs_symbol(_pts(l), o["box"])
         return _seg_in_box(_pts(l), o["box"])
     return _boxes_overlap(a["box"], b["box"])
@@ -251,6 +265,14 @@ def clash(a, b):
 
 def _pts(l):
     return (l["x0"], l["y0"], l["x1"], l["y1"])
+
+
+def _ends_touch(a, b):
+    pa, pb = _pts(a), _pts(b)
+    for e in ((pa[0], pa[1]), (pa[2], pa[3])):
+        if _near(e, (pb[0], pb[1])) or _near(e, (pb[2], pb[3])):
+            return True
+    return False
 
 
 def all_clashes(prims):
@@ -290,13 +312,14 @@ def _symbol(role, x, y, rot, half_along, half_across, node=None):
 
 
 def _squiggle(x, y_end):
-    """Break symbol hanging from the end of a downward line at (x, y_end),
-    drawn along the line (rot 0 is vertical) with its top on the line end.
-    "attach_top" lets the draw layer pin the family's real top edge there
-    (Colin, 2026-11-18: G1 drew it flat, below the line, with a gap)."""
-    s = _symbol("squiggle", x, y_end - SQUIGGLE_HALF_L, 0, SQUIGGLE_HALF_W,
-                SQUIGGLE_HALF_L)
-    s["attach_top"] = (x, y_end)
+    """Break symbol across the end of a vertical line at (x, y_end), the
+    line running into its center (Colin, 2026-11-19). The family drawn at
+    rot 90 lies across a vertical line; the draw layer centers its view box
+    on (x, y_end). "line_to_center" lets the line end inside its box."""
+    s = _symbol("squiggle", x, y_end, 90, SQUIGGLE_HALF_L, SQUIGGLE_HALF_W)
+    s["box"] = (x - SQUIGGLE_HALF_L, y_end - SQUIGGLE_HALF_W,
+                x + SQUIGGLE_HALF_L, y_end + SQUIGGLE_HALF_W)
+    s["line_to_center"] = True
     return s
 
 
@@ -321,6 +344,46 @@ class _Engine(object):
         self.segs = sch["segments"]
         self.log = []
         self._bands(sch)
+        self._adjacency(sch.get("root"))
+
+    def _adjacency(self, root):
+        """Segments whose lines may meet end to end: consecutive Segments
+        of a branch, and the Segments at one tee. None is the meter service
+        (utility, existing run), which meets the first Segment."""
+        adj = {None: set([None])}
+
+        def link(a, b):
+            adj.setdefault(a, set([a])).add(b)
+            adj.setdefault(b, set([b])).add(a)
+
+        def rec(br, up):
+            segs = br.get("segments") or []
+            if not segs:
+                return
+            link(up, segs[0])
+            for a, b in zip(segs, segs[1:]):
+                link(a, b)
+            end = br.get("end")
+            if end and end["type"] == "junction":
+                legs = list(end["taps"]) + [end["run"]]
+                firsts = [l["segments"][0] for l in legs if l.get("segments")]
+                for f in firsts:
+                    link(segs[-1], f)
+                    for g in firsts:
+                        link(f, g)
+                for l in legs:
+                    rec(l, segs[-1])
+
+        if root is not None:
+            rec(root, None)
+        self.adj = adj
+
+    def tag(self, prims):
+        """Give each line the Segments it may meet."""
+        for p in prims:
+            if p["t"] == "line" and "joins" not in p:
+                p["joins"] = self.adj.get(p.get("seg"), set([p.get("seg")]))
+        return prims
 
     # -- elevation bands (Colin, 2026-11-18) ------------------------------
     def _bands(self, sch):
@@ -337,6 +400,17 @@ class _Engine(object):
         for z in zs:
             used.add(self._level_of(z, levels))
         self.band_elevs = sorted(used)
+        # Colin, 2026-11-19: equipment on the highest level, above the
+        # meter's level (a roof), hangs UP from a header below it; every
+        # other band hangs down from a header above it
+        top = len(self.band_elevs) - 1
+        self.up_bands = set([top]) if top > self.band(zs[0]) else set()
+        # header rows of hang up bands: their Segment labels go below the
+        # line, the units' own labels take the space above
+        self.up_header_ys = [b * BAND_FT for b in self.up_bands]
+
+    def hangs_up(self, z):
+        return self.band(z) in self.up_bands
 
     @staticmethod
     def _level_of(z, levels):
@@ -356,13 +430,23 @@ class _Engine(object):
         return b
 
     def y_equip(self, z):
-        return self.band(z) * BAND_FT
+        return self.band(z) * BAND_FT + (ROW_FT if self.hangs_up(z) else 0.0)
 
     def y_header(self, z):
-        return self.band(z) * BAND_FT + ROW_FT
+        return self.band(z) * BAND_FT + (0.0 if self.hangs_up(z) else ROW_FT)
+
+    def turn_y(self, end, y):
+        """Equipment row for terminal end reached from a header at y: its
+        band's row, or one row off the header the way its band hangs."""
+        z = self._z(end)
+        ty = self.y_equip(z)
+        if abs(ty - y) < ROW_FT - 1e-6:
+            ty = y + (ROW_FT if self.hangs_up(z) else -ROW_FT)
+        return ty
 
     # -- helpers -----------------------------------------------------------
     def fits(self, new, occ):
+        self.tag(new)
         for a in new:
             for b in occ:
                 if clash(a, b):
@@ -454,7 +538,11 @@ class _Engine(object):
             best = max(spans, key=lambda s: s[1] - s[0])
         mid = (best[0] + best[1]) / 2.0
         mx, my = ax + ux * mid, ay + uy * mid
-        if rot == 0:
+        if rot == 0 and any(abs(ay - uy_) < 1e-6
+                            for uy_ in self.up_header_ys):
+            prims.append(_text(mx, ay - LABEL_GAP_FT, lines, "center",
+                               "seg", seg=sid))
+        elif rot == 0:
             prims.append(_text(mx, ay + LABEL_GAP_FT + h, lines, "center",
                                "seg", seg=sid))
         else:
@@ -569,7 +657,15 @@ class _Engine(object):
                     pts = [start_xy, (X(c1), y)]
                 pts_list.append(pts)
             ce = cx + n + stretch
-            new = self._branch_prims(br, pts_list, (X(ce), y), (1.0, 0.0))
+            end_xy, end_dir = (X(ce), y), (1.0, 0.0)
+            if end["type"] == "terminal":
+                # the last unit on a header turns like the others on that
+                # line, never straight on (Colin, 2026-11-19)
+                ty = self.turn_y(end, y)
+                pts_list[-1] = pts_list[-1] + [(X(ce), ty)]
+                end_xy = (X(ce), ty)
+                end_dir = (0.0, 1.0 if ty > y else -1.0)
+            new = self._branch_prims(br, pts_list, end_xy, end_dir)
             if not self.fits(new, occ):
                 continue
             trial = occ + new
@@ -595,9 +691,7 @@ class _Engine(object):
         legs = list(j["taps"]) + [j["run"]]
         run = j["run"]
         cont = None
-        if self._is_inline(run, j):
-            cont = run
-        elif run["end"]["type"] == "junction" and \
+        if run["end"]["type"] == "junction" and \
                 abs(self.y_header(self._z(run["end"])) - y) < 1e-6:
             cont = run
         trial = occ
@@ -608,7 +702,11 @@ class _Engine(object):
             res = None
             d_key = None
             jogs = MAX_STRETCH if leg["end"]["type"] == "junction" else 4
-            for jog in range(0, jogs):
+            # the run's own unit turns one column on, so the header reads
+            # as continuing to it (Colin, 2026-11-19)
+            first = 1 if (leg is run and leg["end"]["type"] == "terminal") \
+                else 0
+            for jog in range(first, jogs + first):
                 res, d_key = self.leg(leg, c, y, trial, jog, used)
                 if res is not None:
                     break
@@ -627,9 +725,7 @@ class _Engine(object):
         end = leg["end"]
         n = len(leg["segments"])
         if end["type"] == "terminal":
-            ty = self.y_equip(self._z(end))
-            if abs(ty - y) < ROW_FT - 1e-6:
-                ty = y - ROW_FT
+            ty = self.turn_y(end, y)
             d = 1 if ty > y else -1
             if jog < used.get(d, 0):
                 return None, d
@@ -683,8 +779,9 @@ def layout(sch, notes=None, origin_kind="meter"):
     occ.append(_line(ux1, my, ux1, my - UTILITY_DROP_FT, None,
                      new=not existing))
     occ.append(_squiggle(ux1, my - UTILITY_DROP_FT))
-    occ.append(_text(ux1 - 1.0, my - UTILITY_DROP_FT - 2 * SQUIGGLE_HALF_L
+    occ.append(_text(ux1 - 1.0, my - UTILITY_DROP_FT - SQUIGGLE_HALF_W
                      - LABEL_GAP_FT, UTILITY_TEXT, "left", "utility"))
+    eng.tag(occ)
     root = sch.get("root")
     start_col = 0
     start_xy = (METER_R, my)
@@ -701,7 +798,7 @@ def layout(sch, notes=None, origin_kind="meter"):
                          "center", "existing"))
         occ.append(_line(cx, my, cx, my - UTILITY_DROP_FT, None, new=False))
         occ.append(_squiggle(cx, my - UTILITY_DROP_FT))
-        occ.append(_text(cx - 1.0, my - UTILITY_DROP_FT - 2 * SQUIGGLE_HALF_L
+        occ.append(_text(cx - 1.0, my - UTILITY_DROP_FT - SQUIGGLE_HALF_W
                          - LABEL_GAP_FT, gas_labels.EXISTING_APPLIANCES,
                          "left", "existing"))
         start_xy = (cx, my)
@@ -712,7 +809,7 @@ def layout(sch, notes=None, origin_kind="meter"):
         elif eng.y_equip(eng._z(end)) == my:
             ty = my
         else:
-            ty = eng.y_equip(eng._z(end)) + ROW_FT
+            ty = eng.y_header(eng._z(end))
         res = eng.header(root, start_col, ty, occ, from_y=my,
                          riser_dx=ROOT_RISER_COL, start_xy=start_xy)
         if res is None:

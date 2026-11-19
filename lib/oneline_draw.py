@@ -59,9 +59,11 @@ BORDER_SUFFIX = " - Border"
 # Symbols centered on their bounding box after placing, so a project's copy
 # of the family with a different insertion point still lands where the
 # layout put it (G1, 2026-11-18: an Equipment family inserted on its top
-# line dropped onto its label). These are symmetric about the pipe. The PRV
-# (dome to one side) and the cap (sits on the pipe end) keep the insertion.
-CENTER_BY_BOX = ("equipment", "iso", "meter")
+# line dropped onto its label). These are symmetric about the pipe; the
+# squiggle is centered on its line end, the line running into its center
+# (Colin, 2026-11-19). The PRV (dome to one side) and the cap (sits on the
+# pipe end) keep the insertion.
+CENTER_BY_BOX = ("equipment", "iso", "meter", "squiggle")
 
 # fallback geometry, drafting view feet at 1:100
 _EQ_HALF_W = 1.0
@@ -112,12 +114,6 @@ def center_shift(x, y, box):
     """(dx, dy) moving a placed symbol so its view box (minx, miny, maxx,
     maxy) is centered on (x, y)."""
     return (x - (box[0] + box[2]) / 2.0, y - (box[1] + box[3]) / 2.0)
-
-
-def top_shift(x, y, box):
-    """(dx, dy) moving a placed symbol so the middle of its view box's top
-    edge sits on (x, y): the squiggle hanging from a line end."""
-    return (x - (box[0] + box[2]) / 2.0, y - box[3])
 
 
 def _rot(pts, x, y, deg):
@@ -383,18 +379,12 @@ class _Drawer(object):
                 axis = DB.Line.CreateBound(DB.XYZ(x, y, 0), DB.XYZ(x, y, 1))
                 DB.ElementTransformUtils.RotateElement(
                     self.doc, inst.Id, axis, math.radians(rot))
-            fit = None
-            if p["role"] in CENTER_BY_BOX:
-                fit = center_shift
-            elif p.get("attach_top"):
-                ax, ay = p["attach_top"]
-                fit = lambda _x, _y, box: top_shift(ax, ay, box)  # noqa: E731
-            if inst is not None and fit is not None:
+            if inst is not None and p["role"] in CENTER_BY_BOX:
                 self.doc.Regenerate()
                 bb = inst.get_BoundingBox(self.view)
                 if bb is not None:
-                    dx, dy = fit(x, y, (bb.Min.X, bb.Min.Y,
-                                        bb.Max.X, bb.Max.Y))
+                    dx, dy = center_shift(x, y, (bb.Min.X, bb.Min.Y,
+                                                 bb.Max.X, bb.Max.Y))
                     if abs(dx) > 1e-3 or abs(dy) > 1e-3:
                         DB.ElementTransformUtils.MoveElement(
                             self.doc, inst.Id, DB.XYZ(dx, dy, 0))

@@ -86,11 +86,12 @@ class BorderAndCentering(unittest.TestCase):
         self.assertEqual(D.center_shift(1.0, 2.0, (0.0, 1.0, 2.0, 3.0)),
                          (0.0, 0.0))
 
-    def test_top_shift_squiggle(self):
-        # G1 squiggle box, pinned by its top edge to the line end at -3.0
-        dx, dy = D.top_shift(-6.04, -3.0, (-6.2, -4.0, -5.88, -3.03))
+    def test_squiggle_centered_on_line_end(self):
+        # Colin 2026-11-19: the line runs into the squiggle's center
+        self.assertIn("squiggle", D.CENTER_BY_BOX)
+        dx, dy = D.center_shift(-6.04, -3.0, (-6.526, -3.662, -5.554, -3.338))
         self.assertAlmostEqual(dx, 0.0, 6)
-        self.assertAlmostEqual(dy, 0.03, 6)
+        self.assertAlmostEqual(dy, 0.5, 6)
 
     def test_line_styles(self):
         self.assertEqual(D.NEW_LINE_STYLE, "Line 4")
