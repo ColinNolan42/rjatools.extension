@@ -832,7 +832,9 @@ def main():
     # error can never stop Transactions 2 and 3 (Colin, 2026-11-02).
     # ------------------------------------------------------------------
     try:
-        if not new_construction:
+        # new construction: print only if the walk still met existing phase
+        # pipes, so a skip is never silent
+        if not new_construction or existing_skip_count:
             _emit(gas_console.existing_audit(existing_skip_count,
                                              existing_overloaded,
                                              existing_unchecked),
