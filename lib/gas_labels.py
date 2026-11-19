@@ -58,6 +58,8 @@ NOTES_TEMPLATE_TIE_IN = [
 ]
 
 EXISTING_APPLIANCES = ["TO EXISTING", "APPLIANCES"]
+# the hood gas shutoff, interlocked with the fire suppression (2026-11-19)
+ANSUL_LABEL = ["ANSUL VALVE"]
 
 NOTES_PRV_LINE = ("DOWNSTREAM OF PRV: {inlet_text}, MAX PRESSURE LOSS OF "
                   "{drop_text} PER IFGC TABLE {table_id}")

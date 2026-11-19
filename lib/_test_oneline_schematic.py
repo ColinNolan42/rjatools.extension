@@ -276,6 +276,18 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(seg["valves"], [{"kind": "iso", "node_id": 2,
                                           "midstream": False}])
 
+    def test_ansul_valve_recorded(self):
+        # Colin 2026-11-19: the hood's Ansul gas shutoff, interlocked with
+        # the fire suppression, ahead of the cookline
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fitting", [10, 0, 0],
+                    {"family": "RJA - Gas Shutoff Valve (Ansul)"}),
+                   (3, "fixture", [20, 0, 0], {"name": "FRY-1", "load_mbh": 100.0})],
+                  [(10, 1, 2, 10.0, "1", 100.0), (11, 2, 3, 10.0, "1", 100.0)])
+        sch = S.build(s)
+        seg = sch["segments"][sch["root"]["segments"][0]]
+        self.assertEqual([v["kind"] for v in seg["valves"]], ["ansul"])
+
     def test_unnamed_zero_cap_label(self):
         s = _snap([(1, "meter", [0, 0, 0]), (2, "fixture", [10, 0, 0])],
                   [(10, 1, 2, 10.0, "1", 0.0)])

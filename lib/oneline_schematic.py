@@ -138,6 +138,9 @@ def _valve_kind(node):
             node.get("is_transition"):
         return None
     fam = (node.get("family") or "").lower()
+    for kw in shared_params.ANSUL_VALVE_KEYWORDS:
+        if kw in fam:
+            return "ansul"
     for kw in shared_params.ISOLATION_VALVE_KEYWORDS:
         if kw in fam:
             return "iso"

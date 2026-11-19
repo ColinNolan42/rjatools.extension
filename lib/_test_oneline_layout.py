@@ -231,6 +231,34 @@ class Benches(unittest.TestCase):
         for name in ("RTU-5", "AHU-2"):
             self.assertEqual(self._hang(sch, out, name), "up", name)
 
+    def test_ansul_valve_drawn_and_named(self):
+        # Colin 2026-11-19: cookline fed from one drop with the Ansul valve
+        # ahead of the first appliance, manifold behind the equipment
+        nodes = [(1, "meter", [0, 0, 1.0]), (2, "tee", [10, 0, 9.5]),
+                 (3, "fitting", [12, 5, 6.0],
+                  {"family": "RJA - Gas Shutoff Valve (Ansul)"}),
+                 (4, "tee", [12, 5, 2.0]), (5, "tee", [15, 5, 2.0]),
+                 (6, "fixture", [12, 4, 2.0], {"name": "FRY-1", "load_mbh": 120.0}),
+                 (7, "fixture", [15, 4, 2.0], {"name": "RANGE-1", "load_mbh": 215.0}),
+                 (8, "fixture", [18, 4, 2.0], {"name": "OVEN-1", "load_mbh": 60.0}),
+                 (9, "fixture", [40, 0, 1.0], {"name": "WH-1", "load_mbh": 199.0})]
+        edges = [(50, 1, 2, 12.0, "2", 594.0), (51, 2, 3, 8.0, "1-1/4", 395.0),
+                 (52, 3, 4, 4.0, "1-1/4", 395.0), (53, 4, 6, 1.0, "3/4", 120.0),
+                 (54, 4, 5, 3.0, "1-1/4", 275.0), (55, 5, 7, 1.0, "1", 215.0),
+                 (56, 5, 8, 3.0, "3/4", 60.0), (57, 2, 9, 30.0, "1", 199.0)]
+        snap = _snap(nodes, edges, path=[1, 50, 2, 57, 9])
+        snap["levels"] = [{"name": "FIRST", "elev": 0.0},
+                          {"name": "ROOF", "elev": 20.0}]
+        sch = S.build(snap)
+        out = L.layout(sch)
+        self.assertNotIn("LAYOUT FAILED", " ".join(out["log"]))
+        self.assertEqual(L.all_clashes(out["prims"]), [])
+        labs = _of(out, t="text", role="valve")
+        self.assertEqual([p["lines"] for p in labs], [["ANSUL VALVE"]])
+        self.assertEqual(len(_of(out, t="symbol", role="iso", node=3)), 1)
+        for name in ("FRY-1", "RANGE-1", "OVEN-1", "WH-1"):
+            self.assertEqual(self._hang(sch, out, name), "down", name)
+
     def test_one_level_building_hangs_down(self):
         # meter and every unit on one level: nothing is a roof
         nodes = [(1, "meter", [0, 0, 1.0]), (2, "tee", [10, 0, 9.0]),

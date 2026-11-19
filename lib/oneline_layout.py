@@ -505,6 +505,11 @@ class _Engine(object):
                 sym = _symbol("iso", ax + ux * t, ay + uy * t, rot,
                               ISO_HALF_L, ISO_HALF_T, v["node_id"])
                 cuts.append((t, ISO_HALF_L))
+                if v["kind"] == "ansul":
+                    # the hood shutoff is named, on the side away from the
+                    # Segment label (Colin, 2026-11-19)
+                    prims.append(self._valve_label(sym, rot, ay,
+                                                   gas_labels.ANSUL_LABEL))
             prims.append(sym)
             t += VALVE_PITCH_FT
         for dist, half, prim in end_inserts or []:
@@ -549,6 +554,21 @@ class _Engine(object):
             prims.append(_text(ax + LABEL_SIDE_FT, my + h / 2.0, lines, "left",
                                "seg", seg=sid))
         return prims
+
+    def _valve_label(self, sym, rot, ay, lines):
+        """A named valve's label, opposite the Segment label: left of a
+        vertical pipe; below a horizontal one, above on a header whose units
+        hang up."""
+        w, h = _text_size(lines)
+        b = sym["box"]
+        if rot != 0:
+            return _text(b[0] - LABEL_SIDE_FT - w, sym["y"] + h / 2.0, lines,
+                         "left", "valve", node=sym["node"])
+        if any(abs(ay - uy_) < 1e-6 for uy_ in self.up_header_ys):
+            return _text(sym["x"], b[3] + LABEL_GAP_FT + h, lines, "center",
+                         "valve", node=sym["node"])
+        return _text(sym["x"], b[1] - LABEL_GAP_FT, lines, "center", "valve",
+                     node=sym["node"])
 
     # -- terminal at the end of a pipe ------------------------------------
     def _terminal_inserts(self, end, ex, ey, ux, uy):

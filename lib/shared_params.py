@@ -29,6 +29,12 @@ PRV_MIDSTREAM_MIN_DOWNSTREAM_FT = 10.0
 # Regulating Valve" is a PRV). Moved here from the One-Line script.
 ISOLATION_VALVE_KEYWORDS = ("valve", "ball", "gate", "check", "shutoff")
 
+# The hood's Ansul gas shutoff valve (interlocked with the fire suppression,
+# ahead of every appliance under the hood). Checked before the isolation
+# words; drawn as a valve with an ANSUL VALVE label (Colin, 2026-11-19).
+# Family: RJA - Gas Shutoff Valve (Ansul).
+ANSUL_VALVE_KEYWORDS = ("ansul",)
+
 # Equivalent length added to the developed length for each elbow on a path,
 # feet (IFGC Appendix A). Read by pipe_graph, the sizing basis text and the
 # One-Line (snapshot elbow_equiv_ft).
