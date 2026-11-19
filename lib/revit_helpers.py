@@ -922,13 +922,218 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
             _log_entry("INFO", fn, eid, "Resized per connector.")
             return True, "connector.Radius"
 
-    _log_entry("WARNING", fn, eid, "Could not resize by any approach.")
+    # --- 3. A family sized by Type (one Type per size, RJA - Ball Valve -
+    # .25 thru 3, Horse Creek 2026-11-19): switch to its Type at this size ---
+    swapped, note = swap_to_sized_type(element, nominal_inches)
+    if swapped:
+        _log_entry("INFO", fn, eid, note)
+        return True, "Type swap"
+
+    _log_entry("WARNING", fn, eid, "Could not resize by any approach. "
+               + (note or ""))
     return False, "FAILED"
 
 
 # Module-level so set_fitting_size does not depend on shared_params import
 # ordering at call time.
 INCHES_PER_FOOT = 12.0
+
+# Type parameters that carry a size-per-Type family's nominal size, in order.
+TYPE_SIZE_PARAMS = ("Nominal Pipe Size", "Nominal Diameter", "Nominal Size")
+
+
+def parse_size_inches(text):
+    """Nominal inches from a size text: '1 1/2"', '0 3/4"', '1-1/2"', '2"',
+    '3/4 in'. None when it is not a size."""
+    import re
+    if text is None:
+        return None
+    t = str(text).replace('"', " ").replace("in", " ").replace("-", " ")
+    m = re.match(r"^\s*(\d+(?:\.\d+)?)?\s*(?:(\d+)\s*/\s*(\d+))?\s*$", t)
+    if not m or (m.group(1) is None and m.group(2) is None):
+        return None
+    value = float(m.group(1) or 0.0)
+    if m.group(2):
+        den = float(m.group(3))
+        if den == 0:
+            return None
+        value += float(m.group(2)) / den
+    return value if value > 0 else None
+
+
+def pick_sized_type(candidates, nominal_inches, tol=0.01):
+    """candidates: [(key, size inches or None)]. The key whose size matches
+    nominal_inches within tol, else None."""
+    for key, size in candidates:
+        if size is not None and abs(size - nominal_inches) <= tol:
+            return key
+    return None
+
+
+def _type_size_inches(symbol):
+    """Nominal inches of one family Type: a size Type parameter, else
+    2 x 'Nominal Radius', else the Type name ('1 1/2"')."""
+    from Autodesk.Revit.DB import StorageType
+    for name in TYPE_SIZE_PARAMS:
+        try:
+            p = symbol.LookupParameter(name)
+        except Exception:
+            p = None
+        if p is None:
+            continue
+        try:
+            if p.StorageType == StorageType.Double:
+                v = p.AsDouble() * INCHES_PER_FOOT
+                if v > 0:
+                    return v
+            else:
+                v = parse_size_inches(p.AsString() or p.AsValueString())
+                if v:
+                    return v
+        except Exception:
+            continue
+    try:
+        p = symbol.LookupParameter("Nominal Radius")
+        if p is not None and p.StorageType == StorageType.Double:
+            v = p.AsDouble() * 2.0 * INCHES_PER_FOOT
+            if v > 0:
+                return v
+    except Exception:
+        pass
+    try:
+        from Autodesk.Revit.DB import Element as _E
+        return parse_size_inches(_E.Name.GetValue(symbol))
+    except Exception:
+        return None
+
+
+def swap_to_sized_type(element, nominal_inches):
+    """Switch a family instance to the Type of its own family whose size is
+    nominal_inches. For valves and accessories made with one Type per size,
+    where no instance size parameter exists. Call inside a transaction.
+
+    Returns (True, note) when the instance is now at that size, else
+    (False, reason)."""
+    try:
+        symbol = element.Symbol
+        family = symbol.Family
+        doc = element.Document
+    except Exception:
+        return False, "not a family instance with Types."
+    cands = []
+    for sid in family.GetFamilySymbolIds():
+        s = doc.GetElement(sid)
+        if s is not None:
+            cands.append((s, _type_size_inches(s)))
+    target = pick_sized_type(cands, nominal_inches)
+    if target is None:
+        return False, "its family has no Type at {} in.".format(nominal_inches)
+    if _safe_eid(target) == _safe_eid(symbol):
+        return True, "Already the {} in. Type.".format(nominal_inches)
+    # A new Type changes the body length: Revit drops the reducers that sat
+    # on each end and leaves the valve loose (Horse Creek, 2026-11-19). The
+    # swap runs in a SubTransaction and is undone unless every end that was
+    # connected before is connected again.
+    from Autodesk.Revit.DB import SubTransaction
+    was_connected = _connected_count(element)
+    st = SubTransaction(doc)
+    st.Start()
+    try:
+        if not target.IsActive:
+            target.Activate()
+        element.ChangeTypeId(target.Id)
+        doc.Regenerate()
+        joined = reconnect_open_ends(doc, element)
+        doc.Regenerate()
+        if _connected_count(element) < was_connected:
+            st.RollBack()
+            return False, ("the {} in. Type left an end loose that could not "
+                           "be reconnected; left at its Type.".format(
+                               nominal_inches))
+        st.Commit()
+    except Exception as exc:
+        try:
+            st.RollBack()
+        except Exception:
+            pass
+        return False, "Type swap failed: {}".format(exc)
+    return True, "Switched to its {} in. Type{}.".format(
+        nominal_inches, ", {} end(s) rejoined".format(joined) if joined else "")
+
+
+def _connected_count(element):
+    n = 0
+    manager = _get_connector_manager(element)
+    if manager is None:
+        return 0
+    for c in manager.Connectors:
+        try:
+            if c.IsConnected:
+                n += 1
+        except Exception:
+            continue
+    return n
+
+
+def reconnect_open_ends(doc, element, max_gap_ft=1.5):
+    """Rejoin each open connector of element to the open pipe end lined up
+    with it within max_gap_ft: the pipe end is moved onto the connector and
+    connected. Returns the number of ends joined. Call inside a transaction.
+    """
+    from Autodesk.Revit.DB import (BoundingBoxIntersectsFilter, Line,
+                                   Outline, XYZ)
+    manager = _get_connector_manager(element)
+    if manager is None:
+        return 0
+    joined = 0
+    for vc in manager.Connectors:
+        try:
+            if vc.IsConnected:
+                continue
+            o = vc.Origin
+            axis = vc.CoordinateSystem.BasisZ
+        except Exception:
+            continue
+        m = max_gap_ft
+        box = Outline(XYZ(o.X - m, o.Y - m, o.Z - m),
+                      XYZ(o.X + m, o.Y + m, o.Z + m))
+        best, best_d = None, None
+        pipes = (FilteredElementCollector(doc)
+                 .OfCategory(BuiltInCategory.OST_PipeCurves)
+                 .WherePasses(BoundingBoxIntersectsFilter(box))
+                 .WhereElementIsNotElementType())
+        for pipe in pipes:
+            for pc in pipe.ConnectorManager.Connectors:
+                try:
+                    if pc.IsConnected or str(pc.ConnectorType) != "End":
+                        continue
+                    d = pc.Origin.DistanceTo(o)
+                    if d > max_gap_ft:
+                        continue
+                    if d > 1e-6:
+                        gap = (pc.Origin - o).Normalize()
+                        if abs(gap.DotProduct(axis)) < 0.99:
+                            continue      # not in line with the valve end
+                    if best_d is None or d < best_d:
+                        best, best_d = (pipe, pc), d
+                except Exception:
+                    continue
+        if best is None:
+            continue
+        pipe, pc = best
+        curve = pipe.Location.Curve
+        a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
+        if a.DistanceTo(pc.Origin) < b.DistanceTo(pc.Origin):
+            pipe.Location.Curve = Line.CreateBound(o, b)
+        else:
+            pipe.Location.Curve = Line.CreateBound(a, o)
+        doc.Regenerate()
+        for c in pipe.ConnectorManager.Connectors:
+            if not c.IsConnected and c.Origin.DistanceTo(o) < 1e-3:
+                c.ConnectTo(vc)
+                joined += 1
+                break
+    return joined
 
 
 # =============================================================================

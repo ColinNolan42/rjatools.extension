@@ -377,6 +377,31 @@ class TestFittingTargetSize(unittest.TestCase):
             3, g, {}, {2, 4}), (None, False))
 
 
+class TestSizedTypes(unittest.TestCase):
+    """Valves made with one Type per size (RJA - Ball Valve - .25 thru 3,
+    Types '0 1/4"' to '3"', size in the Type parameter 'Nominal Pipe Size'):
+    Size Gas switches the Type (Horse Creek, 2026-11-19)."""
+
+    def test_parse_size_texts(self):
+        p = revit_helpers.parse_size_inches
+        self.assertEqual(p('1 1/2"'), 1.5)
+        self.assertEqual(p('0 3/4"'), 0.75)
+        self.assertEqual(p('1-1/4"'), 1.25)
+        self.assertEqual(p('2"'), 2.0)
+        self.assertEqual(p('3/8"'), 0.375)
+        self.assertEqual(p('2.5 in'), 2.5)
+        self.assertIsNone(p("Standard"))
+        self.assertIsNone(p(""))
+        self.assertIsNone(p(None))
+        self.assertIsNone(p('0"'))
+
+    def test_pick_matching_type(self):
+        cands = [("half", 0.5), ("one-half", 1.5), ("two", 2.0), ("x", None)]
+        self.assertEqual(revit_helpers.pick_sized_type(cands, 1.5), "one-half")
+        self.assertEqual(revit_helpers.pick_sized_type(cands, 2.0), "two")
+        self.assertIsNone(revit_helpers.pick_sized_type(cands, 1.25))
+
+
 class TestTableLimitWarnings(unittest.TestCase):
     """2024 IFGC Table 402.4(13) Intended Use: 150 CFH single house line
     regulator load (S38, Colin approved 2026-11-04)."""
