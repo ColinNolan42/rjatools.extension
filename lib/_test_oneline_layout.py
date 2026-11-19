@@ -255,7 +255,7 @@ class Benches(unittest.TestCase):
         self.assertEqual(L.all_clashes(out["prims"]), [])
         labs = _of(out, t="text", role="valve")
         self.assertEqual([p["lines"] for p in labs], [["ANSUL VALVE"]])
-        self.assertEqual(len(_of(out, t="symbol", role="iso", node=3)), 1)
+        self.assertEqual(len(_of(out, t="symbol", role="ansul", node=3)), 1)
         for name in ("FRY-1", "RANGE-1", "OVEN-1", "WH-1"):
             self.assertEqual(self._hang(sch, out, name), "down", name)
 

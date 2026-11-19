@@ -39,12 +39,16 @@ SYMBOL_FAMILIES = [
     ("prv", ["RJA - P Symbols - Pressure Regulating Valve",
              "RJA - P Symbols - Pressure Reducing Valve"]),
     ("iso", ["RJA - P Symbols - Gate Valve"]),
+    # the hood Ansul shutoff: the RJA solenoid valve symbol (Colin,
+    # 2026-11-19), the gate valve when it is missing
+    ("ansul", ["RJA - P Symbols - Solenoid Control Valve",
+               "RJA - P Symbols - Gate Valve"]),
     ("cap", ["RJA- Equipment Cap", "RJA - Equipment Cap"]),
     ("squiggle", ["RJA - Squiggle", "RJA- Squiggle"]),
 ]
 
 ROLE_TITLES = {"meter": "Meter", "equipment": "Equipment", "prv": "PRV",
-               "iso": "Isolation valve", "cap": "Cap", "squiggle": "Squiggle"}
+               "iso": "Isolation valve", "ansul": "Ansul valve", "cap": "Cap", "squiggle": "Squiggle"}
 
 NEW_LINE_STYLE = "Line 4"          # new construction pipe (as before)
 # existing pipe and an existing meter's service: a named thin style, not the
@@ -136,7 +140,7 @@ def fallback_segments(prim):
     rot = prim.get("rot") or 0
     if role == "equipment":
         segs = [(-_EQ_HALF_W, d, _EQ_HALF_W, d) for d in (-_EQ_PITCH, 0.0, _EQ_PITCH)]
-    elif role in ("prv", "iso"):
+    elif role in ("prv", "iso", "ansul"):
         L, T = _VALVE_HALF_L, _VALVE_HALF_T
         segs = [(-L, -T, -L, T), (L, -T, L, T), (-L, T, L, -T), (L, T, -L, -T)]
         if role == "prv":

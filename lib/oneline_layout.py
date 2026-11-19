@@ -16,7 +16,7 @@ Primitives (every one carries "box" = (x0, y0, x1, y1)):
     {"t": "text", "x", "y", "lines": [..], "align": "center"|"left",
      "underline_first": bool, "role": "seg"|"fixture"|"notes"|"utility",
      "seg" or "node"}
-    {"t": "symbol", "role": "meter"|"equipment"|"cap"|"prv"|"iso"|
+    {"t": "symbol", "role": "meter"|"equipment"|"cap"|"prv"|"iso"|"ansul"|
      "squiggle", "x", "y", "rot": 0|90|180|270, "node"}
     x, y of a symbol is its center (its family insertion point, except the
     cap, which carries "ix", "iy": the pipe end); of a text, the middle of
@@ -502,7 +502,8 @@ class _Engine(object):
                               PRV_HALF_L, PRV_HALF_T, v["node_id"])
                 cuts.append((t, PRV_HALF_L))
             else:
-                sym = _symbol("iso", ax + ux * t, ay + uy * t, rot,
+                sym = _symbol("ansul" if v["kind"] == "ansul" else "iso",
+                              ax + ux * t, ay + uy * t, rot,
                               ISO_HALF_L, ISO_HALF_T, v["node_id"])
                 cuts.append((t, ISO_HALF_L))
                 if v["kind"] == "ansul":

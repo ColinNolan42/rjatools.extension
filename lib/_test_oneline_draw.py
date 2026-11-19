@@ -25,7 +25,7 @@ class Symbols(unittest.TestCase):
     def test_every_role_has_families(self):
         roles = [r for r, _n in D.SYMBOL_FAMILIES]
         self.assertEqual(sorted(roles), sorted(
-            ["meter", "equipment", "prv", "iso", "cap", "squiggle"]))
+            ["meter", "equipment", "prv", "iso", "ansul", "cap", "squiggle"]))
         self.assertEqual(dict(D.SYMBOL_FAMILIES)["meter"],
                          ["RJA - P Symbols - Meter Annotation"])
         self.assertEqual(dict(D.SYMBOL_FAMILIES)["prv"][0],
@@ -49,7 +49,7 @@ class Symbols(unittest.TestCase):
     def test_real_library_has_the_new_2022_symbols(self):
         if not os.path.isdir(D.SYMBOL_DIR):
             self.skipTest("REVIT FAM not on this machine")
-        for role in ("meter", "equipment", "prv", "iso", "cap", "squiggle"):
+        for role in ("meter", "equipment", "prv", "iso", "ansul", "cap", "squiggle"):
             paths = [p for _n, p in D.symbol_candidates(role)]
             self.assertTrue(any(paths), role)
 
