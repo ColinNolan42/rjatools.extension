@@ -216,28 +216,29 @@ def ensure_symbols(doc, symbol_dir=SYMBOL_DIR):
         row = {"role": ROLE_TITLES[role], "family": "", "status": "fallback",
                "reason": ""}
         cands = symbol_candidates(role, symbol_dir)
-        for name, _path in cands:
+        # candidates in order: in the model, else loaded from symbol_dir,
+        # before falling to the next one (G3C 2026-11-19: the Ansul row
+        # took the gate valve already in the model over the solenoid valve
+        # symbol in REVIT FAM)
+        for name, path in cands:
             fam = _find_family(doc, name)
             if fam is not None:
                 sym = _first_symbol(doc, fam)
-                row.update({"family": name, "status": "found"})
+                row.update({"family": name, "status": "found", "reason": ""})
                 break
-        if sym is None:
-            for name, path in cands:
-                if path is None:
-                    continue
-                try:
-                    fam = _load(doc, path)
-                except Exception as ex:
-                    row["reason"] = "load failed: {0}".format(ex)
-                    fam = None
-                if fam is None:
-                    fam = _find_family(doc, name)
-                if fam is not None:
-                    sym = _first_symbol(doc, fam)
-                    row.update({"family": name, "status": "loaded",
-                                "reason": ""})
-                    break
+            if path is None:
+                continue
+            try:
+                fam = _load(doc, path)
+            except Exception as ex:
+                row["reason"] = "load failed: {0}".format(ex)
+                fam = None
+            if fam is None:
+                fam = _find_family(doc, name)
+            if fam is not None:
+                sym = _first_symbol(doc, fam)
+                row.update({"family": name, "status": "loaded", "reason": ""})
+                break
         if sym is None:
             row["family"] = cands[0][0] if cands else ""
             if not row["reason"]:
