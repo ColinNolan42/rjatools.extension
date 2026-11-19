@@ -59,10 +59,11 @@ _EXISTING_GAS_XAML = (
     ' ResizeMode="NoResize"'
     ' WindowStartupLocation="CenterScreen">'
     '<StackPanel Margin="15">'
-    '<CheckBox Name="cbNew" IsChecked="True" Content="New Construction"'
+    '<CheckBox Name="cbConnect" IsChecked="False" Content="Connect into Existing"'
     ' FontWeight="SemiBold" Margin="0,0,0,2"/>'
-    '<TextBlock Text="Ticked: the picked pipe starts the system. Untick to enter existing'
-    ' gas piping." TextWrapping="Wrap" FontSize="11" Margin="20,0,0,12"/>'
+    '<TextBlock Text="Unticked: full new construction, with a new meter. The picked pipe'
+    ' starts the system. Tick to enter the existing gas piping."'
+    ' TextWrapping="Wrap" FontSize="11" Margin="20,0,0,12"/>'
     '<TextBlock Text="Existing Pipe Size at the Connection" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<ComboBox Name="cbSize" Margin="0,0,0,12"/>'
     '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
@@ -111,8 +112,8 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
             to prefill, for example what was entered in Size Gas.
 
     Returns:
-        {"new_construction": True} when the New Construction box (ticked by
-        default) is left ticked, else a dict with "size_nominal" (str),
+        {"new_construction": True} when the Connect into Existing box
+        (unticked by default) is left unticked, else a dict with "size_nominal" (str),
         "length_ft" and "load_mbh" (floats) and "new_construction": False.
         None if cancelled.
     """
@@ -121,7 +122,7 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
     cb_size    = window.FindName('cbSize')
     tb_length  = window.FindName('tbLength')
     tb_load    = window.FindName('tbLoad')
-    cb_new     = window.FindName('cbNew')
+    cb_connect = window.FindName('cbConnect')
     btn_ok     = window.FindName('btnOK')
     btn_cancel = window.FindName('btnCancel')
 
@@ -141,13 +142,13 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
     result = [None]
 
     def on_new_toggled(sender, e):
-        on = not bool(cb_new.IsChecked)
+        on = bool(cb_connect.IsChecked)
         cb_size.IsEnabled = on
         tb_length.IsEnabled = on
         tb_load.IsEnabled = on
 
-    cb_new.Checked   += on_new_toggled
-    cb_new.Unchecked += on_new_toggled
+    cb_connect.Checked   += on_new_toggled
+    cb_connect.Unchecked += on_new_toggled
     on_new_toggled(None, None)
 
     def _number(box):
@@ -163,7 +164,7 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
         return value
 
     def on_ok(sender, e):
-        if bool(cb_new.IsChecked):
+        if not bool(cb_connect.IsChecked):
             result[0] = {"new_construction": True}
             window.Close()
             return

@@ -161,22 +161,24 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
 
 
 class TestExistingNewConstruction(unittest.TestCase):
-    """New Construction box at the top of the Existing Conditions dialog."""
+    """Connect into Existing box at the top of the Existing Conditions
+    dialog, unticked by default (full new construction, Colin 2026-11-19)."""
 
     def _root(self):
         return ET.fromstring("<Root %s>%s</Root>"
                              % (NS, sizer_dialogs._EXISTING_BODY))
 
-    def test_box_is_first_and_ticked(self):
+    def test_box_is_first_and_unticked(self):
         first = list(self._root())[0]
         self.assertTrue(first.tag.endswith("CheckBox"))
-        self.assertEqual(first.get(X_NAME), "cb_new")
-        self.assertEqual(first.get("IsChecked"), "True")
-        self.assertEqual(first.get("Content"), "New Construction")
+        self.assertEqual(first.get(X_NAME), "cb_connect")
+        self.assertEqual(first.get("IsChecked"), "False")
+        self.assertEqual(first.get("Content"), "Connect into Existing")
 
     def test_hint_text(self):
-        self.assertIn("Ticked: the picked pipe starts the system. Untick to "
-                      "enter existing gas piping.", sizer_dialogs._EXISTING_BODY)
+        self.assertIn("Unticked: full new construction, with a new meter. "
+                      "The picked pipe starts the system. Tick to enter the "
+                      "existing gas piping.", sizer_dialogs._EXISTING_BODY)
 
     def test_fields_still_present(self):
         names = _names_in(sizer_dialogs._EXISTING_BODY)
@@ -185,14 +187,15 @@ class TestExistingNewConstruction(unittest.TestCase):
 
     def test_basis_rows_explain_both_states(self):
         labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
-        self.assertEqual(labels[0], "New Construction")
-        self.assertIn("Existing piping", labels)
+        self.assertEqual(labels[0], "New construction")
+        self.assertIn("Connect into Existing", labels)
         for _l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
             self.assertNotIn(" - ", v)
 
     def test_fallback_has_the_box(self):
         xaml = ui_helpers._EXISTING_GAS_XAML
-        self.assertIn('Name="cbNew" IsChecked="True"', xaml)
+        self.assertIn('Name="cbConnect" IsChecked="False"', xaml)
+        self.assertIn('Content="Connect into Existing"', xaml)
         ET.fromstring(xaml)
 
 
