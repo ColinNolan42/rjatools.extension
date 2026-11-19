@@ -1104,9 +1104,10 @@ def _gas_picker(title, mode, use_theme):
 # ---------------------------------------------------------------------------
 
 _EXISTING_BODY = (
-    _hint('A pipe was picked, so the run starts at the connection to existing gas '
-          'piping. The existing piping is assumed not modeled. Enter it below.',
-          '0,10,0,0') +
+    '<CheckBox x:Name="cb_new" IsChecked="True" Content="New Construction"'
+    ' FontWeight="SemiBold" Margin="0,10,0,0"/>' +
+    _hint('Ticked: the picked pipe starts the system. Untick to enter existing '
+          'gas piping.', '20,2,0,0') +
     _section('Existing gas piping') +
     '<TextBlock Text="Existing pipe size at the connection" Margin="0,0,0,3"/>'
     '<ComboBox x:Name="cb_size" Margin="0,0,0,8"/>'
@@ -1127,6 +1128,13 @@ _EXISTING_BODY = (
 )
 
 _EXISTING_BASIS_ROWS = [
+    ("New Construction",
+     "Ticked: the picked pipe is the start of the system. There is no "
+     "existing pipe, length or load, the longest run starts at the picked "
+     "pipe, and no existing pipe is checked. The fields above are not used."),
+    ("Existing piping",
+     "Unticked: a pipe was picked at the connection to existing gas piping, "
+     "assumed not modeled. The rows below apply."),
     ("Existing pipe",
      "Checked, never resized. It passes if its table capacity covers the "
      "existing load plus the new load. A shortfall is a warning."),
@@ -1167,7 +1175,21 @@ def show_existing_gas_dialog(title, pipe_sizes, defaults=None, use_theme=True):
 
     _fill_basis(win, _EXISTING_BASIS_ROWS)
 
+    cb_new = _named(win, 'cb_new')
+
+    def on_new_toggled(sender, args):
+        on = not bool(cb_new.IsChecked)
+        cb_size.IsEnabled = on
+        tb_length.IsEnabled = on
+        tb_load.IsEnabled = on
+
+    cb_new.Checked += on_new_toggled
+    cb_new.Unchecked += on_new_toggled
+    on_new_toggled(None, None)
+
     def collect(errors):
+        if bool(cb_new.IsChecked):
+            return {"new_construction": True}
         length = _number(tb_length, 'Length', errors, kind='nonneg')
         load = _number(tb_load, 'Total existing load', errors, kind='nonneg')
         if cb_size.SelectedItem is None:
@@ -1178,6 +1200,7 @@ def show_existing_gas_dialog(title, pipe_sizes, defaults=None, use_theme=True):
             "size_nominal": cb_size.SelectedItem,
             "length_ft":    length,
             "load_mbh":     load,
+            "new_construction": False,
         }
 
     return _run(win, [tb_length, tb_load], collect)

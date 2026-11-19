@@ -160,6 +160,42 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
             self.assertIn('Text="Calculation basis"', body, key)
 
 
+class TestExistingNewConstruction(unittest.TestCase):
+    """New Construction box at the top of the Existing Conditions dialog."""
+
+    def _root(self):
+        return ET.fromstring("<Root %s>%s</Root>"
+                             % (NS, sizer_dialogs._EXISTING_BODY))
+
+    def test_box_is_first_and_ticked(self):
+        first = list(self._root())[0]
+        self.assertTrue(first.tag.endswith("CheckBox"))
+        self.assertEqual(first.get(X_NAME), "cb_new")
+        self.assertEqual(first.get("IsChecked"), "True")
+        self.assertEqual(first.get("Content"), "New Construction")
+
+    def test_hint_text(self):
+        self.assertIn("Ticked: the picked pipe starts the system. Untick to "
+                      "enter existing gas piping.", sizer_dialogs._EXISTING_BODY)
+
+    def test_fields_still_present(self):
+        names = _names_in(sizer_dialogs._EXISTING_BODY)
+        for n in ("cb_size", "tb_length", "tb_load"):
+            self.assertIn(n, names)
+
+    def test_basis_rows_explain_both_states(self):
+        labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
+        self.assertEqual(labels[0], "New Construction")
+        self.assertIn("Existing piping", labels)
+        for _l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
+            self.assertNotIn(" - ", v)
+
+    def test_fallback_has_the_box(self):
+        xaml = ui_helpers._EXISTING_GAS_XAML
+        self.assertIn('Name="cbNew" IsChecked="True"', xaml)
+        ET.fromstring(xaml)
+
+
 class TestSizeDuctLimitsGrid(unittest.TestCase):
     """The limits grid names are generated per system, so they are checked
     here rather than by the source scan above."""

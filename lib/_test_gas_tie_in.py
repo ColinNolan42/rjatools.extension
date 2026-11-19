@@ -284,6 +284,48 @@ class TestRememberedBetweenTools(unittest.TestCase):
         self.assertAlmostEqual(tie_in.recall_existing(900)["load_mbh"], 640.0)
 
 
+class TestNewConstruction(unittest.TestCase):
+    """The New Construction tick in the Existing Conditions box."""
+
+    TICKED = {"new_construction": True}
+    UNTICKED = {"size_nominal": "2", "length_ft": 40.0, "load_mbh": 640.0,
+                "new_construction": False}
+
+    def test_ticked_is_new_construction(self):
+        self.assertTrue(tie_in.is_new_construction(self.TICKED))
+        self.assertFalse(tie_in.is_new_construction(self.UNTICKED))
+        self.assertFalse(tie_in.is_new_construction(None))
+        # today's dict, without the key, still means existing piping
+        legacy = dict(self.UNTICKED)
+        del legacy["new_construction"]
+        self.assertFalse(tie_in.is_new_construction(legacy))
+
+    def test_existing_for_sizing(self):
+        self.assertIsNone(tie_in.existing_for_sizing(self.TICKED))
+        self.assertIsNone(tie_in.existing_for_sizing(None))
+        self.assertIs(tie_in.existing_for_sizing(self.UNTICKED), self.UNTICKED)
+
+    def test_inputs_text(self):
+        text = tie_in.existing_inputs_text(self.TICKED)
+        self.assertIn("New construction", text)
+        self.assertIn("starts at the picked pipe", text)
+        self.assertIn("no existing piping upstream", text)
+        self.assertNotIn("-", text)
+        text = tie_in.existing_inputs_text(self.UNTICKED)
+        self.assertIn('2" pipe, 40.0 ft', text)
+        self.assertIn("640.0 MBH existing load", text)
+
+    def test_nothing_is_remembered_by_the_helpers(self):
+        tie_in.existing_for_sizing(self.TICKED)
+        tie_in.existing_inputs_text(self.TICKED)
+        self.assertIsNone(tie_in.recall_existing(777))
+
+    def test_no_existing_means_no_existing_check(self):
+        class _G(object):
+            existing = None
+        self.assertIsNone(sizing_engine.check_existing_pipe({}, _G()))
+
+
 def _run():
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
     result = unittest.TextTestRunner(verbosity=1).run(suite)

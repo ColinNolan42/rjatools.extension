@@ -147,8 +147,10 @@ def main():
         if existing is None:
             output.print_md("Cancelled at existing conditions. Nothing drawn.")
             return
-        tie_in.remember_existing(el_id, existing)
-        if graph.longest_run is not None:
+        if not tie_in.is_new_construction(existing):
+            tie_in.remember_existing(el_id, existing)
+        if (graph.longest_run is not None
+                and tie_in.existing_for_sizing(existing) is not None):
             pipe_graph.apply_existing_conditions(
                 graph, existing["size_nominal"], existing["length_ft"],
                 existing["load_mbh"])
@@ -159,6 +161,8 @@ def main():
             "heat_content": heat,
             "downstream_table": down["label"].split("  [")[0] if down else None,
             "origin_kind": "tie_in" if is_tie_in else "meter"}
+    if existing is not None:
+        info["existing"] = tie_in.existing_inputs_text(existing)
     _emit(gas_console.oneline_inputs(info), gas_console.oneline_inputs_md(info))
 
     # Size Gas rerun in memory (writes nothing): the gate compares sizes
@@ -193,7 +197,8 @@ def main():
     new_mbh = sum(float(t["mbh"] or 0.0) for t in terms)
     notes = gas_labels.notes_lines(
         table_id, new_mbh, snap["longest_run_ft"], downstream_table_id=down_id,
-        existing_mbh=existing["load_mbh"] if existing else None)
+        existing_mbh=(existing["load_mbh"]
+                      if tie_in.existing_for_sizing(existing) else None))
     lay = oneline_layout.layout(sch, notes=notes)
     if any(l.startswith("LAYOUT FAILED") for l in lay["log"]):
         _emit(gas_console.layout_diagnostic(sch, lay),

@@ -50,6 +50,8 @@ def _input_rows(info):
         rows.append(("Downstream of PRV", info["downstream_table"]))
     if info.get("origin_kind") == "tie_in":
         rows.append(("Start type", "New pipe at the existing system"))
+    if info.get("existing"):
+        rows.append(("Existing (entered)", info["existing"]))
     return rows
 
 

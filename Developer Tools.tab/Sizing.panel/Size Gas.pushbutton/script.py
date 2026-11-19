@@ -507,12 +507,9 @@ def main():
             _say("Cancelled at existing conditions. No changes were made to "
                  "the model.")
             return
-        tie_in.remember_existing(picked_id, existing)
-        inputs["existing"] = (
-            "{}\" pipe, {:.1f} ft from the meter to the new connection, "
-            "{:.1f} MBH existing load.".format(
-                existing["size_nominal"], float(existing["length_ft"]),
-                float(existing["load_mbh"])))
+        if not tie_in.is_new_construction(existing):
+            tie_in.remember_existing(picked_id, existing)
+        inputs["existing"] = tie_in.existing_inputs_text(existing)
     else:
         validation = revit_helpers.validate_selected_element(selected_element)
         if not validation["is_valid"]:
@@ -565,7 +562,8 @@ def main():
 
     # Existing building: the existing length joins the developed length that
     # picks the table row, before anything is sized or zoned.
-    if existing is not None:
+    new_construction = tie_in.is_new_construction(existing)
+    if tie_in.existing_for_sizing(existing) is not None:
         pipe_graph.apply_existing_conditions(
             graph, existing["size_nominal"], existing["length_ft"],
             existing["load_mbh"])
@@ -834,12 +832,13 @@ def main():
     # error can never stop Transactions 2 and 3 (Colin, 2026-11-02).
     # ------------------------------------------------------------------
     try:
-        _emit(gas_console.existing_audit(existing_skip_count,
-                                         existing_overloaded,
-                                         existing_unchecked),
-              gas_console.existing_audit_md(existing_skip_count,
-                                            existing_overloaded,
-                                            existing_unchecked))
+        if not new_construction:
+            _emit(gas_console.existing_audit(existing_skip_count,
+                                             existing_overloaded,
+                                             existing_unchecked),
+                  gas_console.existing_audit_md(existing_skip_count,
+                                                existing_overloaded,
+                                                existing_unchecked))
     except Exception as e:
         _say("Existing pipe audit could not be printed: {}".format(str(e)),
              "warn")

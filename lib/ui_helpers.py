@@ -59,9 +59,10 @@ _EXISTING_GAS_XAML = (
     ' ResizeMode="NoResize"'
     ' WindowStartupLocation="CenterScreen">'
     '<StackPanel Margin="15">'
-    '<TextBlock Text="A pipe was picked, so the run starts at the connection to existing gas'
-    ' piping. The existing piping is assumed not modeled. Enter it below."'
-    ' TextWrapping="Wrap" Margin="0,0,0,12"/>'
+    '<CheckBox Name="cbNew" IsChecked="True" Content="New Construction"'
+    ' FontWeight="SemiBold" Margin="0,0,0,2"/>'
+    '<TextBlock Text="Ticked: the picked pipe starts the system. Untick to enter existing'
+    ' gas piping." TextWrapping="Wrap" FontSize="11" Margin="20,0,0,12"/>'
     '<TextBlock Text="Existing Pipe Size at the Connection" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<ComboBox Name="cbSize" Margin="0,0,0,12"/>'
     '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
@@ -110,14 +111,17 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
             to prefill, for example what was entered in Size Gas.
 
     Returns:
-        dict with "size_nominal" (str), "length_ft" and "load_mbh" (floats),
-        or None if cancelled.
+        {"new_construction": True} when the New Construction box (ticked by
+        default) is left ticked, else a dict with "size_nominal" (str),
+        "length_ft" and "load_mbh" (floats) and "new_construction": False.
+        None if cancelled.
     """
     window     = XamlReader.Parse(_EXISTING_GAS_XAML)
     window.Title = title
     cb_size    = window.FindName('cbSize')
     tb_length  = window.FindName('tbLength')
     tb_load    = window.FindName('tbLoad')
+    cb_new     = window.FindName('cbNew')
     btn_ok     = window.FindName('btnOK')
     btn_cancel = window.FindName('btnCancel')
 
@@ -136,6 +140,16 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
 
     result = [None]
 
+    def on_new_toggled(sender, e):
+        on = not bool(cb_new.IsChecked)
+        cb_size.IsEnabled = on
+        tb_length.IsEnabled = on
+        tb_load.IsEnabled = on
+
+    cb_new.Checked   += on_new_toggled
+    cb_new.Unchecked += on_new_toggled
+    on_new_toggled(None, None)
+
     def _number(box):
         """A number of zero or more, or None. Marks the box when it is bad."""
         try:
@@ -149,6 +163,10 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
         return value
 
     def on_ok(sender, e):
+        if bool(cb_new.IsChecked):
+            result[0] = {"new_construction": True}
+            window.Close()
+            return
         length = _number(tb_length)
         load = _number(tb_load)
         if length is None or load is None or cb_size.SelectedItem is None:
@@ -157,6 +175,7 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
             "size_nominal": cb_size.SelectedItem,
             "length_ft":    length,
             "load_mbh":     load,
+            "new_construction": False,
         }
         window.Close()
 

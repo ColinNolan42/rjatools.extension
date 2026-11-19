@@ -103,6 +103,24 @@ class Sections(unittest.TestCase):
         self.assertIn("Downstream of PRV", gc.oneline_inputs(info))
         self.assertIn("**IFGC table:**", gc.oneline_inputs_md(info))
 
+    def test_oneline_existing_row(self):
+        info = {"meter": "New pipe at existing (1)", "table": "T",
+                "table_id": "402.4(2)", "heat_content": 840.0,
+                "origin_kind": "tie_in",
+                "existing": "New construction. The system starts at the "
+                            "picked pipe, with no existing piping upstream."}
+        self.assertIn("Existing (entered)", gc.oneline_inputs(info))
+        self.assertIn("New construction", gc.oneline_inputs(info))
+        self.assertIn("**Existing (entered):**", gc.oneline_inputs_md(info))
+        del info["existing"]
+        self.assertNotIn("Existing (entered)", gc.oneline_inputs(info))
+
+    def test_sizegas_new_construction_row(self):
+        info = {"existing": "New construction. The system starts at the "
+                            "picked pipe, with no existing piping upstream."}
+        self.assertIn("starts at the picked pipe",
+                      gc.sizegas_inputs(info))
+
     def test_gate_ok(self):
         html = gc.gate(oneline_gate.check(G3C))
         self.assertEqual(shape(html).errors, [])
