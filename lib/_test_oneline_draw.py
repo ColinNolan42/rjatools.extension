@@ -31,27 +31,13 @@ class Symbols(unittest.TestCase):
         self.assertEqual(dict(D.SYMBOL_FAMILIES)["prv"][0],
                          "RJA - P Symbols - Pressure Regulating Valve")
 
-    def test_candidates_exact_file_only(self):
-        seen = []
-
-        def exists(p):
-            seen.append(p)
-            return p.endswith("Pressure Reducing Valve.rfa")
-        c = D.symbol_candidates("prv", r"C:\lib", exists)
-        self.assertEqual([n for n, _p in c],
-                         ["RJA - P Symbols - Pressure Regulating Valve",
-                          "RJA - P Symbols - Pressure Reducing Valve"])
-        self.assertIsNone(c[0][1])
-        self.assertTrue(c[1][1].endswith("Pressure Reducing Valve.rfa"))
-        for p in seen:
-            self.assertNotIn(".0001", p)
-
-    def test_real_library_has_the_new_2022_symbols(self):
-        if not os.path.isdir(D.SYMBOL_DIR):
-            self.skipTest("REVIT FAM not on this machine")
-        for role in ("meter", "equipment", "prv", "iso", "ansul", "cap", "squiggle"):
-            paths = [p for _n, p in D.symbol_candidates(role)]
-            self.assertTrue(any(paths), role)
+    def test_never_loads_a_family(self):
+        # Colin 2026-11-19: loading inside the command left Revit 2024 and
+        # 2025 stuck; the button only uses families already in the project
+        src = open(os.path.join(HERE, "oneline_draw.py")).read()
+        self.assertNotIn("LoadFamily", src)
+        self.assertNotIn("SYMBOL_DIR", src)
+        self.assertIn("Load the family into the project", D.FALLBACK_REASON)
 
 
 class TextType(unittest.TestCase):
@@ -101,17 +87,6 @@ class BorderAndCentering(unittest.TestCase):
         self.assertNotIn("prv", D.CENTER_BY_BOX)
         self.assertNotIn("cap", D.CENTER_BY_BOX)
         self.assertIn("equipment", D.CENTER_BY_BOX)
-
-
-class FamilyYear(unittest.TestCase):
-
-    def test_old_files_not_loaded(self):
-        # Grantham 4 (Revit 2024) froze loading 2012 symbol files, 2026-11-19
-        self.assertFalse(D.family_year_ok("2012"))
-        self.assertFalse(D.family_year_ok("2021"))
-        self.assertTrue(D.family_year_ok("2022"))
-        self.assertTrue(D.family_year_ok("2027"))
-        self.assertTrue(D.family_year_ok(None))
 
 
 class Fallbacks(unittest.TestCase):

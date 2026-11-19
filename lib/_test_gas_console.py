@@ -161,7 +161,8 @@ class Sections(unittest.TestCase):
         styles = [r[2][1] for r in p.rows[1:]]
         self.assertIn(cr.STATUS_COLORS["GREEN"], styles[0])
         self.assertIn(cr.STATUS_COLORS["YELLOW"], styles[2])
-        self.assertIn("GENERIC FAMILIES", html)
+        self.assertIn("never loads families", html)
+        self.assertNotIn("GENERIC FAMILIES", html)
         self.assertIn("FALLBACK, drawn", gc.symbols_table_md(rows))
 
     def test_summary_checks_pass_on_g3c(self):

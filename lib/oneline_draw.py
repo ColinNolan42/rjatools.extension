@@ -6,18 +6,20 @@ One-Line rebuild step 6 (2026-11-18): carries out the oneline_layout draw
 list in a Revit drafting view. All layout decisions are made upstream; this
 module only draws.
 
-    syms, report = ensure_symbols(doc)            # find or load, activate
+    syms, report = ensure_symbols(doc)            # find in model, activate
     view = create_view(doc, name)                  # ViewDrafting, 1:100
     counts = draw(doc, view, prims, syms)          # lines, text, symbols
 
 ensure_symbols and draw open no transaction of their own; the button wraps
 them (one TransactionGroup, one undo). The pure helpers at the top
-(symbol_candidates, pick_text_type, fallback_segments) have no Revit import
+(pick_text_type, fallback_segments) have no Revit import
 and are tested in CPython (lib/_test_oneline_draw.py).
 
-Symbols (Colin, 2026-11-18): missing families load from
-REVIT FAM\\GENERIC FAMILIES by exact file name (never a .0001 backup); the
-console lists each as found, loaded or fallback. Insertion points, read from
+Symbols (Colin, 2026-11-19): only families already loaded in the project
+are used. The button never loads a family file: loading inside the command
+left Revit 2024 and 2025 stuck at the end of the run (Grantham 4, Horse
+Creek). A missing symbol is drawn as plain lines and the console lists each
+as found or fallback. Insertion points, read from
 the families: Equipment, Gate Valve, PRV, Meter Annotation centered; Cap a
 single line on its insertion point; Squiggle centered. A project's older copy
 may differ, so Equipment, Gate Valve and Meter are re-centered on their view
@@ -28,11 +30,9 @@ IronPython 2.7 and CPython 3 for the pure part. ASCII source.
 """
 
 import math
-import os
 
-SYMBOL_DIR = r"C:\Users\Colin Nolan\Desktop\REVIT FAM\GENERIC FAMILIES"
-
-# role -> family names to try, in order (first found or loadable wins)
+# role -> family names to look for in the project, in order (first found
+# wins). Nothing is ever loaded from disk (Colin, 2026-11-19).
 SYMBOL_FAMILIES = [
     ("meter", ["RJA - P Symbols - Meter Annotation"]),
     ("equipment", ["RJA - P Symbols - Equipment"]),
@@ -82,16 +82,6 @@ _METER_R = 1.04
 # pure helpers
 # ---------------------------------------------------------------------------
 
-def symbol_candidates(role, symbol_dir=SYMBOL_DIR, exists=os.path.isfile):
-    """[(family name, path or None)] for a role, path only when that exact
-    .rfa file exists (a .0001 backup is never a candidate)."""
-    out = []
-    for name in dict(SYMBOL_FAMILIES).get(role, []):
-        path = os.path.join(symbol_dir, name + ".rfa")
-        out.append((name, path if exists(path) else None))
-    return out
-
-
 def pick_text_type(types):
     """types: [(id, name, size_ft)]. The '3/32" Arial' type, else any 3/32
     in. type, else the first. Returns the id or None."""
@@ -104,21 +94,6 @@ def pick_text_type(types):
         if size is not None and abs(size - TEXT_SIZE_FT) < 1e-6:
             return tid
     return types[0][0]
-
-
-# Symbol files saved before this Revit year are not loaded by the button:
-# Revit upgrades them inside the run and a workshared model can raise a modal
-# version dialog that the button cannot answer, so Revit looks frozen
-# (Grantham 4, Revit 2024, 2026-11-19). Re-save them in Revit 2022.
-MIN_FAMILY_YEAR = 2022
-
-
-def family_year_ok(fmt, min_year=MIN_FAMILY_YEAR):
-    """fmt: BasicFileInfo.Format ('2012', '2022'...). Unknown passes."""
-    try:
-        return int(str(fmt).strip()[:4]) >= min_year
-    except (TypeError, ValueError):
-        return True
 
 
 def border_type_name(base_name):
@@ -206,76 +181,31 @@ def _first_symbol(doc, fam):
     return None
 
 
-def _file_year(path):
-    """The Revit year a family file was saved in, read without opening it."""
-    DB = _db()
-    try:
-        return DB.BasicFileInfo.Extract(path).Format
-    except Exception:
-        return None
+FALLBACK_REASON = ("not loaded in this project, drawn as lines. Load the "
+                   "family into the project to use the RJA symbol.")
 
 
-def _load(doc, path):
-    """Load a family file; returns the Family or None. Inside a transaction."""
-    try:
-        from pyrevit.revit.db.create import FamilyLoaderOptionsHandler
-        res = doc.LoadFamily(path, FamilyLoaderOptionsHandler())
-    except ImportError:
-        res = doc.LoadFamily(path)
-    if isinstance(res, tuple):
-        return res[1] if res[0] else None
-    return None
-
-
-def ensure_symbols(doc, symbol_dir=SYMBOL_DIR):
-    """Find each symbol family in the model, load it from symbol_dir when
-    missing, activate its first type. Call inside a transaction.
+def ensure_symbols(doc):
+    """Find each symbol family in the project and activate its first type.
+    Never loads a family file. Call inside a transaction.
 
     Returns ({role: FamilySymbol or None}, [report rows for
     gas_console.symbols_table])."""
     syms = {}
     report = []
-    for role, _names in SYMBOL_FAMILIES:
+    for role, names in SYMBOL_FAMILIES:
         sym = None
-        row = {"role": ROLE_TITLES[role], "family": "", "status": "fallback",
-               "reason": ""}
-        cands = symbol_candidates(role, symbol_dir)
-        # candidates in order: in the model, else loaded from symbol_dir,
-        # before falling to the next one (G3C 2026-11-19: the Ansul row
-        # took the gate valve already in the model over the solenoid valve
-        # symbol in REVIT FAM)
-        for name, path in cands:
+        row = {"role": ROLE_TITLES[role], "family": names[0] if names else "",
+               "status": "fallback", "reason": FALLBACK_REASON}
+        for name in names:
             fam = _find_family(doc, name)
             if fam is not None:
                 sym = _first_symbol(doc, fam)
-                row.update({"family": name, "status": "found", "reason": ""})
-                break
-            if path is None:
-                continue
-            fmt = _file_year(path)
-            if not family_year_ok(fmt):
-                row["reason"] = ("{0}.rfa is saved in Revit {1}; open and save "
-                                 "it in Revit {2} to load it".format(
-                                     name, fmt, MIN_FAMILY_YEAR))
-                continue
-            try:
-                fam = _load(doc, path)
-            except Exception as ex:
-                row["reason"] = "load failed: {0}".format(ex)
-                fam = None
-            if fam is None:
-                fam = _find_family(doc, name)
-            if fam is not None:
-                sym = _first_symbol(doc, fam)
-                row.update({"family": name, "status": "loaded", "reason": ""})
-                break
-        if sym is None:
-            row["family"] = cands[0][0] if cands else ""
-            if not row["reason"]:
-                row["reason"] = ("not in the model or {0}".format(symbol_dir)
-                                 if all(p is None for _n, p in cands)
-                                 else "could not load")
-        else:
+                if sym is not None:
+                    row.update({"family": name, "status": "found",
+                                "reason": ""})
+                    break
+        if sym is not None:
             try:
                 if not sym.IsActive:
                     sym.Activate()

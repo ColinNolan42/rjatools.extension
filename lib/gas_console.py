@@ -119,8 +119,9 @@ def symbols_table(rows):
     out = cr.section("Symbols")
     out += cr.table(["Symbol", "Family", "Status", "Note"], body,
                     status_col=2, widths=W_SYMBOLS)
-    if any(r["status"] == "loaded" for r in rows):
-        out += cr.note("Loaded from REVIT FAM\\GENERIC FAMILIES into this model.")
+    if any(r["status"] == "fallback" for r in rows):
+        out += cr.note("The One-Line never loads families. Load a missing RJA "
+                       "symbol family into the project to draw it next run.")
     return out
 
 
