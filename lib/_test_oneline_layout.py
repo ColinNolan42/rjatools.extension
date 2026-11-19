@@ -259,6 +259,43 @@ class Benches(unittest.TestCase):
         for name in ("FRY-1", "RANGE-1", "OVEN-1", "WH-1"):
             self.assertEqual(self._hang(sch, out, name), "down", name)
 
+    def test_g3c_cookline_manifold(self):
+        # G3C rebuilt 2026-11-19 (Colin): one tee, the Ansul valve, a rear
+        # manifold for the seven cookline units, FUTURE at the main's end.
+        # It used to fail after 40,000 checks (five minutes in Revit).
+        sch = S.build(_load("oneline_g3c_manifold.json"))
+        calls = [0]
+        orig = L._Engine.fits
+
+        def counting(eng, new, occ):
+            calls[0] += 1
+            return orig(eng, new, occ)
+        L._Engine.fits = counting
+        try:
+            out = L.layout(sch, notes=["x"] * 6)
+        finally:
+            L._Engine.fits = orig
+        self.assertNotIn("LAYOUT FAILED", " ".join(out["log"]))
+        self.assertEqual(L.all_clashes(out["prims"]), [])
+        self.assertLess(calls[0], L.MAX_CHECKS // 10)
+        self.assertEqual([p["lines"] for p in out["prims"] if p.get("role") == "valve"],
+                         [["ANSUL VALVE"]])
+        cook = ("OVEN-1", "CB-1", "GRIDDLE-1", "RANGE-1", "FRY-2", "FRY-1", "SP-1")
+        for name in cook:
+            self.assertEqual(self._hang(sch, out, name), "down", name)
+        fut = self._eq_sym(sch, out, "FUTURE")
+        self.assertGreater(fut["box"][0],
+                           max(self._eq_sym(sch, out, n)["box"][2] for n in cook))
+
+    def test_search_budget_stops_fast(self):
+        old = L.MAX_CHECKS
+        L.MAX_CHECKS = 5
+        try:
+            out = L.layout(G2_SCH, notes=["x"])
+        finally:
+            L.MAX_CHECKS = old
+        self.assertIn("LAYOUT FAILED", " ".join(out["log"]))
+
     def test_one_level_building_hangs_down(self):
         # meter and every unit on one level: nothing is a roof
         nodes = [(1, "meter", [0, 0, 1.0]), (2, "tee", [10, 0, 9.0]),

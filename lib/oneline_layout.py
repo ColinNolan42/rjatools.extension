@@ -87,6 +87,14 @@ INLINE_Z_FT = 1.0          # a run end this close to the tee height is inline
 ROOT_RISER_COL = 0.5       # meter outlet riser, in columns from the meter
 EXISTING_COLS = 2          # tie in: existing meter to the new connection
 EPS = 0.05
+# placement checks before the search gives up: a diagram that cannot be laid
+# out fails in seconds instead of hanging Revit. G2 and G3C need well under
+# a tenth of this.
+MAX_CHECKS = 20000
+
+
+class _OutOfBudget(Exception):
+    pass
 
 UTILITY_TEXT = ["GAS FROM UTILITY"]
 
@@ -343,6 +351,7 @@ class _Engine(object):
         self.sch = sch
         self.segs = sch["segments"]
         self.log = []
+        self.checks = 0
         self._bands(sch)
         self._adjacency(sch.get("root"))
 
@@ -446,6 +455,9 @@ class _Engine(object):
 
     # -- helpers -----------------------------------------------------------
     def fits(self, new, occ):
+        self.checks += 1
+        if self.checks > MAX_CHECKS:
+            raise _OutOfBudget()
         self.tag(new)
         for a in new:
             for b in occ:
@@ -726,7 +738,11 @@ class _Engine(object):
                 continue
             res = None
             d_key = None
-            jogs = MAX_STRETCH if leg["end"]["type"] == "junction" else 4
+            # a junction leg, or the header's own end unit, may step as far
+            # as a branch can: G3C 2026-11-19, FUTURE after the cookline
+            # manifold had to clear its whole span
+            jogs = MAX_STRETCH if (leg["end"]["type"] == "junction" or
+                                   leg is run) else 4
             # the run's own unit turns one column on, so the header reads
             # as continuing to it (Colin, 2026-11-19)
             first = 1 if (leg is run and leg["end"]["type"] == "terminal") \
@@ -839,8 +855,15 @@ def layout(sch, notes=None, origin_kind="meter"):
             ty = my
         else:
             ty = eng.y_header(eng._z(end))
-        res = eng.header(root, start_col, ty, occ, from_y=my,
-                         riser_dx=ROOT_RISER_COL, start_xy=start_xy)
+        try:
+            res = eng.header(root, start_col, ty, occ, from_y=my,
+                             riser_dx=ROOT_RISER_COL, start_xy=start_xy)
+        except _OutOfBudget:
+            # the search stops rather than hang Revit (G3C 2026-11-19 ran
+            # past five minutes in IronPython)
+            eng.log.append("search stopped after {0} placement checks".format(
+                MAX_CHECKS))
+            res = None
         if res is None:
             eng.log.append("LAYOUT FAILED: no clash free placement found")
             res = occ
