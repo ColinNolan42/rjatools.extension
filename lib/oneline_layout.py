@@ -99,6 +99,7 @@ MAX_SECONDS = 20.0
 # two primitives farther apart than this cannot clash (largest margin used by
 # clash() is SYMBOL_MARGIN_FT)
 NEAR_FT = 1.0
+LOG_LIMIT = 40              # layout messages kept for the console
 
 
 class _OutOfBudget(Exception):
@@ -896,4 +897,24 @@ def layout(sch, notes=None, origin_kind="meter"):
         top = y1 + NOTES_GAP_FT + (len(notes) - 1) * LINE_PITCH_FT + TEXT_H_FT
         occ.append(_text(x0, top, notes, "left", "notes"))
         y1 = top
-    return {"prims": occ, "bounds": (x0, y0, x1, y1), "log": eng.log}
+    return {"prims": occ, "bounds": (x0, y0, x1, y1), "log": _short_log(eng.log)}
+
+
+def _short_log(log, limit=LOG_LIMIT):
+    """Each message once, in order, at most limit lines: a long search logged
+    the same move thousands of times and the pyRevit console tied up Revit
+    printing it (Grantham 4, 2026-11-19)."""
+    out, seen = [], set()
+    for ln in log:
+        if ln not in seen:
+            seen.add(ln)
+            out.append(ln)
+    if len(out) > limit:
+        # failures are always kept: the button checks for LAYOUT FAILED
+        keep = [ln for ln in out if ln.startswith(("LAYOUT FAILED",
+                                                    "search stopped"))]
+        rest = [ln for ln in out if ln not in keep]
+        extra = len(rest) - (limit - len(keep))
+        out = keep + rest[:limit - len(keep)] + [
+            "... {0} more layout messages".format(extra)]
+    return out

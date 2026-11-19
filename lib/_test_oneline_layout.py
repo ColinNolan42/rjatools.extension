@@ -287,6 +287,16 @@ class Benches(unittest.TestCase):
         self.assertGreater(fut["box"][0],
                            max(self._eq_sym(sch, out, n)["box"][2] for n in cook))
 
+    def test_log_is_short(self):
+        log = ["header 1 moved off its level row"] * 5000 + ["m%d" % i for i in range(100)]
+        out = L._short_log(log)
+        self.assertEqual(out[0], "header 1 moved off its level row")
+        self.assertEqual(len(out), L.LOG_LIMIT + 1)
+        self.assertIn("more layout messages", out[-1])
+        out = L._short_log(["m%d" % i for i in range(100)] +
+                           ["LAYOUT FAILED: no clash free placement found"])
+        self.assertTrue(any(l.startswith("LAYOUT FAILED") for l in out))
+
     def test_search_budget_stops_fast(self):
         old = L.MAX_CHECKS
         L.MAX_CHECKS = 5
