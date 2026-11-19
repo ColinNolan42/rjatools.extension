@@ -74,10 +74,11 @@ class G3CLabels(unittest.TestCase):
         return segs[0], br
 
     def test_trunk_labels(self):
+        # in order from the meter out, not dict order (G2 2026-11-19)
         trunk = [s["label"][0] for s in S.trunk_segments(self.sch)]
-        self.assertEqual(sorted(trunk), sorted([
+        self.assertEqual(trunk, [
             '3"G, 25\'', '3"G, 11\'', '2"G, 34\'', '1-1/2"G, 20\'',
-            '1-1/4"G, 27\'']))
+            '1-1/4"G, 27\''])
 
     def test_item1_header_spans_are_short(self):
         # kitchen header between taps reads about 3 ft, not 27 ft

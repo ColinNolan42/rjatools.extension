@@ -492,7 +492,15 @@ def terminal_branch(sch, name):
 
 
 def trunk_segments(sch):
-    return [s for s in sch["segments"].values() if s["on_longest"]]
+    """Trunk Segments in order from the meter out (G2 2026-11-19: the
+    console listed them in dict order)."""
+    order = []
+    if sch.get("root") is not None:
+        walk(sch["root"], lambda br, d: order.extend(br["segments"]))
+    seen = set(order)
+    order += [sid for sid in sch["segments"] if sid not in seen]
+    return [sch["segments"][sid] for sid in order
+            if sch["segments"][sid]["on_longest"]]
 
 
 def trunk_sum_ft(sch):
