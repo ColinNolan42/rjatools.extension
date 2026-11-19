@@ -60,6 +60,16 @@ class Gate(unittest.TestCase):
         self.assertTrue(lines[0].startswith("Run Size Gas first"))
         self.assertIn("29 more", lines[-1])
 
+    def test_model_problem_headline_and_order(self):
+        # G3 2026-11-19: a model problem says fix the model, listed first
+        self.s["edges"][FRY1_DROP]["size"] = "3/4"          # sizing reason
+        self.s["nodes"][CB1]["load_mbh"] = 0.0              # model reason
+        res = gate.check(self.s)
+        self.assertEqual(res["headline"], gate.FIX_MODEL)
+        self.assertEqual(res["errors"][0]["code"], "zero_load")
+        self.assertTrue(gate.summary_lines(res)[0].startswith(
+            "Fix the piping model"))
+
     def test_stepped_down_pipe(self):
         self.s["edges"][FRY1_DROP]["size"] = "3/4"
         res = gate.check(self.s)

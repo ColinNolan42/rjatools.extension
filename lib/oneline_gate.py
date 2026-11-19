@@ -5,7 +5,9 @@ oneline_gate.py
 One-Line rebuild step 2b (Colin, 2026-11-18): One-Line runs only after
 Size Gas, on a complete system whose drawn sizes equal what Size Gas
 requires. check(snap) returns every reason the diagram shall not be drawn;
-the button stops with "Run Size Gas first" and lists them.
+the button stops with "Run Size Gas first" (only sizing reasons) or "Fix
+the piping model, then run Size Gas again" (any model reason) and lists
+them, model reasons first.
 
     res = check(snap)
     res["ok"]        True when nothing rejects
@@ -21,6 +23,21 @@ import gas_labels
 
 
 RUN_SIZE_GAS = "Run Size Gas first"
+# G3 2026-11-19: an open stub, a 0 MBH fixture or a missing name is not
+# fixed by running Size Gas again; the headline says to fix the model.
+FIX_MODEL = "Fix the piping model, then run Size Gas again"
+# reasons Size Gas itself clears; every other code is a model problem
+SIZING_CODES = ("sizing_error", "unsized", "size_unreadable", "size_mismatch",
+                "prv_no_table")
+
+
+def headline(errors):
+    """FIX_MODEL when any reason is a model problem, else RUN_SIZE_GAS."""
+    if not errors:
+        return None
+    if any(e["code"] not in SIZING_CODES for e in errors):
+        return FIX_MODEL
+    return RUN_SIZE_GAS
 
 
 def _err(out, code, eid, text):
@@ -131,8 +148,11 @@ def check(snap):
                          "text": "Walk stopped at element {0} on a non gas "
                                  "system ({1}).".format(item[0], item[1])})
 
+    # model problems first: they are what the engineer fixes
+    errors = ([e for e in errors if e["code"] not in SIZING_CODES]
+              + [e for e in errors if e["code"] in SIZING_CODES])
     return {"ok": not errors, "errors": errors, "warnings": warnings,
-            "headline": None if not errors else RUN_SIZE_GAS}
+            "headline": headline(errors)}
 
 
 def summary_lines(res, limit=20):
