@@ -178,7 +178,8 @@ class TestGasScope(unittest.TestCase):
                 if el.get("Style") == "{DynamicResource RjaSectionTitle}"]
 
     def test_scope_is_the_first_section(self):
-        self.assertEqual(self._section_titles(), ["Scope", "Pipe and table"])
+        self.assertEqual(self._section_titles(),
+                         ["Scope", "Pipe and table", "Outputs"])
         first = list(self._root())[0]
         self.assertEqual(first.get(X_NAME), "pnl_scope")
 
@@ -257,8 +258,14 @@ class TestGasScope(unittest.TestCase):
 
     def test_basis_rows_explain_both_scopes(self):
         labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
-        self.assertEqual(labels[:2], ["New Construction",
-                                      "Connect into Existing"])
+        # Colin, 2026-11-20: only these two, the rest of the old scope rows
+        # (New Construction, Existing pipe, second Developed length) dropped.
+        self.assertEqual(labels, ["Longest run"])
+        self.assertIn("Longest Run Method", dict(
+            sizer_dialogs._EXISTING_BASIS_ROWS)["Longest run"])
+        ol = [l for l, _v in sizing_engine.oneline_basis_rows()]
+        self.assertEqual(ol, ["Developed length", "Heat content", "Loads",
+                              "Mid stream PRV"])
         for l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
             (l + v).encode("ascii")
             self.assertNotIn(" - ", v)
@@ -298,6 +305,86 @@ class TestGasScope(unittest.TestCase):
         self.assertIn("gas meter", ui_helpers.PICK_GAS)
         self.assertIn("first new gas pipe", ui_helpers.PICK_GAS_EXISTING)
         self.assertNotIn("meter", ui_helpers.PICK_GAS_EXISTING)
+
+
+class TestGasOutputs(unittest.TestCase):
+    """Developed Length Breakdown tick box (Colin, 2026-11-20): One-Line
+    only, default off, in an Outputs section above the Calculation basis."""
+
+    HERE = os.path.dirname(os.path.abspath(__file__))
+
+    def _root(self):
+        return ET.fromstring("<Root %s>%s</Root>"
+                             % (NS, sizer_dialogs._GAS_BODY))
+
+    def _src(self, name):
+        f = open(os.path.join(self.HERE, name))
+        try:
+            return f.read()
+        finally:
+            f.close()
+
+    def _func(self, name, header):
+        src = self._src(name)
+        part = src[src.index(header):]
+        return part[:part.index("\ndef ")]
+
+    def test_box_is_unticked_in_a_collapsed_outputs_panel(self):
+        root = self._root()
+        pnl = [e for e in root.iter() if e.get(X_NAME) == "pnl_outputs"]
+        self.assertEqual(len(pnl), 1)
+        self.assertEqual(pnl[0].get("Visibility"), "Collapsed")
+        boxes = [e for e in pnl[0].iter() if e.get(X_NAME) == "cb_breakdown"]
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(boxes[0].get("Content"), "Developed Length Breakdown")
+        self.assertEqual(boxes[0].get("IsChecked"), "False")
+
+    def test_outputs_sit_before_the_calculation_basis(self):
+        names = [e.get(X_NAME) for e in self._root().iter() if e.get(X_NAME)]
+        self.assertTrue(names.index("pnl_outputs") < names.index("exp_ref"))
+        self.assertTrue(names.index("pnl_prv") < names.index("pnl_outputs"))
+
+    def test_shown_and_returned_for_oneline_only(self):
+        picker = self._func("sizer_dialogs.py", "def _gas_picker(")
+        self.assertIn("if oneline:", picker)
+        self.assertIn("pnl_outputs.Visibility = Visibility.Visible", picker)
+        self.assertIn('"developed_length_breakdown"', picker)
+        self.assertIn("if oneline else False", picker)
+
+    def test_fallback_has_the_box_for_oneline_only(self):
+        root = ET.fromstring(ui_helpers._PICKER_XAML)
+        by_name = dict((el.get("Name"), el) for el in root.iter()
+                       if el.get("Name"))
+        self.assertEqual(by_name["pnlOutputs"].get("Visibility"), "Collapsed")
+        self.assertEqual(by_name["cbBreakdown"].get("IsChecked"), "False")
+        self.assertEqual(by_name["cbBreakdown"].get("Content"),
+                         "Developed Length Breakdown")
+        legacy = self._func("ui_helpers.py", "def _show_picker_legacy(")
+        self.assertIn("oneline=False", legacy)
+        self.assertIn("if oneline:", legacy)
+        self.assertIn("pnl_outputs.Visibility = Visibility.Visible", legacy)
+        self.assertIn('"developed_length_breakdown"', legacy)
+        self.assertIn("if oneline else False", legacy)
+        one = self._func("ui_helpers.py", "def show_oneline_picker(")
+        self.assertIn("_show_picker_legacy(title, True, oneline=True)", one)
+
+    def test_size_gas_script_does_not_read_the_flag(self):
+        base = os.path.join(self.HERE, "..", "Developer Tools.tab")
+        flag = "developed_length_breakdown"
+        seen_oneline = False
+        for root, _d, files in os.walk(base):
+            for fn in files:
+                if fn != "script.py":
+                    continue
+                f = open(os.path.join(root, fn), "rb")
+                try:
+                    text = f.read().decode("latin-1")
+                finally:
+                    f.close()
+                is_oneline = "One-Line.pushbutton" in root
+                seen_oneline = seen_oneline or is_oneline
+                self.assertEqual(flag in text, is_oneline, root)
+        self.assertTrue(seen_oneline)
 
 
 class TestSizeDuctLimitsGrid(unittest.TestCase):
@@ -387,6 +474,11 @@ class TestGasHeatContentOnMbhTables(unittest.TestCase):
 
 class TestGasCalculationBasis(unittest.TestCase):
 
+    def test_basis_starts_closed(self):
+        # Colin, 2026-11-20: Calculation basis defaults to closed.
+        self.assertIn('x:Name="exp_ref" IsExpanded="False"',
+                      sizer_dialogs._BASIS_XAML)
+
     def test_rows_are_ascii_label_value_pairs(self):
         rows = sizing_engine.basis_of_design_rows()
         self.assertGreater(len(rows), 0)
@@ -400,14 +492,16 @@ class TestGasCalculationBasis(unittest.TestCase):
         joined = " ".join(l + " " + v for l, v in
                           sizing_engine.basis_of_design_rows())
         self.assertIn("2024 IFGC", joined)
-        self.assertIn("Longest Run Method", joined)
         self.assertIn("402.4", joined)
         self.assertIn("%g" % shared_params.SPECIFIC_GRAVITY, joined)
-        self.assertIn("%g ft" % shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT,
+        self.assertIn("%g ft x elbows" % shared_params.ELBOW_EQUIV_LENGTH_FT,
                       joined)
-        self.assertIn("5 ft per elbow", joined)
+        self.assertIn("%g ft x tees" % shared_params.TEE_EQUIV_LENGTH_FT,
+                      joined)
+        self.assertIn("CFH = (MBH x 1000) / Heat Content", joined)
+        self.assertIn("MBH(PRV) =", joined)
+        self.assertNotIn("Regulators", joined)
         self.assertIn("3/4", joined)
-        self.assertIn("Heat Content of Gas", joined)
 
 
 class TestGasPropaneHeatContent(unittest.TestCase):

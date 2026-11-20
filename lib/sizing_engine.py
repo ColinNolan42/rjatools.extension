@@ -772,68 +772,63 @@ def basis_of_design_rows():
     Returns:
         List of (label, value) ASCII string pairs.
     """
+    # The Longest run row follows from the dialog's Scope rows
+    # (sizer_dialogs._EXISTING_BASIS_ROWS, Colin 2026-11-20).
     return [
         ("Code", gas_tables.code_edition() + ", Table 402.4 for the pipe "
                  "material, pressure and pressure drop selected above."),
-        ("Method", "Longest Run Method, IFGC Appendix A (A103.1). One "
-                   "developed length, from the meter to the farthest outlet, "
-                   "sizes every pipe in the system."),
-        ("Developed length", "Pipe length plus {:g} ft per elbow and {:g} ft "
-                             "per tee along the longest run. Where the length "
-                             "falls between table rows the next longer row is "
-                             "used.".format(
-                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT),
-                                 float(shared_params.TEE_EQUIV_LENGTH_FT))),
-        ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
-                   "the total load of every appliance downstream of it. "
-                   "Propane Tables 402.4(25) to (36) publish capacity in "
-                   "MBH: there the MBH load is compared directly and heat "
-                   "content is not used. Propane Table 402.4(37) is in CFH "
-                   "and uses the propane heat content (default {:.0f} "
-                   "BTU/CF).".format(float(
-                       shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF))),
+        _developed_length_row(),
+        _heat_content_row(),
         ("Specific gravity", "{:g}, matching the IFGC tables.".format(
             float(shared_params.SPECIFIC_GRAVITY))),
         ("Pipe size", "Smallest size in the table whose capacity covers the "
                       "demand, not smaller than {} in. (firm "
                       "minimum).".format(_min_size_label())),
-        ("Regulators", "A pressure regulating valve with more than {:g} ft "
-                       "of pipe after it is mid-stream. With Mid Stream PRV "
-                       "ticked, the piping after it is sized on its own "
-                       "table and its own longest run.".format(
-                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
-        # The existing building rows follow from the dialog's Scope
-        # (sizer_dialogs._EXISTING_BASIS_ROWS, Colin 2026-11-20).
+        _midstream_row(),
     ]
 
 
 def oneline_basis_rows():
-    """The One-Line basis for its own dialog (Plan B): what the diagram
-    shows and where each number comes from. It sizes nothing."""
+    """The One-Line basis for its own dialog (Plan B). It sizes nothing.
+    Colin, 2026-11-20: developed length, heat content, loads and the mid
+    stream PRV equation only."""
     return [
-        ("Runs after", "Size Gas. The diagram is drawn only for a complete "
-                       "system whose every pipe is at the size Size Gas "
-                       "requires on the table and heat content picked here; "
-                       "otherwise it lists why and draws nothing."),
-        ("Pipe labels", "Size and G, then the segment's developed length "
-                        "(pipe plus {:g} ft per elbow and {:g} ft per tee), "
-                        "then the MBH it carries. No material on a "
-                        "label.".format(
-                            float(shared_params.ELBOW_EQUIV_LENGTH_FT),
-                            float(shared_params.TEE_EQUIV_LENGTH_FT))),
-        ("Developed length", "The trunk labels add up to the longest run "
-                             "Size Gas used, shown in the notes block."),
+        _developed_length_row(),
+        _heat_content_row(),
         ("Loads", "GAS_LOAD_MBH on each gas fixture. An unnamed or FUTURE "
                   "cap at 0 MBH reads FUTURE CONNECTION."),
-        ("Regulators", "A PRV symbol is shown before every piece of "
-                       "equipment. A mid stream PRV (more than {:g} ft of "
-                       "pipe after it) is shown on its pipe and its table "
-                       "is added to the notes.".format(
-                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
-        ("Layout", "Left to right from the meter, no scale. Elevation by "
-                   "level: first level equipment on the meter row, ceiling "
-                   "headers above it, rooftop units higher."),
+        _midstream_row(),
     ]
+
+
+def _developed_length_row():
+    """Developed length = longest pipe run + fitting losses (Colin,
+    2026-11-20), in equation form."""
+    return ("Developed length",
+            "L = sum of pipe lengths on the longest run + fitting losses. "
+            "Fitting losses = ({:g} ft x elbows) + ({:g} ft x tees).".format(
+                float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                float(shared_params.TEE_EQUIV_LENGTH_FT)))
+
+
+def _heat_content_row():
+    """Where heat content is used (Colin, 2026-11-20)."""
+    return ("Heat content",
+            "CFH = (MBH x 1000) / Heat Content (BTU/CF). Converts each "
+            "pipe's MBH load to CFH for the Table 402.4 capacity lookup. "
+            "Not used on Propane Tables 402.4(25) to (36), which publish "
+            "capacity in MBH. Propane Table 402.4(37) is in CFH and uses the "
+            "propane heat content (default {:.0f} BTU/CF).".format(float(
+                shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)))
+
+
+def _midstream_row():
+    """The mid stream PRV in equation form, no words on regulators
+    (Colin, 2026-11-20)."""
+    return ("Mid stream PRV",
+            "MBH(PRV) = sum of appliance MBH downstream of the PRV. "
+            "L(PRV) = developed length from the PRV to its farthest outlet. "
+            "Pipe after the PRV is sized on the downstream table at L(PRV).")
 
 
 def _min_size_label():

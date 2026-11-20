@@ -278,6 +278,40 @@ def zone_run_rows(snap):
             for z in zones]
 
 
+W_BREAKDOWN = [52, 10, 18, 20]
+
+
+def developed_breakdown(bd):
+    """Developed Length Breakdown (Outputs tick box): the longest run's pipe
+    segments, total pipe, elbows, tees and developed length. bd comes from
+    oneline_schematic.developed_breakdown."""
+    headers, rows = S.breakdown_table(bd)
+    total = rows[-1]
+    body = rows[:-1]
+    farthest = bd.get("farthest") or "FARTHEST OUTLET"
+    out = cr.section("Developed Length Breakdown",
+                     "longest run to {0}".format(farthest))
+    out += cr.table(headers, body, align=["l", "r", "r", "r"],
+                    total_row=total, widths=W_BREAKDOWN, width="80%")
+    out += cr.note("Developed length = total pipe + {0:.0f} ft per elbow + "
+                   "{1:.0f} ft per tee. The notes block TOTAL DEVELOPED "
+                   "LENGTH reads {2}'.".format(
+                       float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                       float(shared_params.TEE_EQUIV_LENGTH_FT),
+                       gas_labels.feet(bd.get("run_ft") or 0.0)))
+    if bd.get("mismatch"):
+        out += cr.callout("The rows add up to a different run than Size Gas "
+                          "reports ({0} ft). Check the longest run.".format(
+                              _ft(bd.get("run_ft"))), "warn")
+    return out
+
+
+def developed_breakdown_md(bd):
+    headers, rows = S.breakdown_table(bd)
+    return "**Developed Length Breakdown**\n\n" + cr.markdown_table(
+        headers, rows)
+
+
 # ---------------------------------------------------------------------------
 # warnings and the layout dump
 # ---------------------------------------------------------------------------

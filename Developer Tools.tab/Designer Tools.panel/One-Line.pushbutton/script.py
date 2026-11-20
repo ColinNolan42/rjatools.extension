@@ -203,6 +203,14 @@ def main():
         _alert(oneline_layout.failure_message(lay["log"]))
         return
 
+    # Developed Length Breakdown (Outputs tick box, default off)
+    breakdown = None
+    if choice.get("developed_length_breakdown"):
+        breakdown = oneline_schematic.developed_breakdown(
+            sch, longest_run_ft=snap["longest_run_ft"],
+            elbow_ft=snap.get("elbow_equiv_ft"),
+            tee_ft=snap.get("tee_equiv_ft"))
+
     # draw: one undo
     view_name = "Gas Piping One-Line - {0}".format(
         datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S"))
@@ -218,6 +226,16 @@ def main():
         t2.Start()
         view = oneline_draw.create_view(doc, view_name)
         counts, draw_errors = oneline_draw.draw(doc, view, lay["prims"], syms)
+        if breakdown is not None:
+            # Developed Length Breakdown under the diagram. Fails soft: a
+            # table that cannot be drawn never costs the diagram.
+            try:
+                oneline_draw.draw_breakdown(doc, view, breakdown,
+                                            lay["bounds"])
+            except Exception as ex:
+                logger.error(traceback.format_exc())
+                draw_errors.append(
+                    "Developed Length Breakdown table not drawn: {0}".format(ex))
         t2.Commit()
         tg.Assimilate()
     except Exception as ex:
@@ -243,6 +261,9 @@ def main():
     _emit(gas_console.oneline_summary(sch, snap, view_name),
           gas_console.oneline_summary_md(sch, snap, view_name))
     _emit(gas_console.length_check(sch, snap), "")
+    if breakdown is not None:
+        _emit(gas_console.developed_breakdown(breakdown),
+              gas_console.developed_breakdown_md(breakdown))
     warns = prv_notes + list(sch["warnings"])
     warns += [w["text"] for w in res["warnings"]]
     warns += draw_errors
