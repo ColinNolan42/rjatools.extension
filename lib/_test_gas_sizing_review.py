@@ -17,11 +17,12 @@ One test class per behavior, numbered as in the review brief:
   12 a 'joint' node is never resized or looked up in the fitting step
 
 Plain CPython with the Revit assemblies stubbed (_test_prv_zones). The Size
-Gas pushbutton script is exec'd with its final main() call removed, pyRevit
-and ui_helpers stubbed, so its helper functions run against stand-in graphs.
+Gas pipeline (lib/gas_run.py on the headless branch, where the button is a
+thin wrapper) is imported, so its helper functions run against stand-in
+graphs.
 Revit Transaction, TransactionStatus and the failure API are stand-ins too.
-main() itself is NOT run: its wiring (items 3 and 7) is checked by reading
-its source. Nothing here proves behavior inside Revit.
+The pipeline itself is NOT run: its wiring (items 3 and 7) is checked by
+reading the source of gas_run.run, resolve_start and size_core. Nothing here proves behavior inside Revit.
 
 Run:  python -I _test_gas_sizing_review.py
 """
@@ -49,10 +50,6 @@ import revit_helpers   # noqa: E402
 import sizing_engine   # noqa: E402
 import shared_params   # noqa: E402
 
-SIZE_GAS = os.path.normpath(os.path.join(
-    HERE, "..", "Developer Tools.tab", "Sizing.panel", "Size Gas.pushbutton",
-    "script.py"))
-
 PROPANE_CFH = "402.4(37)"     # PE CTS, undiluted propane, CFH
 PROPANE_2PSI = "402.4(36)"    # PE, propane, 2 psi, MBH
 PROPANE_MBH = "402.4(28)"     # Sched 40 steel, propane, MBH
@@ -76,61 +73,32 @@ def _need(owner, name):
 
 
 # ---------------------------------------------------------------------------
-# Size Gas script loader
+# Size Gas pipeline loader
 # ---------------------------------------------------------------------------
-_SCRIPT_NS = []
+# On the headless branch the Size Gas button is a thin wrapper and its
+# pipeline lives in lib/gas_run.py (run, resolve_start, size_core and the
+# write steps). The tests read the same names from gas_run's namespace.
+GAS_RUN = os.path.join(HERE, "gas_run.py")
+_PIPELINE_FUNCS = ("run", "resolve_start", "size_core")
 
 
 def _size_gas():
-    """The Size Gas script's globals, exec'd once with main() not called."""
-    if _SCRIPT_NS:
-        return _SCRIPT_NS[0]
-    with open(SIZE_GAS) as f:
-        src = f.read()
-    src = re.sub(r"^main\(\)\s*$", "pass", src, flags=re.M)
-
-    pyrevit = sys.modules["pyrevit"]
-    script = types.ModuleType("pyrevit.script")
-    script.get_output = lambda: mock.MagicMock()
-    script.get_logger = lambda: mock.MagicMock()
-    had_script = hasattr(pyrevit, "script")
-    pyrevit.script = script
-
-    ui = types.ModuleType("ui_helpers")
-    ui.rja_alert = lambda *a, **k: None
-    saved_ui = sys.modules.get("ui_helpers")
-    sys.modules["ui_helpers"] = ui
-
-    # An older script imported Transaction at the top; any stand-in will do
-    # for the load (the write tests install _TransactionStubs themselves).
-    db = sys.modules["Autodesk.Revit.DB"]
-    had_tx = hasattr(db, "Transaction")
-    if not had_tx:
-        db.Transaction = _Tx
-
-    revit = mock.MagicMock()
-    ns = {"__name__": "size_gas_script", "__file__": SIZE_GAS,
-          "__revit__": revit}
-    try:
-        exec(compile(src, SIZE_GAS, "exec"), ns)
-    finally:
-        if not had_tx:
-            del db.Transaction
-        if saved_ui is None:
-            del sys.modules["ui_helpers"]
-        else:
-            sys.modules["ui_helpers"] = saved_ui
-        if not had_script:
-            del pyrevit.script
-    _SCRIPT_NS.append(ns)
-    return ns
+    """gas_run's globals (the module dict, so mock.patch.dict reaches the
+    functions that read them)."""
+    import gas_run
+    return vars(gas_run)
 
 
 def _main_source():
-    with open(SIZE_GAS) as f:
+    """The pipeline's source: gas_run.run, resolve_start and size_core, the
+    steps main's Size Gas main() ran after the dialog."""
+    with open(GAS_RUN) as f:
         src = f.read()
-    m = re.search(r"^def main\(\):.*?(?=^def |\Z)", src, re.S | re.M)
-    return m.group(0)
+    parts = []
+    for name in _PIPELINE_FUNCS:
+        m = re.search(r"^def %s\(.*?(?=^def |\Z)" % name, src, re.S | re.M)
+        parts.append(m.group(0))
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

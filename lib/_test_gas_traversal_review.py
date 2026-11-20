@@ -780,9 +780,8 @@ class TestPipingConnectorsOnly(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         water = open(os.path.join(here, "water_sizing_engine.py")).read()
         self.assertNotIn("piping_only", water)
-        size_gas = open(os.path.join(
-            here, "..", "Developer Tools.tab", "Sizing.panel",
-            "Size Gas.pushbutton", "script.py")).read()
+        # headless branch: the Size Gas pipeline lives in lib/gas_run.py
+        size_gas = open(os.path.join(here, "gas_run.py")).read()
         self.assertIn("piping_only=True", size_gas)
         rg = open(os.path.join(here, "report_generator.py")).read()
         self.assertIn("revit_helpers.get_piping_connectors(origin_element)",

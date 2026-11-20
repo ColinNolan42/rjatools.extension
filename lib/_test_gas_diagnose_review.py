@@ -6,9 +6,9 @@ it), n=36 (fitting counts), n=42 (nested PRVs agree with ready_for_sizing),
 n=62 (zone runs), n=63 (markdown escaping), plus the walk's joints and
 tapped pipes.
 
-Plain CPython with the Revit assemblies stubbed. The Diagnose pushbutton
-itself cannot run here (it calls main() and needs pyRevit), so its wiring is
-checked by reading its source; the logic it calls lives in report_generator
+Plain CPython with the Revit assemblies stubbed. The Diagnose pipeline
+(lib/diagnose_run.py on the headless branch) is not run here, so its wiring
+is checked by reading its source; the logic it calls lives in report_generator
 and is tested directly. Nothing here proves behavior inside Revit.
 
 Run:  python _test_gas_diagnose_review.py
@@ -28,8 +28,9 @@ import report_generator as rg   # noqa: E402
 import revit_helpers       # noqa: E402
 import tie_in              # noqa: E402
 
-DIAGNOSE = os.path.join(HERE, "..", "Developer Tools.tab", "Performance.panel",
-                        "Diagnose.pushbutton", "script.py")
+# headless branch: the Diagnose button is a thin wrapper, its pipeline (and
+# the gas branch checked below) lives in lib/diagnose_run.py
+DIAGNOSE = os.path.join(HERE, "diagnose_run.py")
 
 
 class _Node(object):

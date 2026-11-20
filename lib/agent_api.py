@@ -50,7 +50,10 @@ TOOLS = (
      "ids": "start_id: the gas meter, or the first new gas pipe. A pipe "
             "start is full new construction unless settings['existing'] = "
             "{size_nominal, length_ft, load_mbh} connects it into existing "
-            "piping",
+            "piping (Connect into Existing takes a pipe only, a meter is "
+            "refused). Settings include heat_content_btu_per_cf and "
+            "propane_heat_content_btu_per_cf (402.4(37) only), both 500 to "
+            "3,000 BTU/CF",
      "engine": "ironpython", "mcp": "run_query; run_modify when write=True",
      "writes": "pipes, fittings, stubs (write=True)",
      "decisions": [{"qid": "presizing_warnings", "answer_with": "decisions"}]},

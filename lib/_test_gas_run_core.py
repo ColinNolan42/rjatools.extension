@@ -29,18 +29,19 @@ def check(name, cond):
         print("FAIL " + name)
 
 
-class _Tx(object):
-    def __init__(self, doc, name):
-        self.name = name
+RUN_STEPS = []
+ROLL_BACK = set()
 
-    def Start(self):
-        pass
 
-    def Commit(self):
-        pass
-
-    def RollBack(self):
-        pass
+def _run_step(doc, name, action):
+    """Stand-in for revit_helpers.run_in_transaction: runs the action and
+    returns the error text for a step named in ROLL_BACK."""
+    RUN_STEPS.append(name)
+    action()
+    for key in ROLL_BACK:
+        if key in name:
+            return "rolled back by Revit"
+    return None
 
 
 class _Doc(object):
@@ -59,7 +60,7 @@ rh = gas_run.revit_helpers
 rh.is_new_construction = lambda el, doc: True
 rh.is_valid_element = lambda el: True
 rh.is_transition = lambda el: False
-rh.set_fitting_size = lambda el, inches: (True, "stub")
+rh.set_fitting_size = lambda el, inches, piping_only=False: (True, "stub")
 rh.reset_pipe_diameter_approach = lambda: None
 
 
@@ -70,7 +71,7 @@ def _run(write, themed, existing=None, decisions=None, upstream=None):
     prompter = headless.HeadlessPrompter(decisions or {})
     oc = gas_run.size_core(
         _Doc(), _settings(), object(), upstream, existing, out, prompter,
-        write=write, transaction_factory=_Tx, themed=themed,
+        write=write, run_step=_run_step, themed=themed,
         inputs_extra={"selected": "Element ID 1", "check": "Meter ok."})
     return oc, out
 
@@ -104,6 +105,37 @@ check("fit counts have transitions", "transitions" in fit
 text = "\n".join(str(p) for _k, p in out.log)
 check("write results printed", "Write results" in text)
 check("summary printed", "Summary" in text)
+check("three write steps ran", len(RUN_STEPS) >= 2
+      and "Pipes" in RUN_STEPS[0] and "Fittings" in RUN_STEPS[1])
+check("nothing rolled back", w["rolled_back"] == []
+      and w["transaction_errors"] == [])
+
+# pipe step rolled back: stop, later steps skipped, zero pipes counted
+del RUN_STEPS[:]
+ROLL_BACK.add("Pipes")
+oc, out = _run(True, False, decisions={"presizing_warnings": "continue"})
+ROLL_BACK.clear()
+w = oc["writes"]
+check("rollback stops the run", oc["status"] == "refused"
+      and "rolled them back" in (oc["stop"] or ""))
+check("rollback named", w["rolled_back"] == ["pipe sizes"]
+      and w["pipe_transaction_error"])
+check("fittings and stubs skipped after rollback", RUN_STEPS == [
+    "RJA Tools - Size Gas Pipes"])
+check("no pipe counted after rollback", w["pipes_sized"] == 0
+      and w["written_ids"] == [] and w["approach"] is None)
+
+# fitting step rolled back: stubs skipped, step named
+del RUN_STEPS[:]
+ROLL_BACK.add("Fittings")
+oc, out = _run(True, False, decisions={"presizing_warnings": "continue"})
+ROLL_BACK.clear()
+w = oc["writes"]
+check("fitting rollback keeps status ok", oc["status"] == "ok")
+check("fitting rollback named", w["rolled_back"] == ["fittings"]
+      and any("rolled back" in t for t in w["transaction_errors"]))
+check("stubs skipped after fitting rollback",
+      not any("Stub" in n for n in RUN_STEPS))
 
 if FAILED:
     print("{} failed".format(len(FAILED)))

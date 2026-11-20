@@ -30,6 +30,7 @@ import shared_params
 import revit_helpers
 import pipe_graph
 import report_generator
+import tie_in
 import hvac_graph
 import water_graph
 import water_checks
@@ -74,7 +75,13 @@ def run(doc, uidoc, output, forms):
         'Select the gas meter, the water RPZ, or HVAC equipment/a duct/terminal',
         popup=False)
     if selected_element is None:
-        output.print_md('**Cancelled.**')
+        # n=38: a failed pick is reported, not shown as a cancel
+        failure = ui_helpers.last_pick_error()
+        if failure:
+            output.print_md(':cross_mark: **The pick failed:** {}'.format(
+                report_generator.md_cell(failure)))
+        else:
+            output.print_md('**Cancelled.**')
         return None
 
     outcome = diagnose(doc, selected_element, output)
@@ -254,20 +261,15 @@ def _stopped(text, title):
 # ============================================================================
 # GAS SUMMARY
 # ============================================================================
-# The PRV keywords are the one shared list in shared_params. The isolation
-# valve list mirrors One-Line.pushbutton's _ISOLATION_KW (not imported: that
-# script is fragile); update both together.
-_GAS_PRV_KW = shared_params.PRV_FAMILY_KEYWORDS
-_GAS_ISO_KW = ("isolation", "shutoff", "shut-off", "ball valve", "gas valve")
+# Accessory words for the summary counts, from the one classifier
+# (shared_params.accessory_kind, also used by pipe_graph and the One-Line).
+_GAS_ACCESSORY_WORDS = {"prv": "PRV", "iso": "isolation valve",
+                        "ansul": "Ansul valve"}
 
 
 def _gas_accessory_kind(node):
-    name = (node.family_name or "").lower()
-    if any(kw in name for kw in _GAS_PRV_KW):
-        return "PRV"
-    if any(kw in name for kw in _GAS_ISO_KW):
-        return "isolation valve"
-    return None
+    return _GAS_ACCESSORY_WORDS.get(
+        shared_params.accessory_kind(node.family_name))
 
 
 def _print_log_digest(output, graph):
@@ -291,42 +293,36 @@ def _print_log_digest(output, graph):
                 .replace('>', '&gt;')))
 
 
-def diagnose_gas(doc, element, output):
-    output.print_md('Discipline: **GAS PIPING**')
-    pipe_start = revit_helpers.is_pipe(element)
-    if pipe_start:
-        output.print_md(
-            ':warning: A pipe was picked, not a meter. This is diagnosed as '
-            'an existing building connection starting at that pipe. The '
-            'existing piping, its length and its load are NOT included, and '
-            'the SYSTEM ORIGIN section below describes the pipe, not a meter.')
+def _gas_check_pipe_pick(doc, element, output):
+    """n=33/41: a pipe pick runs the one gas start check Size Gas and
+    One-Line run (tie_in.check_gas_start). Returns (check dict, None), or
+    (None, message) after reporting why the pick cannot be diagnosed as a
+    tie in (the button alerts the message)."""
+    check = tie_in.check_gas_start(element, doc)
+    if not check["ok"]:
+        output.print_md(':cross_mark: {}'.format(
+            report_generator.md_cell(check["message"])))
+        return None, check["message"]
+    output.print_md(
+        ':warning: A pipe was picked, not a meter. This is diagnosed as '
+        'the TIE-IN PIPE, the first new pipe at the connection to existing. '
+        'The existing piping, its length and its load are NOT included, and '
+        'the meter checks are skipped. {}'.format(
+            report_generator.md_cell(check["message"])))
+    return check, None
 
-    try:
-        graph = pipe_graph.build_network(element, doc)
-    except Exception as e:
-        output.print_md(':cross_mark: Traversal ERROR: {}'.format(str(e)))
-        return _stopped("Traversal failed:\n\n{}".format(str(e)),
-                        "Diagnose - Traversal Error")
 
-    fixtures = [n for n in graph.nodes.values() if n.is_gas_fixture]
+def _gas_summary_table(output, graph, counts):
+    """The Summary table. Returns (fixtures, total load MBH, pipe count,
+    total pipe ft, longest run ft, farthest fixture name)."""
+    fixtures = pipe_graph.gas_fixtures(graph)
     # Float starts: '{:.1f}' on int 0 raises in IronPython 2.7. Pipes are the
-    # graph's edges, not nodes.
-    total_load = sum((n.gas_load_mbh for n in fixtures), 0.0)
+    # graph's edges, not nodes (no node is ever typed 'pipe').
+    total_load = pipe_graph.total_connected_mbh(graph)
     pipes = list(graph.edges.values())
-    fittings = [n for n in graph.nodes.values() if n.node_type == 'fitting']
-    tees = [n for n in graph.nodes.values() if n.node_type == 'tee']
     total_length = sum((float(e.length_feet or 0.0) for e in pipes), 0.0)
-
-    accessories = []
-    for n in list(fittings) + list(tees):
-        kind = _gas_accessory_kind(n)
-        if kind:
-            accessories.append((n, kind))
-    prv_count = sum(1 for n, k in accessories if k == "PRV")
-    iso_count = sum(1 for n, k in accessories if k == "isolation valve")
-
     lr = graph.longest_run or {}
-    longest_ft = lr.get('total_length_feet', 0.0)
+    longest_ft = float(lr.get('total_length_feet', 0.0) or 0.0)
     farthest = lr.get('farthest_fixture_name', '-')
 
     output.print_md('\n## Summary')
@@ -336,67 +332,94 @@ def diagnose_gas(doc, element, output):
     output.print_md('| Total connected load | {:.1f} MBH |'.format(total_load))
     output.print_md('| Pipe segments | {} |'.format(len(pipes)))
     output.print_md('| Total pipe length | {:.1f} ft |'.format(total_length))
-    output.print_md('| Tees | {} |'.format(len(tees)))
-    output.print_md('| Fittings (other) | {} |'.format(
-        len(fittings) - len(accessories)))
-    output.print_md('| PRVs found | {} |'.format(prv_count))
-    output.print_md('| Isolation valves found | {} |'.format(iso_count))
-    output.print_md('| Longest developed run | {:.1f} ft |'.format(longest_ft))
-    output.print_md('| Farthest fixture | {} |'.format(farthest))
+    output.print_md('| Tees | {} |'.format(counts["tees"]))
+    output.print_md('| Fittings (other) | {} |'.format(counts["fittings_other"]))
+    output.print_md('| PRVs found | {} |'.format(counts["prv_count"]))
+    output.print_md('| Isolation valves found | {} |'.format(counts["iso_count"]))
+    output.print_md('| Longest developed run (whole system) | {:.1f} ft |'.format(
+        longest_ft))
+    # n=62: each zone's run, the lengths Size Gas sizes on with the box ticked
+    for label, run in report_generator.zone_run_rows(graph):
+        output.print_md('| {} | {} |'.format(
+            report_generator.md_cell(label),
+            report_generator.md_cell(report_generator.zone_run_text(run))))
+    output.print_md('| Farthest fixture | {} |'.format(
+        report_generator.md_cell(farthest)))
     output.print_md('| Disconnected elements | {} |'.format(len(graph.disconnected)))
+    return (fixtures, total_load, len(pipes), total_length, longest_ft,
+            farthest)
 
-    if fixtures:
-        output.print_md('\n### Fixtures')
-        output.print_md('| Name | Load (MBH) | Element ID |')
-        output.print_md('| --- | --- | --- |')
-        for n in fixtures:
-            output.print_md('| {} | {:.1f} | {} |'.format(
-                n.fixture_name, n.gas_load_mbh, n.element_id))
 
-    acc_rows = []
-    if accessories:
-        output.print_md('\n### Accessories (PRVs / Isolation Valves)')
-        output.print_md('| Kind | Family | Element ID | Pipe downstream | Sizing |')
-        output.print_md('| --- | --- | --- | --- | --- |')
-        for n, kind in accessories:
-            if kind == "PRV":
-                downstream = '{:.1f} ft'.format(n.downstream_pipe_ft or 0.0)
-                if n.is_midstream_prv:
-                    role = 'mid-stream step down'
-                else:
-                    role = 'equipment PRV, ignored (within {:g} ft)'.format(
-                        shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)
-            else:
-                downstream, role = '-', '-'
-            output.print_md('| {} | {} | {} | {} | {} |'.format(
-                kind, n.family_name, n.element_id, downstream, role))
-            acc_rows.append({"kind": kind, "family": n.family_name,
-                             "id": n.element_id,
-                             "downstream_ft": (n.downstream_pipe_ft
-                                               if kind == "PRV" else None),
-                             "role": role})
-
-    errors = []
-    warnings = []
+def _gas_fixture_table(output, fixtures):
     if not fixtures:
-        errors.append(
-            "No gas fixtures found (IS_GAS_FIXTURE = Yes). Common causes: "
-            "pipe caps replaced fixture families at terminations, fixture "
-            "families not physically connected to the piping, or "
-            "IS_GAS_FIXTURE not set to Yes.")
-    if total_load <= 0:
-        errors.append("Total load is 0 MBH.")
-    if graph.longest_run is None:
-        errors.append("Longest run could not be determined.")
-    if graph.disconnected:
-        warnings.append("{} disconnected element(s) found.".format(
-            len(graph.disconnected)))
-    if graph.nested_prv_ids:
-        errors.append(
-            "Mid-stream PRV(s) {} sit downstream of another mid-stream PRV. "
-            "Size Gas supports a single step down only.".format(
-                ", ".join(str(i) for i in graph.nested_prv_ids)))
+        return
+    output.print_md('\n### Fixtures')
+    output.print_md('| Name | Load (MBH) | Element ID |')
+    output.print_md('| --- | --- | --- |')
+    for n in fixtures:
+        # n=63: FIXTURE_NAME is free text, escaped for the table
+        output.print_md('| {} | {:.1f} | {} |'.format(
+            report_generator.md_cell(n.fixture_name),
+            float(n.gas_load_mbh or 0.0), n.element_id))
 
+
+def _gas_accessory_role(n, kind):
+    """(pipe downstream text, sizing role) for one accessory row."""
+    if kind != "PRV":
+        return '-', '-'
+    downstream = '{:.1f} ft'.format(float(n.downstream_pipe_ft or 0.0))
+    if n.is_midstream_prv:
+        return downstream, 'mid-stream step down'
+    return downstream, 'equipment PRV, ignored (within {:g} ft)'.format(
+        shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)
+
+
+def _gas_accessory_table(output, accessories):
+    """Prints the accessory table; returns its rows as data."""
+    rows = []
+    if not accessories:
+        return rows
+    output.print_md('\n### Accessories (PRVs / Isolation Valves)')
+    output.print_md('| Kind | Family | Element ID | Pipe downstream | Sizing |')
+    output.print_md('| --- | --- | --- | --- | --- |')
+    for n, kind in accessories:
+        downstream, role = _gas_accessory_role(n, kind)
+        output.print_md('| {} | {} | {} | {} | {} |'.format(
+            kind, report_generator.md_cell(n.family_name), n.element_id,
+            downstream, role))
+        rows.append({"kind": kind, "family": n.family_name,
+                     "id": n.element_id,
+                     "downstream_ft": (float(n.downstream_pipe_ft or 0.0)
+                                       if kind == "PRV" else None),
+                     "role": role})
+    return rows
+
+
+def _gas_existing_appliance_table(output, graph):
+    """Existing phase gas appliances a tie in run reached on new piping.
+    Their load is counted and they are never resized. Returns the rows."""
+    rows = report_generator.existing_appliance_rows(graph)
+    if not rows:
+        return rows
+    output.print_md('\n### Existing Appliances on New Piping (load counted)')
+    output.print_md('| Name | Element ID |')
+    output.print_md('| --- | --- |')
+    for eid, name in rows:
+        output.print_md('| {} | {} |'.format(
+            report_generator.md_cell(name), eid))
+    return rows
+
+
+def _gas_findings(graph, origin_connectors):
+    """Errors, warnings and data errors for the summary, from the same
+    report_generator.gas_validation() the paste block uses, so the summary
+    and ready_for_sizing agree (n=42). Diagnose does not know whether Mid
+    Stream PRV will be ticked, so nested PRVs are a warning here. Plain
+    text: the caller escapes it for print_md (n=63)."""
+    validation = report_generator.gas_validation(
+        graph, origin_connectors, mid_stream_prv=None)
+    errors = list(validation["error_messages"])
+    warnings = list(validation["warning_messages"])
     if graph.non_gas_skipped:
         warnings.append(
             "{} pipe(s) on a system that is not gas ended the walk, nothing "
@@ -412,32 +435,72 @@ def diagnose_gas(doc, element, output):
                 len(bare_end),
                 ", ".join("{} ({})".format(n.element_id, n.family_name)
                           for n in bare_end)))
+    return errors, warnings, list(validation["data_errors"])
 
-    _print_errors_warnings(output, errors, warnings)
+
+def diagnose_gas(doc, element, output):
+    output.print_md('Discipline: **GAS PIPING**')
+    tie_in_check = None
+    upstream = None
+    if revit_helpers.is_pipe(element):
+        tie_in_check, refused = _gas_check_pipe_pick(doc, element, output)
+        if tie_in_check is None:
+            return _stopped(refused, "Diagnose - Gas")
+        upstream = tie_in_check["upstream"]
+
+    try:
+        graph = pipe_graph.build_network(element, doc, upstream)
+    except Exception as e:
+        output.print_md(':cross_mark: Traversal ERROR: {}'.format(str(e)))
+        return _stopped("Traversal failed:\n\n{}".format(str(e)),
+                        "Diagnose - Traversal Error")
+
+    counts = report_generator.gas_summary_counts(graph, _gas_accessory_kind)
+    (fixtures, total_load, pipe_count, total_length, longest_ft,
+     farthest) = _gas_summary_table(output, graph, counts)
+    _gas_fixture_table(output, fixtures)
+    acc_rows = _gas_accessory_table(output, counts["accessories"])
+    appliance_rows = _gas_existing_appliance_table(output, graph)
+
+    # piping connectors only (n=30), as the paste block lists them
+    origin_connectors = (None if tie_in_check is not None
+                         else revit_helpers.get_piping_connectors(element))
+    errors, warnings, data_errors = _gas_findings(graph, origin_connectors)
+    esc = report_generator.md_cell
+    _print_errors_warnings(output, [esc(e) for e in errors],
+                           [esc(w) for w in warnings], data_errors)
     _print_log_digest(output, graph)
 
     output.print_md('\n---')
     output.print_md('## Full Diagnostic Output — Copy and paste below this line')
-    diagnostic_text = report_generator.format_diagnostic_output(graph, element)
+    diagnostic_text = report_generator.format_diagnostic_output(
+        graph, element, tie_in_check=tie_in_check)
     _print_pre(output, diagnostic_text)
 
     summary = {
-        "pipe_start": bool(pipe_start),
+        "pipe_start": tie_in_check is not None,
+        "tie_in_check": (tie_in_check or {}).get("message"),
         "fixtures": [{"id": n.element_id, "name": n.fixture_name,
-                      "mbh": float(n.gas_load_mbh)} for n in fixtures],
+                      "mbh": float(n.gas_load_mbh or 0.0)} for n in fixtures],
         "total_load_mbh": float(total_load),
-        "pipe_segments": len(pipes),
+        "pipe_segments": pipe_count,
         "total_pipe_ft": float(total_length),
-        "tees": len(tees),
-        "fittings_other": len(fittings) - len(accessories),
+        "tees": counts["tees"],
+        "fittings_other": counts["fittings_other"],
         "accessories": acc_rows,
-        "prvs": prv_count,
-        "isolation_valves": iso_count,
+        "prvs": counts["prv_count"],
+        "isolation_valves": counts["iso_count"],
         "longest_run_ft": float(longest_ft or 0.0),
+        "zone_runs": [{"label": label,
+                       "run": report_generator.zone_run_text(run)}
+                      for label, run in report_generator.zone_run_rows(graph)],
         "farthest_fixture": farthest,
         "disconnected": _ids(graph.disconnected),
         "nested_prv_ids": _ids(graph.nested_prv_ids),
         "existing_connections": _ids(graph.existing_connections),
+        "existing_appliances": [{"id": eid, "name": name}
+                                for eid, name in appliance_rows],
+        "data_errors": list(data_errors),
     }
     return {"summary": summary, "errors": errors, "warnings": warnings,
             "ready": not errors, "report": diagnostic_text}
@@ -827,12 +890,19 @@ def diagnose_hvac(doc, element, output):
 # SHARED
 # ============================================================================
 
-def _print_errors_warnings(output, errors, warnings):
+def _print_errors_warnings(output, errors, warnings, data_errors=None):
+    """data_errors (gas, n=10/11): one line per 0 MBH fixture, listed under
+    their own heading. Not blocking: the walk skips them."""
     if errors:
         output.print_md('\n---')
         output.print_md('## :cross_mark: Errors')
         for e in errors:
             output.print_md('- {}'.format(e))
+    if data_errors:
+        output.print_md('\n---')
+        output.print_md('## :cross_mark: Data errors (0 MBH gas fixtures)')
+        for d in data_errors:
+            output.print_md('- {}'.format(report_generator.md_cell(d)))
     if warnings:
         output.print_md('\n---')
         output.print_md('## :warning: Warnings')

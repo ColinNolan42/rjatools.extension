@@ -65,7 +65,11 @@ def check(name, cond):
 d = gas_run.default_settings()
 check("default keys", sorted(d) == ["downstream_table_id", "existing",
                                     "heat_content_btu_per_cf",
-                                    "pipe_material", "table_id"])
+                                    "pipe_material",
+                                    "propane_heat_content_btu_per_cf",
+                                    "table_id"])
+check("default propane heat", d["propane_heat_content_btu_per_cf"]
+      == float(shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF))
 check("no default table", d["table_id"] is None)
 check("default heat", d["heat_content_btu_per_cf"]
       == float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
@@ -82,12 +86,25 @@ check("unknown table", "not an offered" in gas_run.validate_settings(
     dict(ok, table_id="402.4(99)"))[0])
 check("material mismatch", "for Schedule 40 Steel" in gas_run.validate_settings(
     dict(ok, pipe_material="Schedule 40 Steel"))[0])
+# gas_tables.read_heat_content: a number from 500 to 3,000 BTU/CF (n=34/39)
 check("heat zero", gas_run.validate_settings(
     dict(ok, heat_content_btu_per_cf=0)) == [
-        "heat_content_btu_per_cf shall be above 0"])
+        "heat_content_btu_per_cf shall be between 500 and 3000 BTU/CF."])
+check("heat slipped digit", gas_run.validate_settings(
+    dict(ok, heat_content_btu_per_cf=8400)) == [
+        "heat_content_btu_per_cf shall be between 500 and 3000 BTU/CF."])
 check("heat text", gas_run.validate_settings(
     dict(ok, heat_content_btu_per_cf="x")) == [
-        "heat_content_btu_per_cf is not a number"])
+        "heat_content_btu_per_cf shall be a number."])
+check("heat nan", gas_run.validate_settings(
+    dict(ok, heat_content_btu_per_cf=float("nan"))) == [
+        "heat_content_btu_per_cf shall be a number."])
+check("propane heat checked", gas_run.validate_settings(
+    dict(ok, propane_heat_content_btu_per_cf=25000)) == [
+        "propane_heat_content_btu_per_cf shall be between 500 and 3000 "
+        "BTU/CF."])
+check("propane heat valid", gas_run.validate_settings(
+    dict(ok, propane_heat_content_btu_per_cf=2516)) == [])
 
 # Mid stream PRV: same material and gas, never a higher pressure (S11).
 zoned = gas_run.merge_settings({"table_id": "402.4(12)",
@@ -135,7 +152,17 @@ sd = gas_run.settings_from_dialog(choice)
 check("dialog to settings", sd["table_id"] == opts[0]["table_id"]
       and sd["heat_content_btu_per_cf"] == 1000.0
       and sd["downstream_table_id"] is None
+      and sd["existing"] is None
       and sorted(sd) == sorted(gas_run.default_settings()))
+check("dialog without propane box gives the default",
+      sd["propane_heat_content_btu_per_cf"]
+      == shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)
+scope = {"size_nominal": "1-1/2", "length_ft": 40.0, "load_mbh": 200.0}
+sd = gas_run.settings_from_dialog(dict(
+    choice, propane_heat_content_btu_per_cf=2400, existing=scope))
+check("dialog propane and scope carried",
+      sd["propane_heat_content_btu_per_cf"] == 2400.0
+      and sd["existing"] == scope)
 
 # --- refusals before any Revit call -------------------------------------------
 r = gas_run.run_headless(None, 1, settings={})
@@ -168,39 +195,44 @@ gas_run.tie_in.resolve_new_pipe_upstream = lambda e, doc: (
     {"status": "ok", "reason": "one end is open"} if e.Id != 22
     else {"status": "error", "reason": "both ends new"})
 
-rec = headless.RecordingOutput()
-s = gas_run.resolve_start(None, None, ok, rec)
+s = gas_run.resolve_start(None, None, ok)
 check("no element", s["stop"] == "Could not retrieve selected element.")
-s = gas_run.resolve_start(None, Elem(12), ok, rec)
+s = gas_run.resolve_start(None, Elem(12), ok)
 check("meter ok", s["stop"] is None and s["kind"] == "meter"
       and s["upstream"] is None)
-s = gas_run.resolve_start(None, Elem(13), ok, rec)
+s = gas_run.resolve_start(None, Elem(13), ok)
 check("bad meter", "no Out connector" in s["stop"])
-s = gas_run.resolve_start(None, Elem(21, pipe=True), ok, rec)
+s = gas_run.resolve_start(None, Elem(21, pipe=True), ok)
 check("not a gas pipe", "not a gas pipe" in s["stop"] and s["kind"] == "pipe")
-s = gas_run.resolve_start(None, Elem(22, pipe=True), ok, rec)
+s = gas_run.resolve_start(None, Elem(22, pipe=True), ok)
 check("no upstream end", "both ends new" in s["stop"])
-s = gas_run.resolve_start(None, Elem(23, pipe=True), ok, rec)
+s = gas_run.resolve_start(None, Elem(23, pipe=True), ok)
 # Colin 2026-11-20: no existing given = full new construction
 check("pipe with no existing is new construction",
       s["stop"] is None and s["existing"] == {"new_construction": True}
       and "New construction" in s["existing_text"])
-s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=ex), rec)
-check("pipe with existing", s["stop"] is None and s["existing"] == ex
+s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=ex))
+check("pipe with existing", s["stop"] is None
+      and dict(s["existing"], new_construction=None)
+      == dict(ex, new_construction=None)
+      and s["existing"]["new_construction"] is False
       and s["upstream"]["reason"] == "one end is open")
 nc = {"new_construction": True}
-s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=nc), rec)
+s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=nc))
 check("pipe new construction", s["stop"] is None and s["existing"] == nc
       and "New construction" in s["existing_text"]
       and s["check"].startswith("New gas piping connection"))
-asked = []
-s = gas_run.resolve_start(None, Elem(24, pipe=True), ok, rec,
-                          ask_existing=lambda i, t: asked.append((i, t)) or ex)
-check("button asks existing", s["existing"] == ex
-      and asked == [(24, "402.4(10)")])
-s = gas_run.resolve_start(None, Elem(24, pipe=True), ok, rec,
-                          ask_existing=lambda i, t: None)
-check("button cancel existing", s["stop"] == gas_run._CANCELLED)
+# Connect into Existing takes the first new pipe only (tie_in.check_gas_start
+# pipe_only, main's Scope, 2026-11-20): a meter start is refused.
+s = gas_run.resolve_start(None, Elem(12), dict(ok, existing=ex))
+check("connect into existing refuses a meter",
+      "first new gas pipe" in (s["stop"] or "")
+      and "Nothing was changed" in s["stop"])
+s = gas_run.resolve_start(None, Elem(12), dict(ok, existing=nc))
+check("new construction scope still takes the meter", s["stop"] is None
+      and s["kind"] == "meter" and s["existing"] is None)
+check("stop says nothing was changed", "Nothing was changed" in
+      gas_run.resolve_start(None, Elem(13), ok)["stop"])
 
 
 # --- envelope_data over a fake outcome -------------------------------------------
