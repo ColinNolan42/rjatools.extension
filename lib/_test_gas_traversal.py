@@ -170,6 +170,186 @@ class TestWalkStaysInGasPiping(unittest.TestCase):
         self.assertNotIn(20, g.disconnected)
         self.assertTrue(any(s.startswith("SKIP: pipe 20")
                             for s in g.traversal_log))
+        # F1: the stop is recorded for the Size Gas warning
+        self.assertEqual(g.non_gas_skipped, [(20, "DomesticColdWater")])
+
+    def test_water_connector_on_a_fitting_is_recorded(self):
+        # F1: the element side SKIP names the element that was not followed
+        g = self._build(_water_heater_model({"family": "Water Heater"}))
+        self.assertEqual(sorted(g.non_gas_skipped),
+                         [(20, "DomesticColdWater"), (30, "DomesticHotWater")])
+
+    def test_appliance_terminal_is_not_a_non_gas_stop(self):
+        # A gas appliance's water connectors are by design (S21), no F1 line
+        g = self._build(_water_heater_model())
+        self.assertEqual(g.non_gas_skipped, [])
+
+
+def _tee_model(cap_params, elbow_family=None):
+    """meter 1 -> pipe 10 -> tee 2 -> pipe 11 -> RTU 4
+                                   -> pipe 12 (-> elbow 5 -> pipe 13) -> cap 6
+    """
+    meter = _Elem(1, "FamilyInstance", [_c(0, 10, direction="Out")],
+                  {"family": "Gas Meter"})
+    gas = _Elem(10, "Pipe", [_c(0, 1), _c(1, 2)])
+    tee = _Elem(2, "FamilyInstance", [_c(0, 10), _c(1, 11), _c(2, 12)],
+                {"family": "Tee"})
+    gas2 = _Elem(11, "Pipe", [_c(0, 2), _c(1, 4)])
+    rtu = _Elem(4, "FamilyInstance", [_c(0, 11)],
+                {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 100.0,
+                 "FIXTURE_NAME": "RTU-1"})
+    elements = [meter, gas, tee, gas2, rtu]
+    if elbow_family:
+        elements += [
+            _Elem(12, "Pipe", [_c(0, 2), _c(1, 5)], length=30.0),
+            _Elem(5, "FamilyInstance", [_c(0, 12), _c(1, 13)],
+                  {"family": elbow_family}),
+            _Elem(13, "Pipe", [_c(0, 5), _c(1, 6)], length=30.0),
+        ]
+    else:
+        elements.append(_Elem(12, "Pipe", [_c(0, 2), _c(1, 6)]))
+    elements.append(_Elem(6, "FamilyInstance", [_c(0, 13 if elbow_family
+                                                   else 12)], cap_params))
+    return elements
+
+
+class TestBenchFixes(unittest.TestCase):
+    """F2, F3 and F5 from the gas bench fix list (2026-11-18)."""
+
+    def _build(self, elements):
+        with _Model(elements) as m:
+            return pipe_graph.build_network(m.elements[1], None)
+
+    def test_cap_without_flag_is_listed(self):
+        g = self._build(_tee_model({"family": "Cap - Generic"}))
+        ends = pipe_graph.non_fixture_ends(g)
+        self.assertEqual([n.element_id for n in ends], [6])
+
+    def test_flagged_cap_is_not_listed(self):
+        g = self._build(_tee_model({"IS_GAS_FIXTURE": True,
+                                    "GAS_LOAD_MBH": 0.0,
+                                    "FIXTURE_NAME": "FUTURE",
+                                    "family": "RJA- Gas Equipment Cap"}))
+        self.assertEqual(pipe_graph.non_fixture_ends(g), [])
+
+    def _run_with_elbow(self, family):
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        return self._build(_tee_model(cap, elbow_family=family)).longest_run
+
+    def test_elbow_detection_ignores_case(self):
+        for family in ("Elbow - Generic", "ELBOW - Threaded",
+                       "gas elbow", "RJA Long Radius elbow"):
+            run = self._run_with_elbow(family)
+            self.assertEqual(run["elbow_equiv_length_feet"], 5.0, family)
+            # 70 ft pipe + 5 ft elbow + 3 ft for tee 2
+            self.assertAlmostEqual(run["total_length_feet"], 78.0)
+
+    def test_tee_into_the_branch_adds_three_feet(self):
+        # Colin 2026-11-19: developed length = pipe + 5 ft per elbow + 3 ft
+        # per tee. The run turns at tee 2 into pipe 12: 10 + 30 + 30 ft of
+        # pipe, 1 elbow, 1 tee.
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        run = self._build(_tee_model(cap, elbow_family="Elbow - Generic")
+                          ).longest_run
+        self.assertEqual(run["farthest_fixture_name"], "UH-1")
+        self.assertAlmostEqual(run["pipe_length_feet"], 70.0)
+        self.assertEqual(run["elbow_count"], 1)
+        self.assertEqual(run["tee_count"], 1)
+        self.assertAlmostEqual(run["tee_equiv_length_feet"], 3.0)
+        self.assertAlmostEqual(run["total_length_feet"], 78.0)
+
+    def test_tee_straight_through_adds_three_feet(self):
+        # The run goes on through tee 2 to RTU-1 (pipe 11 lengthened to 40
+        # ft so it is the longest); the branch is only 10 + 10 ft.
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        els = _tee_model(cap)
+        dict((e.Id.Value, e) for e in els)[11].length = 40.0
+        run = self._build(els).longest_run
+        self.assertEqual(run["farthest_fixture_name"], "RTU-1")
+        self.assertAlmostEqual(run["pipe_length_feet"], 50.0)
+        self.assertEqual(run["elbow_count"], 0)
+        self.assertEqual(run["tee_count"], 1)
+        self.assertAlmostEqual(run["total_length_feet"], 53.0)
+
+    def test_two_tees_and_an_elbow_together(self):
+        # meter 1 -10-> tee 2 -11-> tee 3 -14-> RTU 4
+        #                  tee 2 -12-> cap 7 (short)
+        #                  tee 3 -15-> elbow 5 -16-> UH-1 6 (longest)
+        # 10 + 10 + 10 + 10 ft pipe + 5 (elbow) + 2 x 3 (tees) = 51 ft.
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        els = [
+            _Elem(1, "FamilyInstance", [_c(0, 10, direction="Out")],
+                  {"family": "Gas Meter"}),
+            _Elem(10, "Pipe", [_c(0, 1), _c(1, 2)]),
+            _Elem(2, "FamilyInstance", [_c(0, 10), _c(1, 11), _c(2, 12)],
+                  {"family": "Tee"}),
+            _Elem(11, "Pipe", [_c(0, 2), _c(1, 3)]),
+            _Elem(3, "FamilyInstance", [_c(0, 11), _c(1, 14), _c(2, 15)],
+                  {"family": "Tee"}),
+            _Elem(14, "Pipe", [_c(0, 3), _c(1, 4)]),
+            _Elem(4, "FamilyInstance", [_c(0, 14)],
+                  {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 100.0,
+                   "FIXTURE_NAME": "RTU-1"}),
+            _Elem(15, "Pipe", [_c(0, 3), _c(1, 5)]),
+            _Elem(5, "FamilyInstance", [_c(0, 15), _c(1, 16)],
+                  {"family": "Elbow - Generic"}),
+            _Elem(16, "Pipe", [_c(0, 5), _c(1, 6)]),
+            _Elem(6, "FamilyInstance", [_c(0, 16)], cap),
+            _Elem(12, "Pipe", [_c(0, 2), _c(1, 7)], length=2.0),
+            _Elem(7, "FamilyInstance", [_c(0, 12)],
+                  {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 10.0,
+                   "FIXTURE_NAME": "UH-2"}),
+        ]
+        run = self._build(els).longest_run
+        self.assertEqual(run["farthest_fixture_name"], "UH-1")
+        self.assertAlmostEqual(run["pipe_length_feet"], 40.0)
+        self.assertEqual((run["elbow_count"], run["tee_count"]), (1, 2))
+        self.assertAlmostEqual(run["elbow_equiv_length_feet"], 5.0)
+        self.assertAlmostEqual(run["tee_equiv_length_feet"], 6.0)
+        self.assertAlmostEqual(run["total_length_feet"], 51.0)
+        self.assertEqual(run["fitting_length_feet"], 0.0)
+
+    def test_what_counts_as_a_tee(self):
+        def node(kind, fixture=False, prv=False):
+            n = pipe_graph.NetworkNode(5, None, kind)
+            n.is_gas_fixture = fixture
+            n.is_prv = prv
+            return n
+        self.assertTrue(pipe_graph.counts_as_tee(node("tee"), 5, 1))
+        # the walk's own start, an appliance and a PRV never count
+        self.assertFalse(pipe_graph.counts_as_tee(node("tee"), 5, 5))
+        self.assertFalse(pipe_graph.counts_as_tee(node("tee", fixture=True), 5, 1))
+        self.assertFalse(pipe_graph.counts_as_tee(node("tee", prv=True), 5, 1))
+        self.assertFalse(pipe_graph.counts_as_tee(node("fitting"), 5, 1))
+        self.assertFalse(pipe_graph.counts_as_tee(node("meter"), 5, 1))
+
+    def test_not_an_elbow(self):
+        run = self._run_with_elbow("Coupling - Generic")
+        self.assertEqual(run["elbow_equiv_length_feet"], 0.0)
+
+    def test_log_digest(self):
+        g = self._build(_water_heater_model({"family": "Water Heater"}))
+        g.log("SKIP: Element 99 already visited.")
+        helper_log = [
+            {"level": "INFO", "function": "f", "element_id": 1,
+             "message": "found"},
+            {"level": "WARNING", "function": "get_x", "element_id": 7,
+             "message": "NOT FOUND"},
+        ]
+        helper_log += [
+            # fitting 3 without the fixture params: routine, dropped
+            {"level": "WARNING", "function": "get_parameter_value",
+             "element_id": 3,
+             "message": "Parameter 'IS_GAS_FIXTURE' NOT FOUND on element."},
+        ]
+        walk, helpers = pipe_graph.log_digest(g, helper_log)
+        self.assertEqual(len([s for s in walk if s.startswith("SKIP")]), 2)
+        self.assertFalse(any("already visited" in s for s in walk))
+        self.assertEqual(helpers, ["WARNING: get_x element 7: NOT FOUND"])
 
 
 class TestZeroDemandOnCopper(unittest.TestCase):

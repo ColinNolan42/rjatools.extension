@@ -117,6 +117,8 @@ check("existing negative", gas_run.validate_settings(
 check("existing not a dict", gas_run.validate_settings(
     dict(ok, existing=5)) == [
         "existing shall be {size_nominal, length_ft, load_mbh}"])
+check("existing new construction", gas_run.validate_settings(
+    dict(ok, existing={"new_construction": True})) == [])
 
 opts = gas_run.table_options()
 check("table options", len(opts) == len(gas_run.gas_tables.TABLE_OPTIONS)
@@ -183,6 +185,11 @@ check("pipe needs existing", "existing conditions" in s["stop"])
 s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=ex), rec)
 check("pipe with existing", s["stop"] is None and s["existing"] == ex
       and s["upstream"]["reason"] == "one end is open")
+nc = {"new_construction": True}
+s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=nc), rec)
+check("pipe new construction", s["stop"] is None and s["existing"] == nc
+      and "New construction" in s["existing_text"]
+      and s["check"].startswith("New gas piping connection"))
 asked = []
 s = gas_run.resolve_start(None, Elem(24, pipe=True), ok, rec,
                           ask_existing=lambda i, t: asked.append((i, t)) or ex)

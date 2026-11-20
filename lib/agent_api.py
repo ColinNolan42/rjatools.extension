@@ -48,7 +48,8 @@ TOOLS = (
      "decisions": [{"qid": "fan_cfm", "answer_with": "fan_cfm"}]},
     {"operation": "size_gas", "module": "gas_run",
      "ids": "start_id: the gas meter, or the first new gas pipe at the "
-            "connection to existing (then settings['existing'] is required)",
+            "connection to existing (then settings['existing'] is required, "
+            "or {'new_construction': True} for a full new system)",
      "engine": "ironpython", "mcp": "run_query; run_modify when write=True",
      "writes": "pipes, fittings, stubs (write=True)",
      "decisions": [{"qid": "presizing_warnings", "answer_with": "decisions"}]},

@@ -66,21 +66,15 @@ def _hvac_categories():
 
 def run(doc, uidoc, output, forms):
     """Diagnose behind the button: header, pick, then diagnose()."""
-    from Autodesk.Revit.UI.Selection import ObjectType
+    import ui_helpers
     _header(output)
-    try:
-        ref = uidoc.Selection.PickObject(
-            ObjectType.Element,
-            'Select the gas meter, the water RPZ, or HVAC equipment/a duct/terminal'
-        )
-        selected_element = doc.GetElement(ref.ElementId)
-    except Exception:
-        output.print_md('**Cancelled.**')
-        return None
-
+    # the shared pick step without the popup: Diagnose takes zero input
+    selected_element = ui_helpers.pick_element(
+        uidoc, doc, 'Diagnose',
+        'Select the gas meter, the water RPZ, or HVAC equipment/a duct/terminal',
+        popup=False)
     if selected_element is None:
-        forms.alert("Could not retrieve the selected element. Please try again.",
-                    title="Diagnose - Selection Error")
+        output.print_md('**Cancelled.**')
         return None
 
     outcome = diagnose(doc, selected_element, output)
@@ -276,6 +270,27 @@ def _gas_accessory_kind(node):
     return None
 
 
+def _print_log_digest(output, graph):
+    """F5: the traversal SKIP / WARNING / TERMINAL / EXISTING lines and the
+    helper WARNING / ERROR entries, collapsed, so nothing the walk dropped
+    is silent (Rule 6)."""
+    walk, helpers = pipe_graph.log_digest(graph, revit_helpers.get_log())
+    if not walk and not helpers:
+        output.print_md('\n**Traversal log:** no skips, stops or helper '
+                        'warnings.')
+        return
+    lines = ['TRAVERSAL ({})'.format(len(walk))] + walk
+    lines += ['', 'HELPERS ({})'.format(len(helpers))] + helpers
+    body = '\n'.join(lines)
+    output.print_html(
+        "<details><summary><b>Traversal log: {} walk line(s), {} helper "
+        "warning(s)</b></summary><pre style='font-family:monospace;"
+        "font-size:11px;'>{}</pre></details>".format(
+            len(walk), len(helpers),
+            body.replace('&', '&amp;').replace('<', '&lt;')
+                .replace('>', '&gt;')))
+
+
 def diagnose_gas(doc, element, output):
     output.print_md('Discipline: **GAS PIPING**')
     pipe_start = revit_helpers.is_pipe(element)
@@ -382,7 +397,24 @@ def diagnose_gas(doc, element, output):
             "Size Gas supports a single step down only.".format(
                 ", ".join(str(i) for i in graph.nested_prv_ids)))
 
+    if graph.non_gas_skipped:
+        warnings.append(
+            "{} pipe(s) on a system that is not gas ended the walk, nothing "
+            "past them is counted: {}".format(
+                len(graph.non_gas_skipped),
+                ", ".join("{} ({})".format(i, c)
+                          for i, c in graph.non_gas_skipped)))
+    bare_end = pipe_graph.non_fixture_ends(graph)
+    if bare_end:
+        warnings.append(
+            "{} end(s) are not gas fixtures (IS_GAS_FIXTURE not set), no "
+            "load counted: {}".format(
+                len(bare_end),
+                ", ".join("{} ({})".format(n.element_id, n.family_name)
+                          for n in bare_end)))
+
     _print_errors_warnings(output, errors, warnings)
+    _print_log_digest(output, graph)
 
     output.print_md('\n---')
     output.print_md('## Full Diagnostic Output — Copy and paste below this line')

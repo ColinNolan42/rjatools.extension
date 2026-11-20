@@ -59,9 +59,11 @@ _EXISTING_GAS_XAML = (
     ' ResizeMode="NoResize"'
     ' WindowStartupLocation="CenterScreen">'
     '<StackPanel Margin="15">'
-    '<TextBlock Text="A pipe was picked, so the run starts at the connection to existing gas'
-    ' piping. The existing piping is assumed not modeled. Enter it below."'
-    ' TextWrapping="Wrap" Margin="0,0,0,12"/>'
+    '<CheckBox Name="cbConnect" IsChecked="False" Content="Connect into Existing"'
+    ' FontWeight="SemiBold" Margin="0,0,0,2"/>'
+    '<TextBlock Text="Unticked: full new construction, with a new meter. The picked pipe'
+    ' starts the system. Tick to enter the existing gas piping."'
+    ' TextWrapping="Wrap" FontSize="11" Margin="20,0,0,12"/>'
     '<TextBlock Text="Existing Pipe Size at the Connection" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<ComboBox Name="cbSize" Margin="0,0,0,12"/>'
     '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
@@ -110,14 +112,17 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
             to prefill, for example what was entered in Size Gas.
 
     Returns:
-        dict with "size_nominal" (str), "length_ft" and "load_mbh" (floats),
-        or None if cancelled.
+        {"new_construction": True} when the Connect into Existing box
+        (unticked by default) is left unticked, else a dict with "size_nominal" (str),
+        "length_ft" and "load_mbh" (floats) and "new_construction": False.
+        None if cancelled.
     """
     window     = XamlReader.Parse(_EXISTING_GAS_XAML)
     window.Title = title
     cb_size    = window.FindName('cbSize')
     tb_length  = window.FindName('tbLength')
     tb_load    = window.FindName('tbLoad')
+    cb_connect = window.FindName('cbConnect')
     btn_ok     = window.FindName('btnOK')
     btn_cancel = window.FindName('btnCancel')
 
@@ -136,6 +141,16 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
 
     result = [None]
 
+    def on_new_toggled(sender, e):
+        on = bool(cb_connect.IsChecked)
+        cb_size.IsEnabled = on
+        tb_length.IsEnabled = on
+        tb_load.IsEnabled = on
+
+    cb_connect.Checked   += on_new_toggled
+    cb_connect.Unchecked += on_new_toggled
+    on_new_toggled(None, None)
+
     def _number(box):
         """A number of zero or more, or None. Marks the box when it is bad."""
         try:
@@ -149,6 +164,10 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
         return value
 
     def on_ok(sender, e):
+        if not bool(cb_connect.IsChecked):
+            result[0] = {"new_construction": True}
+            window.Close()
+            return
         length = _number(tb_length)
         load = _number(tb_load)
         if length is None or load is None or cb_size.SelectedItem is None:
@@ -157,6 +176,7 @@ def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
             "size_nominal": cb_size.SelectedItem,
             "length_ft":    length,
             "load_mbh":     load,
+            "new_construction": False,
         }
         window.Close()
 
@@ -602,6 +622,66 @@ def show_table_picker(title):
     if res is None:
         return None, None, None
     return res["pipe_material"], res["table_label"], res["heat_content"]
+
+
+def show_oneline_picker(title):
+    """The One-Line dialog (its own heading and basis, Plan B), shown before
+    the pick with the Size Gas Mid Stream PRV tick box.
+
+    Returns the show_size_gas_dialog dict, or None if cancelled."""
+    import sizer_dialogs
+    return sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_oneline_picker(title, use_theme),
+        lambda: _show_picker_legacy(title, True))
+
+
+def rja_alert(title, text, kind="info", yes_no=False):
+    """Themed in-run message in place of forms.alert (Plan B). kind: info,
+    warn or error. OK only returns True; yes_no returns True or False.
+    Falls back to forms.alert when the themed window cannot be built."""
+    import sizer_dialogs
+
+    def _legacy():
+        from pyrevit import forms
+        if yes_no:
+            return bool(forms.alert(text, title=title, yes=True, no=True))
+        forms.alert(text, title=title)
+        return True
+
+    res = sizer_dialogs.themed_or(
+        lambda use_theme: sizer_dialogs.show_message(
+            title, text, kind, yes_no, use_theme=use_theme),
+        _legacy)
+    return bool(res)
+
+
+# The one pick step every tool uses (Colin, 2026-11-19): a themed "Select
+# ..." message, then the pick with the same words in Revit's status bar.
+# Diagnose passes popup=False (zero input rule). The gas wording is shared by
+# Size Gas and One-Line.
+PICK_GAS = "Select the gas meter or the new gas pipe connection"
+
+
+def pick_element(uidoc, doc, title, prompt, sel_filter=None, popup=True):
+    """Themed prompt, then one PickObject. sel_filter: an ISelectionFilter
+    or None. Returns the picked element, or None when the pick is cancelled
+    (Esc) or the element cannot be read. The caller reports the cancel."""
+    from Autodesk.Revit.UI.Selection import ObjectType
+    if popup:
+        rja_alert(title, prompt + ".", "info")
+    try:
+        ref = None
+        if sel_filter is not None:
+            try:
+                ref = uidoc.Selection.PickObject(ObjectType.Element,
+                                                 sel_filter, prompt)
+            except TypeError:
+                ref = None
+        if ref is None:
+            ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
+    except Exception:
+        return None
+    return doc.GetElement(ref.ElementId)
 
 
 def show_size_gas_dialog(title):

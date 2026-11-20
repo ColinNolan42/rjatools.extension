@@ -31,11 +31,13 @@ ORIGIN = -100          # the stand-in node at the existing connection
 
 
 def _build(prv=False):
-    """connection(-100) -> pipe 100 (10 ft) -> tee 2
+    """connection(-100) -> pipe 100 (7 ft) -> tee 2
            tee 2 -> pipe 101 (20 ft) -> RTU-1, 120 MBH
            tee 2 -> pipe 102 (10 ft) -> GUH-1, 60 MBH
 
-    New longest run 30 ft, no elbows. New load 180 MBH.
+    New longest run 30 ft: 7 + 20 ft of pipe + 3 ft for tee 2 (Colin,
+    2026-11-19; pipe 100 was 10 ft when a tee added nothing), no elbows.
+    New load 180 MBH.
     """
     g = pipe_graph.NetworkGraph()
     g.origin_id = ORIGIN
@@ -44,7 +46,7 @@ def _build(prv=False):
     _node(g, 2, "tee")
     _node(g, 4, "fixture", 120.0, "RTU-1")
     _node(g, 5, "fixture", 60.0, "GUH-1")
-    _edge(g, 100, ORIGIN, 2, 10.0)
+    _edge(g, 100, ORIGIN, 2, 7.0)
     _edge(g, 101, 2, 4, 20.0)
     _edge(g, 102, 2, 5, 10.0)
     _finish(g)
@@ -68,7 +70,9 @@ class TestExistingLengthJoinsTheRun(unittest.TestCase):
         pipe_graph.apply_existing_conditions(g, "1-1/4", 60.0, 200.0)
         self.assertAlmostEqual(g.longest_run["total_length_feet"], 90.0)
         self.assertAlmostEqual(g.longest_run["existing_length_feet"], 60.0)
-        self.assertAlmostEqual(g.longest_run["pipe_length_feet"], 30.0)
+        # 7 + 20 ft of pipe, plus 3 ft for the tee, is the 30 ft new run
+        self.assertAlmostEqual(g.longest_run["pipe_length_feet"], 27.0)
+        self.assertAlmostEqual(g.longest_run["tee_equiv_length_feet"], 3.0)
         self.assertEqual(g.existing["size_nominal"], "1-1/4")
         self.assertAlmostEqual(g.existing["load_mbh"], 200.0)
 
@@ -282,6 +286,48 @@ class TestRememberedBetweenTools(unittest.TestCase):
         # a copy, so a caller cannot corrupt what is stored
         tie_in.recall_existing(900)["load_mbh"] = 0.0
         self.assertAlmostEqual(tie_in.recall_existing(900)["load_mbh"], 640.0)
+
+
+class TestNewConstruction(unittest.TestCase):
+    """The New Construction tick in the Existing Conditions box."""
+
+    TICKED = {"new_construction": True}
+    UNTICKED = {"size_nominal": "2", "length_ft": 40.0, "load_mbh": 640.0,
+                "new_construction": False}
+
+    def test_ticked_is_new_construction(self):
+        self.assertTrue(tie_in.is_new_construction(self.TICKED))
+        self.assertFalse(tie_in.is_new_construction(self.UNTICKED))
+        self.assertFalse(tie_in.is_new_construction(None))
+        # today's dict, without the key, still means existing piping
+        legacy = dict(self.UNTICKED)
+        del legacy["new_construction"]
+        self.assertFalse(tie_in.is_new_construction(legacy))
+
+    def test_existing_for_sizing(self):
+        self.assertIsNone(tie_in.existing_for_sizing(self.TICKED))
+        self.assertIsNone(tie_in.existing_for_sizing(None))
+        self.assertIs(tie_in.existing_for_sizing(self.UNTICKED), self.UNTICKED)
+
+    def test_inputs_text(self):
+        text = tie_in.existing_inputs_text(self.TICKED)
+        self.assertIn("New construction", text)
+        self.assertIn("starts at the picked pipe", text)
+        self.assertIn("no existing piping upstream", text)
+        self.assertNotIn("-", text)
+        text = tie_in.existing_inputs_text(self.UNTICKED)
+        self.assertIn('2" pipe, 40.0 ft', text)
+        self.assertIn("640.0 MBH existing load", text)
+
+    def test_nothing_is_remembered_by_the_helpers(self):
+        tie_in.existing_for_sizing(self.TICKED)
+        tie_in.existing_inputs_text(self.TICKED)
+        self.assertIsNone(tie_in.recall_existing(777))
+
+    def test_no_existing_means_no_existing_check(self):
+        class _G(object):
+            existing = None
+        self.assertIsNone(sizing_engine.check_existing_pipe({}, _G()))
 
 
 def _run():

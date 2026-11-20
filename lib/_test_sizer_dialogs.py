@@ -51,6 +51,8 @@ X_NAME = "{http://schemas.microsoft.com/winfx/2006/xaml}Name"
 BODIES = {
     "water": sizer_dialogs._WATER_BODY,
     "gas": sizer_dialogs._GAS_BODY,
+    "oneline": sizer_dialogs._GAS_BODY,
+    "message": sizer_dialogs._MESSAGE_BODY,
     "existing": sizer_dialogs._EXISTING_BODY,
     "performance": sizer_dialogs._PERF_BODY,
     "start": sizer_dialogs._START_BODY,
@@ -60,13 +62,15 @@ BODIES = {
 
 # The start point picker is a choice, not a calculation, so it carries no
 # Calculation basis block.
-NO_BASIS = set(["start"])
+NO_BASIS = set(["start", "message"])
 
 # Every name each dialog function looks up, read from its source so the test
 # cannot drift from the code.
 FUNCTIONS = {
     "water": ["show_water_dialog", "_init_project", "_init_recirc"],
-    "gas": ["show_gas_picker"],
+    "gas": ["show_gas_picker", "_gas_picker"],
+    "oneline": ["show_oneline_picker", "_gas_picker"],
+    "message": ["show_message"],
     "existing": ["show_existing_gas_dialog"],
     "performance": ["show_water_performance_dialog", "_init_project",
                     "_init_recirc"],
@@ -154,6 +158,45 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
                 continue
             self.assertIn("grid_ref", _names_in(body), key)
             self.assertIn('Text="Calculation basis"', body, key)
+
+
+class TestExistingNewConstruction(unittest.TestCase):
+    """Connect into Existing box at the top of the Existing Conditions
+    dialog, unticked by default (full new construction, Colin 2026-11-19)."""
+
+    def _root(self):
+        return ET.fromstring("<Root %s>%s</Root>"
+                             % (NS, sizer_dialogs._EXISTING_BODY))
+
+    def test_box_is_first_and_unticked(self):
+        first = list(self._root())[0]
+        self.assertTrue(first.tag.endswith("CheckBox"))
+        self.assertEqual(first.get(X_NAME), "cb_connect")
+        self.assertEqual(first.get("IsChecked"), "False")
+        self.assertEqual(first.get("Content"), "Connect into Existing")
+
+    def test_hint_text(self):
+        self.assertIn("Unticked: full new construction, with a new meter. "
+                      "The picked pipe starts the system. Tick to enter the "
+                      "existing gas piping.", sizer_dialogs._EXISTING_BODY)
+
+    def test_fields_still_present(self):
+        names = _names_in(sizer_dialogs._EXISTING_BODY)
+        for n in ("cb_size", "tb_length", "tb_load"):
+            self.assertIn(n, names)
+
+    def test_basis_rows_explain_both_states(self):
+        labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
+        self.assertEqual(labels[0], "New construction")
+        self.assertIn("Connect into Existing", labels)
+        for _l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
+            self.assertNotIn(" - ", v)
+
+    def test_fallback_has_the_box(self):
+        xaml = ui_helpers._EXISTING_GAS_XAML
+        self.assertIn('Name="cbConnect" IsChecked="False"', xaml)
+        self.assertIn('Content="Connect into Existing"', xaml)
+        ET.fromstring(xaml)
 
 
 class TestSizeDuctLimitsGrid(unittest.TestCase):

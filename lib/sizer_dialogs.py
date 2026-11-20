@@ -929,15 +929,39 @@ def heat_content_note(table_id):
 
 
 def show_gas_picker(title, prv_option, use_theme=True):
-    """Themed pipe material / IFGC table dialog for Size Gas and One-Line.
+    """Themed pipe material / IFGC table dialog for Size Gas.
 
     Same return value as ui_helpers._show_picker: a dict with
     "pipe_material", "table_label", "heat_content", "mid_stream_prv" and
     "downstream_table_label", or None if cancelled.
     """
+    return _gas_picker(title, "size" if prv_option else "plain", use_theme)
+
+
+def show_oneline_picker(title, use_theme=True):
+    """Themed One-Line dialog (Plan B: a tool gets its own dialog). The
+    material, table, heat content and Mid Stream PRV choice shall be the
+    ones Size Gas ran on, so the gate's size check matches. Shown BEFORE the
+    pick, like Size Gas (Colin, 2026-11-18), so it carries the same Mid
+    Stream PRV tick box. Same return value as show_gas_picker."""
+    return _gas_picker(title, "oneline", use_theme)
+
+
+def _gas_picker(title, mode, use_theme):
+    """The gas table dialog. mode: "size" (Size Gas, Mid Stream PRV tick
+    box), "plain" (no PRV), "oneline" (One-Line heading and basis, the same
+    Mid Stream PRV tick box)."""
     from System.Windows import Visibility
 
-    if prv_option:
+    oneline = mode == "oneline"
+    prv_option = mode in ("size", "oneline")
+    downstream_needed = False
+    if oneline:
+        heading = 'Gas One-Line'
+        purpose = ('Draws the gas piping one-line diagram on a drafting view '
+                   'from the sizes Size Gas wrote. Pick the table, heat '
+                   'content and Mid Stream PRV setting Size Gas ran on.')
+    elif prv_option:
         heading = 'Size Gas'
         purpose = ('Sizes gas piping by the IFGC Longest Run Method and writes '
                    'the sizes into the model.')
@@ -1015,6 +1039,9 @@ def show_gas_picker(title, prv_option, use_theme=True):
     if prv_option:
         cb_prv.Visibility = Visibility.Visible
         populate_downstream()
+    if downstream_needed:
+        pnl_prv.Visibility = Visibility.Visible
+        populate_downstream()
 
     def on_material_changed(sender, args):
         if cb_material.SelectedItem is not None:
@@ -1023,7 +1050,7 @@ def show_gas_picker(title, prv_option, use_theme=True):
 
     def on_table_changed(sender, args):
         update_heat_box()
-        if prv_option:
+        if prv_option or downstream_needed:
             populate_downstream()
 
     def on_prv_toggled(sender, args):
@@ -1035,14 +1062,16 @@ def show_gas_picker(title, prv_option, use_theme=True):
     cb_prv.Checked += on_prv_toggled
     cb_prv.Unchecked += on_prv_toggled
 
-    _fill_basis(win, sizing_engine.basis_of_design_rows())
+    _fill_basis(win, sizing_engine.oneline_basis_rows() if oneline
+                else sizing_engine.basis_of_design_rows())
 
     def collect(errors):
         heat_content = _number(tb_heat, 'Heat content of gas', errors)
         if not cb_material.SelectedItem or not cb_table.SelectedItem:
             errors.append((None, 'Pick a pipe material and an IFGC table.'))
 
-        use_prv = bool(cb_prv.IsChecked) if prv_option else False
+        use_prv = (bool(cb_prv.IsChecked) if prv_option
+                   else downstream_needed)
         downstream_label = None
         if use_prv:
             up = upstream_option()
@@ -1075,9 +1104,11 @@ def show_gas_picker(title, prv_option, use_theme=True):
 # ---------------------------------------------------------------------------
 
 _EXISTING_BODY = (
-    _hint('A pipe was picked, so the run starts at the connection to existing gas '
-          'piping. The existing piping is assumed not modeled. Enter it below.',
-          '0,10,0,0') +
+    '<CheckBox x:Name="cb_connect" IsChecked="False"'
+    ' Content="Connect into Existing" FontWeight="SemiBold" Margin="0,10,0,0"/>' +
+    _hint('Unticked: full new construction, with a new meter. The picked pipe '
+          'starts the system. Tick to enter the existing gas piping.',
+          '20,2,0,0') +
     _section('Existing gas piping') +
     '<TextBlock Text="Existing pipe size at the connection" Margin="0,0,0,3"/>'
     '<ComboBox x:Name="cb_size" Margin="0,0,0,8"/>'
@@ -1098,6 +1129,14 @@ _EXISTING_BODY = (
 )
 
 _EXISTING_BASIS_ROWS = [
+    ("New construction",
+     "Connect into Existing unticked (default): full new construction with a "
+     "new meter. The picked pipe is the start of the system. There is no "
+     "existing pipe, length or load, the longest run starts at the picked "
+     "pipe, and no existing pipe is checked. The fields above are not used."),
+    ("Connect into Existing",
+     "Ticked: the picked pipe connects to existing gas piping, assumed not "
+     "modeled. The rows below apply."),
     ("Existing pipe",
      "Checked, never resized. It passes if its table capacity covers the "
      "existing load plus the new load. A shortfall is a warning."),
@@ -1138,7 +1177,21 @@ def show_existing_gas_dialog(title, pipe_sizes, defaults=None, use_theme=True):
 
     _fill_basis(win, _EXISTING_BASIS_ROWS)
 
+    cb_connect = _named(win, 'cb_connect')
+
+    def on_new_toggled(sender, args):
+        on = bool(cb_connect.IsChecked)
+        cb_size.IsEnabled = on
+        tb_length.IsEnabled = on
+        tb_load.IsEnabled = on
+
+    cb_connect.Checked += on_new_toggled
+    cb_connect.Unchecked += on_new_toggled
+    on_new_toggled(None, None)
+
     def collect(errors):
+        if not bool(cb_connect.IsChecked):
+            return {"new_construction": True}
         length = _number(tb_length, 'Length', errors, kind='nonneg')
         load = _number(tb_load, 'Total existing load', errors, kind='nonneg')
         if cb_size.SelectedItem is None:
@@ -1149,6 +1202,53 @@ def show_existing_gas_dialog(title, pipe_sizes, defaults=None, use_theme=True):
             "size_nominal": cb_size.SelectedItem,
             "length_ft":    length,
             "load_mbh":     load,
+            "new_construction": False,
         }
 
     return _run(win, [tb_length, tb_load], collect)
+
+
+# ---------------------------------------------------------------------------
+# In-run messages (Plan B): the themed replacement for forms.alert
+# ---------------------------------------------------------------------------
+
+_MESSAGE_BODY = (
+    '<Border x:Name="bd_kind" BorderThickness="4,0,0,0" Padding="10,6,6,6"'
+    ' Margin="0,10,0,0">'
+    '<TextBlock x:Name="tb_message" TextWrapping="Wrap" FontSize="12"/>'
+    '</Border>'
+)
+
+# kind: (heading, accent color), the console callout colors
+MESSAGE_KINDS = {
+    "info": ("Note", "#0070C0"),
+    "warn": ("Warning", "#E0A800"),
+    "error": ("Error", "#D22828"),
+}
+
+
+def show_message(title, text, kind="info", yes_no=False, heading=None,
+                 use_theme=True):
+    """Themed message. OK only returns True; Yes/No returns True for Yes and
+    None for No or close (ui_helpers.rja_alert turns None into False)."""
+    from System.Windows import Visibility
+    from System.Windows.Media import BrushConverter
+
+    kind_heading, color = MESSAGE_KINDS.get(kind, MESSAGE_KINDS["info"])
+    win = _build_window(title, heading or kind_heading, None, _MESSAGE_BODY,
+                        use_theme, width=480)
+    _named(win, 'tb_message').Text = text
+    _named(win, 'bd_kind').BorderBrush = BrushConverter().ConvertFromString(color)
+    btn_ok = _named(win, 'btn_ok')
+    btn_cancel = _named(win, 'btn_cancel')
+    if yes_no:
+        btn_ok.Content = 'Yes'
+        btn_cancel.Content = 'No'
+    else:
+        btn_cancel.Visibility = Visibility.Collapsed
+
+    def collect(errors):
+        return True
+
+    return _run(win, [], collect)
+

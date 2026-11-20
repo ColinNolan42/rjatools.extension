@@ -65,7 +65,7 @@ from Autodesk.Revit.DB import (
     FilledRegion, FilledRegionType, CurveLoop,
     ConnectorProfileType, ConnectorType
 )
-from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
+from Autodesk.Revit.UI.Selection import ISelectionFilter
 
 from System.Windows import (
     Window, WindowStartupLocation, Thickness,
@@ -2124,15 +2124,11 @@ def _pick_unit(scope, scope_label):
     # 'Select the Rooftop Unit to analyze', not '... Unit unit' (Colin, 2026-11-09)
     prompt = 'Select the {}{} to analyze'.format(
         scope_label, '' if scope_label.lower().endswith('unit') else ' unit')
-    try:
-        if filt is not None:
-            ref = uidoc.Selection.PickObject(ObjectType.Element, filt, prompt)
-        else:
-            ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
-    except Exception:
+    elem = ui_helpers.pick_element(uidoc, doc, 'Duct Performance', prompt,
+                                   filt)
+    if elem is None:
         return None
-    elem = doc.GetElement(ref.ElementId)
-    if elem is None or not hvac_graph.is_equipment(elem):
+    if not hvac_graph.is_equipment(elem):
         output.print_md('The picked element is not mechanical equipment.')
         return None
     if _equip_kind(elem) not in _SCOPE_LISTS.get(scope, ('unit',)):
@@ -2245,7 +2241,14 @@ def main():
                                   fan_inputs, make_sheets=True,
                                   apply_basis=False)
 
+    # Switch only after the command returns (RequestViewChange): setting
+    # ActiveView inside a command left Revit 2024 and 2025 stuck after the
+    # One-Line (2026-11-19).
     if res['new_sheets']:
-        uidoc.ActiveView = res['new_sheets'][0]
+        try:
+            uidoc.RequestViewChange(res['new_sheets'][0])
+        except Exception:
+            output.print_md('Open sheet **{}** from the Project Browser.'.format(
+                res['new_sheets'][0].SheetNumber))
 
 main()

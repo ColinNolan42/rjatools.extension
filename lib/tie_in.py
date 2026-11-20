@@ -236,3 +236,31 @@ def remember_existing(pipe_id, existing):
 def recall_existing(pipe_id):
     found = _EXISTING_BY_PIPE_ID.get(pipe_id)
     return dict(found) if found is not None else None
+
+
+NEW_CONSTRUCTION_TEXT = ("New construction. The system starts at the picked "
+                         "pipe, with no existing piping upstream.")
+
+
+def is_new_construction(existing):
+    """True when the Existing Conditions result says New Construction."""
+    return bool(existing) and bool(existing.get("new_construction"))
+
+
+def existing_for_sizing(existing):
+    """The existing dict to apply to the graph, or None for new construction
+    (nothing to apply, nothing to check)."""
+    if existing is None or is_new_construction(existing):
+        return None
+    return existing
+
+
+def existing_inputs_text(existing):
+    """One line for the inputs table: the entered existing piping, or the
+    new construction statement."""
+    if is_new_construction(existing):
+        return NEW_CONSTRUCTION_TEXT
+    return ("{0}\" pipe, {1:.1f} ft from the meter to the new connection, "
+            "{2:.1f} MBH existing load.".format(
+                existing["size_nominal"], float(existing["length_ft"]),
+                float(existing["load_mbh"])))

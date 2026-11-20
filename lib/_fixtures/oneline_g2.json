@@ -1,0 +1,2633 @@
+{
+ "bench": "G2", 
+ "children": {}, 
+ "disconnected": [], 
+ "downstream_table_id": null, 
+ "edges": {
+  "3593218": {
+   "cum_mbh": 1170.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    157.43230000000000, 
+    58.899999999999999, 
+    0.94999999999999996
+   ], 
+   "from": 3592842, 
+   "id": 3593218, 
+   "length_ft": 0.94059999999999999, 
+   "phase": "New Construction", 
+   "required_size": "1-1/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    156.49170000000001, 
+    58.899999999999999, 
+    0.94999999999999996
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593343, 
+   "zone": 0
+  }, 
+  "3593221": {
+   "cum_mbh": 1170.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    157.5, 
+    58.899999999999999, 
+    1.0177000000000000
+   ], 
+   "from": 3593343, 
+   "id": 3593221, 
+   "length_ft": 10.414600000000000, 
+   "phase": "New Construction", 
+   "required_size": "1-1/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    157.5, 
+    58.899999999999999, 
+    11.432300000000000
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593345, 
+   "zone": 0
+  }, 
+  "3593224": {
+   "cum_mbh": 1170.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    157.5, 
+    24.067699999999999, 
+    11.5
+   ], 
+   "from": 3593345, 
+   "id": 3593224, 
+   "length_ft": 34.764600000000002, 
+   "phase": "New Construction", 
+   "required_size": "1-1/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    157.5, 
+    58.832299999999996, 
+    11.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593349, 
+   "zone": 0
+  }, 
+  "3593227": {
+   "cum_mbh": 1170.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    157.56770000000000, 
+    24.0, 
+    11.5
+   ], 
+   "from": 3593349, 
+   "id": 3593227, 
+   "length_ft": 12.343800000000000, 
+   "phase": "New Construction", 
+   "required_size": "1-1/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    169.91149999999999, 
+    24.0, 
+    11.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593351, 
+   "zone": 0
+  }, 
+  "3593230": {
+   "cum_mbh": 375.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    170.0, 
+    33.932299999999998, 
+    11.5
+   ], 
+   "from": 3593351, 
+   "id": 3593230, 
+   "length_ft": 9.8437999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    170.0, 
+    24.088500000000000, 
+    11.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593353, 
+   "zone": 0
+  }, 
+  "3593233": {
+   "cum_mbh": 375.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    170.0, 
+    34.0, 
+    11.567700000000000
+   ], 
+   "from": 3593353, 
+   "id": 3593233, 
+   "length_ft": 13.843700000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    170.0, 
+    34.0, 
+    25.411500000000000
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593357, 
+   "zone": 0
+  }, 
+  "3593236": {
+   "cum_mbh": 150.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    162.0, 
+    34.0, 
+    25.5
+   ], 
+   "from": 3593357, 
+   "id": 3593236, 
+   "length_ft": 7.9115000000000002, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    169.91149999999999, 
+    34.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593394, 
+   "zone": 0
+  }, 
+  "3593239": {
+   "cum_mbh": 225.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    177.91149999999999, 
+    34.0, 
+    25.5
+   ], 
+   "from": 3593357, 
+   "id": 3593239, 
+   "length_ft": 7.8228999999999997, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    170.08850000000001, 
+    34.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593359, 
+   "zone": 0
+  }, 
+  "3593242": {
+   "cum_mbh": 75.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    178.0, 
+    37.899999999999999, 
+    25.5
+   ], 
+   "from": 3593359, 
+   "id": 3593242, 
+   "length_ft": 3.8115000000000001, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    178.0, 
+    34.088500000000003, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593398, 
+   "zone": 0
+  }, 
+  "3593245": {
+   "cum_mbh": 150.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    186.0, 
+    34.0, 
+    25.5
+   ], 
+   "from": 3593359, 
+   "id": 3593245, 
+   "length_ft": 7.9115000000000002, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    178.08850000000001, 
+    34.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593402, 
+   "zone": 0
+  }, 
+  "3593248": {
+   "cum_mbh": 795.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    189.91149999999999, 
+    24.0, 
+    11.5
+   ], 
+   "from": 3593351, 
+   "id": 3593248, 
+   "length_ft": 19.822900000000001, 
+   "phase": "New Construction", 
+   "required_size": "1 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    170.08850000000001, 
+    24.0, 
+    11.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593361, 
+   "zone": 0
+  }, 
+  "3593251": {
+   "cum_mbh": 165.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    190.0, 
+    14.067700000000000, 
+    11.5
+   ], 
+   "from": 3593361, 
+   "id": 3593251, 
+   "length_ft": 9.8437999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    190.0, 
+    23.911500000000000, 
+    11.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593363, 
+   "zone": 0
+  }, 
+  "3593254": {
+   "cum_mbh": 165.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    190.0, 
+    14.0, 
+    25.432300000000001
+   ], 
+   "from": 3593363, 
+   "id": 3593254, 
+   "length_ft": 13.864599999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    190.0, 
+    14.0, 
+    11.567700000000000
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593367, 
+   "zone": 0
+  }, 
+  "3593257": {
+   "cum_mbh": 165.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    193.91149999999999, 
+    14.0, 
+    25.5
+   ], 
+   "from": 3593367, 
+   "id": 3593257, 
+   "length_ft": 3.8437999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    190.06770000000000, 
+    14.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593371, 
+   "zone": 0
+  }, 
+  "3593260": {
+   "cum_mbh": 45.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    194.0, 
+    8.0999999999999996, 
+    25.5
+   ], 
+   "from": 3593371, 
+   "id": 3593260, 
+   "length_ft": 5.8114999999999997, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    194.0, 
+    13.911500000000000, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593406, 
+   "zone": 0
+  }, 
+  "3593263": {
+   "cum_mbh": 120.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    203.91149999999999, 
+    14.0, 
+    25.5
+   ], 
+   "from": 3593371, 
+   "id": 3593263, 
+   "length_ft": 9.8229000000000006, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    194.08850000000001, 
+    14.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593373, 
+   "zone": 0
+  }, 
+  "3593266": {
+   "cum_mbh": 60.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    204.0, 
+    8.0999999999999996, 
+    25.5
+   ], 
+   "from": 3593373, 
+   "id": 3593266, 
+   "length_ft": 5.8114999999999997, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    204.0, 
+    13.911500000000000, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593410, 
+   "zone": 0
+  }, 
+  "3593269": {
+   "cum_mbh": 60.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    204.08850000000001, 
+    14.0, 
+    25.5
+   ], 
+   "from": 3593373, 
+   "id": 3593269, 
+   "length_ft": 5.9115000000000002, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    210.0, 
+    14.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593414, 
+   "zone": 0
+  }, 
+  "3593272": {
+   "cum_mbh": 630.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    225.93230000000000, 
+    24.0, 
+    11.5
+   ], 
+   "from": 3593361, 
+   "id": 3593272, 
+   "length_ft": 35.843800000000002, 
+   "phase": "New Construction", 
+   "required_size": "1 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    190.08850000000001, 
+    24.0, 
+    11.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593375, 
+   "zone": 0
+  }, 
+  "3593275": {
+   "cum_mbh": 630.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    226.0, 
+    24.0, 
+    25.432300000000001
+   ], 
+   "from": 3593375, 
+   "id": 3593275, 
+   "length_ft": 13.864599999999999, 
+   "phase": "New Construction", 
+   "required_size": "1 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    226.0, 
+    24.0, 
+    11.567700000000000
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593377, 
+   "zone": 0
+  }, 
+  "3593278": {
+   "cum_mbh": 630.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    229.91149999999999, 
+    24.0, 
+    25.5
+   ], 
+   "from": 3593377, 
+   "id": 3593278, 
+   "length_ft": 3.8437999999999999, 
+   "phase": "New Construction", 
+   "required_size": "1 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    226.06770000000000, 
+    24.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593381, 
+   "zone": 0
+  }, 
+  "3593281": {
+   "cum_mbh": 505.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    230.08850000000001, 
+    24.0, 
+    25.5
+   ], 
+   "from": 3593381, 
+   "id": 3593281, 
+   "length_ft": 7.8228999999999997, 
+   "phase": "New Construction", 
+   "required_size": "1 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    237.91149999999999, 
+    24.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593383, 
+   "zone": 0
+  }, 
+  "3593284": {
+   "cum_mbh": 405.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    238.08850000000001, 
+    24.0, 
+    25.5
+   ], 
+   "from": 3593383, 
+   "id": 3593284, 
+   "length_ft": 7.8228999999999997, 
+   "phase": "New Construction", 
+   "required_size": "1 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    245.91149999999999, 
+    24.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593385, 
+   "zone": 0
+  }, 
+  "3593287": {
+   "cum_mbh": 315.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    253.91149999999999, 
+    24.0, 
+    25.5
+   ], 
+   "from": 3593385, 
+   "id": 3593287, 
+   "length_ft": 7.8228999999999997, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    246.08850000000001, 
+    24.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593387, 
+   "zone": 0
+  }, 
+  "3593290": {
+   "cum_mbh": 190.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    261.91149999999999, 
+    24.0, 
+    25.5
+   ], 
+   "from": 3593387, 
+   "id": 3593290, 
+   "length_ft": 7.8228999999999997, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    254.08850000000001, 
+    24.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593389, 
+   "zone": 0
+  }, 
+  "3593293": {
+   "cum_mbh": 90.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    271.93230000000000, 
+    24.0, 
+    25.5
+   ], 
+   "from": 3593389, 
+   "id": 3593293, 
+   "length_ft": 9.8437999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    262.08850000000001, 
+    24.0, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593391, 
+   "zone": 0
+  }, 
+  "3593296": {
+   "cum_mbh": 125.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    230.0, 
+    24.088500000000000, 
+    25.5
+   ], 
+   "from": 3593381, 
+   "id": 3593296, 
+   "length_ft": 2.2551999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    230.0, 
+    26.343800000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593332, 
+   "zone": 0
+  }, 
+  "3593299": {
+   "cum_mbh": 125.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    230.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "from": 3593332, 
+   "id": 3593299, 
+   "length_ft": 3.2437000000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    230.0, 
+    26.656300000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593418, 
+   "zone": 0
+  }, 
+  "3593302": {
+   "cum_mbh": 90.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    246.0, 
+    24.088500000000000, 
+    25.5
+   ], 
+   "from": 3593385, 
+   "id": 3593302, 
+   "length_ft": 2.2551999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    246.0, 
+    26.343800000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593334, 
+   "zone": 0
+  }, 
+  "3593305": {
+   "cum_mbh": 90.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    246.0, 
+    26.656300000000002, 
+    25.5
+   ], 
+   "from": 3593334, 
+   "id": 3593305, 
+   "length_ft": 3.2437000000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    246.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593422, 
+   "zone": 0
+  }, 
+  "3593308": {
+   "cum_mbh": 100.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    262.0, 
+    26.343800000000002, 
+    25.5
+   ], 
+   "from": 3593389, 
+   "id": 3593308, 
+   "length_ft": 2.2551999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    262.0, 
+    24.088500000000000, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593336, 
+   "zone": 0
+  }, 
+  "3593311": {
+   "cum_mbh": 100.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    262.0, 
+    26.656300000000002, 
+    25.5
+   ], 
+   "from": 3593336, 
+   "id": 3593311, 
+   "length_ft": 3.2437000000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    262.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593426, 
+   "zone": 0
+  }, 
+  "3593314": {
+   "cum_mbh": 90.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    272.0, 
+    26.343800000000002, 
+    25.5
+   ], 
+   "from": 3593391, 
+   "id": 3593314, 
+   "length_ft": 2.2759999999999998, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    272.0, 
+    24.067699999999999, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593338, 
+   "zone": 0
+  }, 
+  "3593317": {
+   "cum_mbh": 90.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    272.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "from": 3593338, 
+   "id": 3593317, 
+   "length_ft": 3.2437000000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    272.0, 
+    26.656300000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593430, 
+   "zone": 0
+  }, 
+  "3593320": {
+   "cum_mbh": 100.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    238.0, 
+    23.911500000000000, 
+    25.5
+   ], 
+   "from": 3593383, 
+   "id": 3593320, 
+   "length_ft": 2.2551999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    238.0, 
+    21.656300000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593340, 
+   "zone": 0
+  }, 
+  "3593323": {
+   "cum_mbh": 100.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    238.0, 
+    18.100000000000001, 
+    25.5
+   ], 
+   "from": 3593340, 
+   "id": 3593323, 
+   "length_ft": 3.2437000000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    238.0, 
+    21.343800000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593434, 
+   "zone": 0
+  }, 
+  "3593326": {
+   "cum_mbh": 125.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    254.0, 
+    23.911500000000000, 
+    25.5
+   ], 
+   "from": 3593387, 
+   "id": 3593326, 
+   "length_ft": 2.2551999999999999, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    254.0, 
+    21.656300000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593342, 
+   "zone": 0
+  }, 
+  "3593329": {
+   "cum_mbh": 125.0, 
+   "diameter_in": 1.0, 
+   "end": [
+    254.0, 
+    18.100000000000001, 
+    25.5
+   ], 
+   "from": 3593342, 
+   "id": 3593329, 
+   "length_ft": 3.2437000000000000, 
+   "phase": "New Construction", 
+   "required_size": "3/4 K&L", 
+   "size": "1 K&L", 
+   "start": [
+    254.0, 
+    21.343800000000002, 
+    25.5
+   ], 
+   "table_id": "402.4(12)", 
+   "to": 3593438, 
+   "zone": 0
+  }
+ }, 
+ "elbow_equiv_ft": 5.0, 
+ "tee_equiv_ft": 3.0, 
+ "existing": null, 
+ "existing_connections": [], 
+ "farthest_id": 3593430, 
+ "farthest_name": "RTU-5", 
+ "levels": [
+  {
+   "elev": -0.0, 
+   "name": "FIRST FLOOR"
+  }, 
+  {
+   "elev": 10.0, 
+   "name": "ROOF - ONE STORY"
+  }, 
+  {
+   "elev": 14.0, 
+   "name": "SECOND FLOOR"
+  }, 
+  {
+   "elev": 24.0, 
+   "name": "ROOF"
+  }
+ ], 
+ "longest_path": [
+  3592842, 
+  3593218, 
+  3593343, 
+  3593221, 
+  3593345, 
+  3593224, 
+  3593349, 
+  3593227, 
+  3593351, 
+  3593248, 
+  3593361, 
+  3593272, 
+  3593375, 
+  3593275, 
+  3593377, 
+  3593278, 
+  3593381, 
+  3593281, 
+  3593383, 
+  3593284, 
+  3593385, 
+  3593287, 
+  3593387, 
+  3593290, 
+  3593389, 
+  3593293, 
+  3593391, 
+  3593314, 
+  3593338, 
+  3593317, 
+  3593430
+ ], 
+ "longest_run_ft": 229.4938, 
+ "midstream_prv_ids": [], 
+ "nested_prv_ids": [], 
+ "nodes": {
+  "3592842": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": null, 
+     "xyz": [
+      155.50829999999999, 
+      58.899999999999999, 
+      0.94999999999999996
+     ]
+    }, 
+    {
+     "to": 3593218, 
+     "xyz": [
+      156.49170000000001, 
+      58.899999999999999, 
+      0.94999999999999996
+     ]
+    }
+   ], 
+   "cum_mbh": 1170.0, 
+   "family": "RJA - Gas Meter", 
+   "id": 3592842, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "meter", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593218": 0.0
+   }, 
+   "xyz": [
+    156.0, 
+    58.899999999999999, 
+    -0.0
+   ], 
+   "zone": 0
+  }, 
+  "3593332": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593296, 
+     "xyz": [
+      230.0, 
+      26.343800000000002, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593299, 
+     "xyz": [
+      230.0, 
+      26.656300000000002, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 125.0, 
+   "family": "RJA - Pressure Regulating Valve", 
+   "id": 3593332, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": true, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593296": 0.15620000000000001, 
+    "3593299": 0.15629999999999999
+   }, 
+   "xyz": [
+    230.0, 
+    26.5, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593334": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593302, 
+     "xyz": [
+      246.0, 
+      26.343800000000002, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593305, 
+     "xyz": [
+      246.0, 
+      26.656300000000002, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 90.0, 
+   "family": "RJA - Pressure Regulating Valve", 
+   "id": 3593334, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": true, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593302": 0.15620000000000001, 
+    "3593305": 0.15629999999999999
+   }, 
+   "xyz": [
+    246.0, 
+    26.5, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593336": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593311, 
+     "xyz": [
+      262.0, 
+      26.656300000000002, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593308, 
+     "xyz": [
+      262.0, 
+      26.343800000000002, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 100.0, 
+   "family": "RJA - Pressure Regulating Valve", 
+   "id": 3593336, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": true, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593308": 0.15620000000000001, 
+    "3593311": 0.15629999999999999
+   }, 
+   "xyz": [
+    262.0, 
+    26.5, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593338": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593314, 
+     "xyz": [
+      272.0, 
+      26.343800000000002, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593317, 
+     "xyz": [
+      272.0, 
+      26.656300000000002, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 90.0, 
+   "family": "RJA - Pressure Regulating Valve", 
+   "id": 3593338, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": true, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593314": 0.15620000000000001, 
+    "3593317": 0.15629999999999999
+   }, 
+   "xyz": [
+    272.0, 
+    26.5, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593340": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593323, 
+     "xyz": [
+      238.0, 
+      21.343800000000002, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593320, 
+     "xyz": [
+      238.0, 
+      21.656300000000002, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 100.0, 
+   "family": "RJA - Pressure Regulating Valve", 
+   "id": 3593340, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": true, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593320": 0.15629999999999999, 
+    "3593323": 0.15620000000000001
+   }, 
+   "xyz": [
+    238.0, 
+    21.5, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593342": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593329, 
+     "xyz": [
+      254.0, 
+      21.343800000000002, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593326, 
+     "xyz": [
+      254.0, 
+      21.656300000000002, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 125.0, 
+   "family": "RJA - Pressure Regulating Valve", 
+   "id": 3593342, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": true, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593326": 0.15629999999999999, 
+    "3593329": 0.15620000000000001
+   }, 
+   "xyz": [
+    254.0, 
+    21.5, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593343": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593218, 
+     "xyz": [
+      157.43230000000000, 
+      58.899999999999999, 
+      0.94999999999999996
+     ]
+    }, 
+    {
+     "to": 3593221, 
+     "xyz": [
+      157.5, 
+      58.899999999999999, 
+      1.0177000000000000
+     ]
+    }
+   ], 
+   "cum_mbh": 1170.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593343, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593218": 0.067699999999999996, 
+    "3593221": 0.067699999999999996
+   }, 
+   "xyz": [
+    157.5, 
+    58.899999999999999, 
+    0.94999999999999996
+   ], 
+   "zone": 0
+  }, 
+  "3593345": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593224, 
+     "xyz": [
+      157.5, 
+      58.832299999999996, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593221, 
+     "xyz": [
+      157.5, 
+      58.899999999999999, 
+      11.432300000000000
+     ]
+    }
+   ], 
+   "cum_mbh": 1170.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593345, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593221": 0.067699999999999996, 
+    "3593224": 0.067699999999999996
+   }, 
+   "xyz": [
+    157.5, 
+    58.899999999999999, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593349": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593224, 
+     "xyz": [
+      157.5, 
+      24.067699999999999, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593227, 
+     "xyz": [
+      157.56770000000000, 
+      24.0, 
+      11.5
+     ]
+    }
+   ], 
+   "cum_mbh": 1170.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593349, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593224": 0.067699999999999996, 
+    "3593227": 0.067699999999999996
+   }, 
+   "xyz": [
+    157.5, 
+    24.0, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593351": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593230, 
+     "xyz": [
+      170.0, 
+      24.088500000000000, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593248, 
+     "xyz": [
+      170.08850000000001, 
+      24.0, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593227, 
+     "xyz": [
+      169.91149999999999, 
+      24.0, 
+      11.5
+     ]
+    }
+   ], 
+   "cum_mbh": 1170.0, 
+   "family": "Tee - Generic", 
+   "id": 3593351, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593227": 0.088499999999999995, 
+    "3593230": 0.088499999999999995, 
+    "3593248": 0.088499999999999995
+   }, 
+   "xyz": [
+    170.0, 
+    24.0, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593353": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593233, 
+     "xyz": [
+      170.0, 
+      34.0, 
+      11.567700000000000
+     ]
+    }, 
+    {
+     "to": 3593230, 
+     "xyz": [
+      170.0, 
+      33.932299999999998, 
+      11.5
+     ]
+    }
+   ], 
+   "cum_mbh": 375.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593353, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593230": 0.067699999999999996, 
+    "3593233": 0.067699999999999996
+   }, 
+   "xyz": [
+    170.0, 
+    34.0, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593357": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593236, 
+     "xyz": [
+      169.91149999999999, 
+      34.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593239, 
+     "xyz": [
+      170.08850000000001, 
+      34.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593233, 
+     "xyz": [
+      170.0, 
+      34.0, 
+      25.411500000000000
+     ]
+    }
+   ], 
+   "cum_mbh": 375.0, 
+   "family": "Tee - Generic", 
+   "id": 3593357, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593233": 0.088499999999999995, 
+    "3593236": 0.088499999999999995, 
+    "3593239": 0.088499999999999995
+   }, 
+   "xyz": [
+    170.0, 
+    34.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593359": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593242, 
+     "xyz": [
+      178.0, 
+      34.088500000000003, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593239, 
+     "xyz": [
+      177.91149999999999, 
+      34.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593245, 
+     "xyz": [
+      178.08850000000001, 
+      34.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 225.0, 
+   "family": "Tee - Generic", 
+   "id": 3593359, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593239": 0.088499999999999995, 
+    "3593242": 0.088499999999999995, 
+    "3593245": 0.088499999999999995
+   }, 
+   "xyz": [
+    178.0, 
+    34.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593361": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593248, 
+     "xyz": [
+      189.91149999999999, 
+      24.0, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593251, 
+     "xyz": [
+      190.0, 
+      23.911500000000000, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593272, 
+     "xyz": [
+      190.08850000000001, 
+      24.0, 
+      11.5
+     ]
+    }
+   ], 
+   "cum_mbh": 795.0, 
+   "family": "Tee - Generic", 
+   "id": 3593361, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593248": 0.088499999999999995, 
+    "3593251": 0.088499999999999995, 
+    "3593272": 0.088499999999999995
+   }, 
+   "xyz": [
+    190.0, 
+    24.0, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593363": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593251, 
+     "xyz": [
+      190.0, 
+      14.067700000000000, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593254, 
+     "xyz": [
+      190.0, 
+      14.0, 
+      11.567700000000000
+     ]
+    }
+   ], 
+   "cum_mbh": 165.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593363, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593251": 0.067699999999999996, 
+    "3593254": 0.067699999999999996
+   }, 
+   "xyz": [
+    190.0, 
+    14.0, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593367": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593254, 
+     "xyz": [
+      190.0, 
+      14.0, 
+      25.432300000000001
+     ]
+    }, 
+    {
+     "to": 3593257, 
+     "xyz": [
+      190.06770000000000, 
+      14.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 165.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593367, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593254": 0.067699999999999996, 
+    "3593257": 0.067699999999999996
+   }, 
+   "xyz": [
+    190.0, 
+    14.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593371": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593260, 
+     "xyz": [
+      194.0, 
+      13.911500000000000, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593263, 
+     "xyz": [
+      194.08850000000001, 
+      14.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593257, 
+     "xyz": [
+      193.91149999999999, 
+      14.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 165.0, 
+   "family": "Tee - Generic", 
+   "id": 3593371, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593257": 0.088499999999999995, 
+    "3593260": 0.088499999999999995, 
+    "3593263": 0.088499999999999995
+   }, 
+   "xyz": [
+    194.0, 
+    14.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593373": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593266, 
+     "xyz": [
+      204.0, 
+      13.911500000000000, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593269, 
+     "xyz": [
+      204.08850000000001, 
+      14.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593263, 
+     "xyz": [
+      203.91149999999999, 
+      14.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 120.0, 
+   "family": "Tee - Generic", 
+   "id": 3593373, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593263": 0.088499999999999995, 
+    "3593266": 0.088499999999999995, 
+    "3593269": 0.088499999999999995
+   }, 
+   "xyz": [
+    204.0, 
+    14.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593375": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593272, 
+     "xyz": [
+      225.93230000000000, 
+      24.0, 
+      11.5
+     ]
+    }, 
+    {
+     "to": 3593275, 
+     "xyz": [
+      226.0, 
+      24.0, 
+      11.567700000000000
+     ]
+    }
+   ], 
+   "cum_mbh": 630.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593375, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593272": 0.067699999999999996, 
+    "3593275": 0.067699999999999996
+   }, 
+   "xyz": [
+    226.0, 
+    24.0, 
+    11.5
+   ], 
+   "zone": 0
+  }, 
+  "3593377": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593275, 
+     "xyz": [
+      226.0, 
+      24.0, 
+      25.432300000000001
+     ]
+    }, 
+    {
+     "to": 3593278, 
+     "xyz": [
+      226.06770000000000, 
+      24.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 630.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593377, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593275": 0.067699999999999996, 
+    "3593278": 0.067699999999999996
+   }, 
+   "xyz": [
+    226.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593381": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593278, 
+     "xyz": [
+      229.91149999999999, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593296, 
+     "xyz": [
+      230.0, 
+      24.088500000000000, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593281, 
+     "xyz": [
+      230.08850000000001, 
+      24.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 630.0, 
+   "family": "Tee - Generic", 
+   "id": 3593381, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593278": 0.088499999999999995, 
+    "3593281": 0.088499999999999995, 
+    "3593296": 0.088499999999999995
+   }, 
+   "xyz": [
+    230.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593383": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593320, 
+     "xyz": [
+      238.0, 
+      23.911500000000000, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593281, 
+     "xyz": [
+      237.91149999999999, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593284, 
+     "xyz": [
+      238.08850000000001, 
+      24.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 505.0, 
+   "family": "Tee - Generic", 
+   "id": 3593383, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593281": 0.088499999999999995, 
+    "3593284": 0.088499999999999995, 
+    "3593320": 0.088499999999999995
+   }, 
+   "xyz": [
+    238.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593385": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593287, 
+     "xyz": [
+      246.08850000000001, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593302, 
+     "xyz": [
+      246.0, 
+      24.088500000000000, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593284, 
+     "xyz": [
+      245.91149999999999, 
+      24.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 405.0, 
+   "family": "Tee - Generic", 
+   "id": 3593385, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593284": 0.088499999999999995, 
+    "3593287": 0.088499999999999995, 
+    "3593302": 0.088499999999999995
+   }, 
+   "xyz": [
+    246.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593387": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593326, 
+     "xyz": [
+      254.0, 
+      23.911500000000000, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593287, 
+     "xyz": [
+      253.91149999999999, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593290, 
+     "xyz": [
+      254.08850000000001, 
+      24.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 315.0, 
+   "family": "Tee - Generic", 
+   "id": 3593387, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593287": 0.088499999999999995, 
+    "3593290": 0.088499999999999995, 
+    "3593326": 0.088499999999999995
+   }, 
+   "xyz": [
+    254.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593389": {
+   "connector_count": 3, 
+   "connectors": [
+    {
+     "to": 3593293, 
+     "xyz": [
+      262.08850000000001, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593290, 
+     "xyz": [
+      261.91149999999999, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593308, 
+     "xyz": [
+      262.0, 
+      24.088500000000000, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 190.0, 
+   "family": "Tee - Generic", 
+   "id": 3593389, 
+   "is_elbow": false, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "tee", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593290": 0.088499999999999995, 
+    "3593293": 0.088499999999999995, 
+    "3593308": 0.088499999999999995
+   }, 
+   "xyz": [
+    262.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593391": {
+   "connector_count": 2, 
+   "connectors": [
+    {
+     "to": 3593293, 
+     "xyz": [
+      271.93230000000000, 
+      24.0, 
+      25.5
+     ]
+    }, 
+    {
+     "to": 3593314, 
+     "xyz": [
+      272.0, 
+      24.067699999999999, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 90.0, 
+   "family": "Elbow - Generic", 
+   "id": 3593391, 
+   "is_elbow": true, 
+   "is_gas_fixture": false, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fitting", 
+   "load_mbh": 0.0, 
+   "name": "", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593293": 0.067699999999999996, 
+    "3593314": 0.067699999999999996
+   }, 
+   "xyz": [
+    272.0, 
+    24.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593394": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593236, 
+     "xyz": [
+      162.0, 
+      34.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 150.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593394, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 150.0, 
+   "name": "AHU-1", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593236": 0.0
+   }, 
+   "xyz": [
+    162.0, 
+    34.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593398": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593242, 
+     "xyz": [
+      178.0, 
+      37.899999999999999, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 75.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593398, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 75.0, 
+   "name": "ERV-1", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593242": 0.0
+   }, 
+   "xyz": [
+    178.0, 
+    37.899999999999999, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593402": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593245, 
+     "xyz": [
+      186.0, 
+      34.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 150.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593402, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 150.0, 
+   "name": "AHU-2", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593245": 0.0
+   }, 
+   "xyz": [
+    186.0, 
+    34.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593406": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593260, 
+     "xyz": [
+      194.0, 
+      8.0999999999999996, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 45.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593406, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 45.0, 
+   "name": "B-3", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593260": 0.0
+   }, 
+   "xyz": [
+    194.0, 
+    8.0999999999999996, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593410": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593266, 
+     "xyz": [
+      204.0, 
+      8.0999999999999996, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 60.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593410, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 60.0, 
+   "name": "B-1", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593266": 0.0
+   }, 
+   "xyz": [
+    204.0, 
+    8.0999999999999996, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593414": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593269, 
+     "xyz": [
+      210.0, 
+      14.0, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 60.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593414, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 60.0, 
+   "name": "B-2", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593269": 0.0
+   }, 
+   "xyz": [
+    210.0, 
+    14.0, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593418": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593299, 
+     "xyz": [
+      230.0, 
+      29.899999999999999, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 125.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593418, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 125.0, 
+   "name": "RTU-6", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593299": 0.0
+   }, 
+   "xyz": [
+    230.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593422": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593305, 
+     "xyz": [
+      246.0, 
+      29.899999999999999, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 90.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593422, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 90.0, 
+   "name": "RTU-3", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593305": 0.0
+   }, 
+   "xyz": [
+    246.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593426": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593311, 
+     "xyz": [
+      262.0, 
+      29.899999999999999, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 100.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593426, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 100.0, 
+   "name": "RTU-2", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593311": 0.0
+   }, 
+   "xyz": [
+    262.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593430": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593317, 
+     "xyz": [
+      272.0, 
+      29.899999999999999, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 90.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593430, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 90.0, 
+   "name": "RTU-5", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593317": 0.0
+   }, 
+   "xyz": [
+    272.0, 
+    29.899999999999999, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593434": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593323, 
+     "xyz": [
+      238.0, 
+      18.100000000000001, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 100.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593434, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 100.0, 
+   "name": "RTU-4", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593323": 0.0
+   }, 
+   "xyz": [
+    238.0, 
+    18.100000000000001, 
+    25.5
+   ], 
+   "zone": 0
+  }, 
+  "3593438": {
+   "connector_count": 1, 
+   "connectors": [
+    {
+     "to": 3593329, 
+     "xyz": [
+      254.0, 
+      18.100000000000001, 
+      25.5
+     ]
+    }
+   ], 
+   "cum_mbh": 125.0, 
+   "family": "RJA- Gas Equipment Cap", 
+   "id": 3593438, 
+   "is_elbow": false, 
+   "is_gas_fixture": true, 
+   "is_midstream_prv": false, 
+   "is_prv": false, 
+   "is_transition": false, 
+   "kind": "fixture", 
+   "load_mbh": 125.0, 
+   "name": "RTU-1", 
+   "phase": "New Construction", 
+   "takeout_ft": {
+    "3593329": 0.0
+   }, 
+   "xyz": [
+    254.0, 
+    18.100000000000001, 
+    25.5
+   ], 
+   "zone": 0
+  }
+ }, 
+ "non_gas_skipped": [], 
+ "origin_id": 3592842, 
+ "origin_kind": "meter", 
+ "origin_phase": "New Construction", 
+ "prv_ids": [
+  3593332, 
+  3593340, 
+  3593334, 
+  3593342, 
+  3593336, 
+  3593338
+ ], 
+ "sizing": {
+  "downstream_table_id": null, 
+  "heat_content_btu_per_cf": 840.0, 
+  "longest_run_ft": 229.4938, 
+  "table_id": "402.4(12)", 
+  "table_length_used_ft": 250.0
+ }, 
+ "sizing_error": null, 
+ "table_id": "402.4(12)", 
+ "version": 1
+}

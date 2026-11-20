@@ -41,9 +41,15 @@ class NetworkNode(object):
         self.fixture_name       = ""
         self.is_gas_fixture     = False
 
-        # Elbow detection  -  True if family name contains "Elbow"
-        # Used by _find_longest_run to add 5ft equivalent length per elbow
-        self.is_elbow           = "Elbow" in self.family_name
+        # Elbow detection  -  True if family name contains "elbow", any case
+        # (F3: a family named "ELBOW" or "elbow" was missed and lost its
+        # 5 ft). Used by _find_longest_run to add 5ft equivalent length.
+        self.is_elbow           = "elbow" in (self.family_name or "").lower()
+
+        # Transition (reducer): Revit places one where a resized tee meets a
+        # smaller pipe. It adds no developed length of its own; the flag is
+        # for reporting and for the One-Line.
+        self.is_transition      = "transition" in (self.family_name or "").lower()
 
         # Cumulative load at this node  -  sum of all downstream fixture loads
         self.cumulative_load_mbh = 0.0
@@ -129,6 +135,9 @@ class NetworkGraph(object):
                                         # for the system that node feeds. Only
                                         # filled when the graph has a mid-stream
                                         # PRV.
+        self.non_gas_skipped    = []    # (element_id, classification) of each
+                                        # pipe or element on a system that is
+                                        # not gas, where the walk stopped (F1)
 
     def add_node(self, node):
         self.nodes[node.element_id] = node
@@ -267,6 +276,57 @@ def _not_gas_classification(connector):
     if system_type in _NOT_GAS_CLASSIFICATIONS:
         return system_type
     return None
+
+
+def _record_non_gas(graph, element_id, classification):
+    """Note where the walk stopped at a system that is not gas (F1), once
+    per element."""
+    if any(eid == element_id for eid, _ in graph.non_gas_skipped):
+        return
+    graph.non_gas_skipped.append((element_id, classification))
+
+
+def non_fixture_ends(graph):
+    """One connector ends that are not gas fixtures (F2): a cap or an
+    appliance with IS_GAS_FIXTURE not set. They carry no load, so the pipe
+    to them is sized at the minimum. Returns the nodes, by element id."""
+    ends = [n for n in graph.nodes.values()
+            if n.node_type == "fixture" and not n.is_gas_fixture]
+    return sorted(ends, key=lambda n: n.element_id)
+
+
+_LOG_DIGEST_PREFIXES = ("SKIP", "WARNING", "TERMINAL", "EXISTING", "UNKNOWN")
+
+
+def log_digest(graph, helper_log=None):
+    """The traversal and helper log lines worth reading (F5, Rule 6).
+
+    Traversal lines that start with SKIP, WARNING, TERMINAL, EXISTING or
+    UNKNOWN, except the routine "already visited" SKIPs, and every WARNING or
+    ERROR entry of revit_helpers.get_log(). Returns two lists of strings.
+    """
+    walk = [s for s in (graph.traversal_log or [])
+            if s.startswith(_LOG_DIGEST_PREFIXES)
+            and "already visited" not in s]
+    # Every fitting is checked for the three gas fixture parameters and is
+    # expected not to have them (G1: 11 fittings gave 33 lines of noise).
+    # A missing one only matters on a one connector end.
+    fixture_params = (shared_params.PARAM_IS_GAS_FIXTURE,
+                      shared_params.PARAM_GAS_LOAD_MBH,
+                      shared_params.PARAM_FIXTURE_NAME)
+    ends = set(n.element_id for n in graph.nodes.values()
+               if n.node_type == "fixture")
+    helpers = []
+    for e in helper_log or []:
+        msg = e.get("message") or ""
+        if (e.get("element_id") not in ends and "NOT FOUND" in msg
+                and any("'{}'".format(p) in msg for p in fixture_params)):
+            continue
+        if e.get("level") in ("WARNING", "ERROR"):
+            helpers.append("{}: {} element {}: {}".format(
+                e.get("level"), e.get("function"),
+                e.get("element_id"), e.get("message")))
+    return walk, helpers
 
 
 def check_gas_pipe(pipe):
@@ -451,6 +511,7 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
             graph.log(
                 "SKIP: pipe {} is {}, not gas. Not sized, not "
                 "followed.".format(pipe_id, not_gas))
+            _record_non_gas(graph, pipe_id, not_gas)
             return
 
     # Identify which connector leads back to parent and which goes forward
@@ -584,6 +645,7 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
                     "SKIP: element {} connector {} is {}, not gas. Element "
                     "{} not followed.".format(
                         eid, c.get("connector_index"), not_gas, next_id))
+                _record_non_gas(graph, next_id, not_gas)
                 continue
             if next_id not in visited:
                 next_element = _get_element(doc, next_id)
@@ -657,18 +719,29 @@ def _find_longest_run(graph):
     Per IFGC A103.1 - this single length is used to size ALL segments
     in Phase 2.
 
-    Developed length for each path =
+    Developed length for each path (Colin, 2026-11-19) =
         sum of pipe lengths along that path
-        + (number of elbows along that path x 5ft equivalent length)
+        + (number of elbows the path passes x 5 ft)
+        + (number of tees the path passes x 3 ft)
 
-    The path with the greatest developed length is the longest run.
-    Elbows are counted per path - an elbow only contributes to paths
-    that physically pass through it.
+    A tee counts whether the run goes straight through it or turns into its
+    branch. The length inside each fitting is NOT added; the 5 ft and 3 ft
+    equivalents already account for the fittings (replaces the 2026-11-18
+    centerline rule). Elbows and tees are counted per path - one only
+    contributes to paths that physically pass through it.
     """
     if graph.origin_id is None:
         return
 
     graph.longest_run = _longest_run_from(graph, graph.origin_id, False)
+
+
+def counts_as_tee(node, node_id, start_id):
+    """True when a path passing node adds the tee equivalent length: a
+    fitting with 3 or more connectors that is not a gas appliance, not the
+    node the walk starts at and not a PRV."""
+    return (node.node_type == "tee" and not node.is_gas_fixture
+            and node_id != start_id and not node.is_prv)
 
 
 def _longest_run_from(graph, start_id, stop_at_prv):
@@ -685,48 +758,63 @@ def _longest_run_from(graph, start_id, stop_at_prv):
                       _find_longest_run() reports.
     """
     ELBOW_EQUIV_FT = shared_params.ELBOW_EQUIV_LENGTH_FT
+    TEE_EQUIV_FT = shared_params.TEE_EQUIV_LENGTH_FT
 
     longest = {
         "total_length_feet":        0.0,
         "pipe_length_feet":         0.0,
+        # Kept at 0.0 so older readers do not break: the length inside
+        # fittings is no longer part of developed length (2026-11-19).
+        "fitting_length_feet":      0.0,
         "elbow_count":              0,
         "elbow_equiv_length_feet":  0.0,
+        "tee_count":                0,
+        "tee_equiv_length_feet":    0.0,
         "path_element_ids":         [],
         "farthest_fixture_id":      None,
         "farthest_fixture_name":    ""
     }
 
-    def _dfs(node_id, pipe_length, elbow_count, current_path):
-        """Walk one path. pipe_length and elbow_count are local to this path."""
+    def _dfs(node_id, pipe_length, elbow_count, tee_count, current_path):
+        """Walk one path. The length and counts are local to this path."""
         node = graph.nodes.get(node_id)
         if node is None:
             return
 
-        # If this node is an elbow, add its equivalent length to THIS path only
+        # An elbow or tee adds its equivalent length to THIS path only
         local_elbow_count = elbow_count
         if node.is_elbow:
             local_elbow_count += 1
+        local_tee_count = tee_count
+        if counts_as_tee(node, node_id, start_id):
+            local_tee_count += 1
 
-        total_length = pipe_length + (local_elbow_count * ELBOW_EQUIV_FT)
+        total_length = (pipe_length + (local_elbow_count * ELBOW_EQUIV_FT)
+                        + (local_tee_count * TEE_EQUIV_FT))
 
         ends_at_prv = stop_at_prv and node.is_midstream_prv and node_id != start_id
         if node.is_gas_fixture or ends_at_prv:
             end_name = node.fixture_name if node.is_gas_fixture else "PRV {}".format(node_id)
             graph.log(
-                "PATH to {} '{}': pipe={:.2f}ft, elbows={}, "
-                "equiv={:.0f}ft, total={:.2f}ft".format(
+                "PATH to {} '{}': pipe={:.2f}ft, elbows={} ({:.0f}ft), "
+                "tees={} ({:.0f}ft), total={:.2f}ft".format(
                     "fixture" if node.is_gas_fixture else "regulator",
                     end_name,
                     pipe_length,
                     local_elbow_count,
                     local_elbow_count * ELBOW_EQUIV_FT,
+                    local_tee_count,
+                    local_tee_count * TEE_EQUIV_FT,
                     total_length
                 ))
             if total_length > longest["total_length_feet"]:
                 longest["total_length_feet"]        = total_length
                 longest["pipe_length_feet"]         = pipe_length
+                longest["fitting_length_feet"]      = 0.0
                 longest["elbow_count"]              = local_elbow_count
                 longest["elbow_equiv_length_feet"]  = local_elbow_count * ELBOW_EQUIV_FT
+                longest["tee_count"]                = local_tee_count
+                longest["tee_equiv_length_feet"]    = local_tee_count * TEE_EQUIV_FT
                 longest["path_element_ids"]         = list(current_path)
                 longest["farthest_fixture_id"]      = node_id
                 longest["farthest_fixture_name"]    = end_name
@@ -738,15 +826,16 @@ def _longest_run_from(graph, start_id, stop_at_prv):
                     edge.to_node_id,
                     pipe_length + edge.length_feet,
                     local_elbow_count,
+                    local_tee_count,
                     current_path + [edge.element_id, edge.to_node_id]
                 )
 
-        # Traverse direct node-to-node connections (zero pipe length added)
+        # Traverse direct node-to-node connections (no pipe between them)
         for child_id in graph.node_children.get(node_id, []):
-            _dfs(child_id, pipe_length, local_elbow_count,
+            _dfs(child_id, pipe_length, local_elbow_count, local_tee_count,
                  current_path + [child_id])
 
-    _dfs(start_id, 0.0, 0, [start_id])
+    _dfs(start_id, 0.0, 0, 0, [start_id])
     return longest
 
 
@@ -854,7 +943,7 @@ def _find_zone_runs(graph):
     The meter's system ends at the farthest fixture OR mid-stream PRV on its
     side of the regulator; each PRV's system runs from the PRV to its
     farthest fixture. Same developed-length rule as _find_longest_run() (pipe
-    length plus 5 ft per elbow along the path). Skipped when the graph has no
+    length plus 5 ft per elbow and 3 ft per tee along the path). Skipped when the graph has no
     mid-stream PRV.
     """
     graph.zone_runs = {}

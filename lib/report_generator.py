@@ -1,7 +1,6 @@
 # report_generator.py
 # Takes the NetworkGraph from pipe_graph.py and produces:
 #   1. format_diagnostic_output()  -  formatted string printed to PyRevit output window
-#   2. generate_one_line_data()    -  structured segment and fixture label data
 #
 # IronPython 2.7
 
@@ -135,8 +134,10 @@ def format_diagnostic_output(graph, origin_element):
         lr = graph.longest_run
         lines.append("  Total:          {:.1f}'".format(lr["total_length_feet"]))
         lines.append("  Pipe length:    {:.1f}'".format(lr["pipe_length_feet"]))
-        lines.append("  Elbows:         {}  ({:.1f}' equiv)".format(
+        lines.append("  Elbows:        {}  ({:.1f}' equiv, 5 ft each)".format(
             lr["elbow_count"], lr["elbow_equiv_length_feet"]))
+        lines.append("  Tees:          {}  ({:.1f}' equiv, 3 ft each)".format(
+            lr.get("tee_count", 0), lr.get("tee_equiv_length_feet", 0.0)))
         lines.append("  Farthest:       {} (ID {})".format(
             lr["farthest_fixture_name"], lr["farthest_fixture_id"]))
         lines.append("  Path IDs:       {}".format(lr["path_element_ids"]))
@@ -185,60 +186,6 @@ def format_diagnostic_output(graph, origin_element):
         lines.append("  WARNINGS: {}".format(", ".join(validation["warnings_list"])))
 
     return "\n".join(lines)
-
-
-# =============================================================================
-# ONE-LINE DIAGRAM DATA
-# =============================================================================
-
-def generate_one_line_data(graph):
-    """Build structured one-line diagram data from the graph.
-
-    Returns:
-        dict with keys: segments, fixtures, notes_block
-    """
-    total_load = sum((n.gas_load_mbh for n in graph.nodes.values()
-                      if n.is_gas_fixture), 0.0)
-    longest_ft = graph.longest_run["total_length_feet"] if graph.longest_run else 0.0
-
-    segments = []
-    for edge in graph.edges.values():
-        size_str = _format_pipe_size(edge.diameter_inches)
-        label_line1 = "{}G, {}'".format(size_str, int(round(edge.length_feet)))
-        label_line2 = "{} MBH".format(round(edge.cumulative_load_mbh, 1))
-        segments.append({
-            "edge_id":              edge.element_id,
-            "from_node":            edge.from_node_id,
-            "to_node":              edge.to_node_id,
-            "pipe_label_line1":     label_line1,
-            "pipe_label_line2":     label_line2,
-            "diameter_inches":      round(edge.diameter_inches, 4),
-            "length_feet":          round(edge.length_feet, 2),
-            "cumulative_load_mbh":  round(edge.cumulative_load_mbh, 2)
-        })
-
-    fixture_labels = []
-    for node in graph.nodes.values():
-        if node.is_gas_fixture:
-            fixture_labels.append({
-                "element_id":           node.element_id,
-                "fixture_label_line1":  node.fixture_name,
-                "fixture_label_line2":  "{} MBH".format(round(node.gas_load_mbh, 1))
-            })
-
-    notes_block = {
-        "line1": "CONTRACTOR SHALL SUBMIT APPLICATIONS TO UTILITY AND COORDINATE NEW METER SERVICE",
-        "line2": "GAS PIPING SIZED FOR [X] PSI",
-        "line3": "MAX PRESSURE LOSS OF [X] PSI PER IFGC TABLE 402.4([X])",
-        "line4": "TOTAL CONNECTED LOAD: {} MBH".format(round(total_load, 1)),
-        "line5": "TOTAL DEVELOPED LENGTH: {}'".format(int(round(longest_ft)))
-    }
-
-    return {
-        "segments":     segments,
-        "fixtures":     fixture_labels,
-        "notes_block":  notes_block
-    }
 
 
 # =============================================================================
@@ -295,28 +242,6 @@ def _build_validation_summary(graph, fixtures, origin_connectors, total_load):
 # =============================================================================
 # FORMATTING HELPERS
 # =============================================================================
-
-def _format_pipe_size(diameter_inches):
-    """Convert decimal diameter in inches to fractional string (e.g. 2.5 -> '2-1/2"')."""
-    size_map = {
-        0.5:   '1/2"',
-        0.75:  '3/4"',
-        1.0:   '1"',
-        1.25:  '1-1/4"',
-        1.5:   '1-1/2"',
-        2.0:   '2"',
-        2.5:   '2-1/2"',
-        3.0:   '3"',
-        4.0:   '4"',
-        5.0:   '5"',
-        6.0:   '6"',
-        8.0:   '8"',
-        10.0:  '10"',
-        12.0:  '12"',
-    }
-    closest = min(size_map.keys(), key=lambda k: abs(k - diameter_inches))
-    return size_map[closest]
-
 
 def _safe_family_name(element):
     """Family name through revit_helpers.get_element_family_name, else the

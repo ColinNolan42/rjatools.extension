@@ -667,10 +667,12 @@ def basis_of_design_rows():
         ("Method", "Longest Run Method, IFGC Appendix A (A103.1). One "
                    "developed length, from the meter to the farthest outlet, "
                    "sizes every pipe in the system."),
-        ("Developed length", "Pipe length plus {:g} ft per elbow along the "
-                             "longest run. Where the length falls between "
-                             "table rows the next longer row is used.".format(
-                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT))),
+        ("Developed length", "Pipe length plus {:g} ft per elbow and {:g} ft "
+                             "per tee along the longest run. Where the length "
+                             "falls between table rows the next longer row is "
+                             "used.".format(
+                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                                 float(shared_params.TEE_EQUIV_LENGTH_FT))),
         ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
                    "the total load of every appliance downstream of it. "
                    "Propane Tables 402.4(25) to (36) publish capacity in "
@@ -691,6 +693,35 @@ def basis_of_design_rows():
                               "entered existing length is added to the "
                               "developed length. The existing pipe is "
                               "checked, never resized."),
+    ]
+
+
+def oneline_basis_rows():
+    """The One-Line basis for its own dialog (Plan B): what the diagram
+    shows and where each number comes from. It sizes nothing."""
+    return [
+        ("Runs after", "Size Gas. The diagram is drawn only for a complete "
+                       "system whose every pipe is at the size Size Gas "
+                       "requires on the table and heat content picked here; "
+                       "otherwise it lists why and draws nothing."),
+        ("Pipe labels", "Size and G, then the segment's developed length "
+                        "(pipe plus {:g} ft per elbow and {:g} ft per tee), "
+                        "then the MBH it carries. No material on a "
+                        "label.".format(
+                            float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                            float(shared_params.TEE_EQUIV_LENGTH_FT))),
+        ("Developed length", "The trunk labels add up to the longest run "
+                             "Size Gas used, shown in the notes block."),
+        ("Loads", "GAS_LOAD_MBH on each gas fixture. An unnamed or FUTURE "
+                  "cap at 0 MBH reads FUTURE CONNECTION."),
+        ("Regulators", "A PRV symbol is shown before every piece of "
+                       "equipment. A mid stream PRV (more than {:g} ft of "
+                       "pipe after it) is shown on its pipe and its table "
+                       "is added to the notes.".format(
+                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
+        ("Layout", "Left to right from the meter, no scale. Elevation by "
+                   "level: first level equipment on the meter row, ceiling "
+                   "headers above it, rooftop units higher."),
     ]
 
 
@@ -829,6 +860,135 @@ def _downstream_fixtures(start_node_id, graph):
     return names
 
 
+def serves_text(edge, graph):
+    """What a pipe serves: one fixture name, "trunk (N: A, B, C ...)" for
+    several, or "" for an open end or no fixture."""
+    if edge is None or edge.to_node_id is None:
+        return ""
+    fixtures = _downstream_fixtures(edge.to_node_id, graph)
+    if len(fixtures) == 1:
+        return fixtures[0]
+    if len(fixtures) > 1:
+        return "trunk ({}: {})".format(
+            len(fixtures), ", ".join(fixtures[:3]) +
+            (" ..." if len(fixtures) > 3 else ""))
+    return ""
+
+
+def fitting_target_size(node_id, graph, new_sizes, transition_ids=()):
+    """Size a fitting or valve shall take: the highest load new pipe sized
+    this run that touches it.
+
+    A valve drawn at another size than its line has a transition on each
+    side and touches no pipe (Horse Creek ball valve, 1-1/4" on a 2" line,
+    2026-11-19). When no sized pipe touches the node, the pipes on the far
+    side of a directly joined transition are used, so the valve takes the
+    line size and Revit removes the transitions.
+
+    Args:
+        node_id:        the fitting's element id.
+        graph:          the sized NetworkGraph (edges, node_children).
+        new_sizes:      {pipe element id: nominal size}, new pipes only.
+        transition_ids: ids of the transitions in the graph.
+
+    Returns:
+        (nominal size or None, True when read through a transition).
+    """
+    def best_on(nid):
+        size, load = None, -1
+        for edge in graph.edges.values():
+            if nid not in (edge.from_node_id, edge.to_node_id):
+                continue
+            if (edge.element_id in new_sizes
+                    and edge.cumulative_load_mbh > load):
+                load = edge.cumulative_load_mbh
+                size = new_sizes[edge.element_id]
+        return size, load
+
+    size, _load = best_on(node_id)
+    if size is not None or not transition_ids:
+        return size, False
+    children = getattr(graph, "node_children", None) or {}
+    linked = set(children.get(node_id, []))
+    for parent, kids in children.items():
+        if node_id in kids:
+            linked.add(parent)
+    best, best_load = None, -1
+    for nid in linked:
+        if nid not in transition_ids:
+            continue
+        s, load = best_on(nid)
+        if s is not None and load > best_load:
+            best, best_load = s, load
+    return best, best is not None
+
+
+def sizing_rows(sizing_result, graph):
+    """One dict per sized pipe, for the Size Gas console table.
+
+    The same numbers format_sizing_output prints, as data (Plan B). Keys:
+    pipe_id, serves, mbh, cfh (None on a table in MBH), units, size,
+    capacity (table units, None when unsized), length_ft, status, note,
+    table_id, zone (the system label). status is OK, MIN SIZE (zero load,
+    minimum size assigned) or OVER TABLE (no size carries the load; the
+    engine raises before this in practice, kept so a pipe is never dropped
+    silently). Open ended pipes carry no size and have no row.
+    """
+    zones = sizing_result.get("zones") or []
+    meter_label = zones[0]["label"] if zones else "Meter"
+    labels = set(z["label"] for z in zones)
+    zoned = bool(sizing_result.get("downstream_table_id"))
+
+    def _zone(edge):
+        if not zoned or edge is None:
+            return meter_label
+        label = _zone_label(graph, getattr(edge, "run_key", None))
+        return label if label in labels else meter_label
+
+    rows = []
+    for d in sizing_result["segment_detail"]:
+        edge = graph.edges.get(d["pipe_id"])
+        units = d.get("units", "CFH")
+        mbh = float(d["demand_mbh"])
+        cfh = None
+        if units != "MBH":
+            cfh = float(d.get("demand_cfh", mbh))
+        cap = d.get("capacity_mbh")
+        rows.append({
+            "pipe_id": d["pipe_id"],
+            "serves": serves_text(edge, graph),
+            "mbh": mbh,
+            "cfh": cfh,
+            "units": units,
+            "size": d["selected_size"],
+            "capacity": None if cap is None else float(cap),
+            "length_ft": float(edge.length_feet) if edge else None,
+            "status": "MIN SIZE" if mbh <= 0 else "OK",
+            "note": d.get("note") or "",
+            "table_id": d.get("table_id") or sizing_result["table_id"],
+            "zone": _zone(edge),
+        })
+    sized = set(sizing_result["sizes"])
+    for edge in graph.edges.values():
+        if edge.to_node_id is None or edge.element_id in sized:
+            continue
+        rows.append({
+            "pipe_id": edge.element_id,
+            "serves": serves_text(edge, graph),
+            "mbh": float(edge.cumulative_load_mbh),
+            "cfh": None,
+            "units": "CFH",
+            "size": "",
+            "capacity": None,
+            "length_ft": float(edge.length_feet),
+            "status": "OVER TABLE",
+            "note": "no size in the table carries this load",
+            "table_id": sizing_result["table_id"],
+            "zone": _zone(edge),
+        })
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Diagnostic formatter
 # ---------------------------------------------------------------------------
@@ -887,15 +1047,8 @@ def format_sizing_output(sizing_result, graph):
         length_str = "{:.1f}'".format(edge.length_feet) if edge else "?"
 
         # Downstream fixture label
-        fixture_label = ""
-        if edge and edge.to_node_id is not None:
-            fixtures = _downstream_fixtures(edge.to_node_id, graph)
-            if len(fixtures) == 1:
-                fixture_label = "  -> {}".format(fixtures[0])
-            elif len(fixtures) > 1:
-                fixture_label = "  -> trunk ({}: {})".format(
-                    len(fixtures), ", ".join(fixtures[:3]) +
-                    (" ..." if len(fixtures) > 3 else ""))
+        serves = serves_text(edge, graph)
+        fixture_label = "  -> {}".format(serves) if serves else ""
 
         note = "  ({})".format(detail["note"]) if detail["note"] else ""
         if (sizing_result.get("downstream_table_id")
