@@ -71,6 +71,12 @@ _PICKER_XAML = (
     '<TextBlock Name="tbPrvError" Foreground="Firebrick" FontSize="11"'
     ' TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,4"/>'
     '</StackPanel>'
+    '<StackPanel Name="pnlOutputs" Visibility="Collapsed" Margin="0,0,0,8">'
+    '<TextBlock Text="Outputs" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,6"/>'
+    '<CheckBox Name="cbBreakdown" Content="Developed Length Breakdown" IsChecked="False"/>'
+    '<TextBlock Text="Longest run pipe lengths, elbows and tees. Drawn under the diagram'
+    ' and printed in the console." TextWrapping="Wrap" FontSize="11" Margin="20,0,0,4"/>'
+    '</StackPanel>'
     '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">'
     '<Button Name="btnCancel" Content="Cancel" Width="70" Margin="0,0,8,0"/>'
     '<Button Name="btnOK" Content="OK" Width="70"/>'
@@ -523,7 +529,7 @@ def show_oneline_picker(title):
     import sizer_dialogs
     return sizer_dialogs.themed_or(
         lambda use_theme: sizer_dialogs.show_oneline_picker(title, use_theme),
-        lambda: _show_picker_legacy(title, True))
+        lambda: _show_picker_legacy(title, True, oneline=True))
 
 
 def rja_alert(title, text, kind="info", yes_no=False):
@@ -619,9 +625,10 @@ def _show_picker(title, prv_option):
         lambda: _show_picker_legacy(title, prv_option))
 
 
-def _show_picker_legacy(title, prv_option):
+def _show_picker_legacy(title, prv_option, oneline=False):
     """FALLBACK ONLY. The plain scope / material / table picker. The Scope
-    shows with the Mid Stream PRV option (Size Gas and One-Line)."""
+    shows with the Mid Stream PRV option (Size Gas and One-Line). oneline
+    adds the Outputs box (Developed Length Breakdown)."""
     from System.Windows import Visibility
 
     scope_option    = prv_option
@@ -642,8 +649,13 @@ def _show_picker_legacy(title, prv_option):
     tb_length       = window.FindName('tbLength')
     tb_load         = window.FindName('tbLoad')
     tb_scope_error  = window.FindName('tbScopeError')
+    pnl_outputs     = window.FindName('pnlOutputs')
+    cb_breakdown    = window.FindName('cbBreakdown')
     btn_ok          = window.FindName('btnOK')
     btn_cancel      = window.FindName('btnCancel')
+
+    if oneline:
+        pnl_outputs.Visibility = Visibility.Visible
 
     materials = gas_tables.get_material_labels()
     for m in materials:
@@ -817,6 +829,8 @@ def _show_picker_legacy(title, prv_option):
             "mid_stream_prv":         use_prv,
             "downstream_table_label": downstream_label,
             "existing":               existing,
+            "developed_length_breakdown": (bool(cb_breakdown.IsChecked)
+                                           if oneline else False),
         }
         window.Close()
 

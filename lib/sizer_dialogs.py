@@ -958,6 +958,17 @@ _GAS_BODY = (
     '</StackPanel>'
     '</Border>' +
 
+    # Outputs, One-Line only (Colin, 2026-11-20): shown by _gas_picker in
+    # "oneline" mode, collapsed for Size Gas
+    '<StackPanel x:Name="pnl_outputs" Visibility="Collapsed">' +
+    _section('Outputs') +
+    '<CheckBox x:Name="cb_breakdown" Content="Developed Length Breakdown"'
+    ' IsChecked="False"'
+    ' ToolTip="Prints the longest run in the console and draws it as a table under the diagram: the pipe segments, total pipe length, elbows, tees and the developed length."/>' +
+    _hint('Longest run pipe lengths, elbows and tees. Drawn under the '
+          'diagram and printed in the console.', margin='20,0,0,6') +
+    '</StackPanel>' +
+
     _BASIS_XAML
 )
 
@@ -1061,9 +1072,13 @@ def _gas_picker(title, mode, use_theme):
     cb_downstream = _named(win, 'cb_downstream')
     tb_heat = _named(win, 'tb_heat')
     tb_heat_note = _named(win, 'tb_heat_note')
+    pnl_outputs = _named(win, 'pnl_outputs')
+    cb_breakdown = _named(win, 'cb_breakdown')
 
     if not scope_option:
         pnl_scope.Visibility = Visibility.Collapsed
+    if oneline:
+        pnl_outputs.Visibility = Visibility.Visible
 
     materials = gas_tables.get_material_labels()
     for m in materials:
@@ -1228,6 +1243,8 @@ def _gas_picker(title, mode, use_theme):
             "mid_stream_prv":         use_prv,
             "downstream_table_label": downstream_label,
             "existing":               existing,
+            "developed_length_breakdown": (bool(cb_breakdown.IsChecked)
+                                           if oneline else False),
         }
 
     return _run(win, [tb_length, tb_load, tb_heat], collect)

@@ -402,5 +402,118 @@ class Synthetic(unittest.TestCase):
         self.assertFalse(end["equipment_prv"])
 
 
+class DevelopedBreakdown(unittest.TestCase):
+    """The Developed Length Breakdown rows (Colin, 2026-11-20): segment pipe
+    lengths, total pipe, elbows x 5, tees x 3, developed length; every figure
+    adds exactly and the whole feet agree with the notes block."""
+
+    def _bd(self, snap):
+        sch = S.build(snap)
+        return sch, S.developed_breakdown(sch, snap["longest_run_ft"])
+
+    def _check_sums(self, bd, snap):
+        import gas_labels
+        pipe10 = sum(s["tenths"] for s in bd["segments"])
+        self.assertEqual(pipe10, int(round(bd["total_pipe_ft"] * 10)))
+        dev10 = pipe10 + int(round((bd["elbow_ft"] + bd["tee_ft"]) * 10))
+        self.assertEqual(dev10, int(round(bd["developed_ft"] * 10)))
+        self.assertEqual(bd["elbow_ft"], bd["elbows"] * 5.0)
+        self.assertEqual(bd["tee_ft"], bd["tees"] * 3.0)
+        self.assertEqual(bd["developed_whole"],
+                         gas_labels.feet(snap["longest_run_ft"]))
+        self.assertFalse(bd["mismatch"])
+
+    def test_bench_fixtures_add_exactly(self):
+        for snap in (G3C, G2):
+            sch, bd = self._bd(snap)
+            self._check_sums(bd, snap)
+            # one row per trunk segment, in order from the meter
+            self.assertEqual(len(bd["segments"]), len(S.trunk_segments(sch)))
+            self.assertTrue(bd["segments"][0]["item"].startswith("METER TO "))
+
+    def test_g3c_numbers(self):
+        sch, bd = self._bd(G3C)
+        self.assertEqual(bd["elbows"], 5)
+        self.assertEqual(bd["tees"], 4)
+        self.assertEqual(bd["farthest"], "RTU-1")
+        self.assertEqual(bd["developed_whole"], 124)
+        self.assertEqual([r["length"] for r in bd["summary"]],
+                         ["87.3'", "25.0'", "12.0'", "124.3' (124')"])
+        self.assertEqual([r["qty"] for r in bd["summary"]],
+                         ["", "5", "4", ""])
+        self.assertEqual([r["each"] for r in bd["summary"]],
+                         ["", "5'", "3'", ""])
+
+    def test_rows_are_named_from_and_to_with_size(self):
+        sch, bd = self._bd(G3C)
+        items = [s["item"] for s in bd["segments"]]
+        self.assertEqual(items[0], 'METER TO TEE 1, 3"G')
+        self.assertEqual(items[1], 'TEE 1 TO TEE 2, 3"G')
+        self.assertEqual(items[-1], 'TEE 4 TO RTU-1, 1-1/4"G')
+
+    def test_rounding_holds_the_tenth_below_when_notes_block_reads_lower(self):
+        # one pipe of 124.46 ft: plain tenths read 124.5, the notes block
+        # (gas_labels.feet) reads 124, so the table shows 124.4
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [124, 0, 0], {"name": "RTU-1",
+                                                "load_mbh": 100.0})],
+                  [(10, 1, 2, 124.46, "1", 100.0)], run=124.46)
+        s["longest_path"] = [1, 10, 2]
+        sch, bd = self._bd(s)
+        self.assertEqual(bd["summary"][-1]["length"], "124.4' (124')")
+        self.assertEqual(bd["segments"][0]["pipe_text"], "124.4'")
+        self._check_sums(bd, s)
+
+    def test_rounding_without_hold_back(self):
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [124, 0, 0], {"name": "RTU-1",
+                                                "load_mbh": 100.0})],
+                  [(10, 1, 2, 124.54, "1", 100.0)], run=124.54)
+        s["longest_path"] = [1, 10, 2]
+        sch, bd = self._bd(s)
+        self.assertEqual(bd["summary"][-1]["length"], "124.5' (125')")
+        self._check_sums(bd, s)
+
+    def test_tie_in_has_its_own_existing_row(self):
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [20, 0, 0], {"name": "RTU-1",
+                                              "load_mbh": 100.0})],
+                  [(10, 1, 2, 19.7, "1", 100.0)], run=49.7)
+        s["longest_path"] = [1, 10, 2]
+        s["existing"] = {"size_nominal": "2", "length_ft": 30.0,
+                         "load_mbh": 400.0}
+        sch, bd = self._bd(s)
+        first = bd["segments"][0]
+        self.assertEqual(first["item"],
+                         'METER TO NEW CONNECTION, EXISTING, 2"G')
+        self.assertEqual(first["pipe_text"], "30.0'")
+        self.assertEqual(bd["segments"][1]["item"],
+                         'NEW CONNECTION TO RTU-1, 1"G')
+        self.assertEqual(bd["summary"][0]["length"], "49.7'")
+        self._check_sums(bd, s)
+
+    def test_zero_length_stays_zero_and_ties_go_to_the_earlier(self):
+        self.assertEqual(S._tenths_split([0.0, 5.0], 50), [0, 50])
+        # 0.05 + 0.05 + 0.05 = 0.15 -> 2 tenths: earlier two take the extra
+        self.assertEqual(S._tenths_split([0.05, 0.05, 0.05], 2), [1, 1, 0])
+        self.assertEqual(sum(S._tenths_split([1.26, 2.26, 3.28], 68)), 68)
+
+    def test_table_rows_and_no_dashes(self):
+        sch, bd = self._bd(G3C)
+        headers, rows = S.breakdown_table(bd)
+        self.assertEqual(headers, ["ITEM", "QTY", "EQUIV EACH", "LENGTH"])
+        self.assertEqual(len(rows), len(bd["segments"]) + 4)
+        self.assertEqual(rows[-1][0], "DEVELOPED LENGTH")
+        for row in rows:
+            for cell in row:
+                self.assertNotIn(" - ", cell)
+                self.assertNotIn(chr(0x2014), cell)
+
+    def test_mismatch_is_flagged(self):
+        sch = S.build(G3C)
+        bd = S.developed_breakdown(sch, G3C["longest_run_ft"] + 3.0)
+        self.assertTrue(bd["mismatch"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -572,6 +572,180 @@ def trunk_sum_ft(sch):
     return total
 
 
+def _tenths_split(values, target):
+    """Whole tenths for each value (ft), summing exactly to target tenths
+    (largest remainder, ties to the earlier one). Unlike balanced_feet no
+    minimum is forced: a 0.0 ft run stays 0.0."""
+    tenths = [float(v) * 10.0 for v in values]
+    floors = [int(math.floor(t + 1e-9)) for t in tenths]
+    extra = int(target) - sum(floors)
+    order = sorted(range(len(values)),
+                   key=lambda i: (-(tenths[i] - floors[i]), i))
+    out = list(floors)
+    if not out:
+        return out
+    if extra > 0:
+        for i in order[:extra]:
+            out[i] += 1
+    elif extra < 0:
+        # only when the target was held below the floors (kept for safety)
+        for i in list(reversed(order))[:(-extra)]:
+            out[i] = max(0, out[i] - 1)
+    return out
+
+
+def _node_names(sch):
+    """node_id -> 'TEE' | fixture name, for naming a segment's two ends."""
+    names = {}
+
+    def _v(br, _d):
+        e = br["end"]
+        if e is None:
+            return
+        if e["type"] == "junction":
+            names[e["node_id"]] = "TEE"
+        else:
+            names[e["node_id"]] = (e.get("name") or "").strip() or "OUTLET"
+    if sch.get("root") is not None:
+        walk(sch["root"], _v)
+    return names
+
+
+def developed_breakdown(sch, longest_run_ft=None, elbow_ft=None,
+                        tee_ft=None):
+    """The longest run as a table: pipe lengths per segment, then total
+    pipe, elbows, tees and the developed length (Colin, 2026-11-20).
+
+    Returns {"segments": [{"item", "tenths", "pipe_text", "from", "to",
+    "size"}], "summary": [{"key", "item", "qty", "each", "length"}],
+    "total_pipe_ft", "elbows", "tees", "elbow_ft", "tee_ft",
+    "developed_ft" (as shown, tenths), "developed_whole", "farthest",
+    "run_ft" (what the notes block uses), "mismatch" bool}
+
+    Every figure shown adds exactly: the segment tenths sum to the total
+    pipe length, and total pipe + elbows x 5 + tees x 3 is the developed
+    length shown. The whole feet always equal gas_labels.feet of the run
+    the notes block prints (longest_run_ft, else the rows' own sum): when
+    plain rounding of the tenths would read 124.5 against a notes block of
+    124, the total pipe is held one tenth lower.
+
+    Tie in: the entered existing run is its own first row,
+    METER TO NEW CONNECTION, EXISTING. An existing run has no fittings of
+    its own to count (its length is the Size Gas entry).
+    """
+    elbow_ft = float(shared_params.ELBOW_EQUIV_LENGTH_FT
+                     if elbow_ft is None else elbow_ft)
+    tee_ft = float(shared_params.TEE_EQUIV_LENGTH_FT
+                   if tee_ft is None else tee_ft)
+    trunk = trunk_segments(sch)
+    existing = sch.get("existing")
+    names = _node_names(sch)
+
+    # a name per trunk end node; repeats are numbered (TEE 1, TEE 2)
+    kinds = []
+    for s in trunk:
+        nm = names.get(s["end_node"])
+        kinds.append(nm if nm else "REDUCER")
+    totals = {}
+    for k in kinds:
+        totals[k] = totals.get(k, 0) + 1
+    seen = {}
+    labels = []
+    for k in kinds:
+        if k in ("TEE", "REDUCER") and totals[k] > 1:
+            seen[k] = seen.get(k, 0) + 1
+            labels.append("{0} {1}".format(k, seen[k]))
+        else:
+            labels.append(k)
+
+    start_name = "NEW CONNECTION" if existing else "METER"
+    items = []
+    if existing and existing.get("length_ft") is not None:
+        items.append({"value": float(existing["length_ft"]),
+                      "from": "METER", "to": "NEW CONNECTION, EXISTING",
+                      "size": existing.get("size_nominal"),
+                      "existing": True})
+    prev = start_name
+    for s, lab in zip(trunk, labels):
+        items.append({"value": float(s["pipe_ft"]), "from": prev, "to": lab,
+                      "size": s["size"], "existing": False})
+        prev = lab
+    for it in items:
+        sz = gas_labels.pipe_label(it["size"], None) if it["size"] else ""
+        if it["existing"]:
+            head = "METER TO NEW CONNECTION, EXISTING"
+        else:
+            head = "{0} TO {1}".format(it["from"], it["to"])
+        it["item"] = "{0}, {1}".format(head, sz) if sz else head
+
+    elbows = sum(int(s["elbows"]) for s in trunk)
+    tees = sum(int(s["tees"]) for s in trunk)
+    elbow_total = elbows * elbow_ft
+    tee_total = tees * tee_ft
+    pipe_true = sum(it["value"] for it in items)
+    run_true = pipe_true + elbow_total + tee_total
+    run_ft = float(longest_run_ft) if longest_run_ft is not None else run_true
+    want = gas_labels.feet(run_ft) if run_ft > 0 else 0
+    elbow10 = int(round(elbow_total * 10.0))
+    tee10 = int(round(tee_total * 10.0))
+    equiv10 = elbow10 + tee10
+
+    pipe10 = gas_labels._half_up(pipe_true * 10.0)
+    for _i in range(12):
+        have = gas_labels._half_up((pipe10 + equiv10) / 10.0)
+        if run_ft <= 0 or have == want:
+            break
+        pipe10 += -1 if have > want else 1
+    pipe10 = max(0, pipe10)
+    dev10 = pipe10 + equiv10
+
+    split = _tenths_split([it["value"] for it in items], pipe10)
+    segs = []
+    for it, t in zip(items, split):
+        segs.append({"item": it["item"], "tenths": t,
+                     "pipe_text": "{0:.1f}'".format(t / 10.0),
+                     "from": it["from"], "to": it["to"], "size": it["size"]})
+
+    def _f(t10):
+        return "{0:.1f}'".format(t10 / 10.0)
+    dev_whole = gas_labels._half_up(dev10 / 10.0)
+    summary = [
+        {"key": "pipe", "item": "TOTAL PIPE LENGTH", "qty": "", "each": "",
+         "length": _f(pipe10)},
+        {"key": "elbows", "item": "ELBOWS", "qty": str(elbows),
+         "each": "{0:.0f}'".format(elbow_ft), "length": _f(elbow10)},
+        {"key": "tees", "item": "TEES", "qty": str(tees),
+         "each": "{0:.0f}'".format(tee_ft), "length": _f(tee10)},
+        {"key": "developed", "item": "DEVELOPED LENGTH", "qty": "",
+         "each": "",
+         "length": "{0} ({1}')".format(_f(dev10), dev_whole)},
+    ]
+    farthest = None
+    if trunk:
+        farthest = names.get(trunk[-1]["end_node"])
+        if farthest == "TEE":
+            farthest = None
+    return {"segments": segs, "summary": summary,
+            "total_pipe_ft": pipe10 / 10.0, "elbows": elbows, "tees": tees,
+            "elbow_ft": elbow10 / 10.0, "tee_ft": tee10 / 10.0,
+            "developed_ft": dev10 / 10.0, "developed_whole": dev_whole,
+            "farthest": farthest, "run_ft": run_ft,
+            "mismatch": abs(run_true - run_ft) > 0.05}
+
+
+def breakdown_table(bd):
+    """(headers, rows) of a developed_breakdown for the console and the
+    drafting view: segment rows, then the summary rows, the last (the
+    developed length) shown as the totals row."""
+    headers = ["ITEM", "QTY", "EQUIV EACH", "LENGTH"]
+    rows = []
+    for s in bd["segments"]:
+        rows.append([s["item"], "", "", s["pipe_text"]])
+    for r in bd["summary"]:
+        rows.append([r["item"], r["qty"], r["each"], r["length"]])
+    return headers, rows
+
+
 def eid_counts(sch):
     counts = {}
     for s in sch["segments"].values():

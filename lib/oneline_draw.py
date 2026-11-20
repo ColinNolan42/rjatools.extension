@@ -413,3 +413,51 @@ def draw(doc, view, prims, syms, tt_id=None, new_style=None):
         d.errors.append("Line style '{0}' not found; pipes drawn thin.".format(
             NEW_LINE_STYLE))
     return counts, d.errors
+
+
+# ---------------------------------------------------------------------------
+# Developed Length Breakdown table (Colin, 2026-11-20)
+# ---------------------------------------------------------------------------
+
+BREAKDOWN_MARK = "DELETE BEFORE PUTTING ON SCHEDULE"
+BREAKDOWN_GAP_BLOCKS = 2.0     # gaps (rja_drafting.GAP x view scale) under the diagram
+
+
+def breakdown_title(bd):
+    """Band text: LONGEST RUN TO <farthest outlet>."""
+    return "LONGEST RUN TO {0}".format(bd.get("farthest") or "FARTHEST OUTLET")
+
+
+def draw_breakdown(doc, view, bd, bounds, style=None):
+    """The longest run table under the diagram, in the RJA table look.
+
+    bd: oneline_schematic.developed_breakdown. bounds: the layout's
+    (x0, y0, x1, y1) in model feet; the table starts at x0, a gap under y0.
+    The view is 1:100, so rja_drafting's paper sized cells are scaled by the
+    view scale (rja_drafting._Style(doc, scale)). The columns are fitted to
+    their longest text first, then the blue band and the table are drawn at
+    the same width. Call inside a transaction. Returns (bottom y, width).
+    style: a stand in for rja_drafting._Style (tests).
+    """
+    import oneline_schematic
+    import rja_drafting as rd
+    k = float(getattr(view, "Scale", 1) or 1)
+    st = style if style is not None else rd._Style(doc, k)
+    headers, rows = oneline_schematic.breakdown_table(bd)
+    needs, band_need = rd.column_needs(headers, rows, True, k)
+    title_need = rd.text_width(breakdown_title(bd), True, k)
+    needs = list(needs)
+    short = max(band_need, title_need) - sum(needs, 0.0)
+    if short > 0 and needs:
+        needs[-1] += short       # a long outlet name widens the last column
+    columns = [(h, w) for h, w in zip(headers, needs)]
+    width = sum(needs, 0.0)
+    ox = float(bounds[0])
+    top = float(bounds[1]) - rd.GAP * k * BREAKDOWN_GAP_BLOCKS
+    rd._t(st, view, ox, top, BREAKDOWN_MARK, "bold")
+    top -= rd.TEXT_H * k * 1.4
+    top = rd._band(st, view, ox, top, width, breakdown_title(bd), None,
+                   rd.BAND_H * k)
+    bottom = rd._styled_table(st, view, ox, top, columns, rows,
+                              totals_row=True, left_cols=(0,), fit=True)
+    return bottom, width
