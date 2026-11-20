@@ -22,10 +22,43 @@ _PICKER_XAML = (
     ' ResizeMode="NoResize"'
     ' WindowStartupLocation="CenterScreen">'
     '<StackPanel Margin="15">'
+    '<StackPanel Name="pnlScope" Margin="0,0,0,12">'
+    '<TextBlock Text="Scope" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,6"/>'
+    '<RadioButton Name="rbScopeNew" GroupName="gas_scope" Content="New Construction"'
+    ' IsChecked="True"/>'
+    '<TextBlock Text="Pick the gas meter, or the first new pipe. A pipe start is full new'
+    ' construction with a new meter." TextWrapping="Wrap" FontSize="11" Margin="20,0,0,6"/>'
+    '<RadioButton Name="rbScopeExisting" GroupName="gas_scope" Content="Connect into Existing"/>'
+    '<TextBlock Text="Pick the first new pipe at the connection to the existing gas piping.'
+    ' The existing piping is assumed not modeled." TextWrapping="Wrap" FontSize="11"'
+    ' Margin="20,0,0,4"/>'
+    '<Border Name="pnlScopeOpts" BorderBrush="LightGray" BorderThickness="1" Padding="8"'
+    ' Margin="20,0,0,0" Visibility="Collapsed">'
+    '<StackPanel>'
+    '<TextBlock Text="Existing Pipe Size at the Connection" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<ComboBox Name="cbSize" Margin="0,0,0,8"/>'
+    '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBox Name="tbLength" Margin="0,0,0,8"/>'
+    '<TextBlock Text="Total Existing Load (MBH)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBox Name="tbLoad" Margin="0,0,0,4"/>'
+    '<TextBlock Text="The existing pipe is checked for the existing plus new load and is never'
+    ' resized. The length is added to the new longest run, which is assumed to be the longest'
+    ' run in the system. The engineer shall verify the existing appliances."'
+    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,4"/>'
+    '<TextBlock Name="tbScopeError" Foreground="Firebrick" FontSize="11"'
+    ' TextWrapping="Wrap" Visibility="Collapsed"/>'
+    '</StackPanel>'
+    '</Border>'
+    '</StackPanel>'
     '<TextBlock Text="Pipe Material" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<ComboBox Name="cbMaterial" Margin="0,0,0,12"/>'
     '<TextBlock Text="IFGC Table" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<ComboBox Name="cbTable" Margin="0,0,0,12"/>'
+    '<TextBlock Text="Heat Content of Gas (BTU/CF)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBox Name="tbHeatContent" Margin="0,0,0,4"/>'
+    '<TextBlock Text="RJA standard: CFH = BTUH / Heat Content of Gas. Get this value from the'
+    ' utility (default: Denver, 840 BTU/CF). Sea level = 1000 BTU/CF."'
+    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,12"/>'
     '<CheckBox Name="cbPrv" Content="Mid Stream PRV" FontWeight="SemiBold"'
     ' Visibility="Collapsed" Margin="0,0,0,8"/>'
     '<StackPanel Name="pnlPrv" Visibility="Collapsed" Margin="18,0,0,8">'
@@ -38,155 +71,13 @@ _PICKER_XAML = (
     '<TextBlock Name="tbPrvError" Foreground="Firebrick" FontSize="11"'
     ' TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,4"/>'
     '</StackPanel>'
-    '<TextBlock Text="Heat Content of Gas (BTU/CF)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
-    '<TextBox Name="tbHeatContent" Margin="0,0,0,4"/>'
-    '<TextBlock Text="RJA standard: CFH = BTUH / Heat Content of Gas. Get this value from the'
-    ' utility (default: Denver, 840 BTU/CF). Sea level = 1000 BTU/CF."'
-    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,16"/>'
-    '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right">'
+    '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">'
     '<Button Name="btnCancel" Content="Cancel" Width="70" Margin="0,0,8,0"/>'
     '<Button Name="btnOK" Content="OK" Width="70"/>'
     '</StackPanel>'
     '</StackPanel>'
     '</Window>'
 )
-
-
-_EXISTING_GAS_XAML = (
-    '<Window'
-    ' xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"'
-    ' Width="460" SizeToContent="Height"'
-    ' ResizeMode="NoResize"'
-    ' WindowStartupLocation="CenterScreen">'
-    '<StackPanel Margin="15">'
-    '<CheckBox Name="cbConnect" IsChecked="False" Content="Connect into Existing"'
-    ' FontWeight="SemiBold" Margin="0,0,0,2"/>'
-    '<TextBlock Text="Unticked: full new construction, with a new meter. The picked pipe'
-    ' starts the system. Tick to enter the existing gas piping."'
-    ' TextWrapping="Wrap" FontSize="11" Margin="20,0,0,12"/>'
-    '<TextBlock Text="Existing Pipe Size at the Connection" FontWeight="SemiBold" Margin="0,0,0,4"/>'
-    '<ComboBox Name="cbSize" Margin="0,0,0,12"/>'
-    '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
-    '<TextBox Name="tbLength" Margin="0,0,0,12"/>'
-    '<TextBlock Text="Total Existing Load (MBH)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
-    '<TextBox Name="tbLoad" Margin="0,0,0,4"/>'
-    '<TextBlock Text="The existing pipe is checked for the existing plus new load and is never'
-    ' resized. The length is added to the new longest run, which is assumed to be the longest'
-    ' run in the system. The engineer shall verify the existing appliances."'
-    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,16"/>'
-    '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right">'
-    '<Button Name="btnCancel" Content="Cancel" Width="70" Margin="0,0,8,0"/>'
-    '<Button Name="btnOK" Content="OK" Width="70"/>'
-    '</StackPanel>'
-    '</StackPanel>'
-    '</Window>'
-)
-
-
-def show_existing_gas_dialog(title, pipe_sizes, defaults=None):
-    """Existing Conditions box, shown when a pipe was picked instead of a meter.
-
-    Opens the RJA themed dialog (sizer_dialogs), and falls back to the plain
-    one below if that cannot be built. See _show_existing_gas_dialog_legacy
-    for the arguments and the return value.
-    """
-    import sizer_dialogs
-    return sizer_dialogs.themed_or(
-        lambda use_theme: sizer_dialogs.show_existing_gas_dialog(
-            title, pipe_sizes, defaults, use_theme),
-        lambda: _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults))
-
-
-def _show_existing_gas_dialog_legacy(title, pipe_sizes, defaults=None):
-    """FALLBACK ONLY. Plain Existing Conditions box.
-
-    Colin, 2026-10-13: the existing gas piping is assumed not modeled, so the
-    designer enters its size, its length from the meter to the new connection
-    and its total load. Shown AFTER the pick, and only for a pipe.
-
-    Args:
-        title: window title string.
-        pipe_sizes: nominal size strings of the selected IFGC table, smallest
-            first (gas_tables.list_pipe_sizes).
-        defaults: optional dict with "size_nominal", "length_ft", "load_mbh"
-            to prefill, for example what was entered in Size Gas.
-
-    Returns:
-        {"new_construction": True} when the Connect into Existing box
-        (unticked by default) is left unticked, else a dict with "size_nominal" (str),
-        "length_ft" and "load_mbh" (floats) and "new_construction": False.
-        None if cancelled.
-    """
-    window     = XamlReader.Parse(_EXISTING_GAS_XAML)
-    window.Title = title
-    cb_size    = window.FindName('cbSize')
-    tb_length  = window.FindName('tbLength')
-    tb_load    = window.FindName('tbLoad')
-    cb_connect = window.FindName('cbConnect')
-    btn_ok     = window.FindName('btnOK')
-    btn_cancel = window.FindName('btnCancel')
-
-    defaults = defaults or {}
-    pick = 0
-    for i, size in enumerate(pipe_sizes):
-        cb_size.Items.Add(size)
-        if size == defaults.get("size_nominal"):
-            pick = i
-    if cb_size.Items.Count > 0:
-        cb_size.SelectedIndex = pick
-    if defaults.get("length_ft") is not None:
-        tb_length.Text = "{:g}".format(float(defaults["length_ft"]))
-    if defaults.get("load_mbh") is not None:
-        tb_load.Text = "{:g}".format(float(defaults["load_mbh"]))
-
-    result = [None]
-
-    def on_new_toggled(sender, e):
-        on = bool(cb_connect.IsChecked)
-        cb_size.IsEnabled = on
-        tb_length.IsEnabled = on
-        tb_load.IsEnabled = on
-
-    cb_connect.Checked   += on_new_toggled
-    cb_connect.Unchecked += on_new_toggled
-    on_new_toggled(None, None)
-
-    def _number(box):
-        """A number of zero or more, or None. Marks the box when it is bad."""
-        try:
-            value = float(box.Text.strip())
-            if value < 0 or value != value or value == float("inf"):
-                raise ValueError
-        except ValueError:
-            box.Background = Brushes.LightPink
-            return None
-        box.Background = Brushes.White
-        return value
-
-    def on_ok(sender, e):
-        if not bool(cb_connect.IsChecked):
-            result[0] = {"new_construction": True}
-            window.Close()
-            return
-        length = _number(tb_length)
-        load = _number(tb_load)
-        if length is None or load is None or cb_size.SelectedItem is None:
-            return
-        result[0] = {
-            "size_nominal": cb_size.SelectedItem,
-            "length_ft":    length,
-            "load_mbh":     load,
-            "new_construction": False,
-        }
-        window.Close()
-
-    def on_cancel(sender, e):
-        window.Close()
-
-    btn_ok.Click     += on_ok
-    btn_cancel.Click += on_cancel
-    window.ShowDialog()
-    return result[0]
 
 
 def show_water_dialog(title, project_info, return_detection):
@@ -626,7 +517,7 @@ def show_table_picker(title):
 
 def show_oneline_picker(title):
     """The One-Line dialog (its own heading and basis, Plan B), shown before
-    the pick with the Size Gas Mid Stream PRV tick box.
+    the pick with the Size Gas Scope and Mid Stream PRV tick box.
 
     Returns the show_size_gas_dialog dict, or None if cancelled."""
     import sizer_dialogs
@@ -660,6 +551,9 @@ def rja_alert(title, text, kind="info", yes_no=False):
 # Diagnose passes popup=False (zero input rule). The gas wording is shared by
 # Size Gas and One-Line.
 PICK_GAS = "Select the gas meter or the new gas pipe connection"
+# Connect into Existing scope: the pick shall be the first new pipe.
+PICK_GAS_EXISTING = ("Select the first new gas pipe at the connection to the "
+                     "existing gas piping")
 
 
 def pick_element(uidoc, doc, title, prompt, sel_filter=None, popup=True):
@@ -685,7 +579,13 @@ def pick_element(uidoc, doc, title, prompt, sel_filter=None, popup=True):
 
 
 def show_size_gas_dialog(title):
-    """show_table_picker() plus a "Mid Stream PRV" check box.
+    """show_table_picker() plus the Scope and a "Mid Stream PRV" check box.
+
+    Scope (Colin, 2026-11-20), chosen before the pick: New Construction
+    (default; the pick is the meter or the first new pipe) or Connect into
+    Existing (the pick is the first new pipe, and the existing pipe size,
+    length from the meter and existing load are entered here, empty and
+    with no size preselected).
 
     Checking the box reveals a second dropdown for the IFGC table that governs
     the piping after each pressure regulating valve (same pipe material and
@@ -698,8 +598,10 @@ def show_size_gas_dialog(title):
 
     Returns:
         dict with "pipe_material", "table_label", "heat_content",
-        "mid_stream_prv" (bool) and "downstream_table_label" (short label, or
-        None when the box is off), or None if cancelled.
+        "mid_stream_prv" (bool), "downstream_table_label" (short label, or
+        None when the box is off) and "existing" (None for New
+        Construction, else a dict with "size_nominal" (str), "length_ft" and
+        "load_mbh" (floats)), or None if cancelled.
     """
     return _show_picker(title, True)
 
@@ -718,9 +620,11 @@ def _show_picker(title, prv_option):
 
 
 def _show_picker_legacy(title, prv_option):
-    """FALLBACK ONLY. The plain material / table picker."""
+    """FALLBACK ONLY. The plain scope / material / table picker. The Scope
+    shows with the Mid Stream PRV option (Size Gas and One-Line)."""
     from System.Windows import Visibility
 
+    scope_option    = prv_option
     window          = XamlReader.Parse(_PICKER_XAML)
     window.Title    = title
     cb_material     = window.FindName('cbMaterial')
@@ -730,6 +634,14 @@ def _show_picker_legacy(title, prv_option):
     cb_downstream   = window.FindName('cbDownstream')
     tb_prv_error    = window.FindName('tbPrvError')
     tb_heat_content = window.FindName('tbHeatContent')
+    pnl_scope       = window.FindName('pnlScope')
+    rb_existing     = window.FindName('rbScopeExisting')
+    rb_new          = window.FindName('rbScopeNew')
+    pnl_scope_opts  = window.FindName('pnlScopeOpts')
+    cb_size         = window.FindName('cbSize')
+    tb_length       = window.FindName('tbLength')
+    tb_load         = window.FindName('tbLoad')
+    tb_scope_error  = window.FindName('tbScopeError')
     btn_ok          = window.FindName('btnOK')
     btn_cancel      = window.FindName('btnCancel')
 
@@ -776,8 +688,31 @@ def _show_picker_legacy(title, prv_option):
         if cb_table.Items.Count > 0:
             cb_table.SelectedIndex = 0
 
+    def populate_sizes():
+        """Existing pipe sizes of the table above, none preselected; a size
+        already chosen is kept when the new table lists it."""
+        chosen = cb_size.SelectedItem
+        cb_size.Items.Clear()
+        up = _upstream_option()
+        keep = -1
+        sizes = []
+        if up is not None:
+            try:
+                sizes = gas_tables.list_pipe_sizes(up["table_id"])
+            except ValueError:
+                sizes = []
+        for i, size in enumerate(sizes):
+            cb_size.Items.Add(size)
+            if chosen is not None and size == chosen:
+                keep = i
+        cb_size.SelectedIndex = keep
+
     populate_table(materials[0])
     tb_heat_content.Text = str(int(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+    populate_sizes()
+
+    if not scope_option:
+        pnl_scope.Visibility = Visibility.Collapsed
 
     if prv_option:
         cb_prv.Visibility = Visibility.Visible
@@ -788,8 +723,20 @@ def _show_picker_legacy(title, prv_option):
             populate_table(cb_material.SelectedItem)
 
     def on_table_changed(sender, e):
+        populate_sizes()
         if prv_option:
             populate_downstream()
+
+    def on_scope_changed(sender, e):
+        on = bool(rb_existing.IsChecked)
+        pnl_scope_opts.Visibility = (Visibility.Visible if on
+                                     else Visibility.Collapsed)
+        tb_scope_error.Visibility = Visibility.Collapsed
+
+    rb_new.Checked        += on_scope_changed
+    rb_new.Unchecked      += on_scope_changed
+    rb_existing.Checked   += on_scope_changed
+    rb_existing.Unchecked += on_scope_changed
 
     def on_prv_toggled(sender, e):
         on = bool(cb_prv.IsChecked)
@@ -803,7 +750,39 @@ def _show_picker_legacy(title, prv_option):
 
     result = [None]
 
+    def _nonneg(box):
+        """A number of zero or more, or None. Marks the box when it is bad."""
+        try:
+            value = float(box.Text.strip())
+            if value < 0 or value != value or value == float("inf"):
+                raise ValueError
+        except ValueError:
+            box.Background = Brushes.LightPink
+            return None
+        box.Background = Brushes.White
+        return value
+
     def on_ok(sender, e):
+        existing = None
+        if scope_option and bool(rb_existing.IsChecked):
+            length = _nonneg(tb_length)
+            load = _nonneg(tb_load)
+            if cb_size.SelectedItem is None:
+                tb_scope_error.Text = ("Pick the existing pipe size at the "
+                                       "connection.")
+                tb_scope_error.Visibility = Visibility.Visible
+                return
+            if length is None or load is None:
+                tb_scope_error.Text = ("Length and existing load shall be "
+                                       "numbers of 0 or more.")
+                tb_scope_error.Visibility = Visibility.Visible
+                return
+            tb_scope_error.Visibility = Visibility.Collapsed
+            existing = {
+                "size_nominal": cb_size.SelectedItem,
+                "length_ft":    length,
+                "load_mbh":     load,
+            }
         try:
             heat_content = float(tb_heat_content.Text.strip())
             if heat_content <= 0:
@@ -837,6 +816,7 @@ def _show_picker_legacy(title, prv_option):
             "heat_content":           heat_content,
             "mid_stream_prv":         use_prv,
             "downstream_table_label": downstream_label,
+            "existing":               existing,
         }
         window.Close()
 

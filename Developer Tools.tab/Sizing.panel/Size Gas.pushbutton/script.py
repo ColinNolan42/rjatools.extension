@@ -457,14 +457,21 @@ def main():
         "downstream_table_id": downstream_table_id,
     }
 
+    # Scope, chosen in the dialog before the pick (Colin, 2026-11-20): None
+    # is New Construction, else the existing gas piping entered there.
+    connect_existing = choice.get("existing")
+
     # ------------------------------------------------------------------
     # STEP 2 - Pick the gas meter, or the first new pipe on an existing
     # building (Colin, 2026-10-13). A meter runs exactly as before. A pipe
-    # starts the run at the connection to existing.
+    # starts the run at the connection to existing. Connect into Existing
+    # takes the first new pipe only.
     # ------------------------------------------------------------------
     # the shared pick step, same words and window as One-Line (2026-11-19)
     selected_element = ui_helpers.pick_element(
-        uidoc, doc, "Size Gas", ui_helpers.PICK_GAS)
+        uidoc, doc, "Size Gas",
+        ui_helpers.PICK_GAS_EXISTING if connect_existing
+        else ui_helpers.PICK_GAS)
     if selected_element is None:
         _say("Selection cancelled. No changes were made to the model.")
         return
@@ -473,11 +480,20 @@ def main():
         revit_helpers.eid_int(selected_element.Id))
 
     # ------------------------------------------------------------------
-    # STEP 3 - Validate the pick. For a pipe, find its existing side and ask
-    # for the existing conditions, which are assumed not modeled.
+    # STEP 3 - Validate the pick. For a pipe, find its existing side. The
+    # existing conditions, assumed not modeled, came from the dialog.
     # ------------------------------------------------------------------
     upstream = None
     existing = None
+    if connect_existing and not revit_helpers.is_pipe(selected_element):
+        _alert(
+            "Connect into Existing was chosen, so the pick shall be the first "
+            "new gas pipe at the connection to existing, not the gas meter "
+            "or other equipment.\n\nNothing was changed. Run Size Gas again "
+            "and pick that pipe, or choose New Construction to start at the "
+            "meter.",
+            "error")
+        return
     if revit_helpers.is_pipe(selected_element):
         gas_check = pipe_graph.check_gas_pipe(selected_element)
         if not gas_check["ok"]:
@@ -500,17 +516,8 @@ def main():
         inputs["check"] = ("New gas piping connection. Upstream end found "
                            "because {}.".format(upstream["reason"]))
 
-        picked_id = revit_helpers.eid_int(selected_element.Id)
-        existing = ui_helpers.show_existing_gas_dialog(
-            "Size Gas - Existing Conditions",
-            gas_tables.list_pipe_sizes(table_id),
-            tie_in.recall_existing(picked_id))
-        if existing is None:
-            _say("Cancelled at existing conditions. No changes were made to "
-                 "the model.")
-            return
-        if not tie_in.is_new_construction(existing):
-            tie_in.remember_existing(picked_id, existing)
+        # New Construction from a pipe: full new construction, new meter.
+        existing = tie_in.existing_from_scope(connect_existing)
         inputs["existing"] = tie_in.existing_inputs_text(existing)
     else:
         validation = revit_helpers.validate_selected_element(selected_element)

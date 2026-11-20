@@ -688,11 +688,8 @@ def basis_of_design_rows():
                        "ticked, the piping after it is sized on its own "
                        "table and its own longest run.".format(
                            float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
-        ("Existing building", "Picking a new pipe instead of a meter starts "
-                              "the run at the connection to existing. The "
-                              "entered existing length is added to the "
-                              "developed length. The existing pipe is "
-                              "checked, never resized."),
+        # The existing building rows follow from the dialog's Scope
+        # (sizer_dialogs._EXISTING_BASIS_ROWS, Colin 2026-11-20).
     ]
 
 

@@ -57,12 +57,23 @@ def _emit(html, md):
     cr.emit(output, html, lambda: output.print_md(md), logger, TITLE)
 
 
-def _pick():
-    """The meter, or the first new gas pipe at an existing building.
+def _pick(connect_existing):
+    """The meter, or the first new gas pipe at an existing building. With
+    Connect into Existing (connect_existing true) only the pipe is taken.
     Returns (element, upstream or None) or (None, None)."""
-    el = ui_helpers.pick_element(uidoc, doc, TITLE, ui_helpers.PICK_GAS)
+    el = ui_helpers.pick_element(
+        uidoc, doc, TITLE,
+        ui_helpers.PICK_GAS_EXISTING if connect_existing
+        else ui_helpers.PICK_GAS)
     if el is None:
         output.print_md("Selection cancelled. Nothing drawn.")
+        return None, None
+    if connect_existing and not revit_helpers.is_pipe(el):
+        _alert("Connect into Existing was chosen, so the pick shall be the "
+               "first new gas pipe at the connection to existing, not the "
+               "gas meter or other equipment.\n\nNothing was drawn. Run "
+               "One-Line again and pick that pipe, or choose New "
+               "Construction to start at the meter.")
         return None, None
     if revit_helpers.is_pipe(el):
         chk = pipe_graph.check_gas_pipe(el)
@@ -109,8 +120,11 @@ def main():
                       choice.get("downstream_table_label"))
     down_id = down["table_id"] if down else None
     heat = choice["heat_content"]
+    # Scope, chosen before the pick (Colin, 2026-11-20): None is New
+    # Construction, else the existing gas piping entered in the dialog.
+    connect_existing = choice.get("existing")
 
-    el, upstream = _pick()
+    el, upstream = _pick(connect_existing)
     if el is None:
         return
     is_tie_in = upstream is not None
@@ -141,14 +155,8 @@ def main():
 
     existing = None
     if is_tie_in:
-        existing = ui_helpers.show_existing_gas_dialog(
-            "Gas One-Line - Existing Conditions",
-            gas_tables.list_pipe_sizes(table_id), tie_in.recall_existing(el_id))
-        if existing is None:
-            output.print_md("Cancelled at existing conditions. Nothing drawn.")
-            return
-        if not tie_in.is_new_construction(existing):
-            tie_in.remember_existing(el_id, existing)
+        # New Construction from a pipe: full new construction, new meter.
+        existing = tie_in.existing_from_scope(connect_existing)
         if (graph.longest_run is not None
                 and tie_in.existing_for_sizing(existing) is not None):
             pipe_graph.apply_existing_conditions(

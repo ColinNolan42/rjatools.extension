@@ -226,6 +226,9 @@ def _is_cap(element):
 # would otherwise type them again into One-Line. Kept per picked pipe for as
 # long as this module stays loaded. If pyRevit reloads it the box just opens
 # empty, so nothing depends on this.
+# 2026-11-20: no button calls remember_existing or recall_existing any more.
+# The existing conditions are entered in the gas dialog's Scope before the
+# pick, empty every run (Colin). Kept for its test until Colin decides.
 _EXISTING_BY_PIPE_ID = {}
 
 
@@ -238,12 +241,29 @@ def recall_existing(pipe_id):
     return dict(found) if found is not None else None
 
 
+def existing_from_scope(scope_existing):
+    """The existing dict the gas tools carry after a PIPE pick, from the
+    dialog's Scope (Colin, 2026-11-20).
+
+    scope_existing: the dialog's "existing" value, None for New Construction
+    or a dict with "size_nominal", "length_ft" and "load_mbh" for Connect
+    into Existing. Returns {"new_construction": True} for New Construction,
+    else a copy of the entered values with "new_construction": False.
+    """
+    if not scope_existing:
+        return {"new_construction": True}
+    existing = dict(scope_existing)
+    existing["new_construction"] = False
+    return existing
+
+
 NEW_CONSTRUCTION_TEXT = ("New construction. The system starts at the picked "
                          "pipe, with no existing piping upstream.")
 
 
 def is_new_construction(existing):
-    """True when the Existing Conditions result says New Construction."""
+    """True when the existing dict says New Construction (a pipe pick with
+    the New Construction scope, tie_in.existing_from_scope)."""
     return bool(existing) and bool(existing.get("new_construction"))
 
 

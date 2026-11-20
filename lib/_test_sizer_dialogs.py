@@ -53,7 +53,6 @@ BODIES = {
     "gas": sizer_dialogs._GAS_BODY,
     "oneline": sizer_dialogs._GAS_BODY,
     "message": sizer_dialogs._MESSAGE_BODY,
-    "existing": sizer_dialogs._EXISTING_BODY,
     "performance": sizer_dialogs._PERF_BODY,
     "start": sizer_dialogs._START_BODY,
     "duct": sizer_dialogs._DUCT_BODY,
@@ -71,7 +70,6 @@ FUNCTIONS = {
     "gas": ["show_gas_picker", "_gas_picker"],
     "oneline": ["show_oneline_picker", "_gas_picker"],
     "message": ["show_message"],
-    "existing": ["show_existing_gas_dialog"],
     "performance": ["show_water_performance_dialog", "_init_project",
                     "_init_recirc"],
     "start": ["show_start_point_dialog"],
@@ -160,43 +158,146 @@ class TestEveryLookedUpNameExists(unittest.TestCase):
             self.assertIn('Text="Calculation basis"', body, key)
 
 
-class TestExistingNewConstruction(unittest.TestCase):
-    """Connect into Existing box at the top of the Existing Conditions
-    dialog, unticked by default (full new construction, Colin 2026-11-19)."""
+class TestGasScope(unittest.TestCase):
+    """Scope at the top of the one gas dialog (Colin, 2026-11-20): New
+    Construction (default) or Connect into Existing, with the existing gas
+    piping in a Scope options box under Connect into Existing, laid out like
+    the Duct Performance Scope. The Existing Conditions popup is gone."""
 
     def _root(self):
         return ET.fromstring("<Root %s>%s</Root>"
-                             % (NS, sizer_dialogs._EXISTING_BODY))
+                             % (NS, sizer_dialogs._GAS_BODY))
 
-    def test_box_is_first_and_unticked(self):
+    def _by_name(self, name):
+        found = [el for el in self._root().iter() if el.get(X_NAME) == name]
+        self.assertEqual(len(found), 1, name)
+        return found[0]
+
+    def _section_titles(self):
+        return [el.get("Text") for el in self._root().iter()
+                if el.get("Style") == "{DynamicResource RjaSectionTitle}"]
+
+    def test_scope_is_the_first_section(self):
+        self.assertEqual(self._section_titles(), ["Scope", "Pipe and table"])
         first = list(self._root())[0]
-        self.assertTrue(first.tag.endswith("CheckBox"))
-        self.assertEqual(first.get(X_NAME), "cb_connect")
-        self.assertEqual(first.get("IsChecked"), "False")
-        self.assertEqual(first.get("Content"), "Connect into Existing")
+        self.assertEqual(first.get(X_NAME), "pnl_scope")
 
-    def test_hint_text(self):
-        self.assertIn("Unticked: full new construction, with a new meter. "
-                      "The picked pipe starts the system. Tick to enter the "
-                      "existing gas piping.", sizer_dialogs._EXISTING_BODY)
+    def test_two_radio_choices_new_construction_default(self):
+        radios = [el for el in self._root().iter()
+                  if el.tag.endswith("RadioButton")]
+        self.assertEqual([r.get(X_NAME) for r in radios],
+                         ["rb_scope_new", "rb_scope_existing"])
+        self.assertEqual([r.get("Content") for r in radios],
+                         ["New Construction", "Connect into Existing"])
+        self.assertEqual(len(set(r.get("GroupName") for r in radios)), 1)
+        self.assertEqual(radios[0].get("IsChecked"), "True")
+        self.assertIn(radios[1].get("IsChecked"), (None, "False"))
 
-    def test_fields_still_present(self):
-        names = _names_in(sizer_dialogs._EXISTING_BODY)
-        for n in ("cb_size", "tb_length", "tb_load"):
-            self.assertIn(n, names)
+    def test_scope_options_sit_under_connect_into_existing(self):
+        scope = list(self._by_name("pnl_scope"))
+        names = [el.get(X_NAME) for el in scope]
+        i_existing = names.index("rb_scope_existing")
+        i_opts = names.index("pnl_scope_opts")
+        # radio, its hint line, then the options box (as in Duct Performance)
+        self.assertEqual(i_opts, i_existing + 2)
+        opts = self._by_name("pnl_scope_opts")
+        self.assertEqual(opts.get("Style"), "{DynamicResource RjaGroupBorder}")
+        self.assertEqual(opts.get("Visibility"), "Collapsed")
+        inside = set(el.get(X_NAME) for el in opts.iter() if el.get(X_NAME))
+        self.assertEqual(inside, set(["pnl_scope_opts", "cb_size",
+                                      "tb_length", "tb_load"]))
 
-    def test_basis_rows_explain_both_states(self):
+    def test_existing_fields_start_empty_with_no_size(self):
+        self.assertTrue(self._by_name("cb_size").tag.endswith("ComboBox"))
+        self.assertIsNone(self._by_name("cb_size").get("SelectedIndex"))
+        for n in ("tb_length", "tb_load"):
+            self.assertIn(self._by_name(n).get("Text"), (None, ""))
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "sizer_dialogs.py")).read()
+        body = src[src.index("def _gas_picker("):]
+        body = body[:body.index("\ndef ")]
+        # never preselected, never recalled, never prefilled
+        self.assertIn("cb_size.SelectedIndex = keep", body)
+        self.assertIn("keep = -1", body)
+        self.assertNotIn("recall_existing", body)
+        self.assertNotIn("tb_length.Text =", body)
+        self.assertNotIn("tb_load.Text =", body)
+
+    def test_existing_is_validated_inline(self):
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "sizer_dialogs.py")).read()
+        body = src[src.index("def _gas_picker("):]
+        body = body[:body.index("\ndef ")]
+        self.assertIn("'Pick the existing pipe size at the '", body)
+        self.assertEqual(body.count("kind='nonneg'"), 2)
+        self.assertIn('"existing":               existing,', body)
+
+    def test_heat_content_is_in_pipe_and_table(self):
+        body = sizer_dialogs._GAS_BODY
+        self.assertNotIn('Text="Gas"', body)
+        i_table = body.index('x:Name="cb_table"')
+        i_heat = body.index('x:Name="tb_heat"')
+        i_prv = body.index('x:Name="cb_prv"')
+        self.assertTrue(i_table < i_heat < i_prv)
+        self.assertIn('Text="BTU/CF"', body)
+
+    def test_existing_pipe_sizes_follow_the_table(self):
+        self.assertEqual(sizer_dialogs.existing_pipe_sizes("402.4(2)")[:3],
+                         ["1/2", "3/4", "1"])
+        self.assertEqual(sizer_dialogs.existing_pipe_sizes(None), [])
+        self.assertEqual(sizer_dialogs.existing_pipe_sizes("402.4(99)"), [])
+
+    def test_the_popup_is_gone(self):
+        for mod in (sizer_dialogs, ui_helpers):
+            self.assertFalse(hasattr(mod, "show_existing_gas_dialog"))
+        self.assertFalse(hasattr(sizer_dialogs, "_EXISTING_BODY"))
+        self.assertFalse(hasattr(ui_helpers, "_EXISTING_GAS_XAML"))
+        self.assertFalse(hasattr(ui_helpers,
+                                 "_show_existing_gas_dialog_legacy"))
+
+    def test_basis_rows_explain_both_scopes(self):
         labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
-        self.assertEqual(labels[0], "New construction")
-        self.assertIn("Connect into Existing", labels)
-        for _l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
+        self.assertEqual(labels[:2], ["New Construction",
+                                      "Connect into Existing"])
+        for l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
+            (l + v).encode("ascii")
             self.assertNotIn(" - ", v)
+            self.assertNotIn("tick", v.lower())
+        gas_labels = [l for l, _v in sizing_engine.basis_of_design_rows()]
+        self.assertNotIn("Existing building", gas_labels)
 
-    def test_fallback_has_the_box(self):
-        xaml = ui_helpers._EXISTING_GAS_XAML
-        self.assertIn('Name="cbConnect" IsChecked="False"', xaml)
-        self.assertIn('Content="Connect into Existing"', xaml)
-        ET.fromstring(xaml)
+    def test_basis_appended_for_both_tools(self):
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "sizer_dialogs.py")).read()
+        self.assertIn("basis = basis + _EXISTING_BASIS_ROWS", src)
+
+    def test_fallback_matches(self):
+        xaml = ui_helpers._PICKER_XAML
+        root = ET.fromstring(xaml)
+        names = [el.get("Name") for el in root.iter() if el.get("Name")]
+        for n in ("pnlScope", "rbScopeNew", "rbScopeExisting", "pnlScopeOpts",
+                  "cbSize", "tbLength", "tbLoad", "tbScopeError",
+                  "cbMaterial", "cbTable", "tbHeatContent", "cbPrv",
+                  "cbDownstream"):
+            self.assertIn(n, names)
+        self.assertTrue(names.index("pnlScope") < names.index("cbMaterial")
+                        < names.index("tbHeatContent") < names.index("cbPrv"))
+        self.assertIn('Name="rbScopeNew" GroupName="gas_scope" '
+                      'Content="New Construction" IsChecked="True"',
+                      xaml.replace("'", "").replace("\n", ""))
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "ui_helpers.py")).read()
+        legacy = src[src.index("def _show_picker_legacy("):]
+        legacy = legacy[:legacy.index("\ndef ")]
+        for n in ("pnlScope", "rbScopeNew", "rbScopeExisting", "pnlScopeOpts",
+                  "cbSize", "tbLength", "tbLoad", "tbScopeError"):
+            self.assertIn("FindName('%s')" % n, legacy)
+        self.assertIn('"existing":               existing,', legacy)
+
+    def test_pick_prompts(self):
+        self.assertIn("gas meter", ui_helpers.PICK_GAS)
+        self.assertIn("first new gas pipe", ui_helpers.PICK_GAS_EXISTING)
+        self.assertNotIn("meter", ui_helpers.PICK_GAS_EXISTING)
 
 
 class TestSizeDuctLimitsGrid(unittest.TestCase):
