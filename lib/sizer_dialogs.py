@@ -77,7 +77,7 @@ _SHELL_XAML = '''
 '''
 
 _BASIS_XAML = '''
-                <Expander x:Name="exp_ref" IsExpanded="True" Margin="0,14,0,0">
+                <Expander x:Name="exp_ref" IsExpanded="False" Margin="0,14,0,0">
                     <Expander.Header>
                         <TextBlock FontSize="13" FontWeight="SemiBold" Text="Calculation basis"/>
                     </Expander.Header>
@@ -964,11 +964,6 @@ _GAS_BODY = (
 
 # Appended to the gas Calculation basis rows (Size Gas and One-Line).
 _EXISTING_BASIS_ROWS = [
-    ("Connect into Existing",
-     "The pick is the first new pipe at the connection to existing gas "
-     "piping, assumed not modeled. The existing pipe size, the length from "
-     "the meter and the total existing load at the existing meter are "
-     "entered under the scope."),
     ("Longest run",
      "Longest Run Method, IFGC Appendix A (A103.1). L = developed length "
      "from the meter to the farthest outlet (+ the entered existing length "

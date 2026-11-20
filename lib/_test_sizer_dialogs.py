@@ -259,7 +259,7 @@ class TestGasScope(unittest.TestCase):
         labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
         # Colin, 2026-11-20: only these two, the rest of the old scope rows
         # (New Construction, Existing pipe, second Developed length) dropped.
-        self.assertEqual(labels, ["Connect into Existing", "Longest run"])
+        self.assertEqual(labels, ["Longest run"])
         self.assertIn("Longest Run Method", dict(
             sizer_dialogs._EXISTING_BASIS_ROWS)["Longest run"])
         ol = [l for l, _v in sizing_engine.oneline_basis_rows()]
@@ -390,6 +390,11 @@ class TestGasHeatContentOnMbhTables(unittest.TestCase):
 
 
 class TestGasCalculationBasis(unittest.TestCase):
+
+    def test_basis_starts_closed(self):
+        # Colin, 2026-11-20: Calculation basis defaults to closed.
+        self.assertIn('x:Name="exp_ref" IsExpanded="False"',
+                      sizer_dialogs._BASIS_XAML)
 
     def test_rows_are_ascii_label_value_pairs(self):
         rows = sizing_engine.basis_of_design_rows()
