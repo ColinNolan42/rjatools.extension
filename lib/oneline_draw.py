@@ -355,12 +355,18 @@ class _Drawer(object):
                             self.doc, inst.Id, DB.XYZ(dx, dy, 0))
             self.counts["symbols"] += 1
             return
-        # fallback
+        # fallback: drawn in the new pipe line style, Line 4 (Colin,
+        # 2026-11-20), never the default <Lines> or the thin existing style
         if p["role"] == "meter":
             for a0 in (0.0, math.pi):
                 arc = DB.Arc.Create(DB.XYZ(x, y, 0), _METER_R, a0, a0 + math.pi,
                                     DB.XYZ.BasisX, DB.XYZ.BasisY)
-                self.doc.Create.NewDetailCurve(self.view, arc)
+                dc = self.doc.Create.NewDetailCurve(self.view, arc)
+                if self.new_style is not None:
+                    try:
+                        dc.LineStyle = self.new_style
+                    except Exception:
+                        pass
             opts = DB.TextNoteOptions(self.tt_id)
             opts.HorizontalAlignment = DB.HorizontalTextAlignment.Center
             opts.VerticalAlignment = DB.VerticalTextAlignment.Middle
@@ -368,7 +374,7 @@ class _Drawer(object):
                                opts)
         else:
             for s in fallback_segments(p):
-                self.line(s[0], s[1], s[2], s[3])
+                self.line(s[0], s[1], s[2], s[3], new=True)
         self.counts["fallbacks"] += 1
 
     def draw(self, prims):
