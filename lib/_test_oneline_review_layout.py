@@ -108,7 +108,7 @@ class RoofRule(unittest.TestCase):
     """n31 / n32 (Colin 2026-11-20): roof = level name has ROOF, or units
     more than 8 ft above the top level. The meter plays no part."""
 
-    def _two_story(self, levels, unit_z, names=("RTU-1", "RTU-2")):
+    def _two_story(self, levels, unit_z, names=("EQ-1", "EQ-2")):
         nodes = [(1, "meter", [0, 0, 0.5]), (2, "tee", [10, 0, 9.0]),
                  (5, "fixture", [10, 8, 1.0], {"name": "WH-1", "load_mbh": 150.0}),
                  (3, "tee", [30, 0, unit_z - 1.0]),
@@ -168,7 +168,7 @@ class RoofRule(unittest.TestCase):
         notes = out["roof_notes"]
         self.assertEqual(len(notes), 2)
         joined = " ".join(notes)
-        for name, eid in (("RTU-1", 6), ("RTU-2", 7)):
+        for name, eid in (("EQ-1", 6), ("EQ-2", 7)):
             self.assertIn("{0} (element {1}), 12.0 ft above the top "
                           "level (FIRST)".format(name, eid), joined)
         self.assertNotIn("WH-1", joined)
@@ -196,12 +196,58 @@ class RoofRule(unittest.TestCase):
         self.assertFalse(_hangs_up(out, 6))
         self.assertFalse(_hangs_up(out, 7))
 
+    def test_indoor_unit_on_roof_level_gets_routing_note(self):
+        lv = [{"name": "FIRST", "elev": 0.0}, {"name": "ROOF", "elev": 14.0}]
+        sch = S.build(self._two_story(lv, 15.0, names=("UH-1", "EQ-2")))
+        out = L.layout(sch)
+        _ok(self, out)
+        self.assertFalse(_hangs_up(out, 6))
+        notes = [n for n in out["roof_notes"] if n.startswith("CHECK ROUTING")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("UH-1 (element 6)", notes[0])
+        self.assertIn("1.0 ft above ROOF", notes[0])
+
+    # Colin 2026-11-20: an RTU is on the roof by its name, and the piping
+    # is still checked against that
+    def test_rtu_inside_by_elevation_drawn_up_with_routing_note(self):
+        lv = [{"name": "FIRST", "elev": 0.0}, {"name": "SECOND", "elev": 14.0},
+              {"name": "ROOF", "elev": 28.0}]
+        sch = S.build(self._two_story(lv, 14.5, names=("RTU-1", "EQ-2")))
+        out = L.layout(sch)
+        _ok(self, out)
+        self.assertTrue(_hangs_up(out, 6))
+        self.assertFalse(_hangs_up(out, 7))
+        notes = [n for n in out["roof_notes"] if n.startswith("CHECK ROUTING")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("RTU-1 (element 6) is a rooftop unit", notes[0])
+        self.assertIn("0.5 ft above SECOND", notes[0])
+
+    def test_rtu_on_roof_no_note(self):
+        lv = [{"name": "FIRST", "elev": 0.0}, {"name": "ROOF", "elev": 14.0}]
+        out = L.layout(S.build(self._two_story(lv, 15.0,
+                                               names=("RTU-1", "RTU-2"))))
+        _ok(self, out)
+        self.assertTrue(_hangs_up(out, 6))
+        self.assertEqual(out["roof_notes"], [])
+
+    def test_rtu_high_without_roof_level_no_height_note(self):
+        lv = [{"name": "FIRST", "elev": 0.0}]
+        out = L.layout(S.build(self._two_story(lv, 12.0,
+                                               names=("RTU-1", "RTU-2"))))
+        _ok(self, out)
+        self.assertTrue(_hangs_up(out, 6))
+        self.assertEqual(out["roof_notes"], [])
+
     def test_indoor_names(self):
         for n in ("UH-1", "uh-2", "GUH-7", "F-1", "F1", "FURN-2",
                   "FURNACE-3"):
             self.assertTrue(L.is_indoor_equipment(n), n)
         for n in ("FUTURE", "RTU-1", "FCU-1", "WH-1", "", None, "FUTURE 1"):
             self.assertFalse(L.is_indoor_equipment(n), n)
+        for n in ("RTU-1", "rtu-12", "RTU 3"):
+            self.assertTrue(L.is_roof_equipment(n), n)
+        for n in ("UH-1", "F-1", "FUTURE", "RTUX", None):
+            self.assertFalse(L.is_roof_equipment(n), n)
 
     def test_roof_tie_in(self):
         nodes = [(-50, "meter", [0, 0, 29.0]), (2, "tee", [10, 0, 29.0]),

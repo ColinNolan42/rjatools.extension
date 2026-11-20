@@ -102,6 +102,10 @@ ROOF_ABOVE_TOP_FT = 8.0
 # (FIXTURE_NAME): unit heaters (UH, GUH) and furnaces (F, FURN) (Colin,
 # 2026-11-20). They take the level they sit on, never a ROOF band.
 INDOOR_NAME_RE = re.compile(r"^\s*(G?UH|FURN(ACE)?|F)\s*-?\s*\d", re.I)
+# Equipment assumed on the roof by its name: rooftop units (RTU). The name
+# sets the assumption; the piping elevation is still checked against it and
+# a mismatch is a console note (Colin, 2026-11-20).
+ROOF_NAME_RE = re.compile(r"^\s*RTU\s*-?\s*\d", re.I)
 INLINE_Z_FT = 1.0          # a run end this close to the tee height is inline
 ROOT_RISER_COL = 0.5       # meter outlet riser, in columns from the meter
 EXISTING_COLS = 2          # tie in: existing meter to the new connection
@@ -462,18 +466,41 @@ class _Engine(object):
         self.origin_z = oz
         zs = [oz]
         self.roof_by_height = []      # (name, node id, ft above top level)
-        # elevations of indoor units (unit heaters, furnaces): never a roof
-        # band, whatever their height (Colin, 2026-11-20)
-        self.indoor_z = set()
+        # The equipment name sets where a unit is drawn (Colin,
+        # 2026-11-20): unit heaters and furnaces inside, RTUs on the roof.
+        # The piping elevation is then checked against that assumption and
+        # a mismatch is a note (name_notes). Other names go by elevation.
+        # A unit whose name disagrees with its piping elevation is drawn at
+        # the elevation its name implies, per unit (by node id), never by
+        # sharing a height with another unit.
+        self.z_override = {}
+        self.name_notes = []
         self.non_roof_levels = [e for e, n in lv if "ROOF" not in n.upper()]
+        self.level_names = dict(lv)
         for t in self._terms(sch.get("root")):
-            if t.get("xyz") and is_indoor_equipment(t.get("name")):
-                self.indoor_z.add(round(float(t["xyz"][2]), 3))
+            if not t.get("xyz") or not self.levels:
+                continue
+            z = float(t["xyz"][2])
+            name = t.get("name")
+            if is_indoor_equipment(name) and self._geo_roof(z):
+                # noted only on a level named ROOF: with no ROOF level the
+                # 8 ft height rule cannot tell a hung unit heater from a
+                # roof unit, so it is not a routing mismatch by itself
+                if self._level_of(z, self.levels) in self.roof_levels:
+                    self.name_notes.append(name_mismatch_note(
+                        name, t.get("node_id"), True, self._where(z)))
+                self.z_override[t.get("node_id")] = self._level_of(
+                    z, self.non_roof_levels or self.levels)
+            elif is_roof_equipment(name) and not self._geo_roof(z):
+                self.name_notes.append(name_mismatch_note(
+                    name, t.get("node_id"), False, self._where(z)))
+                self.z_override[t.get("node_id")] = self._roof_z(z)
         for t in self._terms(sch.get("root")):
             if t.get("xyz"):
-                z = t["xyz"][2]
+                z = self._z(t)
                 zs.append(z)
-                if self._above_top(z) and not self._is_indoor_z(z):
+                if (self._above_top(z) and not is_roof_equipment(
+                        t.get("name"))):
                     self.roof_by_height.append(
                         (t.get("name") or "UNNAMED", t.get("node_id"),
                          float(z) - self.top_elev))
@@ -510,16 +537,34 @@ class _Engine(object):
     def _level_key(self, z):
         """Elevation of the level z sits on, or (height rule, no ROOF
         level) the roof band above the top level for units more than
-        ROOF_ABOVE_TOP_FT above it. An indoor unit (unit heater, furnace)
-        always takes the highest non ROOF level at or below it."""
-        if self._is_indoor_z(z):
-            return self._level_of(z, self.non_roof_levels or self.levels)
+        ROOF_ABOVE_TOP_FT above it."""
         if self._above_top(z):
             return self.top_elev + ROOF_ABOVE_TOP_FT
         return self._level_of(z, self.levels)
 
-    def _is_indoor_z(self, z):
-        return round(float(z), 3) in getattr(self, "indoor_z", ())
+    def _roof_z(self, z):
+        """Drawing elevation for an RTU whose piping stays inside: the
+        lowest ROOF level above it (else the highest ROOF level), or with
+        no ROOF level the roof band above the top level."""
+        roofs = sorted(self.roof_levels)
+        if roofs:
+            above = [r for r in roofs if r >= z]
+            return above[0] if above else roofs[-1]
+        return self.top_elev + ROOF_ABOVE_TOP_FT + 1.0
+
+    def _geo_roof(self, z):
+        """True when the piping elevation alone puts z on a roof: on a level
+        named ROOF, or (no ROOF level) more than ROOF_ABOVE_TOP_FT above
+        the top level."""
+        if self._above_top(z):
+            return True
+        return self._level_of(z, self.levels) in self.roof_levels
+
+    def _where(self, z):
+        """Where the piping elevation puts z, for a note."""
+        e = self._level_of(z, self.levels)
+        return "{0:.1f} ft above {1}".format(
+            float(z) - e, self.level_names.get(e) or "its level")
 
     def _is_roof_key(self, e):
         if e in self.roof_levels:
@@ -531,7 +576,8 @@ class _Engine(object):
         """One note per unit the height rule made a roof unit, so the
         engineer can check it or rename a level (Colin, 2026-11-20)."""
         return [roof_height_note(name, nid, ft, self.top_name)
-                for name, nid, ft in self.roof_by_height]
+                for name, nid, ft in self.roof_by_height] + list(
+                    getattr(self, "name_notes", []))
 
     def band(self, z):
         k = self._level_key(z)
@@ -627,8 +673,13 @@ class _Engine(object):
                 self._terms(t, out)
         return out
 
-    @staticmethod
-    def _z(item):
+    def _z(self, item):
+        """Drawing elevation of a node: its model elevation, or for a unit
+        whose name disagrees with its piping, the elevation its name implies
+        (z_override, Colin 2026-11-20)."""
+        over = getattr(self, "z_override", None)
+        if over and item.get("node_id") in over:
+            return over[item.get("node_id")]
         return (item.get("xyz") or [0, 0, 0])[2]
 
     # -- one Segment drawn along a polyline -------------------------------
@@ -1011,6 +1062,27 @@ def is_indoor_equipment(name):
     heater (UH-1, GUH-7) or a furnace (F-1, FURN-2) by its equipment name
     (Colin, 2026-11-20). FUTURE and RTU names are not."""
     return bool(name) and INDOOR_NAME_RE.match(str(name)) is not None
+
+
+def is_roof_equipment(name):
+    """True for equipment assumed on the roof by its name: a rooftop unit
+    (RTU-1) (Colin, 2026-11-20)."""
+    return bool(name) and ROOF_NAME_RE.match(str(name)) is not None
+
+
+def name_mismatch_note(name, node_id, indoor, where):
+    """The console note when the piping elevation does not match the unit
+    type its name implies (Colin, 2026-11-20). indoor: the name is a unit
+    heater or furnace (drawn inside) whose piping reaches a roof; else an
+    RTU (drawn on the roof) whose piping stays below one."""
+    if indoor:
+        return ("CHECK ROUTING: {0} (element {1}) is a unit heater or "
+                "furnace by its name and is drawn inside, but its piping "
+                "ends on the roof ({2}). Check the routing or the "
+                "name.".format(name, node_id, where))
+    return ("CHECK ROUTING: {0} (element {1}) is a rooftop unit by its name "
+            "and is drawn on the roof, but its piping ends inside ({2}). "
+            "Check the routing or the name.".format(name, node_id, where))
 
 
 def roof_height_note(name, node_id, above_ft, top_name=""):
