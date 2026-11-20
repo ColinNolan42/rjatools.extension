@@ -274,9 +274,10 @@ def resolve_start(doc, element, settings, output, ask_existing=None,
     begins.
 
     For a pipe, the existing conditions come from settings["existing"], else
-    ask_existing(picked_id, table_id) (the button's dialog). settings
-    ["existing"] = {"new_construction": True} starts the run at the picked
-    pipe with no existing piping (the Connect into Existing box left off).
+    ask_existing(picked_id, table_id) (the button's dialog). With neither
+    (headless), the run is full new construction: {"new_construction": True},
+    the picked pipe starts the system with no existing piping, as the button
+    with Connect into Existing left off (Colin, 2026-11-20).
     Returns dict: kind ("meter" | "pipe"), upstream, existing, check (one line
     for the inputs table), existing_text (inputs line, or None), stop (None
     to go on, _CANCELLED, or the message that stopped the run), title.
@@ -324,13 +325,11 @@ def resolve_start(doc, element, settings, output, ask_existing=None,
                 out["stop"] = _CANCELLED
                 return out
         if existing is None:
-            out["stop"] = (
-                "A pipe start needs the existing conditions: settings "
-                "existing = {size_nominal, length_ft (meter to the new "
-                "connection), load_mbh (existing load)}, or {new_construction: "
-                "True} for a full new system. Ask Colin; they are assumed not "
-                "modeled.")
-            return out
+            # Headless with no existing given: full new construction, the
+            # same as the button with Connect into Existing left off (Colin,
+            # 2026-11-20). Give settings["existing"] = {size_nominal,
+            # length_ft, load_mbh} to connect into existing piping instead.
+            existing = {"new_construction": True}
         out["existing"] = existing
         out["existing_text"] = tie_in.existing_inputs_text(existing)
         return out
@@ -1130,9 +1129,9 @@ def run_headless(doc, start_id, settings=None, decisions=None, write=True,
     """Size Gas with no UI. Returns the headless.result envelope.
 
     start_id: the gas meter, or the first new gas pipe at the connection to
-    existing (then settings["existing"] is required: {size_nominal, length_ft,
-    load_mbh}, or {new_construction: True} for a full new system with no
-    existing piping). settings: table_id
+    existing. A pipe start with no settings["existing"] is full new
+    construction, the picked pipe starting the system; to connect into
+    existing piping give {size_nominal, length_ft, load_mbh}). settings: table_id
     (required, see table_options()), pipe_material (optional, picks the
     material when a table id is shared), heat_content_btu_per_cf (840),
     downstream_table_id (None = no mid-stream PRV), existing.

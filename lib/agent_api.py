@@ -47,9 +47,10 @@ TOOLS = (
      "writes": "colored plan copies, sheet (make_sheets=True)",
      "decisions": [{"qid": "fan_cfm", "answer_with": "fan_cfm"}]},
     {"operation": "size_gas", "module": "gas_run",
-     "ids": "start_id: the gas meter, or the first new gas pipe at the "
-            "connection to existing (then settings['existing'] is required, "
-            "or {'new_construction': True} for a full new system)",
+     "ids": "start_id: the gas meter, or the first new gas pipe. A pipe "
+            "start is full new construction unless settings['existing'] = "
+            "{size_nominal, length_ft, load_mbh} connects it into existing "
+            "piping",
      "engine": "ironpython", "mcp": "run_query; run_modify when write=True",
      "writes": "pipes, fittings, stubs (write=True)",
      "decisions": [{"qid": "presizing_warnings", "answer_with": "decisions"}]},

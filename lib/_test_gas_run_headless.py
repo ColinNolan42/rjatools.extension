@@ -181,7 +181,10 @@ check("not a gas pipe", "not a gas pipe" in s["stop"] and s["kind"] == "pipe")
 s = gas_run.resolve_start(None, Elem(22, pipe=True), ok, rec)
 check("no upstream end", "both ends new" in s["stop"])
 s = gas_run.resolve_start(None, Elem(23, pipe=True), ok, rec)
-check("pipe needs existing", "existing conditions" in s["stop"])
+# Colin 2026-11-20: no existing given = full new construction
+check("pipe with no existing is new construction",
+      s["stop"] is None and s["existing"] == {"new_construction": True}
+      and "New construction" in s["existing_text"])
 s = gas_run.resolve_start(None, Elem(23, pipe=True), dict(ok, existing=ex), rec)
 check("pipe with existing", s["stop"] is None and s["existing"] == ex
       and s["upstream"]["reason"] == "one end is open")
