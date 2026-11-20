@@ -257,8 +257,14 @@ class TestGasScope(unittest.TestCase):
 
     def test_basis_rows_explain_both_scopes(self):
         labels = [l for l, _v in sizer_dialogs._EXISTING_BASIS_ROWS]
-        self.assertEqual(labels[:2], ["New Construction",
-                                      "Connect into Existing"])
+        # Colin, 2026-11-20: only these two, the rest of the old scope rows
+        # (New Construction, Existing pipe, second Developed length) dropped.
+        self.assertEqual(labels, ["Connect into Existing", "Longest run"])
+        self.assertIn("Longest Run Method", dict(
+            sizer_dialogs._EXISTING_BASIS_ROWS)["Longest run"])
+        ol = [l for l, _v in sizing_engine.oneline_basis_rows()]
+        self.assertEqual(ol, ["Developed length", "Heat content", "Loads",
+                              "Mid stream PRV"])
         for l, v in sizer_dialogs._EXISTING_BASIS_ROWS:
             (l + v).encode("ascii")
             self.assertNotIn(" - ", v)
@@ -398,14 +404,16 @@ class TestGasCalculationBasis(unittest.TestCase):
         joined = " ".join(l + " " + v for l, v in
                           sizing_engine.basis_of_design_rows())
         self.assertIn("2024 IFGC", joined)
-        self.assertIn("Longest Run Method", joined)
         self.assertIn("402.4", joined)
         self.assertIn("%g" % shared_params.SPECIFIC_GRAVITY, joined)
-        self.assertIn("%g ft" % shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT,
+        self.assertIn("%g ft x elbows" % shared_params.ELBOW_EQUIV_LENGTH_FT,
                       joined)
-        self.assertIn("5 ft per elbow", joined)
+        self.assertIn("%g ft x tees" % shared_params.TEE_EQUIV_LENGTH_FT,
+                      joined)
+        self.assertIn("CFH = (MBH x 1000) / Heat Content", joined)
+        self.assertIn("MBH(PRV) =", joined)
+        self.assertNotIn("Regulators", joined)
         self.assertIn("3/4", joined)
-        self.assertIn("Heat Content of Gas", joined)
 
 
 def _run():

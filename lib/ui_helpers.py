@@ -39,7 +39,7 @@ _PICKER_XAML = (
     '<ComboBox Name="cbSize" Margin="0,0,0,8"/>'
     '<TextBlock Text="Length, Meter to New Connection (ft)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<TextBox Name="tbLength" Margin="0,0,0,8"/>'
-    '<TextBlock Text="Total Existing Load (MBH)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBlock Text="Total Existing Load At Existing Meter (MBH)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
     '<TextBox Name="tbLoad" Margin="0,0,0,4"/>'
     '<TextBlock Text="The existing pipe is checked for the existing plus new load and is never'
     ' resized. The length is added to the new longest run, which is assumed to be the longest'

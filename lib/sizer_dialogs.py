@@ -899,19 +899,19 @@ _GAS_SCOPE_XAML = (
     '<StackPanel>'
     '<TextBlock FontWeight="SemiBold" Text="Existing gas piping"/>'
     '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
-    '<TextBlock Text="Existing pipe size at the connection" Width="210" VerticalAlignment="Center"/>'
+    '<TextBlock Text="Existing pipe size at the connection" Width="250" VerticalAlignment="Center"/>'
     '<ComboBox x:Name="cb_size" Width="90" Margin="0,0,6,0"'
     ' ToolTip="Nominal size of the existing pipe at the new connection. Shall be chosen."/>'
     '<TextBlock Text="in." VerticalAlignment="Center"/>'
     '</StackPanel>'
     '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
-    '<TextBlock Text="Length, meter to new connection" Width="210" VerticalAlignment="Center"/>'
+    '<TextBlock Text="Length, meter to new connection" Width="250" VerticalAlignment="Center"/>'
     '<TextBox x:Name="tb_length" Width="90" Margin="0,0,6,0"'
     ' ToolTip="Developed length of the existing pipe from the meter to the new connection. Cannot be negative."/>'
     '<TextBlock Text="ft" VerticalAlignment="Center"/>'
     '</StackPanel>'
     '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
-    '<TextBlock Text="Total existing load" Width="210" VerticalAlignment="Center"/>'
+    '<TextBlock Text="Total Existing Load At Existing Meter" Width="250" VerticalAlignment="Center"/>'
     '<TextBox x:Name="tb_load" Width="90" Margin="0,0,6,0"'
     ' ToolTip="Connected load of the existing appliances. Cannot be negative."/>'
     '<TextBlock Text="MBH" VerticalAlignment="Center"/>'
@@ -964,25 +964,18 @@ _GAS_BODY = (
 
 # Appended to the gas Calculation basis rows (Size Gas and One-Line).
 _EXISTING_BASIS_ROWS = [
-    ("New Construction",
-     "Scope default: full new construction with a new meter. The pick is the "
-     "gas meter or the first new pipe. A pipe start begins the system at the "
-     "picked pipe, with no existing pipe, length or load and no existing pipe "
-     "check."),
     ("Connect into Existing",
      "The pick is the first new pipe at the connection to existing gas "
      "piping, assumed not modeled. The existing pipe size, the length from "
-     "the meter and the existing load are entered under the scope."),
-    ("Existing pipe",
-     "Checked, never resized. It passes if its table capacity covers the "
-     "existing load plus the new load. A shortfall is a warning."),
-    ("Developed length",
-     "The entered length is added to the new longest run. That total picks "
-     "the table row for the check and for every new pipe."),
+     "the meter and the total existing load at the existing meter are "
+     "entered under the scope."),
     ("Longest run",
-     "The new piping is assumed to be the longest run in the system. The "
-     "engineer shall verify that existing appliances farther from the meter "
-     "still receive adequate gas."),
+     "Longest Run Method, IFGC Appendix A (A103.1). L = developed length "
+     "from the meter to the farthest outlet (+ the entered existing length "
+     "with Connect into Existing). Every pipe is read on the Table 402.4 row "
+     "at L, the next longer row when L falls between rows. Each pipe's load "
+     "= sum of the appliance MBH downstream of it. Pipe size = smallest size "
+     "whose capacity at L covers that load."),
 ]
 
 
@@ -1205,7 +1198,7 @@ def _gas_picker(title, mode, use_theme):
                                         'connection.'))
             length = _number(tb_length, 'Length, meter to new connection',
                              errors, kind='nonneg')
-            load = _number(tb_load, 'Total existing load', errors,
+            load = _number(tb_load, 'Total Existing Load At Existing Meter', errors,
                            kind='nonneg')
             existing = {
                 "size_nominal": cb_size.SelectedItem,
