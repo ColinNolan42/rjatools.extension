@@ -242,69 +242,90 @@ class TestBenchFixes(unittest.TestCase):
                        "gas elbow", "RJA Long Radius elbow"):
             run = self._run_with_elbow(family)
             self.assertEqual(run["elbow_equiv_length_feet"], 5.0, family)
-            self.assertAlmostEqual(run["total_length_feet"], 75.0)
+            # 70 ft pipe + 5 ft elbow + 3 ft for tee 2
+            self.assertAlmostEqual(run["total_length_feet"], 78.0)
 
-    def _centerline_model(self, takeout, reducer=False):
-        """meter 1 -> pipe 10 -> tee 2 (center x 10) -> pipe 12 -> elbow 5
-        (center x 40) -> pipe 13 -> UH-1 6. A fitting sized up takes
-        `takeout` ft of each pipe end it meets; the centers never move.
-        reducer=True puts a 0.3 ft transition 7 between tee 2 and pipe 12."""
+    def test_tee_into_the_branch_adds_three_feet(self):
+        # Colin 2026-11-19: developed length = pipe + 5 ft per elbow + 3 ft
+        # per tee. The run turns at tee 2 into pipe 12: 10 + 30 + 30 ft of
+        # pipe, 1 elbow, 1 tee.
         cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
                "FIXTURE_NAME": "UH-1"}
-        els = _tee_model(cap, elbow_family="Elbow - Generic")
-        by = dict((e.Id.Value, e) for e in els)
-        tee, elbow = by[2], by[5]
-        tee.location = [10.0, 0.0, 0.0]
-        elbow.location = [40.0, 0.0, 0.0]
-        tee.connectors[0]["origin_xyz"] = [10.0 - takeout, 0.0, 0.0]
-        tee.connectors[1]["origin_xyz"] = [10.0, takeout, 0.0]
-        tee.connectors[2]["origin_xyz"] = [10.0 + takeout, 0.0, 0.0]
-        elbow.connectors[0]["origin_xyz"] = [40.0 - takeout, 0.0, 0.0]
-        elbow.connectors[1]["origin_xyz"] = [40.0, takeout, 0.0]
-        by[10].length = 10.0 - takeout
-        extra = []
-        if reducer:
-            red = _Elem(7, "FamilyInstance", [_c(0, 2), _c(1, 12)],
-                        {"family": "Transition - Generic"})
-            red.location = [10.0 + takeout + 0.15, 0.0, 0.0]
-            red.connectors[0]["origin_xyz"] = [10.0 + takeout, 0.0, 0.0]
-            red.connectors[1]["origin_xyz"] = [10.0 + takeout + 0.3, 0.0, 0.0]
-            tee.connectors[2]["connected_element_id"] = 7
-            by[12].connectors[0]["connected_element_id"] = 7
-            by[12].length = 30.0 - 2 * takeout - 0.3
-            extra.append(red)
-        else:
-            by[12].length = 30.0 - 2 * takeout
-        by[13].length = 30.0 - takeout
-        return els + extra
+        run = self._build(_tee_model(cap, elbow_family="Elbow - Generic")
+                          ).longest_run
+        self.assertEqual(run["farthest_fixture_name"], "UH-1")
+        self.assertAlmostEqual(run["pipe_length_feet"], 70.0)
+        self.assertEqual(run["elbow_count"], 1)
+        self.assertEqual(run["tee_count"], 1)
+        self.assertAlmostEqual(run["tee_equiv_length_feet"], 3.0)
+        self.assertAlmostEqual(run["total_length_feet"], 78.0)
 
-    def _centerline_build(self, elements):
-        saved = revit_helpers.get_element_location
-        try:
-            with _Model(elements) as m:
-                revit_helpers.get_element_location = (
-                    lambda el: getattr(el, "location", None))
-                return pipe_graph.build_network(m.elements[1], None)
-        finally:
-            revit_helpers.get_element_location = saved
+    def test_tee_straight_through_adds_three_feet(self):
+        # The run goes on through tee 2 to RTU-1 (pipe 11 lengthened to 40
+        # ft so it is the longest); the branch is only 10 + 10 ft.
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        els = _tee_model(cap)
+        dict((e.Id.Value, e) for e in els)[11].length = 40.0
+        run = self._build(els).longest_run
+        self.assertEqual(run["farthest_fixture_name"], "RTU-1")
+        self.assertAlmostEqual(run["pipe_length_feet"], 50.0)
+        self.assertEqual(run["elbow_count"], 0)
+        self.assertEqual(run["tee_count"], 1)
+        self.assertAlmostEqual(run["total_length_feet"], 53.0)
 
-    def test_centerline_holds_when_fittings_grow(self):
-        # F10: 1 in. fittings (0.1 ft) vs fittings sized up (0.6 ft) with a
-        # reducer: the same centerline, 10 + 30 + 30 ft + 5 ft for the elbow.
-        small = self._centerline_build(self._centerline_model(0.1))
-        big = self._centerline_build(self._centerline_model(0.6, True))
-        for g in (small, big):
-            self.assertAlmostEqual(g.longest_run["total_length_feet"], 75.0)
-            self.assertEqual(g.longest_run["elbow_count"], 1)
-        self.assertAlmostEqual(big.longest_run["fitting_length_feet"],
-                               0.6 * 4 + 0.3)
+    def test_two_tees_and_an_elbow_together(self):
+        # meter 1 -10-> tee 2 -11-> tee 3 -14-> RTU 4
+        #                  tee 2 -12-> cap 7 (short)
+        #                  tee 3 -15-> elbow 5 -16-> UH-1 6 (longest)
+        # 10 + 10 + 10 + 10 ft pipe + 5 (elbow) + 2 x 3 (tees) = 51 ft.
+        cap = {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 50.0,
+               "FIXTURE_NAME": "UH-1"}
+        els = [
+            _Elem(1, "FamilyInstance", [_c(0, 10, direction="Out")],
+                  {"family": "Gas Meter"}),
+            _Elem(10, "Pipe", [_c(0, 1), _c(1, 2)]),
+            _Elem(2, "FamilyInstance", [_c(0, 10), _c(1, 11), _c(2, 12)],
+                  {"family": "Tee"}),
+            _Elem(11, "Pipe", [_c(0, 2), _c(1, 3)]),
+            _Elem(3, "FamilyInstance", [_c(0, 11), _c(1, 14), _c(2, 15)],
+                  {"family": "Tee"}),
+            _Elem(14, "Pipe", [_c(0, 3), _c(1, 4)]),
+            _Elem(4, "FamilyInstance", [_c(0, 14)],
+                  {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 100.0,
+                   "FIXTURE_NAME": "RTU-1"}),
+            _Elem(15, "Pipe", [_c(0, 3), _c(1, 5)]),
+            _Elem(5, "FamilyInstance", [_c(0, 15), _c(1, 16)],
+                  {"family": "Elbow - Generic"}),
+            _Elem(16, "Pipe", [_c(0, 5), _c(1, 6)]),
+            _Elem(6, "FamilyInstance", [_c(0, 16)], cap),
+            _Elem(12, "Pipe", [_c(0, 2), _c(1, 7)], length=2.0),
+            _Elem(7, "FamilyInstance", [_c(0, 12)],
+                  {"IS_GAS_FIXTURE": True, "GAS_LOAD_MBH": 10.0,
+                   "FIXTURE_NAME": "UH-2"}),
+        ]
+        run = self._build(els).longest_run
+        self.assertEqual(run["farthest_fixture_name"], "UH-1")
+        self.assertAlmostEqual(run["pipe_length_feet"], 40.0)
+        self.assertEqual((run["elbow_count"], run["tee_count"]), (1, 2))
+        self.assertAlmostEqual(run["elbow_equiv_length_feet"], 5.0)
+        self.assertAlmostEqual(run["tee_equiv_length_feet"], 6.0)
+        self.assertAlmostEqual(run["total_length_feet"], 51.0)
+        self.assertEqual(run["fitting_length_feet"], 0.0)
 
-    def test_meter_and_appliance_add_no_takeout(self):
-        g = self._centerline_build(self._centerline_model(0.1))
-        self.assertEqual(
-            pipe_graph.fitting_takeout_ft(g.nodes[1], 10), 0.0)
-        self.assertEqual(
-            pipe_graph.fitting_takeout_ft(g.nodes[6], 13), 0.0)
+    def test_what_counts_as_a_tee(self):
+        def node(kind, fixture=False, prv=False):
+            n = pipe_graph.NetworkNode(5, None, kind)
+            n.is_gas_fixture = fixture
+            n.is_prv = prv
+            return n
+        self.assertTrue(pipe_graph.counts_as_tee(node("tee"), 5, 1))
+        # the walk's own start, an appliance and a PRV never count
+        self.assertFalse(pipe_graph.counts_as_tee(node("tee"), 5, 5))
+        self.assertFalse(pipe_graph.counts_as_tee(node("tee", fixture=True), 5, 1))
+        self.assertFalse(pipe_graph.counts_as_tee(node("tee", prv=True), 5, 1))
+        self.assertFalse(pipe_graph.counts_as_tee(node("fitting"), 5, 1))
+        self.assertFalse(pipe_graph.counts_as_tee(node("meter"), 5, 1))
 
     def test_not_an_elbow(self):
         run = self._run_with_elbow("Coupling - Generic")

@@ -75,25 +75,31 @@ class G3CLabels(unittest.TestCase):
 
     def test_trunk_labels(self):
         # in order from the meter out, not dict order (G2 2026-11-19)
+        # length = pipe + 5 ft per elbow + 3 ft per tee (Colin, 2026-11-19)
+        # S1 13.17 + 2x5 + 3 = 26.17; S2 10.44 + 3 = 13.44;
+        # S3 22.60 + 2x5 + 3 = 35.60; S5 19.56 + 3 = 22.56;
+        # S6 21.50 + 5 = 26.50 (ends at RTU-1, no tee). Sum 124.26.
         trunk = [s["label"][0] for s in S.trunk_segments(self.sch)]
         self.assertEqual(trunk, [
-            '3"G, 25\'', '3"G, 11\'', '2"G, 34\'', '1-1/2"G, 20\'',
-            '1-1/4"G, 27\''])
+            '3"G, 26\'', '3"G, 13\'', '2"G, 36\'', '1-1/2"G, 23\'',
+            '1-1/4"G, 26\''])
 
     def test_item1_header_spans_are_short(self):
-        # kitchen header between taps reads about 3 ft, not 27 ft
+        # kitchen header between taps: 2.58 ft pipe + 3 ft for the tee it
+        # arrives at = 5.58, reads 6 ft (2.56 + 3 = 5.56 on the 1-1/2 in.)
         spans = [s for s in self.sch["segments"].values()
                  if s["branch_kind"] == "run" and not s["on_longest"]
                  and s["mbh"] in (755.0, 665.0, 450.0, 330.0)]
         self.assertEqual(len(spans), 4)
         for s in spans:
-            self.assertEqual(s["label"][0].split(", ")[1], "3'", s["label"])
+            self.assertEqual(s["label"][0].split(", ")[1], "6'", s["label"])
 
     def test_item1_drop_lengths_own_pipes(self):
         seg, _br = self._drop("CB-1")
         self.assertEqual(seg["elbows"], 2)
         self.assertAlmostEqual(seg["pipe_ft"], 5.10 + 7.22 + 1.06, places=1)
-        self.assertEqual(seg["label"], ['1"G, 24\'', "100 MBH"])
+        # 13.38 ft pipe + 2 elbows x 5 ft = 23.38, no tee on a drop
+        self.assertEqual(seg["label"], ['1"G, 23\'', "100 MBH"])
 
     def test_item2_drop_sizes(self):
         want = {"OVEN-1": "3/4", "CB-1": "1", "GRIDDLE-1": "1",
@@ -114,7 +120,8 @@ class G3CLabels(unittest.TestCase):
         self.assertEqual(br["end"]["kind"], "cap")
         sp, spbr = self._drop("SP-1")
         self.assertEqual(spbr["kind"], "tap")
-        self.assertEqual(sp["label"], ['1"G, 24\'', "90 MBH"])
+        # 13.45 ft pipe + 2 elbows x 5 ft = 23.45
+        self.assertEqual(sp["label"], ['1"G, 23\'', "90 MBH"])
 
     def test_kitchen_header_order(self):
         order = [t["name"] for t in S.terminals_in_order(self.sch)]
@@ -170,7 +177,8 @@ class Fraser(unittest.TestCase):
         hops = [s["label"][0] for s in spine if s["mbh"] in
                 (505.0, 405.0, 315.0, 190.0)]
         for h in hops:
-            self.assertEqual(h, '1"G, 8\'')   # K&L stripped from the label
+            # 7.82 ft pipe + 3 ft for the tee it arrives at = 10.82
+            self.assertEqual(h, '1"G, 11\'')   # K&L stripped from the label
             self.assertNotIn(h, taps.values())
 
     def test_equipment_prvs_fold_into_terminals(self):
@@ -206,7 +214,7 @@ def _snap(nodes, edges, children=None, path=None, run=0.0):
              "is_elbow": False, "is_transition": False, "is_prv": False,
              "is_midstream_prv": False, "is_gas_fixture": n[1] == "fixture",
              "load_mbh": 0.0, "name": "", "cum_mbh": 0.0, "connectors": [],
-             "takeout_ft": {}, "phase": None}
+             "phase": None}
         d.update(n[3] if len(n) > 3 else {})
         nd[str(n[0])] = d
     ed = {}
@@ -217,7 +225,7 @@ def _snap(nodes, edges, children=None, path=None, run=0.0):
                          "end": nd[str(e[2])]["xyz"], "phase": None}
     return {"origin_id": nodes[0][0], "nodes": nd, "edges": ed,
             "children": children or {}, "longest_path": path or [],
-            "longest_run_ft": run, "elbow_equiv_ft": 5.0,
+            "longest_run_ft": run, "elbow_equiv_ft": 5.0, "tee_equiv_ft": 3.0,
             "origin_phase": None}
 
 
@@ -226,15 +234,73 @@ class Synthetic(unittest.TestCase):
     def test_size_change_mid_run_splits(self):
         # meter 1 -> coupling 2 -> fixture 3; pipe 2" then 1-1/2"
         s = _snap([(1, "meter", [0, 0, 0]),
-                   (2, "fitting", [10, 0, 0], {"is_transition": True,
-                                               "takeout_ft": {"10": 0.2, "11": 0.3}}),
+                   (2, "fitting", [10, 0, 0], {"is_transition": True}),
                    (3, "fixture", [20, 0, 0], {"name": "RTU-1", "load_mbh": 100.0})],
                   [(10, 1, 2, 9.8, "2", 100.0), (11, 2, 3, 9.7, "1-1/2", 100.0)])
         sch = S.build(s)
         segs = [sch["segments"][x] for x in sch["root"]["segments"]]
         self.assertEqual([x["size"] for x in segs], ["2", "1-1/2"])
-        self.assertAlmostEqual(segs[0]["length_ft"], 10.0)
-        self.assertAlmostEqual(segs[1]["length_ft"], 10.0)
+        # pipe only: a transition adds no length of its own
+        self.assertAlmostEqual(segs[0]["length_ft"], 9.8)
+        self.assertAlmostEqual(segs[1]["length_ft"], 9.7)
+
+    def test_tee_three_feet_on_the_arriving_segment(self):
+        # meter 1 -10 ft-> tee 2 -> L (5 ft) / R (9 ft). The 3 ft sits on the
+        # segment that arrives at the tee, so the trunk is 10 + 3 + 9 = 22.
+        s = self._bullhead(5, 9)
+        s["longest_path"] = [1, 10, 2, 12, 4]
+        sch = S.build(s)
+        first = sch["segments"][sch["root"]["segments"][0]]
+        self.assertEqual((first["tees"], first["elbows"]), (1, 0))
+        self.assertAlmostEqual(first["length_ft"], 13.0)
+        legs = [sch["segments"][x] for x in
+                sch["root"]["end"]["run"]["segments"]]
+        self.assertEqual([x["tees"] for x in legs], [0])
+        self.assertAlmostEqual(S.trunk_sum_ft(sch), 22.0)
+        for seg in sch["segments"].values():
+            if seg is not first:
+                self.assertEqual(seg["tees"], 0, seg["id"])
+
+    def _tee_trunk(self, branch_longest):
+        # meter 1 -10-> tee 2 (kind tee, riser at [10,0,0])
+        #   straight: tee 2 -12 ft-> fixture 3
+        #   branch:   tee 2 -> elbow 4 -> fixture 5 (6 + 8 ft)
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "tee", [10, 0, 0]),
+                   (3, "fixture", [22, 0, 0], {"name": "S", "load_mbh": 50.0}),
+                   (4, "fitting", [10, 6, 0], {"is_elbow": True}),
+                   (5, "fixture", [18, 6, 0], {"name": "B", "load_mbh": 50.0})],
+                  [(10, 1, 2, 10.0, "1", 100.0),
+                   (11, 2, 3, 12.0 if not branch_longest else 2.0, "3/4", 50.0),
+                   (12, 2, 4, 6.0, "3/4", 50.0),
+                   (13, 4, 5, 8.0, "3/4", 50.0)])
+        s["longest_path"] = ([1, 10, 2, 12, 4, 13, 5] if branch_longest
+                             else [1, 10, 2, 11, 3])
+        return s
+
+    def test_trunk_sums_through_a_tee_straight_on(self):
+        # 10 + 12 ft pipe + 3 ft tee = 25
+        sch = S.build(self._tee_trunk(False))
+        self.assertAlmostEqual(S.trunk_sum_ft(sch), 25.0)
+
+    def test_trunk_sums_through_a_tee_into_the_branch(self):
+        # 10 + 6 + 8 ft pipe + 5 ft elbow + 3 ft tee = 32
+        sch = S.build(self._tee_trunk(True))
+        self.assertAlmostEqual(S.trunk_sum_ft(sch), 32.0)
+        trunk = S.trunk_segments(sch)
+        self.assertEqual(sum(x["tees"] for x in trunk), 1)
+        self.assertEqual(sum(x["elbows"] for x in trunk), 1)
+
+    def test_trunk_matches_pipe_graph_longest_run(self):
+        # The same tee graph the PRV zone tests use, run through the real
+        # snapshot: 50 + 30 + 20 ft of pipe + 3 ft for tee 2 = 103.
+        import oneline_snapshot
+        from _test_prv_zones import _build as build_graph
+        g = build_graph(with_prv=True, prv_to_fixture_ft=20.0)
+        snap = oneline_snapshot.snapshot(g, None, "402.4(2)")
+        self.assertAlmostEqual(snap["longest_run_ft"], 103.0)
+        sch = S.build(snap)
+        self.assertAlmostEqual(S.trunk_sum_ft(sch), snap["longest_run_ft"])
 
     def _bullhead(self, left_len, right_len):
         # meter 1 -> tee 2 (riser) -> left fixture 3 / right fixture 4

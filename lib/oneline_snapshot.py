@@ -15,9 +15,10 @@ snapshots dumped from the test benches.
 Keys are strings in JSON, so every id map here is keyed by str(element id)
 and ids inside lists stay ints.
 
-Length facts come from pipe_graph only: pipe length (edge.length_feet) and
-the centerline take-out of each fitting toward each neighbor
-(pipe_graph.fitting_takeout_ft). The pure layer never re-derives geometry.
+Length facts come from pipe_graph only: pipe length (edge.length_feet), the
+elbow flag and the tee flag of each fitting. Developed length is pipe + 5 ft
+per elbow + 3 ft per tee (Colin, 2026-11-19); the length inside a fitting is
+not part of it. The pure layer never re-derives geometry.
 
 IronPython 2.7 and CPython 3 (the module itself imports no Revit API; doc is
 used only to read each element's created phase name). ASCII source.
@@ -25,7 +26,6 @@ used only to read each element's created phase name). ASCII source.
 
 import json
 
-import pipe_graph
 import sizing_engine
 import shared_params
 
@@ -105,18 +105,17 @@ def snapshot(graph, doc, table_id, sizing_result=None,
     nodes = {}
     for nid, n in graph.nodes.items():
         connectors = []
-        takeout = {}
         for c in n.connectors or []:
             other = c.get("connected_element_id")
             connectors.append({"to": other, "xyz": _xyz(c.get("origin_xyz"))})
-            if other is not None:
-                takeout[str(other)] = _r(pipe_graph.fitting_takeout_ft(n, other))
         nodes[str(nid)] = {
             "id": nid,
             "kind": n.node_type,
             "family": n.family_name or "",
             "xyz": _xyz(n.location_xyz),
             "is_elbow": bool(n.is_elbow),
+            "is_tee": bool(n.node_type == "tee" and not n.is_gas_fixture
+                           and not n.is_prv),
             "is_transition": bool(getattr(n, "is_transition", False)),
             "is_prv": bool(n.is_prv),
             "is_midstream_prv": bool(n.is_midstream_prv),
@@ -126,7 +125,6 @@ def snapshot(graph, doc, table_id, sizing_result=None,
             "cum_mbh": _r(n.cumulative_load_mbh, 3),
             "connector_count": int(n.connector_count or len(connectors)),
             "connectors": connectors,
-            "takeout_ft": takeout,
             "zone": int(getattr(n, "zone", 0) or 0),
             "phase": _phase_name(doc, n.element),
         }
@@ -165,6 +163,7 @@ def snapshot(graph, doc, table_id, sizing_result=None,
         "table_id": table_id,
         "downstream_table_id": downstream_table_id,
         "elbow_equiv_ft": shared_params.ELBOW_EQUIV_LENGTH_FT,
+        "tee_equiv_ft": shared_params.TEE_EQUIV_LENGTH_FT,
         "longest_run_ft": _r(lr.get("total_length_feet", 0.0)),
         "longest_path": list(lr.get("path_element_ids") or []),
         "farthest_id": lr.get("farthest_fixture_id"),

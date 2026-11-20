@@ -48,11 +48,15 @@ class FixtureIntegrity(unittest.TestCase):
                 self.assertIn(str(c), nodes)
         for i in snap["longest_path"]:
             self.assertTrue(str(i) in nodes or str(i) in edges, i)
-        # every connected neighbour of a fitting has a take-out entry
+        # the length inside a fitting is no longer carried (2026-11-19)
+        self.assertEqual(snap["tee_equiv_ft"], 3.0)
+        self.assertEqual(snap["elbow_equiv_ft"], 5.0)
         for n in nodes.values():
-            for c in n["connectors"]:
-                if c["to"] is not None:
-                    self.assertIn(str(c["to"]), n["takeout_ft"], n["id"])
+            if "is_tee" in n:
+                self.assertEqual(
+                    n["is_tee"],
+                    n["kind"] == "tee" and not n["is_gas_fixture"] and
+                    not n["is_prv"], n["id"])
 
     def test_g3c(self):
         self._check(_load("oneline_g3c.json"))
@@ -62,14 +66,15 @@ class FixtureIntegrity(unittest.TestCase):
 
 
 class G3CFacts(unittest.TestCase):
-    """Handoff model facts: 1814 MBH, 12 fixtures, 117.0 ft, row 125."""
+    """Handoff model facts: 1814 MBH, 12 fixtures, 124.26 ft (87.26 pipe +
+    5 elbows x 5 ft + 4 tees x 3 ft), row 125."""
 
     @classmethod
     def setUpClass(cls):
         cls.s = _load("oneline_g3c.json")
 
     def test_run_and_row(self):
-        self.assertAlmostEqual(self.s["longest_run_ft"], 116.96, places=2)
+        self.assertAlmostEqual(self.s["longest_run_ft"], 124.26, places=2)
         self.assertEqual(self.s["sizing"]["table_length_used_ft"], 125.0)
         self.assertEqual(self.s["origin_kind"], "meter")
         self.assertEqual(self.s["table_id"], "402.4(2)")
@@ -107,7 +112,7 @@ class G2NotSized(unittest.TestCase):
         bad = [e for e in s["edges"].values()
                if e["size"] != e["required_size"]]
         self.assertEqual(len(bad), 32)
-        self.assertAlmostEqual(s["longest_run_ft"], 210.86, places=2)
+        self.assertAlmostEqual(s["longest_run_ft"], 229.49, places=2)
         names = sorted(n["name"] for n in s["nodes"].values()
                        if n["is_gas_fixture"])
         for r in ("RTU-1", "RTU-2", "RTU-3", "RTU-4", "RTU-5", "RTU-6"):
@@ -131,7 +136,12 @@ class SnapshotUnit(unittest.TestCase):
         self.assertEqual(s["edges"]["101"]["from"], 1)
         self.assertTrue(s["nodes"]["3"]["is_prv"])
         self.assertEqual(s["nodes"]["4"]["name"], "RTU-1")
-        self.assertAlmostEqual(s["longest_run_ft"], 100.0)
+        # 50 + 30 + 20 ft of pipe + 3 ft for tee 2 (the path passes it)
+        self.assertAlmostEqual(s["longest_run_ft"], 103.0)
+        self.assertNotIn("takeout_ft", s["nodes"]["2"])
+        self.assertTrue(s["nodes"]["2"]["is_tee"])
+        self.assertFalse(s["nodes"]["1"]["is_tee"])
+        self.assertFalse(s["nodes"]["3"]["is_tee"])
         self.assertIsNone(s["nodes"]["1"]["phase"])
         self.assertEqual(s["sizing"]["table_length_used_ft"], 100.0)
 

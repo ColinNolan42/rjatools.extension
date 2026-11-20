@@ -13,7 +13,7 @@ oneline_snapshot dict. Pure Python, no Revit import. ASCII source.
 
     Segment  {"id", "eids" [pipe ids], "node_ids" [fittings passed],
               "start_node", "end_node", "size", "sizes_seen",
-              "pipe_ft", "fitting_ft", "elbows", "length_ft", "mbh",
+              "pipe_ft", "elbows", "tees", "length_ft", "mbh",
               "valves" [{"kind": "iso"|"prv", "node_id"}],
               "on_longest" bool, "branch_kind" "root"|"run"|"tap",
               "is_existing" bool, "label" [line1, line2]}
@@ -30,10 +30,13 @@ Rules (plan section 3.2, Colin 2026-11-18):
    Terminal and owns exactly the pipes and fittings between them. No id is
    ever copied to another Segment (fixes items 1 and 2).
 2. A Segment also splits where the pipe size changes, so it has one size.
-3. length_ft = pipe + fitting take-outs (the start node's half toward the
-   segment, every interior node's two halves, the end node's half) + 5 ft
-   per elbow passed. Same hop rule as pipe_graph._longest_run_from, so the
-   segments on the longest path sum to the longest run.
+3. length_ft = pipe + 5 ft per elbow passed + 3 ft per tee passed (Colin,
+   2026-11-19; the length inside a fitting is not added). A tee's 3 ft goes
+   on the Segment that ARRIVES at the tee: every path through the tee, straight
+   on or into a branch, passes that Segment once, and each outgoing leg
+   starts a new Segment, so it counts once. Same hop rule as
+   pipe_graph._longest_run_from, so the segments on the longest path sum to
+   the longest run.
 4. mbh = cum_mbh of the Segment's first pipe (pipe_graph's number).
 5. At a Junction the run is the leg collinear (within 10 deg) with the
    incoming leg; the rest are taps. No collinear leg, or more than one:
@@ -110,6 +113,8 @@ class _G(object):
         self.path = set(int(i) for i in (snap.get("longest_path") or []))
         self.elbow_ft = float(snap.get("elbow_equiv_ft") or
                               shared_params.ELBOW_EQUIV_LENGTH_FT)
+        self.tee_ft = float(snap.get("tee_equiv_ft") or
+                            shared_params.TEE_EQUIV_LENGTH_FT)
         self.origin_phase = snap.get("origin_phase")
 
     def node(self, nid):
@@ -121,8 +126,14 @@ class _G(object):
     def legs(self, nid):
         return list(self.out.get(str(nid), []))
 
-    def takeout(self, nid, other):
-        return float(self.node(nid).get("takeout_ft", {}).get(str(other)) or 0.0)
+    def is_tee(self, nid):
+        """A fitting with 3 or more connectors that adds the tee equivalent
+        length to a path through it (never an appliance or a PRV)."""
+        n = self.node(nid)
+        if "is_tee" in n:
+            return bool(n["is_tee"])
+        return bool(n.get("kind") == "tee" and not n.get("is_gas_fixture") and
+                    not n.get("is_prv"))
 
     def next_node(self, hop):
         kind, hid = hop
@@ -164,7 +175,7 @@ class _Builder(object):
         sid = "S{0}".format(self._n)
         seg = {"id": sid, "eids": [], "node_ids": [], "start_node": start_node,
                "end_node": None, "size": None, "sizes_seen": [],
-               "pipe_ft": 0.0, "fitting_ft": 0.0, "elbows": 0,
+               "pipe_ft": 0.0, "elbows": 0, "tees": 0,
                "length_ft": 0.0, "mbh": None, "valves": [],
                "on_longest": False, "branch_kind": kind,
                "is_existing": False, "label": None}
@@ -174,8 +185,8 @@ class _Builder(object):
     def _close(self, seg, end_node):
         g = self.g
         seg["end_node"] = end_node
-        seg["length_ft"] = seg["pipe_ft"] + seg["fitting_ft"] + \
-            seg["elbows"] * g.elbow_ft
+        seg["length_ft"] = seg["pipe_ft"] + seg["elbows"] * g.elbow_ft + \
+            seg["tees"] * g.tee_ft
         if seg["mbh"] is None:
             seg["mbh"] = float(g.node(end_node).get("cum_mbh") or 0.0)
         if len(seg["sizes_seen"]) > 1:
@@ -236,7 +247,6 @@ class _Builder(object):
               "developed_ft": 0.0}
         seg = self._new_seg(start, kind)
         br["segments"].append(seg["id"])
-        seg["fitting_ft"] += g.takeout(start, hop[1])
         prev = start
         visited = set([start])
         while True:
@@ -258,7 +268,6 @@ class _Builder(object):
                 y = e["to"]
             else:
                 y = hid
-            seg["fitting_ft"] += g.takeout(y, hid if k == "edge" else prev)
             if y in visited:
                 self.warnings.append("Loop at element {0}".format(y))
                 self._close(seg, y)
@@ -268,6 +277,9 @@ class _Builder(object):
             node = g.node(y)
             if node.get("is_elbow"):
                 seg["elbows"] += 1
+            # The tee's 3 ft lands on the Segment arriving at it (see rule 3).
+            if g.is_tee(y):
+                seg["tees"] += 1
 
             if node.get("kind") == "fixture" or node.get("is_gas_fixture"):
                 self._close(seg, y)
@@ -298,12 +310,10 @@ class _Builder(object):
                     self._close(seg, y)
                     seg = self._new_seg(y, kind)
                     br["segments"].append(seg["id"])
-                    seg["fitting_ft"] += g.takeout(y, nxt[1])
                     prev = y
                     hop = nxt
                     continue
             seg["node_ids"].append(y)
-            seg["fitting_ft"] += g.takeout(y, nxt[1])
             prev = y
             hop = nxt
 

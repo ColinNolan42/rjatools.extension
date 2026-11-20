@@ -667,10 +667,12 @@ def basis_of_design_rows():
         ("Method", "Longest Run Method, IFGC Appendix A (A103.1). One "
                    "developed length, from the meter to the farthest outlet, "
                    "sizes every pipe in the system."),
-        ("Developed length", "Pipe length plus {:g} ft per elbow along the "
-                             "longest run. Where the length falls between "
-                             "table rows the next longer row is used.".format(
-                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT))),
+        ("Developed length", "Pipe length plus {:g} ft per elbow and {:g} ft "
+                             "per tee along the longest run. Where the length "
+                             "falls between table rows the next longer row is "
+                             "used.".format(
+                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                                 float(shared_params.TEE_EQUIV_LENGTH_FT))),
         ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
                    "the total load of every appliance downstream of it. "
                    "Propane Tables 402.4(25) to (36) publish capacity in "
@@ -702,11 +704,12 @@ def oneline_basis_rows():
                        "system whose every pipe is at the size Size Gas "
                        "requires on the table and heat content picked here; "
                        "otherwise it lists why and draws nothing."),
-        ("Pipe labels", "Size and G, then the segment's centerline length "
-                        "(pipe plus the length inside its fittings, plus "
-                        "{:g} ft per elbow), then the MBH it carries. No "
-                        "material on a label.".format(
-                            float(shared_params.ELBOW_EQUIV_LENGTH_FT))),
+        ("Pipe labels", "Size and G, then the segment's developed length "
+                        "(pipe plus {:g} ft per elbow and {:g} ft per tee), "
+                        "then the MBH it carries. No material on a "
+                        "label.".format(
+                            float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                            float(shared_params.TEE_EQUIV_LENGTH_FT))),
         ("Developed length", "The trunk labels add up to the longest run "
                              "Size Gas used, shown in the notes block."),
         ("Loads", "GAS_LOAD_MBH on each gas fixture. An unnamed or FUTURE "

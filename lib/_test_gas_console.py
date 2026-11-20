@@ -171,11 +171,13 @@ class Sections(unittest.TestCase):
         self.assertEqual(p.errors, [])
         checks = [r for r in rows if len(r) == 3 and r[0] != "Check"]
         self.assertEqual([r[2] for r in checks], ["OK", "OK", "OK"])
-        self.assertIn("116.96 of 116.96 ft", checks[0][1])
+        # 87.26 ft pipe + 5 elbows x 5 ft + 4 tees x 3 ft = 124.26 ft
+        self.assertIn("124.26 of 124.26 ft", checks[0][1])
         self.assertIn("44 of 44 pipes", checks[1][1])
         text = "".join(p.text)
         self.assertIn("1814 MBH", text)
-        self.assertIn("117'", text)
+        self.assertIn("124'", text)
+        self.assertIn("5 ft per elbow + 3 ft per tee", text)
         self.assertIn("11 (11 PRV symbols)", text)
 
     def test_summary_flags_a_broken_tree(self):
@@ -191,7 +193,13 @@ class Sections(unittest.TestCase):
         p, rows = _cells(gc.length_check(SCH, G3C))
         self.assertEqual(p.errors, [])
         self.assertEqual(rows[-1][0], "Total")
-        self.assertEqual(rows[-1][-1], "116.96")
+        # 87.26 ft pipe + 5 elbows x 5 ft + 4 tees x 3 ft = 124.26 ft
+        self.assertEqual(rows[-1][-1], "124.26")
+        self.assertEqual(rows[1][-3:-1], ["2", "1"])   # S1: elbows, tees
+        text = "".join(p.text)
+        self.assertIn("Tees", text)
+        self.assertNotIn("Fittings ft", text)
+        self.assertIn("Elbows add 5 ft each, tees 3 ft each.", text)
         self.assertEqual(len(rows), 1 + 5 + 1)
 
     def test_warnings(self):
@@ -206,7 +214,7 @@ class Sections(unittest.TestCase):
         self.assertIn("ONE-LINE LAYOUT DIAGNOSTIC", text)
         self.assertIn('1"G, 6\'', text)
         self.assertIn("-> FUTURE", text)
-        self.assertIn("trunk sum 116.96 ft", text)
+        self.assertIn("trunk sum 124.26 ft", text)
         html = gc.layout_diagnostic(SCH, lay)
         self.assertEqual(shape(html).errors, [])
         self.assertIn("<pre", html)

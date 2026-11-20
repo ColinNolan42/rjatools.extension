@@ -819,6 +819,7 @@
   }
  }, 
  "elbow_equiv_ft": 5.0, 
+ "tee_equiv_ft": 3.0, 
  "existing": null, 
  "existing_connections": [], 
  "farthest_id": 3618473, 
@@ -868,7 +869,7 @@
   3618383, 
   3618473
  ], 
- "longest_run_ft": 116.95820000000001, 
+ "longest_run_ft": 124.2648, 
  "midstream_prv_ids": [], 
  "nested_prv_ids": [], 
  "nodes": {
@@ -2935,7 +2936,7 @@
  "sizing": {
   "downstream_table_id": null, 
   "heat_content_btu_per_cf": 840.0, 
-  "longest_run_ft": 116.95820000000001, 
+  "longest_run_ft": 124.2648, 
   "table_id": "402.4(2)", 
   "table_length_used_ft": 125.0
  }, 

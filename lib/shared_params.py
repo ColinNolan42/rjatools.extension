@@ -37,8 +37,12 @@ ANSUL_VALVE_KEYWORDS = ("ansul",)
 
 # Equivalent length added to the developed length for each elbow on a path,
 # feet (IFGC Appendix A). Read by pipe_graph, the sizing basis text and the
-# One-Line (snapshot elbow_equiv_ft).
+# One-Line (snapshot elbow_equiv_ft, tee_equiv_ft).
 ELBOW_EQUIV_LENGTH_FT = 5.0
+# Equivalent length of each tee a path passes, straight through or into its
+# branch (Colin, 2026-11-19). Developed length = pipe + 5 ft per elbow + 3 ft
+# per tee; the length inside fittings is not added.
+TEE_EQUIV_LENGTH_FT = 3.0
 
 # =============================================================================
 # DOMESTIC WATER FIXTURE SHARED PARAMETERS

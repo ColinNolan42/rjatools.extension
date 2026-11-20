@@ -179,13 +179,16 @@ class TestUnits(unittest.TestCase):
 
 
 def _two_fixture_graph(load_a, load_b, run_ft):
+    """run_ft is the DEVELOPED length to A: (run_ft - 13) + 10 ft of pipe
+    plus 3 ft for tee 2 (Colin, 2026-11-19), so the row the test reads is
+    unchanged."""
     g = pipe_graph.NetworkGraph()
     g.origin_id = 1
     _node(g, 1, "meter")
     _node(g, 2, "tee")
     _node(g, 3, "fixture", load_a, "A")
     _node(g, 4, "fixture", load_b, "B")
-    _edge(g, 10, 1, 2, run_ft - 10.0)
+    _edge(g, 10, 1, 2, run_ft - 13.0)
     _edge(g, 11, 2, 3, 10.0)
     _edge(g, 12, 2, 4, 5.0)
     _finish(g)

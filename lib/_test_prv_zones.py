@@ -199,10 +199,10 @@ class ZoneAssignment(unittest.TestCase):
 
     def test_per_system_longest_run(self):
         g = _build()
-        # Whole-system run is unchanged: through the PRV to RTU-1 = 100 ft.
-        self.assertAlmostEqual(g.longest_run["total_length_feet"], 100.0)
-        # Meter system ends at the farthest fixture OR PRV: GUH-1 at 90 ft.
-        self.assertAlmostEqual(g.zone_runs[1]["total_length_feet"], 90.0)
+        # Whole-system run is unchanged: through the PRV to RTU-1 = 103 ft (50 + 30 + 20 pipe + 3 ft for the tee).
+        self.assertAlmostEqual(g.longest_run["total_length_feet"], 103.0)
+        # Meter system ends at the farthest fixture OR PRV: GUH-1 at 93 ft (50 + 40 pipe + 3 ft tee).
+        self.assertAlmostEqual(g.zone_runs[1]["total_length_feet"], 93.0)
         self.assertEqual(g.zone_runs[1]["farthest_fixture_name"], "GUH-1")
         # The PRV's own system: 20 ft to RTU-1.
         self.assertAlmostEqual(g.zone_runs[3]["total_length_feet"], 20.0)
@@ -210,7 +210,7 @@ class ZoneAssignment(unittest.TestCase):
 
     def test_meter_run_stops_at_prv(self):
         g = _build()
-        # If the walk went THROUGH the PRV the meter run would be 100 ft.
+        # If the walk went THROUGH the PRV the meter run would be 103 ft.
         self.assertLess(g.zone_runs[1]["total_length_feet"],
                         g.longest_run["total_length_feet"])
 
@@ -281,14 +281,14 @@ class ZoneSizing(unittest.TestCase):
             g, "Schedule 40 Steel", 2.0, UP, downstream_table_id=DOWN)
         # After the PRV: RTU-1 800 MBH on the low-pressure table, 20 ft run.
         self.assertEqual(r["sizes"][103], _expected_size(DOWN, 20.0, 800.0))
-        # Before it: the trunk carries 1200 MBH on the 2 psi table, 90 ft run.
-        self.assertEqual(r["sizes"][101], _expected_size(UP, 90.0, 1200.0))
-        self.assertEqual(r["sizes"][104], _expected_size(UP, 90.0, 400.0))
+        # Before it: the trunk carries 1200 MBH on the 2 psi table, 93 ft run.
+        self.assertEqual(r["sizes"][101], _expected_size(UP, 93.0, 1200.0))
+        self.assertEqual(r["sizes"][104], _expected_size(UP, 93.0, 400.0))
         # The feed to the regulator carries only the regulated load.
-        self.assertEqual(r["sizes"][102], _expected_size(UP, 90.0, 800.0))
+        self.assertEqual(r["sizes"][102], _expected_size(UP, 93.0, 800.0))
         # The regulator really changes the answer: the same pipe sized on
         # the meter's 2 psi table and the whole-system run would be smaller.
-        self.assertNotEqual(r["sizes"][103], _expected_size(UP, 100.0, 800.0))
+        self.assertNotEqual(r["sizes"][103], _expected_size(UP, 103.0, 800.0))
         self.assertEqual(r["edge_context"][103]["table_id"], DOWN)
         self.assertEqual(r["edge_context"][101]["table_id"], UP)
 
@@ -299,17 +299,17 @@ class ZoneSizing(unittest.TestCase):
         self.assertEqual(len(r["zones"]), 2)
         self.assertEqual(r["zones"][0]["table_id"], UP)
         self.assertEqual(r["zones"][1]["table_id"], DOWN)
-        self.assertEqual(r["longest_run_ft"], 90.0)
+        self.assertEqual(r["longest_run_ft"], 93.0)
 
     def test_without_downstream_table_matches_single_system(self):
         g = _build()
         r = sizing_engine.size_system(g, "Schedule 40 Steel", 2.0, UP)
         self.assertIsNone(r["downstream_table_id"])
-        # One system, one table, the whole-system 100 ft run.
-        self.assertEqual(r["longest_run_ft"], 100.0)
+        # One system, one table, the whole-system 103 ft run.
+        self.assertEqual(r["longest_run_ft"], 103.0)
         for eid, size in r["sizes"].items():
             mbh = g.edges[eid].cumulative_load_mbh
-            self.assertEqual(size, _expected_size(UP, 100.0, mbh), eid)
+            self.assertEqual(size, _expected_size(UP, 103.0, mbh), eid)
         self.assertTrue(all(c["table_id"] == UP
                             for c in r["edge_context"].values()))
 

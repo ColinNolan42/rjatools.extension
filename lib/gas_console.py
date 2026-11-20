@@ -15,6 +15,7 @@ IronPython 2.7: no f-strings; numbers are cast with float() before format.
 
 import console_report as cr
 import gas_labels
+import shared_params
 import oneline_schematic as S
 
 
@@ -166,7 +167,8 @@ def oneline_summary(sch, snap, view_name=None, sheet=None):
             ("Equipment", "{0} ({1} PRV symbols)".format(len(eq), len(eq))),
             ("Caps", str(len([t for t in terms if t["kind"] == "cap"]))),
             ("Total connected load", gas_labels.mbh_text(total)),
-            ("Total developed length", "{0}'".format(
+            ("Total developed length", "{0}' (pipe + 5 ft per elbow + 3 ft "
+                                       "per tee)".format(
                 gas_labels.feet(snap.get("longest_run_ft") or 0.0))),
             ("Segments drawn", str(len(sch["segments"])))]
     if sheet:
@@ -191,15 +193,17 @@ def length_check(sch, snap):
     rows = []
     for s in S.trunk_segments(sch):
         rows.append([s["id"], s["label"][0], _ft(s["pipe_ft"]),
-                     _ft(s["fitting_ft"]), str(s["elbows"]), _ft(s["length_ft"])])
+                     str(s["elbows"]), str(s["tees"]), _ft(s["length_ft"])])
     total = S.trunk_sum_ft(sch)
-    out = cr.section("Trunk Length", "centerline, labels round each segment")
-    out += cr.table(["Segment", "Label", "Pipe ft", "Fittings ft", "Elbows",
+    out = cr.section("Trunk Length", "pipe + elbows + tees, labels round each segment")
+    out += cr.table(["Segment", "Label", "Pipe ft", "Elbows", "Tees",
                      "Length ft"], rows, align=["l", "l", "r", "r", "r", "r"],
                     total_row=["Total", "", "", "", "",
                                _ft(total)], widths=W_LENGTH)
-    out += cr.note("Longest run (Size Gas): {0} ft. Elbows add {1:.0f} ft each.".format(
-        _ft(snap.get("longest_run_ft")), float(snap.get("elbow_equiv_ft") or 5.0)))
+    out += cr.note("Longest run (Size Gas): {0} ft. Elbows add {1:.0f} ft each, tees {2:.0f} ft each.".format(
+        _ft(snap.get("longest_run_ft")),
+        float(snap.get("elbow_equiv_ft") or shared_params.ELBOW_EQUIV_LENGTH_FT),
+        float(snap.get("tee_equiv_ft") or shared_params.TEE_EQUIV_LENGTH_FT)))
     return out
 
 
@@ -231,11 +235,11 @@ def layout_diagnostic_text(sch, lay):
             "J{0}".format(end["node_id"])
         for sid in br["segments"]:
             s = segs[sid]
-            out.append("{0}{1} {2:<5} {3} | {4} | pipe {5} fit {6} elb {7} | "
+            out.append("{0}{1} {2:<5} {3} | {4} | pipe {5} elb {6} tee {7} | "
                        "eids {8}{9}".format(
                            "  " * depth, br["kind"][0].upper(), sid,
                            s["label"][0], s["label"][1], _ft(s["pipe_ft"]),
-                           _ft(s["fitting_ft"]), s["elbows"],
+                           s["elbows"], s["tees"],
                            ",".join(str(e) for e in s["eids"]),
                            " T" if s["on_longest"] else ""))
         out.append("{0}  -> {1}".format("  " * depth, tag))

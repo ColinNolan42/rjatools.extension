@@ -31,11 +31,13 @@ ORIGIN = -100          # the stand-in node at the existing connection
 
 
 def _build(prv=False):
-    """connection(-100) -> pipe 100 (10 ft) -> tee 2
+    """connection(-100) -> pipe 100 (7 ft) -> tee 2
            tee 2 -> pipe 101 (20 ft) -> RTU-1, 120 MBH
            tee 2 -> pipe 102 (10 ft) -> GUH-1, 60 MBH
 
-    New longest run 30 ft, no elbows. New load 180 MBH.
+    New longest run 30 ft: 7 + 20 ft of pipe + 3 ft for tee 2 (Colin,
+    2026-11-19; pipe 100 was 10 ft when a tee added nothing), no elbows.
+    New load 180 MBH.
     """
     g = pipe_graph.NetworkGraph()
     g.origin_id = ORIGIN
@@ -44,7 +46,7 @@ def _build(prv=False):
     _node(g, 2, "tee")
     _node(g, 4, "fixture", 120.0, "RTU-1")
     _node(g, 5, "fixture", 60.0, "GUH-1")
-    _edge(g, 100, ORIGIN, 2, 10.0)
+    _edge(g, 100, ORIGIN, 2, 7.0)
     _edge(g, 101, 2, 4, 20.0)
     _edge(g, 102, 2, 5, 10.0)
     _finish(g)
@@ -68,7 +70,9 @@ class TestExistingLengthJoinsTheRun(unittest.TestCase):
         pipe_graph.apply_existing_conditions(g, "1-1/4", 60.0, 200.0)
         self.assertAlmostEqual(g.longest_run["total_length_feet"], 90.0)
         self.assertAlmostEqual(g.longest_run["existing_length_feet"], 60.0)
-        self.assertAlmostEqual(g.longest_run["pipe_length_feet"], 30.0)
+        # 7 + 20 ft of pipe, plus 3 ft for the tee, is the 30 ft new run
+        self.assertAlmostEqual(g.longest_run["pipe_length_feet"], 27.0)
+        self.assertAlmostEqual(g.longest_run["tee_equiv_length_feet"], 3.0)
         self.assertEqual(g.existing["size_nominal"], "1-1/4")
         self.assertAlmostEqual(g.existing["load_mbh"], 200.0)
 
