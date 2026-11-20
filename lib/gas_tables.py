@@ -341,7 +341,7 @@ TABLE_OPTIONS = [
     },
     # --- Polyethylene Plastic Pipe - Propane ---
     {
-        "label":   "PE Plastic Pipe - Propane, 11.0\" w.c., 0.5\" w.c. drop (regulator to appliance)  [402.4(35)]",
+        "label":   "PE Plastic Pipe - Propane, 11.0\" w.c., 0.5\" w.c. drop (regulator to building)  [402.4(35)]",
         "table_id": "402.4(35)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Propane",
@@ -355,7 +355,7 @@ TABLE_OPTIONS = [
         "inlet_pressure_psi": 2.0,
     },
     {
-        "label":   "PE Plastic Pipe - Propane, 11.0\" w.c., 0.5\" w.c. drop (CTS tubing, regulator to appliance)  [402.4(37)]",
+        "label":   "PE Plastic Pipe - Propane, 11.0\" w.c., 0.5\" w.c. drop (CTS tubing, regulator to building)  [402.4(37)]",
         "table_id": "402.4(37)",
         "material": "Polyethylene Plastic Pipe",
         "gas":      "Propane",
@@ -652,6 +652,73 @@ def table_units(table_id):
             "Table '{}' has unrecognized units '{}'. Expected CFH or "
             "MBH.".format(table_id, units))
     return units
+
+
+def is_propane_table(table_id):
+    """True when the table's "gas" field names propane.
+
+    2024 IFGC Table 402.4(37) is the only propane table published in CFH
+    (PDF p.176, "Capacity in Cubic Feet of Gas per Hour", undiluted propane,
+    SG 1.50), so a propane CFH table needs a propane heat content, not the
+    natural gas one (Colin, 2026-11-20). Read from the table metadata, never
+    from a hard-coded table id.
+
+    Raises:
+        ValueError: unknown table.
+    """
+    return "propane" in str(get_table(table_id).get("gas", "")).lower()
+
+
+def table_kind(table_id):
+    """"natural" (a natural gas CFH table), "mbh" (propane 402.4(25) to
+    (36), published in MBH), "propane" (402.4(37), propane in CFH) or None
+    when the table is unknown. Read from the table metadata (table_units,
+    is_propane_table), the one rule for the gas dialogs."""
+    if not table_id:
+        return None
+    try:
+        if table_units(table_id) == "MBH":
+            return "mbh"
+        return "propane" if is_propane_table(table_id) else "natural"
+    except ValueError:
+        return None
+
+
+# Heat content plausibility range for natural gas and propane (n=34, Colin
+# 2026-11-20). Natural gas runs about 700 to 1200 BTU/CF and propane about
+# 2500; a slipped digit (8400 for 840) lands outside and is rejected.
+HEAT_CONTENT_MIN_BTU_PER_CF = 500.0
+HEAT_CONTENT_MAX_BTU_PER_CF = 3000.0
+
+
+def read_heat_content(text, label):
+    """(value, None) for a usable heat content, else (None, message).
+
+    Rejects text that is not a number, nan and inf (n=39), and anything
+    outside HEAT_CONTENT_MIN_BTU_PER_CF to HEAT_CONTENT_MAX_BTU_PER_CF
+    (n=34). Shared by the themed gas dialog and its plain fallback.
+    """
+    import math
+    try:
+        value = float(str(text).strip())
+        if math.isnan(value) or math.isinf(value):
+            raise ValueError('not finite')
+    except (ValueError, TypeError):
+        return None, label + ' shall be a number.'
+    if (value < HEAT_CONTENT_MIN_BTU_PER_CF or
+            value > HEAT_CONTENT_MAX_BTU_PER_CF):
+        return None, '%s shall be between %g and %g BTU/CF.' % (
+            label, HEAT_CONTENT_MIN_BTU_PER_CF, HEAT_CONTENT_MAX_BTU_PER_CF)
+    return value, None
+
+
+def first_length_row(table_id):
+    """The shortest length row the table publishes, in feet (int).
+
+    Raises:
+        ValueError: unknown table.
+    """
+    return min(int(k) for k in get_table(table_id)["data"].keys())
 
 
 # Any table with a real numeric inlet pressure at or above this threshold

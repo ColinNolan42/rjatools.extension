@@ -49,8 +49,44 @@ def _xyz(p):
         return None
 
 
-def _phase_name(doc, element):
-    """Created phase name of an element, or None. Never raises."""
+def _log(warns, text):
+    """Rule 6: a model read that failed is logged and printed as a warning
+    (the gate passes snap["read_warnings"] on to the console)."""
+    if warns is not None:
+        warns.append(text)
+    try:
+        import revit_helpers
+        revit_helpers._log_entry("WARNING", "oneline_snapshot", None, text)
+    except Exception:
+        pass        # CPython tests: no Revit, the warning list still has it
+
+
+READ_WARNINGS_LIMIT = 10
+
+
+def _eid(element):
+    """Element id for a message, through the shared revit_helpers helper."""
+    try:
+        import revit_helpers
+        return revit_helpers._safe_eid(element)
+    except Exception:
+        return None
+
+
+def _short(warns, limit=READ_WARNINGS_LIMIT):
+    out = []
+    for w in warns:
+        if w not in out:
+            out.append(w)
+    if len(out) > limit:
+        out = out[:limit] + ["... and {0} more model read warnings (see the "
+                             "log).".format(len(out) - limit)]
+    return out
+
+
+def _phase_name(doc, element, warns=None):
+    """Created phase name of an element, or None. Never raises; a failed
+    read is logged (Rule 6, review n46)."""
     if doc is None or element is None:
         return None
     try:
@@ -64,26 +100,43 @@ def _phase_name(doc, element):
             return _E.Name.GetValue(ph)
         except Exception:
             return str(getattr(ph, "Name", None))
-    except Exception:
+    except Exception as ex:
+        _log(warns, "Phase of element {0} could not be read ({1}).".format(
+            _eid(element), ex))
         return None
 
 
-def read_levels(doc):
+def _is_new(doc, element, warns=None):
+    """True when created in the project's LAST phase, the rule Size Gas
+    uses (revit_helpers.is_new_construction, review n16). None without a
+    doc (CPython tests). An unreadable phase is existing (that helper fails
+    closed) and is reported."""
+    if doc is None or element is None:
+        return None
+    import revit_helpers
+    if revit_helpers.get_created_phase_id(element) is None:
+        _log(warns, "Phase of element {0} could not be read; drawn as "
+                    "existing, as Size Gas treats it.".format(_eid(element)))
+    return bool(revit_helpers.is_new_construction(element, doc))
+
+
+def read_levels(doc, warns=None):
     """[{"name", "elev"}] for every level in the model, lowest first. The
     One-Line draws elevation vertical by level band (Colin, 2026-11-18)."""
     out = []
     if doc is None:
         return out
     try:
-        from Autodesk.Revit.DB import FilteredElementCollector, Level, \
-            Element as _E
+        from Autodesk.Revit.DB import FilteredElementCollector, Level,             Element as _E
         for lv in FilteredElementCollector(doc).OfClass(Level):
             try:
                 name = _E.Name.GetValue(lv)
             except Exception:
                 name = str(getattr(lv, "Name", ""))
             out.append({"name": name, "elev": _r(lv.Elevation)})
-    except Exception:
+    except Exception as ex:
+        _log(warns, "Levels could not be read ({0}); the diagram is drawn "
+                    "on one elevation band.".format(ex))
         return []
     out.sort(key=lambda d: d["elev"])
     return out
@@ -102,6 +155,10 @@ def _edge_table(edge, table_id, downstream_table_id, sizing_result):
 def snapshot(graph, doc, table_id, sizing_result=None,
              downstream_table_id=None):
     """Plain dict snapshot of the graph for the One-Line pure layers."""
+    warns = []
+    # levels first: their warning is one line and shall not be cut off by
+    # a long list of per element phase warnings
+    levels = read_levels(doc, warns)
     nodes = {}
     for nid, n in graph.nodes.items():
         connectors = []
@@ -126,7 +183,8 @@ def snapshot(graph, doc, table_id, sizing_result=None,
             "connector_count": int(n.connector_count or len(connectors)),
             "connectors": connectors,
             "zone": int(getattr(n, "zone", 0) or 0),
-            "phase": _phase_name(doc, n.element),
+            "phase": _phase_name(doc, n.element, warns),
+            "is_new": _is_new(doc, n.element, warns),
         }
 
     required = (sizing_result or {}).get("sizes") or {}
@@ -146,8 +204,11 @@ def snapshot(graph, doc, table_id, sizing_result=None,
             "required_size": required.get(eid),
             "cum_mbh": _r(e.cumulative_load_mbh, 3),
             "zone": int(getattr(e, "zone", 0) or 0),
-            "phase": _phase_name(doc, e.pipe),
+            "phase": _phase_name(doc, e.pipe, warns),
+            "is_new": _is_new(doc, e.pipe, warns),
         }
+
+    _place_joints(nodes, edges)
 
     lr = graph.longest_run or {}
     children = {}
@@ -159,7 +220,8 @@ def snapshot(graph, doc, table_id, sizing_result=None,
         "version": SNAPSHOT_VERSION,
         "origin_id": graph.origin_id,
         "origin_kind": "tie_in" if graph.origin_is_tie_in else "meter",
-        "origin_phase": _phase_name(doc, origin.element) if origin else None,
+        "origin_phase": (_phase_name(doc, origin.element, warns)
+                         if origin else None),
         "table_id": table_id,
         "downstream_table_id": downstream_table_id,
         "elbow_equiv_ft": shared_params.ELBOW_EQUIV_LENGTH_FT,
@@ -177,9 +239,15 @@ def snapshot(graph, doc, table_id, sizing_result=None,
         "nested_prv_ids": list(graph.nested_prv_ids or []),
         "existing_connections": list(graph.existing_connections or []),
         "non_gas_skipped": [list(x) for x in (graph.non_gas_skipped or [])],
+        # the walk's data errors (0 MBH fixtures, FUTURE caps included) and
+        # tapped pipes (pipe_graph, 2026-11-20)
+        "data_errors": [dict(d) for d in
+                        (getattr(graph, "data_errors", None) or [])],
+        "tapped_pipes": list(getattr(graph, "tapped_pipes", None) or []),
         "existing": graph.existing,
-        "levels": read_levels(doc),
+        "levels": levels,
         "sizing": None,
+        "read_warnings": _short(warns),
     }
     if sizing_result:
         snap["sizing"] = {
@@ -188,8 +256,41 @@ def snapshot(graph, doc, table_id, sizing_result=None,
             "table_length_used_ft": _r(sizing_result.get("table_length_used_ft")),
             "heat_content_btu_per_cf": _r(sizing_result.get("heat_content_btu_per_cf")),
             "downstream_table_id": sizing_result.get("downstream_table_id"),
+            # Size Gas's own run per system, meter first (2026-11-20): the
+            # notes PRV line and the console state them when zoned
+            "zones": [{"label": z.get("label"), "table_id": z.get("table_id"),
+                       "run_ft": _r(z.get("run_ft")),
+                       "row_ft": _r(z.get("row_ft"))}
+                      for z in (sizing_result.get("zones") or [])],
         }
+        # pipes Size Gas left unsized because they lead only to 0 MBH
+        # fixtures: a data error, not "Run Size Gas first" (2026-11-20)
+        snap["unsized_zero_load"] = [
+            {"pipe_id": z.get("pipe_id"),
+             "fixture_ids": list(z.get("fixture_ids") or [])}
+            for z in (sizing_result.get("unsized_zero_load") or [])]
     return snap
+
+
+def _place_joints(nodes, edges):
+    """A joint (two pipes joined end to end, or a tapped pipe) has no Revit
+    element and may have no location. It is keyed by the pipe that ends at
+    it, so it takes that pipe's far end (the end away from the pipe's from
+    node). Pure: reads only the snapshot dicts."""
+    for key, n in nodes.items():
+        if n.get("kind") != "joint" or n.get("xyz"):
+            continue
+        e = edges.get(key)
+        if e is None:
+            continue
+        s, t = e.get("start"), e.get("end")
+        frm = (nodes.get(str(e.get("from"))) or {}).get("xyz")
+        pick = t or s
+        if s and t and frm:
+            ds = sum((a - b) ** 2 for a, b in zip(s, frm))
+            dt = sum((a - b) ** 2 for a, b in zip(t, frm))
+            pick = s if ds > dt else t
+        n["xyz"] = list(pick) if pick else None
 
 
 def _json_default(o):

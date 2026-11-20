@@ -127,13 +127,36 @@ def mbh_to_cfh(demand_mbh, heat_content_btu_per_cf):
     return (demand_mbh * 1000.0) / heat_content_btu_per_cf
 
 
-def demand_in_table_units(demand_mbh, table_id, heat_content_btu_per_cf):
+def heat_content_for_table(table_id, heat_content_btu_per_cf,
+                           propane_heat_content_btu_per_cf=None):
+    """The heat content a table's demand is converted with, or None.
+
+    None for a table in MBH (no conversion). A propane table in CFH (2024
+    IFGC Table 402.4(37), the only one) uses the propane heat content,
+    default shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF; every other
+    CFH table uses the natural gas heat content entered in the dialog
+    (Colin, 2026-11-20). The table is identified from its metadata
+    (gas_tables.is_propane_table), not its id.
+    """
+    if gas_tables.table_units(table_id) == "MBH":
+        return None
+    if gas_tables.is_propane_table(table_id):
+        if propane_heat_content_btu_per_cf is None:
+            return shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF
+        return propane_heat_content_btu_per_cf
+    return heat_content_btu_per_cf
+
+
+def demand_in_table_units(demand_mbh, table_id, heat_content_btu_per_cf,
+                          propane_heat_content_btu_per_cf=None):
     """The demand to compare with a table's capacities, in that table's units.
 
     IFGC Tables 402.4(25) to (36) (propane) publish capacity in MBH
     (thousands of Btu per hour); every other table publishes CFH. An MBH
     table is compared with the MBH load directly, so heat content has no
-    effect on it (Colin, 2026-11-04). A CFH table uses mbh_to_cfh().
+    effect on it (Colin, 2026-11-04). A CFH table uses mbh_to_cfh() with
+    the heat content heat_content_for_table() picks: the propane value for
+    the propane CFH Table 402.4(37), the natural gas value otherwise.
 
     Returns:
         (value, units)  float demand and "MBH" or "CFH".
@@ -141,7 +164,9 @@ def demand_in_table_units(demand_mbh, table_id, heat_content_btu_per_cf):
     units = gas_tables.table_units(table_id)
     if units == "MBH":
         return float(demand_mbh), units
-    return mbh_to_cfh(demand_mbh, heat_content_btu_per_cf), units
+    heat = heat_content_for_table(table_id, heat_content_btu_per_cf,
+                                  propane_heat_content_btu_per_cf)
+    return mbh_to_cfh(demand_mbh, heat), units
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +313,46 @@ def high_pressure_capacity_cfh(diameter_in, inlet_absolute_psi,
 # Main sizing function
 # ---------------------------------------------------------------------------
 
+def _leads_only_to(edge, graph, error_ids):
+    """Sorted ids of the data error fixtures a pipe leads to, when every
+    terminal downstream of it is one of error_ids; else []. A terminal is a
+    gas fixture or a node nothing leaves (a cap). Joints are walked through."""
+    out = {}
+    for e in graph.edges.values():
+        out.setdefault(e.from_node_id, []).append(e.to_node_id)
+    children = getattr(graph, "node_children", None) or {}
+    terminals, seen, stack = set(), set(), [edge.to_node_id]
+    while stack:
+        nid = stack.pop()
+        if nid is None or nid in seen:
+            continue
+        seen.add(nid)
+        node = graph.nodes.get(nid)
+        nxt = [i for i in out.get(nid, []) if i is not None]
+        nxt += list(children.get(nid, []))
+        if (node is not None and node.is_gas_fixture) or not nxt:
+            terminals.add(nid)
+            continue
+        stack.extend(nxt)
+    if terminals and terminals <= error_ids:
+        return sorted(terminals)
+    return []
+
+
 def _zone_label(graph, key):
     """Human label for the system fed by the meter or a PRV."""
     if key == graph.origin_id:
         return "Meter to regulator(s)" if graph.midstream_prv_ids else "Meter"
     return "After PRV {}".format(key)
+
+
+def _zone_has_pipe(graph, key):
+    """True when any pipe with a downstream end belongs to the system fed by
+    the meter or PRV key (its run_key)."""
+    for edge in graph.edges.values():
+        if edge.to_node_id is not None and getattr(edge, "run_key", None) == key:
+            return True
+    return False
 
 
 def _build_zone_contexts(graph, table_id, downstream_table_id, overall_run_ft):
@@ -325,6 +385,21 @@ def _build_zone_contexts(graph, table_id, downstream_table_id, overall_run_ft):
         this_table = table_id if key == graph.origin_id else downstream_table_id
         label = _zone_label(graph, key)
         run_ft = run["total_length_feet"]
+        if run_ft <= 0 and not _zone_has_pipe(graph, key):
+            # Nothing to size in this system: the meter is joined straight
+            # to the mid-stream PRV with no pipe between them (n=22). It
+            # keeps a context, at the table's first row, so the result and
+            # the console still have the meter's table.
+            contexts[key] = {
+                "table_id": this_table,
+                "pipe_sizes": gas_tables.list_pipe_sizes(this_table),
+                "run_ft": 0.0,
+                "row_ft": gas_tables.first_length_row(this_table),
+                "label": label,
+                "farthest_name": "no pipe, joined straight to the regulator",
+                "empty": True,
+            }
+            continue
         if run_ft <= 0:
             raise ValueError(
                 "{}: no fixture found downstream, so there is no run to "
@@ -346,7 +421,8 @@ def _build_zone_contexts(graph, table_id, downstream_table_id, overall_run_ft):
 
 
 def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
-                 heat_content_btu_per_cf=None, downstream_table_id=None):
+                 heat_content_btu_per_cf=None, downstream_table_id=None,
+                 propane_heat_content_btu_per_cf=None):
     """Size every pipe segment using the IFGC Longest Run Method.
 
     Per IFGC A103.1:
@@ -375,7 +451,14 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         heat_content_btu_per_cf: float  project/location Heat Content of
                              Gas, BTU per actual cubic foot. Defaults to
                              shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF
-                             (Denver) if not supplied.
+                             (Denver) if not supplied. Used for every CFH
+                             table except a propane one.
+        propane_heat_content_btu_per_cf: float  heat content for a propane
+                             table published in CFH (402.4(37) only),
+                             default shared_params.
+                             DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF. Applied
+                             per system, so 402.4(37) after a PRV uses it
+                             (Colin, 2026-11-20).
         downstream_table_id: str  optional - IFGC table for the piping
                              downstream of a mid-stream PRV. When supplied
                              the graph shall contain at least one mid-stream
@@ -395,14 +478,20 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
                                   else the whole system)
             pipe_material         str
             inlet_pressure_psi    float
-            heat_content_btu_per_cf  float
+            heat_content_btu_per_cf  float  (natural gas, as entered)
+            propane_heat_content_btu_per_cf  float
             downstream_table_id   str or None
             zones                 list of dicts - one per system sized
                                   (label, table_id, run_ft, row_ft,
-                                  farthest_name)
+                                  farthest_name, heat_content_btu_per_cf:
+                                  the value that system's demand used, None
+                                  on an MBH table)
             edge_context          {pipe_id: {"table_id", "longest_run_ft"}}
                                   the table and run each pipe was sized on
             segment_detail        list of dicts - one per sized segment
+            unsized_zero_load     list of dicts {pipe_id, fixture_ids,
+                                  table_id}: pipes that lead only to 0 MBH
+                                  data error fixtures, left unsized
 
     Raises:
         ValueError: If longest run is missing, table not available, any
@@ -411,6 +500,9 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
     """
     if heat_content_btu_per_cf is None:
         heat_content_btu_per_cf = shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF
+    if propane_heat_content_btu_per_cf is None:
+        propane_heat_content_btu_per_cf = (
+            shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)
 
     if graph.longest_run is None:
         raise ValueError(
@@ -455,6 +547,11 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
     segment_detail = []
     sizing_errors = []
     edge_context = {}
+    # Pipes that lead only to 0 MBH (data error) fixtures: left unsized and
+    # listed, never written at the minimum (Colin, 2026-11-20).
+    error_ids = set(d.get("element_id") for d in
+                    (getattr(graph, "data_errors", None) or []))
+    unsized_zero_load = []
 
     def _apply_minimum(nom, pipe_sizes_list):
         """If nom is smaller than MIN_PIPE_INCHES, return the first size in
@@ -489,15 +586,24 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         }
 
         # Demand in the table's own units: CFH = BTUH / Heat Content of Gas
-        # for a CFH table, the MBH load itself for a propane MBH table (see
-        # demand_in_table_units()).
+        # for a CFH table (the propane value on 402.4(37)), the MBH load
+        # itself for a propane MBH table (see demand_in_table_units()).
         demand_cfh_effective, e_units = demand_in_table_units(
-            demand_mbh, e_table_id, heat_content_btu_per_cf)
+            demand_mbh, e_table_id, heat_content_btu_per_cf,
+            propane_heat_content_btu_per_cf)
 
         # Zero demand: the smallest size at or above the firm minimum that
         # has a published capacity at this run. Copper tables leave the small
         # sizes blank at long rows, so the first size can have no value
         # (Colin, 2026-11-02).
+        if demand_mbh <= 0 and error_ids:
+            only = _leads_only_to(edge, graph, error_ids)
+            if only:
+                unsized_zero_load.append({"pipe_id": edge.element_id,
+                                          "fixture_ids": only,
+                                          "table_id": e_table_id})
+                continue
+
         if demand_mbh <= 0:
             selected = None
             capacity_at_size = None
@@ -596,16 +702,21 @@ def size_system(graph, pipe_material, inlet_pressure_psi, table_id=None,
         "pipe_material":          pipe_material,
         "inlet_pressure_psi":     inlet_pressure_psi,
         "heat_content_btu_per_cf": heat_content_btu_per_cf,
+        "propane_heat_content_btu_per_cf": propane_heat_content_btu_per_cf,
         "downstream_table_id":    downstream_table_id,
         "zones":                  [
             {"label":         c["label"],
              "table_id":      c["table_id"],
              "run_ft":        c["run_ft"],
              "row_ft":        c["row_ft"],
-             "farthest_name": c["farthest_name"]}
+             "farthest_name": c["farthest_name"],
+             "heat_content_btu_per_cf": heat_content_for_table(
+                 c["table_id"], heat_content_btu_per_cf,
+                 propane_heat_content_btu_per_cf)}
             for c in [contexts[k] for k in ordered_keys]],
         "edge_context":           edge_context,
         "segment_detail":         segment_detail,
+        "unsized_zero_load":      unsized_zero_load,
     }
 
 # ---------------------------------------------------------------------------
@@ -661,68 +772,63 @@ def basis_of_design_rows():
     Returns:
         List of (label, value) ASCII string pairs.
     """
+    # The Longest run row follows from the dialog's Scope rows
+    # (sizer_dialogs._EXISTING_BASIS_ROWS, Colin 2026-11-20).
     return [
         ("Code", gas_tables.code_edition() + ", Table 402.4 for the pipe "
                  "material, pressure and pressure drop selected above."),
-        ("Method", "Longest Run Method, IFGC Appendix A (A103.1). One "
-                   "developed length, from the meter to the farthest outlet, "
-                   "sizes every pipe in the system."),
-        ("Developed length", "Pipe length plus {:g} ft per elbow and {:g} ft "
-                             "per tee along the longest run. Where the length "
-                             "falls between table rows the next longer row is "
-                             "used.".format(
-                                 float(shared_params.ELBOW_EQUIV_LENGTH_FT),
-                                 float(shared_params.TEE_EQUIV_LENGTH_FT))),
-        ("Demand", "CFH = BTU/h / Heat Content of Gas. Each pipe carries "
-                   "the total load of every appliance downstream of it. "
-                   "Propane Tables 402.4(25) to (36) publish capacity in "
-                   "MBH: there the MBH load is compared directly and heat "
-                   "content is not used."),
+        _developed_length_row(),
+        _heat_content_row(),
         ("Specific gravity", "{:g}, matching the IFGC tables.".format(
             float(shared_params.SPECIFIC_GRAVITY))),
         ("Pipe size", "Smallest size in the table whose capacity covers the "
                       "demand, not smaller than {} in. (firm "
                       "minimum).".format(_min_size_label())),
-        ("Regulators", "A pressure regulating valve with more than {:g} ft "
-                       "of pipe after it is mid-stream. With Mid Stream PRV "
-                       "ticked, the piping after it is sized on its own "
-                       "table and its own longest run.".format(
-                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
-        ("Existing building", "Picking a new pipe instead of a meter starts "
-                              "the run at the connection to existing. The "
-                              "entered existing length is added to the "
-                              "developed length. The existing pipe is "
-                              "checked, never resized."),
+        _midstream_row(),
     ]
 
 
 def oneline_basis_rows():
-    """The One-Line basis for its own dialog (Plan B): what the diagram
-    shows and where each number comes from. It sizes nothing."""
+    """The One-Line basis for its own dialog (Plan B). It sizes nothing.
+    Colin, 2026-11-20: developed length, heat content, loads and the mid
+    stream PRV equation only."""
     return [
-        ("Runs after", "Size Gas. The diagram is drawn only for a complete "
-                       "system whose every pipe is at the size Size Gas "
-                       "requires on the table and heat content picked here; "
-                       "otherwise it lists why and draws nothing."),
-        ("Pipe labels", "Size and G, then the segment's developed length "
-                        "(pipe plus {:g} ft per elbow and {:g} ft per tee), "
-                        "then the MBH it carries. No material on a "
-                        "label.".format(
-                            float(shared_params.ELBOW_EQUIV_LENGTH_FT),
-                            float(shared_params.TEE_EQUIV_LENGTH_FT))),
-        ("Developed length", "The trunk labels add up to the longest run "
-                             "Size Gas used, shown in the notes block."),
+        _developed_length_row(),
+        _heat_content_row(),
         ("Loads", "GAS_LOAD_MBH on each gas fixture. An unnamed or FUTURE "
                   "cap at 0 MBH reads FUTURE CONNECTION."),
-        ("Regulators", "A PRV symbol is shown before every piece of "
-                       "equipment. A mid stream PRV (more than {:g} ft of "
-                       "pipe after it) is shown on its pipe and its table "
-                       "is added to the notes.".format(
-                           float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))),
-        ("Layout", "Left to right from the meter, no scale. Elevation by "
-                   "level: first level equipment on the meter row, ceiling "
-                   "headers above it, rooftop units higher."),
+        _midstream_row(),
     ]
+
+
+def _developed_length_row():
+    """Developed length = longest pipe run + fitting losses (Colin,
+    2026-11-20), in equation form."""
+    return ("Developed length",
+            "L = sum of pipe lengths on the longest run + fitting losses. "
+            "Fitting losses = ({:g} ft x elbows) + ({:g} ft x tees).".format(
+                float(shared_params.ELBOW_EQUIV_LENGTH_FT),
+                float(shared_params.TEE_EQUIV_LENGTH_FT)))
+
+
+def _heat_content_row():
+    """Where heat content is used (Colin, 2026-11-20)."""
+    return ("Heat content",
+            "CFH = (MBH x 1000) / Heat Content (BTU/CF). Converts each "
+            "pipe's MBH load to CFH for the Table 402.4 capacity lookup. "
+            "Not used on Propane Tables 402.4(25) to (36), which publish "
+            "capacity in MBH. Propane Table 402.4(37) is in CFH and uses the "
+            "propane heat content (default {:.0f} BTU/CF).".format(float(
+                shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)))
+
+
+def _midstream_row():
+    """The mid stream PRV in equation form, no words on regulators
+    (Colin, 2026-11-20)."""
+    return ("Mid stream PRV",
+            "MBH(PRV) = sum of appliance MBH downstream of the PRV. "
+            "L(PRV) = developed length from the PRV to its farthest outlet. "
+            "Pipe after the PRV is sized on the downstream table at L(PRV).")
 
 
 def _min_size_label():
@@ -764,7 +870,9 @@ def check_existing_pipe(sizing_result, graph):
                              shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)
     run_ft = sizing_result["longest_run_ft"]
     table_id = sizing_result["table_id"]
-    demand_cfh, units = demand_in_table_units(total_load, table_id, heat)
+    demand_cfh, units = demand_in_table_units(
+        total_load, table_id, heat,
+        sizing_result.get("propane_heat_content_btu_per_cf"))
 
     try:
         capacity = gas_tables.get_capacity(
@@ -875,7 +983,59 @@ def serves_text(edge, graph):
     return ""
 
 
-def fitting_target_size(node_id, graph, new_sizes, transition_ids=()):
+def _largest_nominal(sizes, node_id):
+    """The largest of several nominal sizes by NOMINAL_TO_INCHES. Raises
+    ValueError on a size that is unknown or unreadable (None), so a fitting
+    is never sized below a pipe whose size could not be read."""
+    best, best_in = None, None
+    for pipe_id, nominal in sizes:
+        inches = NOMINAL_TO_INCHES.get(nominal) if nominal else None
+        if inches is None:
+            raise ValueError(
+                "fitting {}: the size of existing pipe {} could not be read "
+                "('{}'), so it was not resized (it shall never be smaller "
+                "than an existing pipe it joins).".format(
+                    node_id, pipe_id, nominal))
+        if best_in is None or inches > best_in:
+            best, best_in = nominal, inches
+    return best
+
+
+def edge_table_id(sizing_result, edge):
+    """The IFGC table a pipe of the graph is read on, or None.
+
+    The table of its own system (size_system's edge_context, set from the
+    edge's run_key: the meter table, or the downstream table after a mid
+    stream PRV). None for an open ended pipe (no downstream node): size_system
+    does not size it, so it has no system table and is never read on the
+    meter table by default (review, 2026-11-20).
+    """
+    if getattr(edge, "to_node_id", None) is None:
+        return None
+    ctx = (sizing_result.get("edge_context") or {}).get(edge.element_id)
+    if ctx is None:
+        return None
+    return ctx.get("table_id")
+
+
+def fitting_resize_exempt(node, graph):
+    """Why a node shall never be resized by the fitting resize, or None.
+
+    The meter and every PRV are left at the size drawn: a regulator is
+    selected by the designer, and a mid-stream PRV sits between two
+    systems sized on different tables (n=29, Colin 2026-11-20).
+    """
+    if node is None:
+        return None
+    if node.element_id == getattr(graph, "origin_id", None):
+        return "the gas meter (start of the run) is never resized"
+    if getattr(node, "is_prv", False):
+        return "a pressure regulating valve is never resized"
+    return None
+
+
+def fitting_target_size(node_id, graph, new_sizes, transition_ids=(),
+                        existing_sizes=None):
     """Size a fitting or valve shall take: the highest load new pipe sized
     this run that touches it.
 
@@ -885,24 +1045,46 @@ def fitting_target_size(node_id, graph, new_sizes, transition_ids=()):
     side of a directly joined transition are used, so the valve takes the
     line size and Revit removes the transitions.
 
+    A new fitting that also joins existing phase pipes (a new tee cut into an
+    existing main) takes the largest size among ALL its pipes, existing at
+    their modeled size and new at their new size, so it is never smaller
+    than an existing pipe it joins (n=3, Colin 2026-11-20). An existing pipe
+    alone never makes a fitting resize: a new pipe has to touch it.
+
     Args:
         node_id:        the fitting's element id.
         graph:          the sized NetworkGraph (edges, node_children).
         new_sizes:      {pipe element id: nominal size}, new pipes only.
         transition_ids: ids of the transitions in the graph.
+        existing_sizes: {pipe element id: modeled nominal size or None} for
+                        the existing phase pipes. None skips the rule.
 
     Returns:
         (nominal size or None, True when read through a transition).
+
+    Raises:
+        ValueError: an existing pipe on the fitting has no readable size.
     """
+    existing_sizes = existing_sizes or {}
+
     def best_on(nid):
         size, load = None, -1
+        touching = []      # (pipe id, nominal) of every new and existing pipe
+        has_existing = False
         for edge in graph.edges.values():
             if nid not in (edge.from_node_id, edge.to_node_id):
                 continue
-            if (edge.element_id in new_sizes
-                    and edge.cumulative_load_mbh > load):
-                load = edge.cumulative_load_mbh
-                size = new_sizes[edge.element_id]
+            if edge.element_id in new_sizes:
+                touching.append((edge.element_id, new_sizes[edge.element_id]))
+                if edge.cumulative_load_mbh > load:
+                    load = edge.cumulative_load_mbh
+                    size = new_sizes[edge.element_id]
+            elif edge.element_id in existing_sizes:
+                touching.append((edge.element_id,
+                                 existing_sizes[edge.element_id]))
+                has_existing = True
+        if size is not None and has_existing:
+            size = _largest_nominal(touching, nid)
         return size, load
 
     size, _load = best_on(node_id)
@@ -969,6 +1151,24 @@ def sizing_rows(sizing_result, graph):
             "zone": _zone(edge),
         })
     sized = set(sizing_result["sizes"])
+    for z in sizing_result.get("unsized_zero_load") or []:
+        edge = graph.edges.get(z["pipe_id"])
+        sized.add(z["pipe_id"])
+        rows.append({
+            "pipe_id": z["pipe_id"],
+            "serves": serves_text(edge, graph),
+            "mbh": 0.0,
+            "cfh": None,
+            "units": gas_tables.table_units(z["table_id"]),
+            "size": "",
+            "capacity": None,
+            "length_ft": float(edge.length_feet) if edge else None,
+            "status": "DATA ERROR",
+            "note": "leads only to 0 MBH fixture(s) {}, not sized".format(
+                ", ".join(str(i) for i in z["fixture_ids"])),
+            "table_id": z["table_id"],
+            "zone": _zone(edge),
+        })
     for edge in graph.edges.values():
         if edge.to_node_id is None or edge.element_id in sized:
             continue
@@ -1032,9 +1232,15 @@ def format_sizing_output(sizing_result, graph):
         lines.append("Heat Content:  not used. The table is in MBH, so the "
                      "MBH load is compared directly.")
     else:
+        # The propane value on a propane CFH table (402.4(37)), else the
+        # natural gas value entered.
         lines.append("Heat Content:  {:.0f} BTU/CF".format(
-            float(sizing_result.get("heat_content_btu_per_cf",
-                                    shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))))
+            float(heat_content_for_table(
+                sizing_result["table_id"],
+                sizing_result.get(
+                    "heat_content_btu_per_cf",
+                    shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF),
+                sizing_result.get("propane_heat_content_btu_per_cf")))))
     lines.append("Total load:    {:.1f} MBH  |  {} fixtures".format(
         float(total_mbh), len(fixture_nodes)))
     lines.append("")

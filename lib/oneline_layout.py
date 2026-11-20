@@ -31,11 +31,18 @@ Rules (plan section 4, Colin 2026-11-18):
   ceiling one row above, with drops down to the equipment. The meter sits
   on the base row of its level, so first floor equipment (kitchen, WH-1)
   shares the meter row and rooftop units sit higher.
-- The highest band, when above the meter's (a roof), hangs UP: its header
-  runs on the band's base row and the units rise from it, with the header
-  labels below the line (Colin, 2026-11-19). Every other band hangs down.
-- No header ever runs along the meter row (item 9); the meter outlet rises
-  to its header.
+- A roof band hangs UP: its header runs on the band's base row and the
+  units rise from it, with the header labels below the line (Colin,
+  2026-11-19). A band is the roof when its level name contains ROOF. Only
+  when the model has NO level named ROOF, units more than
+  ROOF_ABOVE_TOP_FT above the top level get a roof band of their own, and
+  each such unit is listed in the One-Line warnings as a note (Colin,
+  2026-11-20). Every other band hangs down. At a tie in the existing meter
+  sits at the lowest level.
+- The meter outlet rises to its header; nothing else runs along the meter
+  row at the meter. A sub-header moved off its parent's row may sit on the
+  meter row away from the meter (Colin, 2026-11-20: the approved G3C
+  cookline manifold and G2 first floor boilers do).
 - A tap to equipment is a vertical drop to its band's equipment row; a tap
   holding more junctions rises or drops to its own level's header row. A
   run that changes level becomes a riser too. A second leg the same way
@@ -50,6 +57,7 @@ Rules (plan section 4, Colin 2026-11-18):
   the junction one column right, or steps the leg further right.
 """
 
+import math
 import time
 
 import gas_labels
@@ -85,6 +93,10 @@ MAX_STRETCH = 12
 MAX_ROWS_OUT = 12
 BAND_FT = 20.0             # one level band: equipment row, drop, header row
 LEVEL_TOL_FT = 0.25        # an element this close below a level is on it
+# units this far above the top level are on a roof of their own, ONLY when
+# no level is named ROOF (Colin, 2026-11-20): a ROOF level wins, and a model
+# without one still draws its RTUs hanging up
+ROOF_ABOVE_TOP_FT = 8.0
 INLINE_Z_FT = 1.0          # a run end this close to the tee height is inline
 ROOT_RISER_COL = 0.5       # meter outlet riser, in columns from the meter
 EXISTING_COLS = 2          # tie in: existing meter to the new connection
@@ -110,6 +122,11 @@ UTILITY_TEXT = ["GAS FROM UTILITY"]
 
 def X(c):
     return c * COL_FT
+
+
+def node_line_id(node_id):
+    """Pseudo Segment id of a junction's node line (review n14)."""
+    return "J{0}".format(node_id)
 
 
 def Y(r):
@@ -386,8 +403,13 @@ class _Engine(object):
             if end and end["type"] == "junction":
                 legs = list(end["taps"]) + [end["run"]]
                 firsts = [l["segments"][0] for l in legs if l.get("segments")]
+                # the junction's own node line, drawn along the header when
+                # a leg steps right (review n14), meets all of them
+                jid = node_line_id(end["node_id"])
+                link(segs[-1], jid)
                 for f in firsts:
                     link(segs[-1], f)
+                    link(f, jid)
                     for g in firsts:
                         link(f, g)
                 for l in legs:
@@ -409,21 +431,47 @@ class _Engine(object):
         """Bands come from the levels the meter and the equipment sit on:
         band i draws its equipment at y = i * BAND_FT and the headers that
         run at that level's ceiling one row above. The meter shares the
-        band of the first level equipment."""
-        levels = sorted([float(l["elev"]) for l in sch.get("levels") or []])
-        zs = [(sch.get("origin_xyz") or [0, 0, 0])[2]]
+        band of the first level equipment.
+
+        Roof (Colin, 2026-11-20, review n31 and n32): a band is the roof
+        when its level name contains ROOF (any case). A ROOF level wins:
+        only when no level is named ROOF do units more than
+        ROOF_ABOVE_TOP_FT above the top level get a roof band of their own
+        (the height rule), and each of them is kept in roof_by_height for
+        the console note. With a ROOF level, a unit high above the top level
+        that is not on a ROOF band hangs down as normal. Roof units hang
+        up, the rest hang down; the meter's elevation plays no part. At a
+        tie in the existing meter is drawn at the lowest level, not at the
+        picked pipe's elevation."""
+        lv = sorted([(float(l["elev"]), str(l.get("name") or ""))
+                     for l in sch.get("levels") or []])
+        self.levels = [e for e, _n in lv]
+        self.roof_levels = set(e for e, n in lv if "ROOF" in n.upper())
+        self.top_elev = self.levels[-1] if self.levels else None
+        self.top_name = lv[-1][1] if lv else ""
+        # the height rule applies only with no level named ROOF
+        self.height_rule = bool(self.levels) and not self.roof_levels
+        oz = (sch.get("origin_xyz") or [0, 0, 0])[2]
+        if sch.get("origin_kind") == "tie_in" and self.levels:
+            oz = self.levels[0]
+        self.origin_z = oz
+        zs = [oz]
+        self.roof_by_height = []      # (name, node id, ft above top level)
         for t in self._terms(sch.get("root")):
             if t.get("xyz"):
-                zs.append(t["xyz"][2])
+                z = t["xyz"][2]
+                zs.append(z)
+                if self._above_top(z):
+                    self.roof_by_height.append(
+                        (t.get("name") or "UNNAMED", t.get("node_id"),
+                         float(z) - self.top_elev))
         used = set()
         for z in zs:
-            used.add(self._level_of(z, levels))
+            used.add(self._level_key(z))
         self.band_elevs = sorted(used)
-        # Colin, 2026-11-19: equipment on the highest level, above the
-        # meter's level (a roof), hangs UP from a header below it; every
-        # other band hangs down from a header above it
-        top = len(self.band_elevs) - 1
-        self.up_bands = set([top]) if top > self.band(zs[0]) else set()
+        self._band_index = dict((e, i) for i, e in enumerate(self.band_elevs))
+        self.up_bands = set(i for i, e in enumerate(self.band_elevs)
+                            if self._is_roof_key(e))
         # header rows of hang up bands: their Segment labels go below the
         # line, the units' own labels take the space above
         self.up_header_ys = [b * BAND_FT for b in self.up_bands]
@@ -441,7 +489,36 @@ class _Engine(object):
                 best = e
         return best
 
+    def _above_top(self, z):
+        """True when the height rule makes z a roof unit: no level is named
+        ROOF and z is more than ROOF_ABOVE_TOP_FT above the top level."""
+        return (self.height_rule and
+                z > self.top_elev + ROOF_ABOVE_TOP_FT)
+
+    def _level_key(self, z):
+        """Elevation of the level z sits on, or (height rule, no ROOF
+        level) the roof band above the top level for units more than
+        ROOF_ABOVE_TOP_FT above it."""
+        if self._above_top(z):
+            return self.top_elev + ROOF_ABOVE_TOP_FT
+        return self._level_of(z, self.levels)
+
+    def _is_roof_key(self, e):
+        if e in self.roof_levels:
+            return True
+        return (self.height_rule and
+                e > self.top_elev + ROOF_ABOVE_TOP_FT - 1e-6)
+
+    def roof_notes(self):
+        """One note per unit the height rule made a roof unit, so the
+        engineer can check it or rename a level (Colin, 2026-11-20)."""
+        return [roof_height_note(name, nid, ft, self.top_name)
+                for name, nid, ft in self.roof_by_height]
+
     def band(self, z):
+        k = self._level_key(z)
+        if k in self._band_index:
+            return self._band_index[k]
         b = 0
         for i, e in enumerate(self.band_elevs):
             if e <= z + LEVEL_TOL_FT:
@@ -454,14 +531,44 @@ class _Engine(object):
     def y_header(self, z):
         return self.band(z) * BAND_FT + (0.0 if self.hangs_up(z) else ROW_FT)
 
-    def turn_y(self, end, y):
+    def turn_y(self, end, y, rows=1):
         """Equipment row for terminal end reached from a header at y: its
-        band's row, or one row off the header the way its band hangs."""
+        band's row, or rows rows off the header the way its band hangs. A
+        unit never turns against the way its band hangs (review n13), and
+        the turn is at least rows rows long (review n1)."""
         z = self._z(end)
+        s = 1 if self.hangs_up(z) else -1
         ty = self.y_equip(z)
-        if abs(ty - y) < ROW_FT - 1e-6:
-            ty = y + (ROW_FT if self.hangs_up(z) else -ROW_FT)
+        need = rows * ROW_FT
+        if abs(ty - y) < ROW_FT - 1e-6 or (ty - y) * s < 0:
+            return y + s * need
+        if abs(ty - y) < need - 1e-6:
+            return y + (need if ty > y else -need)
         return ty
+
+    # -- how long a drop must be (review n1) -------------------------------
+    def _piece_need(self, seg, end=None):
+        """Length one vertical piece needs: its valves from the start, its
+        label, and the PRV before equipment at the end."""
+        _w, h = _text_size(seg.get("label") or [""])
+        k = len(seg.get("valves") or [])
+        v = 0.0
+        if k:
+            v = VALVE_FROM_START_FT + (k - 1) * VALVE_PITCH_FT + \
+                max(PRV_HALF_L, ISO_HALF_L)
+        e = 0.0
+        if end is not None and end.get("kind") == "equipment":
+            e = PRV_BEFORE_END_FT + PRV_HALF_L
+        return v + h + 2.0 * LABEL_GAP_FT + e
+
+    def _piece_needs(self, segs, end):
+        last = len(segs) - 1
+        return [self._piece_need(s, end if i == last else None)
+                for i, s in enumerate(segs)]
+
+    @staticmethod
+    def _rows_for(length):
+        return max(1, int(math.ceil(length / ROW_FT - 1e-9)))
 
     # -- helpers -----------------------------------------------------------
     def fits(self, new, occ):
@@ -713,8 +820,11 @@ class _Engine(object):
             end_xy, end_dir = (X(ce), y), (1.0, 0.0)
             if end["type"] == "terminal":
                 # the last unit on a header turns like the others on that
-                # line, never straight on (Colin, 2026-11-19)
-                ty = self.turn_y(end, y)
+                # line, never straight on (Colin, 2026-11-19); the turn is
+                # long enough for its valves, label and PRV (review n1)
+                rows = self._rows_for(self._piece_need(
+                    self.segs[br["segments"][-1]], end))
+                ty = self.turn_y(end, y, rows)
                 pts_list[-1] = pts_list[-1] + [(X(ce), ty)]
                 end_xy = (X(ce), ty)
                 end_dir = (0.0, 1.0 if ty > y else -1.0)
@@ -753,6 +863,7 @@ class _Engine(object):
             cont = run
         trial = occ
         used = {}          # direction -> vertical legs already at this tee
+        reach = 0          # columns of node line drawn right of c
         for leg in legs:
             if leg is cont:
                 continue
@@ -768,41 +879,90 @@ class _Engine(object):
             first = 1 if (leg is run and leg["end"]["type"] == "terminal") \
                 else 0
             for jog in range(first, jogs + first):
-                res, d_key = self.leg(leg, c, y, trial, jog, used)
+                res, d_key = self.leg(leg, c, y, trial, jog, used, reach,
+                                      j["node_id"])
                 if res is not None:
                     break
             if res is None:
                 return None
             used[d_key] = used.get(d_key, 0) + 1
+            if jog > first:
+                self.log.append("leg stepped {0} col(s) right at junction "
+                                "{1}".format(jog, j["node_id"]))
+            reach = max(reach, jog)
             trial = res
         if cont is None:
             return trial
-        return self.header(cont, c, y, trial)
+        # the run carries on from the end of the node line (review n14)
+        return self.header(cont, c + reach, y, trial)
 
-    def leg(self, leg, c, y, occ, jog, used):
+    def _node_lines(self, jid, c, y, reach, jog):
+        """Unit pieces of a junction's node line along the header, from
+        column c + reach to c + jog: a leg that steps right leaves from
+        here, so no leg runs along the header itself (review n14). The
+        line is new or existing like the Segment arriving at the junction
+        (an existing main's tee keeps the existing line style)."""
+        new = self._junction_is_new(jid)
+        out = []
+        for k in range(reach, jog):
+            p = _line(X(c + k), y, X(c + k + 1), y, node_line_id(jid), new)
+            out.append(p)
+        return out
+
+    def _junction_is_new(self, jid):
+        """False when the Segment ending at junction jid is existing pipe,
+        else True (new, also when no incoming Segment is found)."""
+        if jid is None:
+            return True
+        for seg in self.segs.values():
+            if seg.get("end_node") == jid:
+                return not seg.get("is_existing")
+        return True
+
+    def leg(self, leg, c, y, occ, jog, used, reach=0, jid=None):
         """A leg leaving the header vertically: a drop or riser to its
         equipment, or a riser to its own header at its level. Returns
         (occupancy or None, direction)."""
         end = leg["end"]
         n = len(leg["segments"])
+        ext = self._node_lines(jid, c, y, reach, jog)
         if end["type"] == "terminal":
-            ty = self.turn_y(end, y)
+            segs = [self.segs[s] for s in leg["segments"]]
+            needs = self._piece_needs(segs, end)
+            tot = sum(needs)
+            ty = self.turn_y(end, y, self._rows_for(tot))
             d = 1 if ty > y else -1
             if jog < used.get(d, 0):
                 return None, d
             x = X(c + jog)
             pts_list = []
+            acc = 0.0
             for i in range(n):
-                y0 = y + (ty - y) * i / float(n)
-                y1 = y + (ty - y) * (i + 1) / float(n)
-                pts = [(x, y0), (x, y1)]
-                if i == 0 and jog:
-                    pts = [(X(c), y)] + pts
-                pts_list.append(pts)
-            new = self._branch_prims(leg, pts_list, (x, ty), (0.0, float(d)))
+                y0 = y + (ty - y) * acc / tot
+                acc += needs[i]
+                y1 = ty if i == n - 1 else y + (ty - y) * acc / tot
+                pts_list.append([(x, y0), (x, y1)])
+            new = ext + self._branch_prims(leg, pts_list, (x, ty),
+                                           (0.0, float(d)))
             if self.fits(new, occ):
                 return occ + new, d
             return None, d
+        return self._header_leg(leg, c, y, occ, jog, used, ext)
+
+    def _header_rows(self, y, s):
+        """Rows a header on its parent's row may move to: the way its
+        units hang first, then the other way, alternating. The meter row
+        is allowed: a sub-header may sit on it away from the meter (Colin,
+        2026-11-20, review n13; the approved G3C cookline manifold and G2
+        first floor boilers do). The clash check keeps it off the meter
+        and its outlet."""
+        out = []
+        for k in range(1, MAX_ROWS_OUT + 1):
+            out += [y + s * k * ROW_FT, y - s * k * ROW_FT]
+        return out
+
+    def _header_leg(self, leg, c, y, occ, jog, used, ext):
+        end = leg["end"]
         ty = self.y_header(self._z(end))
         cands = [ty]
         if abs(ty - y) < 1e-6:
@@ -810,15 +970,16 @@ class _Engine(object):
             # units hang (G2 2026-11-19: first floor boilers off the first
             # floor main went up into the roof labels and failed)
             s = 1 if self.hangs_up(self._z(end)) else -1
-            cands = []
-            for k in range(1, MAX_ROWS_OUT + 1):
-                cands += [y + s * k * ROW_FT, y - s * k * ROW_FT]
+            cands = self._header_rows(y, s)
         d = 1 if cands[0] > y else -1
         if jog < used.get(d, 0):
             return None, d
+        if ext:
+            if not self.fits(ext, occ):
+                return None, d
+            occ = occ + ext
         for cy in cands:
-            res = self.header(leg, c + jog, cy, occ, from_y=y,
-                              start_xy=(X(c), y) if jog else None)
+            res = self.header(leg, c + jog, cy, occ, from_y=y)
             if res is not None:
                 if cy != ty:
                     self.log.append("header {0} moved off its level "
@@ -827,12 +988,35 @@ class _Engine(object):
         return None, d
 
 
+def roof_height_note(name, node_id, above_ft, top_name=""):
+    """The console note for a unit drawn as a roof unit by the height rule
+    (no level named ROOF, more than ROOF_ABOVE_TOP_FT above the top
+    level)."""
+    return ("NOTE: no level is named ROOF, so {0} (element {1}), {2:.1f} ft "
+            "above the top level{3}, is drawn as a roof unit (more than "
+            "{4:g} ft above it). Check it, or rename the roof level to "
+            "include ROOF.".format(
+                name, node_id, float(above_ft),
+                " ({0})".format(top_name) if top_name else "",
+                float(ROOF_ABOVE_TOP_FT)))
+
+
 def layout(sch, notes=None, origin_kind="meter"):
     """Draw list for a schematic. notes: the notes block lines
-    (gas_labels.notes_lines)."""
+    (gas_labels.notes_lines).
+
+    Units made roof units by the height rule are listed as notes in
+    sch["warnings"] (the list the One-Line button already prints) and in
+    the returned "roof_notes"."""
     eng = _Engine(sch)
+    roof_notes = eng.roof_notes()
+    warnings = sch.setdefault("warnings", [])
+    for note in roof_notes:
+        if note not in warnings:
+            warnings.append(note)
     occ = []
-    oz = (sch.get("origin_xyz") or [0, 0, 0])[2]
+    # the meter's elevation: at a tie in, the lowest level (review n32)
+    oz = eng.origin_z
     my = eng.y_equip(oz)
     # meter and utility stub
     existing = sch.get("existing")
@@ -897,7 +1081,26 @@ def layout(sch, notes=None, origin_kind="meter"):
         top = y1 + NOTES_GAP_FT + (len(notes) - 1) * LINE_PITCH_FT + TEXT_H_FT
         occ.append(_text(x0, top, notes, "left", "notes"))
         y1 = top
-    return {"prims": occ, "bounds": (x0, y0, x1, y1), "log": _short_log(eng.log)}
+    return {"prims": occ, "bounds": (x0, y0, x1, y1), "log": _short_log(eng.log),
+            "roof_notes": roof_notes}
+
+
+def failed(log):
+    """True when the layout log says no placement was found."""
+    return any(l.startswith("LAYOUT FAILED") for l in log)
+
+
+def failure_message(log):
+    """Alert text for a failed layout. A search stopped on the time or
+    check budget did not prove an overlap and says so (review n43)."""
+    stop = [l for l in log if l.startswith("search stopped")]
+    if stop:
+        return ("The layout search ran out of time ({0}) before it found a "
+                "placement without overlaps. Nothing was drawn. No overlap "
+                "was proven; the layout diagnostic is in the "
+                "console.".format(stop[0][len("search stopped "):]))
+    return ("The diagram could not be laid out without overlaps. Nothing "
+            "was drawn. The layout diagnostic is in the console.")
 
 
 def _short_log(log, limit=LOG_LIMIT):

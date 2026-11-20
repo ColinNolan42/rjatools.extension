@@ -10,6 +10,15 @@
 # dimension here is printed inches / 12. Every helper fails soft: a piece
 # that cannot be drawn is skipped, never the whole view.
 #
+# View scale (2026-11-20): a view that is not 1:1 (the Gas One-Line draws
+# at 1:100) passes its scale to _Style(doc, scale). The constants below
+# (PAD, ROW_H, HEAD_H, TEXT_H, CHAR_W) are then multiplied by it wherever a
+# helper uses them, so the cells grow with the text, which Revit already
+# prints at paper size. Positions and widths a caller passes in are model
+# feet and are never scaled again; a caller that sizes a band from BAND_H
+# multiplies by the scale itself. Scale 1 (the default, every other tool)
+# draws exactly as before.
+#
 # The names keep their leading underscore from water_drafting, where they
 # started, so the callers did not change.
 #
@@ -47,10 +56,13 @@ class _Style(object):
     Table Title" (bold, white, 1/8 in). All have a transparent background so
     the shaded rows show through. If a type cannot be made the project's
     first text type is used instead, so the table still draws.
+
+    scale: the drafting view's scale (view.Scale), 1 for a 1:1 view.
     """
 
-    def __init__(self, doc):
+    def __init__(self, doc, scale=1.0):
         self.doc = doc
+        self.scale = float(scale or 1.0)
         base = _text_note_type_id(doc)
         self.types = {
             "text": _ensure_text_type(doc, base, "RJA Table Text"),
@@ -66,19 +78,31 @@ class _Style(object):
             break
 
 
+def _k(st):
+    """The view scale a style was made for, 1 when there is none (a 1:1
+    view, or the stand ins the CPython tests pass)."""
+    try:
+        return float(getattr(st, "scale", 1.0) or 1.0)
+    except Exception:
+        return 1.0
+
+
 def _t(st, view, x, y, value, kind="text", align="left"):
     """A TextNote whose origin is the TOP of the text box, flowing down.
     align "center" or "right" puts x at the middle or right of the text."""
     if not value:
         return None
     try:
+        k = _k(st)
         opts = TextNoteOptions(st.types[kind])
         if align == "center":
             opts.HorizontalAlignment = HorizontalTextAlignment.Center
         elif align == "right":
             opts.HorizontalAlignment = HorizontalTextAlignment.Right
-        pad = PAD if align == "left" else (-PAD if align == "right" else 0.0)
-        return TextNote.Create(st.doc, view.Id, XYZ(x + pad, y - PAD, 0.0),
+        pad = PAD * k if align == "left" else (
+            -PAD * k if align == "right" else 0.0)
+        return TextNote.Create(st.doc, view.Id,
+                               XYZ(x + pad, y - PAD * k, 0.0),
                                str(value), opts)
     except Exception:
         return None
@@ -121,32 +145,34 @@ def _line(st, view, x0, y0, x1, y1, weight=None):
 def _band(st, view, ox, top, width, title, right_text, height):
     """RJA blue band with a white title, optional text at its right end.
     Returns the y of its bottom edge."""
+    k = _k(st)
     bottom = top - height
     _fill(st, view, ox, top, ox + width, bottom, RJA_BLUE)
-    inset = (height - TEXT_H) / 2.0
-    _t(st, view, ox, top - inset + PAD, title, "title")
+    inset = (height - TEXT_H * k) / 2.0
+    _t(st, view, ox, top - inset + PAD * k, title, "title")
     if right_text:
-        _t(st, view, ox + width, top - inset + PAD, right_text, "title",
+        _t(st, view, ox + width, top - inset + PAD * k, right_text, "title",
            "right")
     return bottom
 
 
 def _info_grid(st, view, ox, top, widths, rows):
     """Label / value grid: even columns are shaded bold labels."""
+    row_h = ROW_H * _k(st)
     xs = [ox]
     for w in widths:
         xs.append(xs[-1] + w)
-    bottom = top - ROW_H * len(rows)
+    bottom = top - row_h * len(rows)
     for r, row in enumerate(rows):
-        row_top = top - ROW_H * r
+        row_top = top - row_h * r
         for c, value in enumerate(row):
             label = (c % 2 == 0)
             if label:
-                _fill(st, view, xs[c], row_top, xs[c + 1], row_top - ROW_H,
+                _fill(st, view, xs[c], row_top, xs[c + 1], row_top - row_h,
                       HEAD_FILL)
             _t(st, view, xs[c], row_top, value, "bold" if label else "text")
     for r in range(len(rows) + 1):
-        _line(st, view, ox, top - ROW_H * r, xs[-1], top - ROW_H * r)
+        _line(st, view, ox, top - row_h * r, xs[-1], top - row_h * r)
     for x in xs:
         _line(st, view, x, top, x, bottom)
     _outline(st, view, ox, top, xs[-1], bottom)
@@ -155,15 +181,16 @@ def _info_grid(st, view, ox, top, widths, rows):
 
 def _note_panel(st, view, ox, top, width, lines, chars=None):
     """Plain lines in a lightly shaded, outlined panel. Returns its bottom."""
+    k = _k(st)
     wrapped = []
     for line in lines:
-        wrapped.extend(_wrap(line, chars or int(width / CHAR_W)))
-    bottom = top - TEXT_H * len(wrapped) - 2.0 * PAD
+        wrapped.extend(_wrap(line, chars or int(width / (CHAR_W * k))))
+    bottom = top - TEXT_H * k * len(wrapped) - 2.0 * PAD * k
     _fill(st, view, ox, top, ox + width, bottom, ZEBRA_FILL)
-    y = top - PAD
+    y = top - PAD * k
     for line in wrapped:
         _t(st, view, ox, y, line)
-        y -= TEXT_H
+        y -= TEXT_H * k
     _outline(st, view, ox, top, ox + width, bottom)
     return bottom
 
@@ -174,17 +201,20 @@ def _outline(st, view, x0, top, x1, bottom):
         _line(st, view, a[0], a[1], b[0], b[1], OUTER_WEIGHT)
 
 
-def text_width(text, bold=False):
+def text_width(text, bold=False, scale=1.0):
     """Estimated width (feet) of a cell holding text: its characters at the
-    average width, on the generous side, plus the inset on both sides."""
-    return len(str(text)) * (BOLD_CHAR_W if bold else CHAR_W) + 2.0 * PAD
+    average width, on the generous side, plus the inset on both sides.
+    scale: the view scale (model feet per paper foot)."""
+    return (len(str(text)) * (BOLD_CHAR_W if bold else CHAR_W)
+            + 2.0 * PAD) * float(scale or 1.0)
 
 
-def column_needs(headers, rows, totals_row=False):
+def column_needs(headers, rows, totals_row=False, scale=1.0):
     """(needs, band_need): the width each column needs for its longest text
     (header in bold, bold and totals rows in bold), and the width a heading
-    row ({'band': text}) needs across the whole table."""
-    needs = [text_width(h, True) for h in headers]
+    row ({'band': text}) needs across the whole table, in model feet at the
+    view scale."""
+    needs = [text_width(h, True, scale) for h in headers]
     band_need = 0.0
     last = len(rows) - 1
     for r, row in enumerate(rows):
@@ -192,19 +222,20 @@ def column_needs(headers, rows, totals_row=False):
         if isinstance(row, dict):
             if "band" in row:
                 if row.get("band"):
-                    band_need = max(band_need, text_width(row["band"], True))
+                    band_need = max(band_need,
+                                    text_width(row["band"], True, scale))
                 continue
             bold = bold or bool(row.get("bold"))
             row = row.get("cells") or []
         for c, value in enumerate(row):
             if c < len(needs) and value:
-                needs[c] = max(needs[c], text_width(value, bold))
+                needs[c] = max(needs[c], text_width(value, bold, scale))
     return needs, band_need
 
 
-def table_need(headers, rows, totals_row=False):
+def table_need(headers, rows, totals_row=False, scale=1.0):
     """Narrowest table width that holds every text of the table."""
-    needs, band_need = column_needs(headers, rows, totals_row)
+    needs, band_need = column_needs(headers, rows, totals_row, scale)
     return max(sum(needs, 0.0), band_need)
 
 
@@ -256,10 +287,12 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
     column when a heading row is longer than the table, so no text runs
     over its cell (Colin, 2026-11-09: no cell is ever clipped).
     """
+    k = _k(st)
+    row_h = ROW_H * k
     widths = [c[1] for c in columns]
     if fit:
         needs, band_need = column_needs([c[0] for c in columns], rows,
-                                        totals_row)
+                                        totals_row, k)
         widths = [max(w, n) for w, n in zip(widths, needs)]
         short = band_need - sum(widths, 0.0)
         if short > 0 and widths:
@@ -271,7 +304,7 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
 
     head_top = top
     if groups:
-        group_bottom = top - ROW_H
+        group_bottom = top - row_h
         _fill(st, view, ox, top, right, group_bottom, HEAD_FILL)
         col = 0
         for label, span in groups:
@@ -283,11 +316,11 @@ def _styled_table(st, view, ox, top, columns, rows, groups=None,
             col += span
         head_top = group_bottom
 
-    head_bottom = head_top - HEAD_H
+    head_bottom = head_top - HEAD_H * k
     _fill(st, view, ox, head_top, right, head_bottom, HEAD_FILL)
     row_tops = [head_bottom]
     for _ in rows:
-        row_tops.append(row_tops[-1] - ROW_H)
+        row_tops.append(row_tops[-1] - row_h)
     bottom = row_tops[-1]
 
     last = len(rows) - 1

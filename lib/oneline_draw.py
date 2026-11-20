@@ -96,6 +96,42 @@ def pick_text_type(types):
     return types[0][0]
 
 
+def text_type_note(types, picked):
+    """Warning when the picked text type is not 3/32 in.: the layout's
+    clash boxes assume 3/32 in. text at 1:100 (review n44). None when fine."""
+    for tid, name, size in types or []:
+        if tid != picked:
+            continue
+        if name == TEXT_TYPE_NAME or (size is not None and
+                                      abs(size - TEXT_SIZE_FT) < 1e-6):
+            return None
+        return ("No 3/32 in. text type in this project; labels drawn with "
+                "'{0}', so they may overlap symbols and other labels. Add "
+                "the '{1}' text type and run One-Line again.".format(
+                    name, TEXT_TYPE_NAME))
+    if types:
+        return "Text type for the labels could not be identified."
+    return "No text type in this project; labels could not be drawn."
+
+
+def style_notes(new_found, existing_found, failures):
+    """Warnings for the line styles (review n12, n45). failures: {style
+    name: count of lines whose LineStyle could not be set}."""
+    out = []
+    if not new_found:
+        out.append("Line style '{0}' not found; pipes drawn thin.".format(
+            NEW_LINE_STYLE))
+    if not existing_found:
+        out.append("Line style '{0}' not found; existing pipe and the "
+                   "existing meter service drawn in the default line "
+                   "style.".format(EXISTING_LINE_STYLE))
+    for name in sorted(failures):
+        out.append("Line style '{0}' could not be set on {1} line(s): {2}. "
+                   "Those lines are drawn in the default style.".format(
+                       name, failures[name][0], failures[name][1]))
+    return out
+
+
 def border_type_name(base_name):
     """Name of the bordered sibling of a text type."""
     base = base_name or TEXT_TYPE_NAME
@@ -236,7 +272,7 @@ def create_view(doc, name, scale=100):
     return view
 
 
-def text_type_id(doc):
+def _text_types(doc):
     DB = _db()
     types = []
     for t in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType):
@@ -245,7 +281,18 @@ def text_type_id(doc):
         except Exception:
             size = None
         types.append((t.Id, _name(t), size))
-    return pick_text_type(types)
+    return types
+
+
+def text_type_id(doc):
+    return pick_text_type(_text_types(doc))
+
+
+def text_type_choice(doc):
+    """(id or None, warning or None) for the label text type."""
+    types = _text_types(doc)
+    tid = pick_text_type(types)
+    return tid, text_type_note(types, tid)
 
 
 def border_text_type_id(doc, base_id):
@@ -272,11 +319,24 @@ def border_text_type_id(doc, base_id):
 
 
 def line_style(doc, name=NEW_LINE_STYLE):
+    """The PROJECTION GraphicsStyle of a line style. A line subcategory
+    also has a Cut style of the same name, which DetailCurve.LineStyle
+    rejects (review n12). UNVERIFIED Revit API: GraphicsStyle.GraphicsStyleType
+    and GraphicsStyleType.Projection; when they cannot be read, the first
+    style of that name is used, as before."""
     DB = _db()
+    first = None
     for gs in DB.FilteredElementCollector(doc).OfClass(DB.GraphicsStyle):
-        if _name(gs) == name:
-            return gs
-    return None
+        if _name(gs) != name:
+            continue
+        if first is None:
+            first = gs
+        try:
+            if gs.GraphicsStyleType == DB.GraphicsStyleType.Projection:
+                return gs
+        except Exception:
+            return first
+    return first
 
 
 class _Drawer(object):
@@ -293,6 +353,23 @@ class _Drawer(object):
         self.counts = {"lines": 0, "texts": 0, "symbols": 0, "fallbacks": 0,
                        "failed": 0}
         self.errors = []
+        # style name -> [lines it could not be set on, first error]
+        self.style_failures = {}
+
+    def _set_style(self, dc, style):
+        """Set a detail curve's line style; a refusal is counted and
+        reported, never passed over (Rule 6, review n12)."""
+        if style is None:
+            return
+        try:
+            dc.LineStyle = style
+        except Exception as ex:
+            try:
+                key = _name(style) or "?"
+            except Exception:
+                key = "?"
+            rec = self.style_failures.setdefault(key, [0, str(ex)])
+            rec[0] += 1
 
     def line(self, x0, y0, x1, y1, new=False):
         DB = _db()
@@ -300,12 +377,7 @@ class _Drawer(object):
             return None
         dc = self.doc.Create.NewDetailCurve(
             self.view, DB.Line.CreateBound(DB.XYZ(x0, y0, 0), DB.XYZ(x1, y1, 0)))
-        style = self.new_style if new else self.existing_style
-        if style is not None:
-            try:
-                dc.LineStyle = style
-            except Exception:
-                pass
+        self._set_style(dc, self.new_style if new else self.existing_style)
         self.counts["lines"] += 1
         return dc
 
@@ -362,11 +434,7 @@ class _Drawer(object):
                 arc = DB.Arc.Create(DB.XYZ(x, y, 0), _METER_R, a0, a0 + math.pi,
                                     DB.XYZ.BasisX, DB.XYZ.BasisY)
                 dc = self.doc.Create.NewDetailCurve(self.view, arc)
-                if self.new_style is not None:
-                    try:
-                        dc.LineStyle = self.new_style
-                    except Exception:
-                        pass
+                self._set_style(dc, self.new_style)
             opts = DB.TextNoteOptions(self.tt_id)
             opts.HorizontalAlignment = DB.HorizontalTextAlignment.Center
             opts.VerticalAlignment = DB.VerticalTextAlignment.Middle
@@ -399,17 +467,71 @@ class _Drawer(object):
 def draw(doc, view, prims, syms, tt_id=None, new_style=None):
     """Draw every primitive. Call inside a transaction. Returns (counts,
     errors): nothing is skipped silently."""
+    tt_note = None
     if tt_id is None:
-        tt_id = text_type_id(doc)
+        tt_id, tt_note = text_type_choice(doc)
     if new_style is None:
         new_style = line_style(doc)
     border_id, border_note = border_text_type_id(doc, tt_id)
     existing_style = line_style(doc, EXISTING_LINE_STYLE)
     d = _Drawer(doc, view, syms, tt_id, new_style, border_id, existing_style)
     counts = d.draw(prims)
+    if tt_note:
+        d.errors.append(tt_note)
     if border_note and "created" not in border_note:
         d.errors.append(border_note)
-    if new_style is None:
-        d.errors.append("Line style '{0}' not found; pipes drawn thin.".format(
-            NEW_LINE_STYLE))
+    # only warn about Line 2 when something existing was drawn
+    any_existing = any(p.get("t") == "line" and not p.get("new", True)
+                       for p in prims)
+    d.errors += style_notes(new_style is not None,
+                            existing_style is not None or not any_existing,
+                            d.style_failures)
     return counts, d.errors
+
+
+# ---------------------------------------------------------------------------
+# Developed Length Breakdown table (Colin, 2026-11-20)
+# ---------------------------------------------------------------------------
+
+BREAKDOWN_MARK = "DELETE BEFORE PUTTING ON SCHEDULE"
+BREAKDOWN_GAP_BLOCKS = 2.0     # gaps (rja_drafting.GAP x view scale) under the diagram
+
+
+def breakdown_title(bd):
+    """Band text: LONGEST RUN TO <farthest outlet>."""
+    return "LONGEST RUN TO {0}".format(bd.get("farthest") or "FARTHEST OUTLET")
+
+
+def draw_breakdown(doc, view, bd, bounds, style=None):
+    """The longest run table under the diagram, in the RJA table look.
+
+    bd: oneline_schematic.developed_breakdown. bounds: the layout's
+    (x0, y0, x1, y1) in model feet; the table starts at x0, a gap under y0.
+    The view is 1:100, so rja_drafting's paper sized cells are scaled by the
+    view scale (rja_drafting._Style(doc, scale)). The columns are fitted to
+    their longest text first, then the blue band and the table are drawn at
+    the same width. Call inside a transaction. Returns (bottom y, width).
+    style: a stand in for rja_drafting._Style (tests).
+    """
+    import oneline_schematic
+    import rja_drafting as rd
+    k = float(getattr(view, "Scale", 1) or 1)
+    st = style if style is not None else rd._Style(doc, k)
+    headers, rows = oneline_schematic.breakdown_table(bd)
+    needs, band_need = rd.column_needs(headers, rows, True, k)
+    title_need = rd.text_width(breakdown_title(bd), True, k)
+    needs = list(needs)
+    short = max(band_need, title_need) - sum(needs, 0.0)
+    if short > 0 and needs:
+        needs[-1] += short       # a long outlet name widens the last column
+    columns = [(h, w) for h, w in zip(headers, needs)]
+    width = sum(needs, 0.0)
+    ox = float(bounds[0])
+    top = float(bounds[1]) - rd.GAP * k * BREAKDOWN_GAP_BLOCKS
+    rd._t(st, view, ox, top, BREAKDOWN_MARK, "bold")
+    top -= rd.TEXT_H * k * 1.4
+    top = rd._band(st, view, ox, top, width, breakdown_title(bd), None,
+                   rd.BAND_H * k)
+    bottom = rd._styled_table(st, view, ox, top, columns, rows,
+                              totals_row=True, left_cols=(0,), fit=True)
+    return bottom, width

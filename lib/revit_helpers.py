@@ -403,23 +403,139 @@ def get_type_parameter_value(element, param_name):
                    "Element is None. Cannot read type parameter '{}'.".format(param_name))
         return None
 
-    symbol = None
-    try:
-        symbol = element.Symbol
-    except Exception:
-        try:
-            type_id = element.GetTypeId()
-            if type_id is not None and eid_int(type_id) > 0:
-                symbol = element.Document.GetElement(type_id)
-        except Exception:
-            symbol = None
-
+    symbol = _element_type(element)
     if symbol is not None:
         value = get_parameter_value(symbol, param_name)
         if value is not None:
             return value
 
     return get_parameter_value(element, param_name)
+
+
+def _element_type(element):
+    """The element's Type (FamilySymbol for a family instance), or None.
+    Logged when it cannot be read."""
+    try:
+        symbol = element.Symbol
+        if symbol is not None:
+            return symbol
+    except Exception:
+        pass
+    try:
+        type_id = element.GetTypeId()
+        if type_id is not None and eid_int(type_id) > 0:
+            return element.Document.GetElement(type_id)
+    except Exception as e:
+        _log_entry("INFO", "_element_type", _safe_eid(element),
+                   "Type NOT FOUND ({}).".format(str(e)))
+        return None
+    _log_entry("INFO", "_element_type", _safe_eid(element),
+               "Type NOT FOUND (no Symbol and no type id).")
+    return None
+
+
+def get_instance_or_type_parameter_value(element, param_name):
+    """Read a parameter from the INSTANCE first, then from its Type.
+
+    For the gas fixture parameters (IS_GAS_FIXTURE, GAS_LOAD_MBH,
+    FIXTURE_NAME): RJA families carry them on the instance, a manufacturer
+    family may bind them to the Type (review n=28, Colin 2026-11-20). An
+    instance value, even False or 0, wins; the Type is read only when the
+    instance has no such parameter or no value.
+
+    Returns the value in a Python-native type (see get_parameter_value), or
+    None when neither has it.
+    """
+    value = get_parameter_value(element, param_name)
+    if value is not None or element is None:
+        return value
+    symbol = _element_type(element)
+    if symbol is None:
+        return None
+    value = get_parameter_value(symbol, param_name)
+    if value is not None:
+        _log_entry("INFO", "get_instance_or_type_parameter_value",
+                   _safe_eid(element),
+                   "Parameter '{}' read from the Type: {}.".format(
+                       param_name, value))
+    return value
+
+
+def _lookup_instance_or_type(element, param_name):
+    """The Parameter object on the instance, else on its Type, or None."""
+    for owner in (element, _element_type(element)):
+        if owner is None:
+            continue
+        try:
+            param = owner.LookupParameter(param_name)
+        except Exception:
+            param = None
+        if param is not None and param.HasValue:
+            return param
+    return None
+
+
+def parameter_is_plain_number(element, param_name):
+    """True when the parameter's spec is a plain Number (no units), False
+    when it has another spec (HVAC Power, Length...), None when it cannot be
+    told. Instance first, then Type.
+
+    A Double parameter with units reads AsDouble() in Revit internal units,
+    so a GAS_LOAD_MBH defined as HVAC Power would read about 10.76 times the
+    watts (review n=57). UNVERIFIED Revit API: Definition.GetDataType() and
+    SpecTypeId.Number are the Revit 2022+ spec API as documented; the first
+    live run shall confirm a Number shared parameter compares equal.
+    """
+    fn = "parameter_is_plain_number"
+    eid = _safe_eid(element)
+    if element is None:
+        return None
+    param = _lookup_instance_or_type(element, param_name)
+    if param is None:
+        _log_entry("INFO", fn, eid,
+                   "Parameter '{}' NOT FOUND, spec not checked.".format(
+                       param_name))
+        return None
+    try:
+        if str(param.StorageType) != "Double":
+            return None
+    except Exception:
+        return None
+    try:
+        from Autodesk.Revit.DB import SpecTypeId
+        result = bool(param.Definition.GetDataType() == SpecTypeId.Number)
+    except Exception as e:
+        _log_entry("INFO", fn, eid,
+                   "Spec of '{}' could not be read ({}).".format(
+                       param_name, str(e)))
+        return None
+    _log_entry("INFO" if result else "WARNING", fn, eid,
+               "Parameter '{}' spec is {}.".format(
+                   param_name, "Number" if result else "NOT a plain Number"))
+    return result
+
+
+def get_piping_system_type_name(element):
+    """The piping System Type name of a pipe or fitting (for example
+    "Natural Gas"), or None. Read from RBS_PIPING_SYSTEM_TYPE_PARAM with
+    AsValueString(), the read check_gas_pipe already used."""
+    fn = "get_piping_system_type_name"
+    eid = _safe_eid(element)
+    if element is None:
+        return None
+    try:
+        param = element.get_Parameter(
+            BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
+        name = param.AsValueString() if param is not None else None
+    except Exception as e:
+        _log_entry("WARNING", fn, eid,
+                   "System Type could not be read ({}).".format(str(e)))
+        return None
+    if not name:
+        _log_entry("WARNING", fn, eid, "System Type name NOT FOUND.")
+        return None
+    _log_entry("INFO", fn, eid, "System Type '{}'.".format(name))
+    return name
 
 
 # =============================================================================
@@ -615,13 +731,38 @@ def get_connectors(element):
             "diameter_in": None,                   # connector size, inches
             # Revit's own connector Id, fixed per element. The position in
             # the set is not: two reads can enumerate it in different orders.
-            "connector_id": None
+            "connector_id": None,
+            # "End" at a pipe end, "Curve" for the connector a tap adds
+            # along a pipe (str(Connector.ConnectorType), the read
+            # reconnect_open_ends already uses). None when not readable.
+            "connector_type": None,
+            # str(Connector.Domain): "DomainPiping", "DomainElectrical",
+            # "DomainHvac"... None when not readable (then treated as piping,
+            # see piping_connectors).
+            "domain": None
         }
 
         try:
             entry["connector_id"] = int(connector.Id)
         except Exception:
             pass
+
+        try:
+            entry["connector_type"] = str(connector.ConnectorType)
+        except Exception as e:
+            _log_entry("INFO", fn, eid,
+                       "Connector {}: no ConnectorType ({}).".format(i, str(e)))
+
+        # UNVERIFIED Revit API: Connector.Domain is assumed to return the
+        # Domain enum (DomainPiping, DomainElectrical, DomainHvac,
+        # DomainCableTrayConduit, DomainUndefined). An unreadable domain is
+        # left None and counts as piping (review n=30).
+        try:
+            entry["domain"] = str(connector.Domain)
+        except Exception as e:
+            _log_entry("INFO", fn, eid,
+                       "Connector {}: no Domain ({}), counted as piping.".format(
+                           i, str(e)))
 
         # --- Flow direction ---
         try:
@@ -827,7 +968,8 @@ def set_pipe_diameter(pipe, nominal_inches):
     return False, "FAILED"
 
 
-def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
+def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None,
+                     piping_only=False):
     """Resize a fitting (elbow, tee, coupling) or accessory.
 
     Revit fittings do not follow their pipes automatically, so an elbow or a
@@ -854,6 +996,7 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
             pipe.
         size_by_neighbour_id: optional {connected element id: nominal inches},
             used only by the fallback.
+        piping_only: passed to swap_to_sized_type (gas: True).
 
     Returns:
         (success: bool, approach: str)
@@ -924,7 +1067,8 @@ def set_fitting_size(element, nominal_inches, size_by_neighbour_id=None):
 
     # --- 3. A family sized by Type (one Type per size, RJA - Ball Valve -
     # .25 thru 3, Horse Creek 2026-11-19): switch to its Type at this size ---
-    swapped, note = swap_to_sized_type(element, nominal_inches)
+    swapped, note = swap_to_sized_type(element, nominal_inches,
+                                       piping_only=piping_only)
     if swapped:
         _log_entry("INFO", fn, eid, note)
         return True, "Type swap"
@@ -970,6 +1114,59 @@ def pick_sized_type(candidates, nominal_inches, tol=0.01):
     return None
 
 
+# A size written in a Type name: '1 1/2"', '1-1/2"', '0 3/4"', '3/8"', '2"',
+# '2.5 in', '1 inch'. Removed to compare two Type names apart from the size.
+_SIZE_TEXT_RE = (r'(?:\d+(?:\.\d+)?\s*[- ]\s*\d+\s*/\s*\d+|\d+\s*/\s*\d+|'
+                 r'\d+(?:\.\d+)?)\s*(?:"|inch(?:es)?\b|in\b)')
+
+
+def type_name_stem(name):
+    """A Type name with its size text removed, lower case, spaces collapsed:
+    '1" Press' and '1-1/2" Press' both give 'press'. '' for None."""
+    import re
+    if not name:
+        return ""
+    text = re.sub(_SIZE_TEXT_RE, " ", str(name), flags=re.IGNORECASE)
+    return " ".join(text.lower().split())
+
+
+def choose_sized_type(current, candidates, nominal_inches, tol=0.01):
+    """The Type a sized-by-Type family instance shall take (n=50).
+
+    current:    (key, size inches or None, Type name) of the instance's Type.
+    candidates: [(key, size inches or None, Type name)] of its family.
+
+    The current Type is kept when it is already at nominal_inches. Otherwise
+    a matching Type whose name differs from the current one only by the size
+    text is preferred ('1" Press' -> '1-1/2" Press', never '1-1/2"
+    Threaded'), then the first matching Type. None when no Type matches.
+    """
+    cur_key, cur_size, cur_name = current
+    if cur_size is not None and abs(cur_size - nominal_inches) <= tol:
+        return cur_key
+    matches = [c for c in candidates
+               if c[1] is not None and abs(c[1] - nominal_inches) <= tol]
+    if not matches:
+        return None
+    stem = type_name_stem(cur_name)
+    for key, _size, name in matches:
+        if type_name_stem(name) == stem:
+            return key
+    return matches[0][0]
+
+
+def _type_name(symbol):
+    """A Type's name through Element.Name.GetValue (never .Name in pyRevit),
+    or None when it cannot be read (logged)."""
+    try:
+        from Autodesk.Revit.DB import Element as _E
+        return _E.Name.GetValue(symbol)
+    except Exception as exc:
+        _log_entry("WARNING", "_type_name", _safe_eid(symbol),
+                   "Type name NOT READABLE: {}".format(exc))
+        return None
+
+
 def _type_size_inches(symbol):
     """Nominal inches of one family Type: a size Type parameter, else
     2 x 'Nominal Radius', else the Type name ('1 1/2"')."""
@@ -1007,10 +1204,12 @@ def _type_size_inches(symbol):
         return None
 
 
-def swap_to_sized_type(element, nominal_inches):
+def swap_to_sized_type(element, nominal_inches, piping_only=False):
     """Switch a family instance to the Type of its own family whose size is
     nominal_inches. For valves and accessories made with one Type per size,
     where no instance size parameter exists. Call inside a transaction.
+
+    piping_only is passed to reconnect_open_ends (gas: True, water: False).
 
     Returns (True, note) when the instance is now at that size, else
     (False, reason)."""
@@ -1024,12 +1223,19 @@ def swap_to_sized_type(element, nominal_inches):
     for sid in family.GetFamilySymbolIds():
         s = doc.GetElement(sid)
         if s is not None:
-            cands.append((s, _type_size_inches(s)))
-    target = pick_sized_type(cands, nominal_inches)
+            cands.append((s, _type_size_inches(s), _type_name(s)))
+    # The current Type stays when it is already this size; otherwise the
+    # Type named like it apart from the size (n=50, Colin 2026-11-20).
+    target = choose_sized_type(
+        (symbol, _type_size_inches(symbol), _type_name(symbol)),
+        cands, nominal_inches)
     if target is None:
         return False, "its family has no Type at {} in.".format(nominal_inches)
     if _safe_eid(target) == _safe_eid(symbol):
         return True, "Already the {} in. Type.".format(nominal_inches)
+    # The System Types of the pipes on it now, before the swap loosens its
+    # ends: only pipes on those may be rejoined (n=58).
+    system_type_ids = connected_pipe_system_type_ids(element)
     # A new Type changes the body length: Revit drops the reducers that sat
     # on each end and leaves the valve loose (Horse Creek, 2026-11-19). The
     # swap runs in a SubTransaction and is undone unless every end that was
@@ -1043,7 +1249,9 @@ def swap_to_sized_type(element, nominal_inches):
             target.Activate()
         element.ChangeTypeId(target.Id)
         doc.Regenerate()
-        joined = reconnect_open_ends(doc, element)
+        joined = reconnect_open_ends(doc, element,
+                                     system_type_ids=system_type_ids,
+                                     piping_only=piping_only)
         doc.Regenerate()
         if _connected_count(element) < was_connected:
             st.RollBack()
@@ -1075,18 +1283,101 @@ def _connected_count(element):
     return n
 
 
-def reconnect_open_ends(doc, element, max_gap_ft=1.5):
+def pipe_system_type_id(pipe):
+    """Integer id of a pipe's piping System Type (RBS_PIPING_SYSTEM_TYPE_PARAM),
+    or None when it cannot be read (logged)."""
+    pid = _safe_eid(pipe)
+    try:
+        param = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
+        if param is None:
+            _log_entry("WARNING", "pipe_system_type_id", pid,
+                       "System Type parameter NOT FOUND.")
+            return None
+        return eid_int(param.AsElementId())
+    except Exception as exc:
+        _log_entry("WARNING", "pipe_system_type_id", pid,
+                   "System Type NOT READABLE: {}".format(exc))
+        return None
+
+
+def connected_pipe_system_type_ids(element):
+    """System Type ids of the pipes connected to element's connectors now.
+    Read before a Type swap, which can leave the ends loose."""
+    ids = set()
+    manager = _get_connector_manager(element)
+    if manager is None:
+        return ids
+    own = _safe_eid(element)
+    for c in manager.Connectors:
+        try:
+            if not c.IsConnected:
+                continue
+            for ref in c.AllRefs:
+                owner = ref.Owner
+                if (owner is None or _safe_eid(owner) == own
+                        or _is_mep_system(owner) or not is_pipe(owner)):
+                    continue
+                sid = pipe_system_type_id(owner)
+                if sid is not None:
+                    ids.add(sid)
+        except Exception as exc:
+            _log_entry("WARNING", "connected_pipe_system_type_ids", own,
+                       "Connector read failed: {}".format(exc))
+    _log_entry("INFO", "connected_pipe_system_type_ids", own,
+               "Pipe System Type ids on it: {}".format(sorted(ids)))
+    return ids
+
+
+def reconnect_candidate_reason(doc, pipe, system_type_ids):
+    """Why an open pipe end shall NOT be moved onto a valve connector, or
+    None when it may be (n=58): the pipe shall be new construction and on
+    one of system_type_ids, the piping System Types the valve was joined to
+    before its Type swap."""
+    if not system_type_ids:
+        return "the valve's piping system could not be read"
+    if not is_new_construction(pipe, doc):
+        return "existing phase (or phase unreadable)"
+    sid = pipe_system_type_id(pipe)
+    if sid is None or sid not in system_type_ids:
+        return "on another piping system ({})".format(sid)
+    return None
+
+
+def reconnect_open_ends(doc, element, max_gap_ft=1.5, system_type_ids=None,
+                        piping_only=False):
     """Rejoin each open connector of element to the open pipe end lined up
     with it within max_gap_ft: the pipe end is moved onto the connector and
     connected. Returns the number of ends joined. Call inside a transaction.
+
+    Only NEW construction pipes on the same piping System Type as the valve
+    are moved or connected (n=58, Colin 2026-11-20); every move and connect
+    is logged with the pipe id. system_type_ids are the System Types read
+    before the swap (connected_pipe_system_type_ids); None reads them now.
+    With none readable nothing is moved.
+
+    piping_only (gas): an open connector that is not piping (for example an
+    electrical connector on a gas solenoid valve, review n=30) is skipped.
+    Water passes False and keeps its behavior.
     """
     from Autodesk.Revit.DB import (BoundingBoxIntersectsFilter, Line,
                                    Outline, XYZ)
+    fn = "reconnect_open_ends"
+    eid = _safe_eid(element)
     manager = _get_connector_manager(element)
     if manager is None:
         return 0
+    if system_type_ids is None:
+        system_type_ids = connected_pipe_system_type_ids(element)
+    if not system_type_ids:
+        _log_entry("WARNING", fn, eid,
+                   "Piping system NOT READABLE, no pipe end moved.")
+        return 0
     joined = 0
     for vc in manager.Connectors:
+        if piping_only and not _is_piping_connector(vc):
+            _log_entry("INFO", fn, eid,
+                       "Open connector is not piping: skipped.")
+            continue
         try:
             if vc.IsConnected:
                 continue
@@ -1103,6 +1394,11 @@ def reconnect_open_ends(doc, element, max_gap_ft=1.5):
                  .WherePasses(BoundingBoxIntersectsFilter(box))
                  .WhereElementIsNotElementType())
         for pipe in pipes:
+            why_not = reconnect_candidate_reason(doc, pipe, system_type_ids)
+            if why_not is not None:
+                _log_entry("INFO", fn, _safe_eid(pipe),
+                           "Not moved onto valve {}: {}.".format(eid, why_not))
+                continue
             for pc in pipe.ConnectorManager.Connectors:
                 try:
                     if pc.IsConnected or str(pc.ConnectorType) != "End":
@@ -1121,18 +1417,30 @@ def reconnect_open_ends(doc, element, max_gap_ft=1.5):
         if best is None:
             continue
         pipe, pc = best
+        pid = _safe_eid(pipe)
         curve = pipe.Location.Curve
         a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
         if a.DistanceTo(pc.Origin) < b.DistanceTo(pc.Origin):
             pipe.Location.Curve = Line.CreateBound(o, b)
         else:
             pipe.Location.Curve = Line.CreateBound(a, o)
+        _log_entry("INFO", fn, pid,
+                   "Pipe end moved {:.3f} ft onto valve {}.".format(
+                       float(best_d), eid))
         doc.Regenerate()
+        connected = False
         for c in pipe.ConnectorManager.Connectors:
             if not c.IsConnected and c.Origin.DistanceTo(o) < 1e-3:
                 c.ConnectTo(vc)
                 joined += 1
+                connected = True
+                _log_entry("INFO", fn, pid,
+                           "Pipe end connected to valve {}.".format(eid))
                 break
+        if not connected:
+            _log_entry("WARNING", fn, pid,
+                       "Pipe end moved onto valve {} but NOT connected."
+                       .format(eid))
     return joined
 
 
@@ -1323,6 +1631,99 @@ def is_transition(element):
                "No part type readable; family name '{}': {}.".format(
                    name, "transition" if result else "not a transition"))
     return result
+
+
+_NOT_PIPING_DOMAINS = ("DomainElectrical", "DomainHvac",
+                       "DomainCableTrayConduit")
+
+
+def piping_connectors(connectors, element_id=None):
+    """The connector dicts from get_connectors() that are piping connectors.
+
+    A gas solenoid or Ansul valve family with an electrical connector read
+    as 3 connectors, so it was typed a tee, lost its valve symbol and failed
+    the One-Line gate as an open fitting (review n=30). Only a connector whose
+    domain reads electrical, HVAC or cable tray/conduit is dropped; an
+    unreadable (None) or undefined domain still counts as piping, so a read
+    failure never loses a pipe connection. Pure, logs each one dropped.
+    """
+    kept = []
+    for c in connectors or []:
+        if c.get("domain") in _NOT_PIPING_DOMAINS:
+            _log_entry("INFO", "piping_connectors", element_id,
+                       "Connector {} is {}: not counted as piping.".format(
+                           c.get("connector_index"), c.get("domain")))
+            continue
+        kept.append(c)
+    return kept
+
+
+def get_piping_connectors(element):
+    """get_connectors(element) keeping only its piping connectors
+    (piping_connectors). For the gas paths: an electrical connector on a
+    meter or valve family is never counted or listed (review n=30). Water
+    keeps get_connectors()."""
+    return piping_connectors(get_connectors(element), _safe_eid(element))
+
+
+def _is_piping_connector(connector):
+    """A raw Revit Connector is piping unless its Domain reads electrical,
+    HVAC or cable tray/conduit. An unreadable Domain counts as piping, as in
+    piping_connectors(), so a read failure never loses a pipe end."""
+    try:
+        return str(connector.Domain) not in _NOT_PIPING_DOMAINS
+    except Exception as e:
+        _log_entry("INFO", "_is_piping_connector", None,
+                   "Connector Domain not readable ({}), counted as "
+                   "piping.".format(str(e)))
+        return True
+
+
+def is_elbow(element):
+    """True when a fitting is an elbow (adds the elbow equivalent length).
+
+    Read in order, like is_transition: the fitting's MEPModel.PartType, then
+    the family's FAMILY_CONTENT_PART_TYPE parameter (mapped to the PartType
+    enum by _family_part_type_text), and only when neither reads a defined
+    part type, the family name keywords (shared_params.ELBOW_FAMILY_KEYWORDS
+    as substrings, ELBOW_FAMILY_WORDS as whole words, any case). So "90 Ell -
+    Threaded" or "Pipe Bend" content still counts its 5 ft (review n=56).
+    Never raises.
+
+    UNVERIFIED Revit API: MEPModel.PartType and the PartType.Elbow member are
+    the documented API, and FAMILY_CONTENT_PART_TYPE.AsInteger() is assumed
+    to hold the PartType enum value. The first live run shall confirm which
+    read answers (the log line says which).
+    """
+    fn = "is_elbow"
+    eid = _safe_eid(element)
+    if element is None:
+        return False
+    text = _part_type_text(element)
+    source = "MEPModel.PartType"
+    if text is None:
+        text = _family_part_type_text(element)
+        source = "FAMILY_CONTENT_PART_TYPE"
+    if text is not None:
+        result = (text == "Elbow")
+        _log_entry("INFO", fn, eid, "Part type {} (read from {}): {}.".format(
+            text, source, "elbow" if result else "not an elbow"))
+        return result
+    name = get_element_family_name(element) or ""
+    result = elbow_by_name(name)
+    _log_entry("INFO", fn, eid,
+               "No part type readable; family name '{}': {}.".format(
+                   name, "elbow" if result else "not an elbow"))
+    return result
+
+
+def elbow_by_name(name):
+    """The family name fallback of is_elbow. Pure, no Revit."""
+    lowered = (name or "").lower()
+    if any(kw in lowered for kw in shared_params.ELBOW_FAMILY_KEYWORDS):
+        return True
+    words = "".join(ch if ch.isalnum() else " " for ch in lowered).split()
+    return any(w in shared_params.ELBOW_FAMILY_WORDS for w in words)
 
 
 def pipes_joined(pipes):
@@ -1570,8 +1971,9 @@ def validate_selected_element(element):
             "connector_summary": []
         }
 
-    # Read all connectors
-    connectors = get_connectors(element)
+    # Piping connectors only (n=30): an electrical connector on the meter
+    # family never stands in for its gas outlet.
+    connectors = get_piping_connectors(element)
     connector_summary = [c["direction"] for c in connectors]
 
     if not connectors:

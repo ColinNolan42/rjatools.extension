@@ -77,7 +77,7 @@ _SHELL_XAML = '''
 '''
 
 _BASIS_XAML = '''
-                <Expander x:Name="exp_ref" IsExpanded="True" Margin="0,14,0,0">
+                <Expander x:Name="exp_ref" IsExpanded="False" Margin="0,14,0,0">
                     <Expander.Header>
                         <TextBlock FontSize="13" FontWeight="SemiBold" Text="Calculation basis"/>
                     </Expander.Header>
@@ -869,15 +869,165 @@ def show_size_duct_dialog(title, use_theme=True):
 
 
 # ---------------------------------------------------------------------------
-# Size Gas and One-Line: pipe material, IFGC table, heat content
+# Size Gas and One-Line: scope, pipe material, IFGC table, heat content
 # ---------------------------------------------------------------------------
+#
+# One dialog before the pick (Colin, 2026-11-20). The Scope section follows
+# the Duct Performance Scope: radio choices, with a Scope options box under
+# the selected choice. Only Connect into Existing has options (the existing
+# gas piping, assumed not modeled), so the box shows under it and is
+# collapsed under New Construction. The old Existing Conditions popup after
+# the pick is gone.
+
+# The heat content range, read_heat_content and the table kind rule live in
+# gas_tables (no WPF), imported here, never copied (2026-11-20).
+HEAT_CONTENT_MIN_BTU_PER_CF = gas_tables.HEAT_CONTENT_MIN_BTU_PER_CF
+HEAT_CONTENT_MAX_BTU_PER_CF = gas_tables.HEAT_CONTENT_MAX_BTU_PER_CF
+read_heat_content = gas_tables.read_heat_content
+_gas_table_kind = gas_tables.table_kind
+
+
+def default_propane_heat_content():
+    """shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF, as a float."""
+    return float(shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)
+
+
+def gas_heat_boxes(table_id, downstream_table_id=None):
+    """Which heat content boxes the gas dialog uses (n=24/25).
+
+    Args:
+        table_id: the IFGC table picked above.
+        downstream_table_id: the table after a mid-stream PRV, only when
+            Mid Stream PRV is ticked.
+
+    Returns:
+        (natural_note, propane_used). natural_note is "" when the natural gas
+        box is used, else the note saying why it is greyed out. propane_used
+        is True when Table 402.4(37) (propane in CFH) is either table.
+    """
+    kinds = [(tid, _gas_table_kind(tid))
+             for tid in (table_id, downstream_table_id) if tid]
+    propane_used = any(k == "propane" for _t, k in kinds)
+    if not kinds or any(k in ("natural", None) for _t, k in kinds):
+        return "", propane_used
+    parts = []
+    for tid, kind in kinds:
+        if kind == "mbh":
+            parts.append("Table {} is published in MBH".format(tid))
+        else:
+            parts.append("Table {} is propane, its heat content is entered "
+                         "below".format(tid))
+    return "Not used: {}.".format(" and ".join(parts)), propane_used
+
+
+def gas_heat_contents(natural_text, propane_text, table_id,
+                      downstream_table_id=None):
+    """Read the dialog's two heat content boxes (n=24/25, 34, 39, 40).
+
+    A box in use is validated with read_heat_content. A box not in use
+    (greyed or hidden) is never validated (n=40): its value is its text when
+    usable, else its default, and the sizer does not use it.
+
+    Returns:
+        (natural, propane, problems): problems is a list of
+        ("natural" or "propane", message).
+    """
+    natural_note, propane_used = gas_heat_boxes(table_id, downstream_table_id)
+    problems = []
+
+    def _one(text, label, used, default, key):
+        value, message = read_heat_content(text, label)
+        if used:
+            if message:
+                problems.append((key, message))
+            return value
+        return value if message is None else default
+
+    natural = _one(natural_text, 'Heat content of gas', not natural_note,
+                   float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF),
+                   'natural')
+    propane = _one(propane_text, 'Propane heat content', propane_used,
+                   default_propane_heat_content(), 'propane')
+    return natural, propane, problems
+
+
+_GAS_SCOPE_XAML = (
+    '<StackPanel x:Name="pnl_scope">' +
+    _section('Scope', 10) +
+    _hint('Chosen before the pick. The scope sets what the next pick shall be.',
+          '0,0,0,6') +
+    '<RadioButton x:Name="rb_scope_new" GroupName="gas_scope"'
+    ' Content="New Construction" IsChecked="True"'
+    ' ToolTip="Full new construction with a new meter. Pick the gas meter, or the first new pipe."/>' +
+    _hint('Pick the gas meter, or the first new pipe. A pipe start is full new '
+          'construction with a new meter.', '20,0,0,0') +
+    '<RadioButton x:Name="rb_scope_existing" GroupName="gas_scope"'
+    ' Content="Connect into Existing" Margin="0,8,0,0"'
+    ' ToolTip="New piping connected into existing gas piping that is not modeled. Pick the first new pipe."/>' +
+    _hint('Pick the first new pipe at the connection to the existing gas '
+          'piping. The existing piping is assumed not modeled.', '20,0,0,0') +
+    '<Border x:Name="pnl_scope_opts" Style="{DynamicResource RjaGroupBorder}"'
+    ' Margin="20,4,0,4" Visibility="Collapsed">'
+    '<StackPanel>'
+    '<TextBlock FontWeight="SemiBold" Text="Existing gas piping"/>'
+    '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
+    '<TextBlock Text="Existing pipe size at the connection" Width="250" VerticalAlignment="Center"/>'
+    '<ComboBox x:Name="cb_size" Width="90" Margin="0,0,6,0"'
+    ' ToolTip="Nominal size of the existing pipe at the new connection. Shall be chosen."/>'
+    '<TextBlock Text="in." VerticalAlignment="Center"/>'
+    '</StackPanel>'
+    '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
+    '<TextBlock Text="Length, meter to new connection" Width="250" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_length" Width="90" Margin="0,0,6,0"'
+    ' ToolTip="Developed length of the existing pipe from the meter to the new connection. Cannot be negative."/>'
+    '<TextBlock Text="ft" VerticalAlignment="Center"/>'
+    '</StackPanel>'
+    '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
+    '<TextBlock Text="Total Existing Load At Existing Meter" Width="250" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_load" Width="90" Margin="0,0,6,0"'
+    ' ToolTip="Connected load of the existing appliances. Cannot be negative."/>'
+    '<TextBlock Text="MBH" VerticalAlignment="Center"/>'
+    '</StackPanel>' +
+    _hint('The existing pipe is checked for the existing plus new load and is '
+          'never resized.') +
+    '</StackPanel>'
+    '</Border>'
+    '</StackPanel>'
+)
 
 _GAS_BODY = (
-    _section('Pipe and table', 10) +
+    _GAS_SCOPE_XAML +
+
+    _section('Pipe and table') +
     '<TextBlock Text="Pipe material" Margin="0,0,0,3"/>'
     '<ComboBox x:Name="cb_material" Margin="0,0,0,8"/>'
     '<TextBlock Text="IFGC table" Margin="0,0,0,3"/>'
     '<ComboBox x:Name="cb_table"/>'
+    '<StackPanel Orientation="Horizontal" Margin="0,8,0,0">'
+    '<TextBlock Text="Heat content of gas" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_heat" Width="72" Margin="8,0,6,0"'
+    ' ToolTip="Get this value from the utility. Shall be greater than 0."/>'
+    '<TextBlock Text="BTU/CF" VerticalAlignment="Center"/>'
+    '</StackPanel>'
+    '<TextBlock x:Name="tb_heat_note" Style="{DynamicResource RjaHint}" FontSize="11"'
+    ' FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>' +
+    _hint('RJA standard: CFH = BTU/h / Heat Content of Gas. Get this value from the '
+          'utility. Default %g BTU/CF is Denver. Sea level is 1000 BTU/CF.'
+          % float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)) +
+    # Propane Table 402.4(37) is published in CFH (n=24/25, Colin
+    # 2026-11-20): its own heat content box, shown only when that table is
+    # picked above or downstream of a mid-stream PRV.
+    '<StackPanel x:Name="pnl_propane" Margin="0,8,0,0" Visibility="Collapsed">'
+    '<StackPanel Orientation="Horizontal">'
+    '<TextBlock Text="Propane heat content" VerticalAlignment="Center"/>'
+    '<TextBox x:Name="tb_propane_heat" Width="72" Margin="8,0,6,0"'
+    ' ToolTip="Get this value from the propane supplier. Shall be between %g and %g BTU/CF."/>'
+    '<TextBlock Text="BTU/CF" VerticalAlignment="Center"/>'
+    '</StackPanel>' % (HEAT_CONTENT_MIN_BTU_PER_CF, HEAT_CONTENT_MAX_BTU_PER_CF) +
+    _hint('Table 402.4(37) is undiluted propane published in CFH. CFH = BTU/h / '
+          'propane heat content. Default %g BTU/CF; get the value from the '
+          'propane supplier.' % default_propane_heat_content()) +
+    '</StackPanel>' +
     '<CheckBox x:Name="cb_prv" Content="Mid Stream PRV" Margin="0,10,0,0"'
     ' Visibility="Collapsed"'
     ' ToolTip="Tick when a pressure regulating valve steps the pressure down part way along the piping."/>'
@@ -894,21 +1044,31 @@ _GAS_BODY = (
     '</StackPanel>'
     '</Border>' +
 
-    _section('Gas') +
-    '<StackPanel Orientation="Horizontal">'
-    '<TextBlock Text="Heat content of gas" VerticalAlignment="Center"/>'
-    '<TextBox x:Name="tb_heat" Width="72" Margin="8,0,6,0"'
-    ' ToolTip="Get this value from the utility. Shall be greater than 0."/>'
-    '<TextBlock Text="BTU/CF" VerticalAlignment="Center"/>'
-    '</StackPanel>'
-    '<TextBlock x:Name="tb_heat_note" Style="{DynamicResource RjaHint}" FontSize="11"'
-    ' FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>' +
-    _hint('RJA standard: CFH = BTU/h / Heat Content of Gas. Get this value from the '
-          'utility. Default %g BTU/CF is Denver. Sea level is 1000 BTU/CF.'
-          % float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF)) +
+    # Outputs, One-Line only (Colin, 2026-11-20): shown by _gas_picker in
+    # "oneline" mode, collapsed for Size Gas
+    '<StackPanel x:Name="pnl_outputs" Visibility="Collapsed">' +
+    _section('Outputs') +
+    '<CheckBox x:Name="cb_breakdown" Content="Developed Length Breakdown"'
+    ' IsChecked="False"'
+    ' ToolTip="Prints the longest run in the console and draws it as a table under the diagram: the pipe segments, total pipe length, elbows, tees and the developed length."/>' +
+    _hint('Longest run pipe lengths, elbows and tees. Drawn under the '
+          'diagram and printed in the console.', margin='20,0,0,6') +
+    '</StackPanel>' +
 
     _BASIS_XAML
 )
+
+
+# Appended to the gas Calculation basis rows (Size Gas and One-Line).
+_EXISTING_BASIS_ROWS = [
+    ("Longest run",
+     "Longest Run Method, IFGC Appendix A (A103.1). L = developed length "
+     "from the meter to the farthest outlet (+ the entered existing length "
+     "with Connect into Existing). Every pipe is read on the Table 402.4 row "
+     "at L, the next longer row when L falls between rows. Each pipe's load "
+     "= sum of the appliance MBH downstream of it. Pipe size = smallest size "
+     "whose capacity at L covers that load."),
+]
 
 
 def heat_content_note(table_id):
@@ -917,49 +1077,62 @@ def heat_content_note(table_id):
     Propane Tables 402.4(25) to (36) publish capacity in MBH, so the sizer
     compares the MBH load directly and heat content is not used there
     (Colin, 2026-11-04). The box is greyed out and this note says why.
+    Propane Table 402.4(37) is published in CFH but takes the propane heat
+    content box instead (n=24/25), so the natural gas box is greyed there
+    too. With a mid-stream PRV use gas_heat_boxes(), which reads both tables.
     """
+    return gas_heat_boxes(table_id)[0]
+
+
+def existing_pipe_sizes(table_id):
+    """Nominal sizes offered for the existing pipe: the sizes of the selected
+    IFGC table, smallest first, or [] when the table cannot be read."""
     if not table_id:
-        return ""
+        return []
     try:
-        if gas_tables.table_units(table_id) == "MBH":
-            return "Not used: Table {} is published in MBH.".format(table_id)
+        return gas_tables.list_pipe_sizes(table_id)
     except ValueError:
-        return ""
-    return ""
+        return []
 
 
 def show_gas_picker(title, prv_option, use_theme=True):
-    """Themed pipe material / IFGC table dialog for Size Gas.
+    """Themed scope / pipe material / IFGC table dialog for Size Gas.
 
     Same return value as ui_helpers._show_picker: a dict with
-    "pipe_material", "table_label", "heat_content", "mid_stream_prv" and
-    "downstream_table_label", or None if cancelled.
+    "pipe_material", "table_label", "heat_content", "mid_stream_prv",
+    "downstream_table_label" and "existing" (None for New Construction, else
+    {"size_nominal", "length_ft", "load_mbh"}), or None if cancelled. Also
+    "propane_heat_content_btu_per_cf": the propane heat content entered
+    when Table 402.4(37) is picked above or after the PRV, else the default
+    (not used by the sizer then). "heat_content" is likewise the default
+    when the natural gas box is greyed out and its text is not usable.
     """
     return _gas_picker(title, "size" if prv_option else "plain", use_theme)
 
 
 def show_oneline_picker(title, use_theme=True):
     """Themed One-Line dialog (Plan B: a tool gets its own dialog). The
-    material, table, heat content and Mid Stream PRV choice shall be the
-    ones Size Gas ran on, so the gate's size check matches. Shown BEFORE the
-    pick, like Size Gas (Colin, 2026-11-18), so it carries the same Mid
-    Stream PRV tick box. Same return value as show_gas_picker."""
+    scope, material, table, heat content and Mid Stream PRV choice shall be
+    the ones Size Gas ran on, so the gate's size check matches. Shown BEFORE
+    the pick, like Size Gas (Colin, 2026-11-18), so it carries the same
+    Scope and Mid Stream PRV tick box. Same return value as
+    show_gas_picker."""
     return _gas_picker(title, "oneline", use_theme)
 
 
 def _gas_picker(title, mode, use_theme):
-    """The gas table dialog. mode: "size" (Size Gas, Mid Stream PRV tick
-    box), "plain" (no PRV), "oneline" (One-Line heading and basis, the same
-    Mid Stream PRV tick box)."""
+    """The gas dialog. mode: "size" (Size Gas, Scope and Mid Stream PRV tick
+    box), "plain" (no Scope, no PRV), "oneline" (One-Line heading and basis,
+    the same Scope and Mid Stream PRV tick box)."""
     from System.Windows import Visibility
 
     oneline = mode == "oneline"
     prv_option = mode in ("size", "oneline")
-    downstream_needed = False
+    scope_option = mode in ("size", "oneline")
     if oneline:
         heading = 'Gas One-Line'
         purpose = ('Draws the gas piping one-line diagram on a drafting view '
-                   'from the sizes Size Gas wrote. Pick the table, heat '
+                   'from the sizes Size Gas wrote. Pick the scope, table, heat '
                    'content and Mid Stream PRV setting Size Gas ran on.')
     elif prv_option:
         heading = 'Size Gas'
@@ -971,6 +1144,13 @@ def _gas_picker(title, mode, use_theme):
                    'with the pipe sizes already in the model.')
     win = _build_window(title, heading, purpose, _GAS_BODY, use_theme)
 
+    pnl_scope = _named(win, 'pnl_scope')
+    rb_scope_new = _named(win, 'rb_scope_new')
+    rb_scope_existing = _named(win, 'rb_scope_existing')
+    pnl_scope_opts = _named(win, 'pnl_scope_opts')
+    cb_size = _named(win, 'cb_size')
+    tb_length = _named(win, 'tb_length')
+    tb_load = _named(win, 'tb_load')
     cb_material = _named(win, 'cb_material')
     cb_table = _named(win, 'cb_table')
     cb_prv = _named(win, 'cb_prv')
@@ -978,6 +1158,15 @@ def _gas_picker(title, mode, use_theme):
     cb_downstream = _named(win, 'cb_downstream')
     tb_heat = _named(win, 'tb_heat')
     tb_heat_note = _named(win, 'tb_heat_note')
+    pnl_propane = _named(win, 'pnl_propane')
+    tb_propane_heat = _named(win, 'tb_propane_heat')
+    pnl_outputs = _named(win, 'pnl_outputs')
+    cb_breakdown = _named(win, 'cb_breakdown')
+
+    if not scope_option:
+        pnl_scope.Visibility = Visibility.Collapsed
+    if oneline:
+        pnl_outputs.Visibility = Visibility.Visible
 
     materials = gas_tables.get_material_labels()
     for m in materials:
@@ -1015,6 +1204,21 @@ def _gas_picker(title, mode, use_theme):
         if cb_downstream.Items.Count > 0:
             cb_downstream.SelectedIndex = pick
 
+    def populate_sizes():
+        """The existing pipe sizes follow the table above. No size is
+        preselected (Colin, 2026-11-20); a size already chosen is kept when
+        the new table lists it."""
+        chosen = cb_size.SelectedItem
+        cb_size.Items.Clear()
+        up = upstream_option()
+        keep = -1
+        for i, size in enumerate(existing_pipe_sizes(
+                up["table_id"] if up else None)):
+            cb_size.Items.Add(size)
+            if chosen is not None and size == chosen:
+                keep = i
+        cb_size.SelectedIndex = keep
+
     def populate_table(material):
         cb_table.Items.Clear()
         for lbl in gas_tables.get_table_option_labels_for_material(material):
@@ -1022,25 +1226,43 @@ def _gas_picker(title, mode, use_theme):
         if cb_table.Items.Count > 0:
             cb_table.SelectedIndex = 0
 
-    def update_heat_box():
-        """Grey the heat content box on an MBH (propane) table."""
+    def table_ids():
+        """(table above, table after the PRV or None). The downstream table
+        counts only while Mid Stream PRV is ticked."""
         up = upstream_option()
-        note = heat_content_note(up["table_id"] if up else None)
+        up_id = up["table_id"] if up else None
+        down_id = None
+        if (up is not None and prv_option and bool(cb_prv.IsChecked) and
+                cb_downstream.SelectedItem is not None):
+            try:
+                down_id = gas_tables.get_table_option_by_material_and_short_label(
+                    up["material"], cb_downstream.SelectedItem)["table_id"]
+            except ValueError:
+                down_id = None
+        return up_id, down_id
+
+    def update_heat_box():
+        """Grey the natural gas box when no natural gas CFH table is
+        picked, and show the propane box when 402.4(37) is (n=24/25)."""
+        note, propane_used = gas_heat_boxes(*table_ids())
         tb_heat.IsEnabled = not note
+        if note:
+            ui_helpers.rja_clear_error(tb_heat)
         tb_heat_note.Text = note
         tb_heat_note.Visibility = (Visibility.Visible if note
                                    else Visibility.Collapsed)
+        pnl_propane.Visibility = (Visibility.Visible if propane_used
+                                  else Visibility.Collapsed)
 
     populate_table(materials[0])
     tb_heat.Text = "{:.0f}".format(
         float(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+    tb_propane_heat.Text = "{:.0f}".format(default_propane_heat_content())
     update_heat_box()
+    populate_sizes()
 
     if prv_option:
         cb_prv.Visibility = Visibility.Visible
-        populate_downstream()
-    if downstream_needed:
-        pnl_prv.Visibility = Visibility.Visible
         populate_downstream()
 
     def on_material_changed(sender, args):
@@ -1049,29 +1271,74 @@ def _gas_picker(title, mode, use_theme):
         update_heat_box()
 
     def on_table_changed(sender, args):
-        update_heat_box()
-        if prv_option or downstream_needed:
+        populate_sizes()
+        if prv_option:
             populate_downstream()
+        update_heat_box()
 
     def on_prv_toggled(sender, args):
         on = bool(cb_prv.IsChecked)
         pnl_prv.Visibility = Visibility.Visible if on else Visibility.Collapsed
+        update_heat_box()
+
+    def on_downstream_changed(sender, args):
+        update_heat_box()
+
+    def on_scope_changed(sender, args):
+        """Scope options sit under Connect into Existing, the only scope
+        that has any, and are always live there."""
+        on = bool(rb_scope_existing.IsChecked)
+        pnl_scope_opts.Visibility = (Visibility.Visible if on
+                                     else Visibility.Collapsed)
 
     cb_material.SelectionChanged += on_material_changed
     cb_table.SelectionChanged += on_table_changed
     cb_prv.Checked += on_prv_toggled
     cb_prv.Unchecked += on_prv_toggled
+    cb_downstream.SelectionChanged += on_downstream_changed
+    for rb in (rb_scope_new, rb_scope_existing):
+        rb.Checked += on_scope_changed
+        rb.Unchecked += on_scope_changed
+    on_scope_changed(None, None)
 
-    _fill_basis(win, sizing_engine.oneline_basis_rows() if oneline
-                else sizing_engine.basis_of_design_rows())
+    basis = (sizing_engine.oneline_basis_rows() if oneline
+             else sizing_engine.basis_of_design_rows())
+    if scope_option:
+        basis = basis + _EXISTING_BASIS_ROWS
+    _fill_basis(win, basis)
+
+    def on_size_changed(sender, args):
+        ui_helpers.rja_clear_error(cb_size)
+
+    cb_size.SelectionChanged += on_size_changed
 
     def collect(errors):
-        heat_content = _number(tb_heat, 'Heat content of gas', errors)
+        ui_helpers.rja_clear_error(cb_size)
+        existing = None
+        if scope_option and bool(rb_scope_existing.IsChecked):
+            if cb_size.SelectedItem is None:
+                errors.append((cb_size, 'Pick the existing pipe size at the '
+                                        'connection.'))
+            length = _number(tb_length, 'Length, meter to new connection',
+                             errors, kind='nonneg')
+            load = _number(tb_load, 'Total Existing Load At Existing Meter', errors,
+                           kind='nonneg')
+            existing = {
+                "size_nominal": cb_size.SelectedItem,
+                "length_ft":    length,
+                "load_mbh":     load,
+            }
+        # n=24/25, 34, 39, 40: only the boxes in use are validated, in the
+        # 500 to 3000 BTU/CF range; a greyed or hidden box is never checked.
+        heat_content, propane_heat, heat_problems = gas_heat_contents(
+            tb_heat.Text, tb_propane_heat.Text, *table_ids())
+        for key, message in heat_problems:
+            errors.append((tb_heat if key == 'natural' else tb_propane_heat,
+                           message))
         if not cb_material.SelectedItem or not cb_table.SelectedItem:
             errors.append((None, 'Pick a pipe material and an IFGC table.'))
 
-        use_prv = (bool(cb_prv.IsChecked) if prv_option
-                   else downstream_needed)
+        use_prv = bool(cb_prv.IsChecked) if prv_option else False
         downstream_label = None
         if use_prv:
             up = upstream_option()
@@ -1092,120 +1359,16 @@ def _gas_picker(title, mode, use_theme):
             "pipe_material":          cb_material.SelectedItem,
             "table_label":            cb_table.SelectedItem,
             "heat_content":           heat_content,
+            "propane_heat_content_btu_per_cf": propane_heat,
             "mid_stream_prv":         use_prv,
             "downstream_table_label": downstream_label,
+            "existing":               existing,
+            "developed_length_breakdown": (bool(cb_breakdown.IsChecked)
+                                           if oneline else False),
         }
 
-    return _run(win, [tb_heat], collect)
+    return _run(win, [tb_length, tb_load, tb_heat, tb_propane_heat], collect)
 
-
-# ---------------------------------------------------------------------------
-# Size Gas and One-Line: existing conditions at a new connection
-# ---------------------------------------------------------------------------
-
-_EXISTING_BODY = (
-    '<CheckBox x:Name="cb_connect" IsChecked="False"'
-    ' Content="Connect into Existing" FontWeight="SemiBold" Margin="0,10,0,0"/>' +
-    _hint('Unticked: full new construction, with a new meter. The picked pipe '
-          'starts the system. Tick to enter the existing gas piping.',
-          '20,2,0,0') +
-    _section('Existing gas piping') +
-    '<TextBlock Text="Existing pipe size at the connection" Margin="0,0,0,3"/>'
-    '<ComboBox x:Name="cb_size" Margin="0,0,0,8"/>'
-    '<StackPanel Orientation="Horizontal">'
-    '<TextBlock Text="Length, meter to new connection" Width="190" VerticalAlignment="Center"/>'
-    '<TextBox x:Name="tb_length" Width="72" Margin="0,0,6,0"'
-    ' ToolTip="Developed length of the existing pipe from the meter to the new connection. Cannot be negative."/>'
-    '<TextBlock Text="ft" VerticalAlignment="Center"/>'
-    '</StackPanel>'
-    '<StackPanel Orientation="Horizontal" Margin="0,6,0,0">'
-    '<TextBlock Text="Total existing load" Width="190" VerticalAlignment="Center"/>'
-    '<TextBox x:Name="tb_load" Width="72" Margin="0,0,6,0"'
-    ' ToolTip="Connected load of the existing appliances. Cannot be negative."/>'
-    '<TextBlock Text="MBH" VerticalAlignment="Center"/>'
-    '</StackPanel>' +
-
-    _BASIS_XAML
-)
-
-_EXISTING_BASIS_ROWS = [
-    ("New construction",
-     "Connect into Existing unticked (default): full new construction with a "
-     "new meter. The picked pipe is the start of the system. There is no "
-     "existing pipe, length or load, the longest run starts at the picked "
-     "pipe, and no existing pipe is checked. The fields above are not used."),
-    ("Connect into Existing",
-     "Ticked: the picked pipe connects to existing gas piping, assumed not "
-     "modeled. The rows below apply."),
-    ("Existing pipe",
-     "Checked, never resized. It passes if its table capacity covers the "
-     "existing load plus the new load. A shortfall is a warning."),
-    ("Developed length",
-     "The entered length is added to the new longest run. That total picks "
-     "the table row for the check and for every new pipe."),
-    ("Longest run",
-     "The new piping is assumed to be the longest run in the system. The "
-     "engineer shall verify that existing appliances farther from the meter "
-     "still receive adequate gas."),
-]
-
-
-def show_existing_gas_dialog(title, pipe_sizes, defaults=None, use_theme=True):
-    """Themed Existing Conditions box. Same arguments and return value as
-    ui_helpers.show_existing_gas_dialog."""
-    win = _build_window(
-        title, 'Existing Conditions',
-        'The existing gas piping from the meter to the new connection.',
-        _EXISTING_BODY, use_theme, width=520)
-
-    cb_size = _named(win, 'cb_size')
-    tb_length = _named(win, 'tb_length')
-    tb_load = _named(win, 'tb_load')
-
-    defaults = defaults or {}
-    pick = 0
-    for i, size in enumerate(pipe_sizes):
-        cb_size.Items.Add(size)
-        if size == defaults.get("size_nominal"):
-            pick = i
-    if cb_size.Items.Count > 0:
-        cb_size.SelectedIndex = pick
-    if defaults.get("length_ft") is not None:
-        tb_length.Text = "{:g}".format(float(defaults["length_ft"]))
-    if defaults.get("load_mbh") is not None:
-        tb_load.Text = "{:g}".format(float(defaults["load_mbh"]))
-
-    _fill_basis(win, _EXISTING_BASIS_ROWS)
-
-    cb_connect = _named(win, 'cb_connect')
-
-    def on_new_toggled(sender, args):
-        on = bool(cb_connect.IsChecked)
-        cb_size.IsEnabled = on
-        tb_length.IsEnabled = on
-        tb_load.IsEnabled = on
-
-    cb_connect.Checked += on_new_toggled
-    cb_connect.Unchecked += on_new_toggled
-    on_new_toggled(None, None)
-
-    def collect(errors):
-        if not bool(cb_connect.IsChecked):
-            return {"new_construction": True}
-        length = _number(tb_length, 'Length', errors, kind='nonneg')
-        load = _number(tb_load, 'Total existing load', errors, kind='nonneg')
-        if cb_size.SelectedItem is None:
-            errors.append((None, 'Pick the existing pipe size.'))
-        if errors:
-            return None
-        return {
-            "size_nominal": cb_size.SelectedItem,
-            "length_ft":    length,
-            "load_mbh":     load,
-            "new_construction": False,
-        }
-
-    return _run(win, [tb_length, tb_load], collect)
 
 
 # ---------------------------------------------------------------------------

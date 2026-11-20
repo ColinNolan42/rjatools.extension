@@ -71,6 +71,15 @@ class LabelsSumToTotal(unittest.TestCase):
             S.balanced_feet([26.17, 13.44, 35.60, 22.56, 26.50], 124),
             [26, 13, 36, 23, 26])
 
+    def test_one_foot_bump_taken_from_largest(self):
+        # review n48: the bump of a 0.2 ft stub to 1 ft used to add a foot
+        self.assertEqual(S.balanced_feet([0.2, 10.2], 10), [1, 9])
+        self.assertEqual(S.balanced_feet([0.3, 0.3, 10.1], 11), [1, 1, 9])
+        for lengths in ([0.2, 10.2], [0.3, 0.3, 10.1], [0.1, 5.4, 7.4, 0.2]):
+            import gas_labels
+            target = gas_labels.feet(sum(lengths))
+            self.assertEqual(sum(S.balanced_feet(lengths, target)), target)
+
     def test_small_and_tie(self):
         self.assertEqual(S.balanced_feet([0.3, 10.2], 11), [1, 10])
         self.assertEqual(S.balanced_feet([2.5, 2.5], 5), [3, 2])
@@ -96,6 +105,45 @@ class LabelsSumToTotal(unittest.TestCase):
 
     def test_g3c_manifold(self):
         self._check(_load("oneline_g3c_manifold.json"))
+
+    # item I (2026-11-20): the target is the notes number,
+    # feet(snap["longest_run_ft"]), not the rounded trunk sum
+    def test_target_is_the_notes_total(self):
+        import copy
+        import gas_labels
+        snap = copy.deepcopy(G3C)
+        trunk = sum(x["length_ft"] for x in S.trunk_segments(S.build(snap)))
+        snap["longest_run_ft"] = trunk + 1.4     # notes say a foot more
+        sch = S.build(snap)
+        labels = [self._label_ft(x) for x in S.trunk_segments(sch)]
+        self.assertEqual(sum(labels), gas_labels.feet(snap["longest_run_ft"]))
+        self.assertNotEqual(sum(labels), gas_labels.feet(trunk))
+        self.assertEqual(sch["warnings"], [])
+
+    def test_tie_in_existing_length_counted_on_both_sides(self):
+        import copy
+        import gas_labels
+        snap = copy.deepcopy(G3C)
+        trunk = sum(x["length_ft"] for x in S.trunk_segments(S.build(snap)))
+        # apply_existing_conditions adds the existing length to the run the
+        # notes print; the existing run is one of the balanced labels
+        snap["existing"] = {"size_nominal": "2", "length_ft": 40.4,
+                            "load_mbh": 100.0}
+        snap["longest_run_ft"] = trunk + 40.4
+        sch = S.build(snap)
+        labels = [self._label_ft(x) for x in S.trunk_segments(sch)]
+        labels.append(sch["existing"]["label_ft"])
+        self.assertEqual(sum(labels), gas_labels.feet(snap["longest_run_ft"]))
+        self.assertEqual(sch["warnings"], [])
+
+    def test_unreachable_target_warns(self):
+        import copy
+        snap = copy.deepcopy(G3C)
+        n = len(S.trunk_segments(S.build(snap)))
+        snap["longest_run_ft"] = float(n - 1)    # every label is at least 1
+        sch = S.build(snap)
+        self.assertEqual(len(sch["warnings"]), 1)
+        self.assertIn("TOTAL DEVELOPED LENGTH", sch["warnings"][0])
 
 
 class G3CLabels(unittest.TestCase):
@@ -393,13 +441,203 @@ class Synthetic(unittest.TestCase):
         seg = sch["segments"][sch["root"]["segments"][0]]
         self.assertEqual([v["kind"] for v in seg["valves"]], ["ansul"])
 
+    # --- review n16: existing = not the project's last phase ----------------
+    def _phased(self):
+        s = _snap([(1, "meter", [0, 0, 0], {"phase": "Existing"}),
+                   (2, "fixture", [20, 0, 0], {"name": "RTU-1", "load_mbh": 100.0})],
+                  [(10, 1, 2, 20.0, "1", 100.0)])
+        s["origin_phase"] = "Existing"
+        s["edges"]["10"]["phase"] = "New Construction"
+        return s
+
+    def test_existing_meter_new_pipe_is_new(self):
+        s = self._phased()
+        s["edges"]["10"]["is_new"] = True
+        seg = S.build(s)["segments"]["S1"]
+        self.assertFalse(seg["is_existing"])
+
+    def test_existing_phase_pipe_is_existing(self):
+        s = self._phased()
+        s["edges"]["10"]["is_new"] = False
+        s["origin_phase"] = "New Construction"     # meter phase is ignored
+        seg = S.build(s)["segments"]["S1"]
+        self.assertTrue(seg["is_existing"])
+
+    # --- review n2: label shows Size Gas's name when the diameter matches ---
+    def test_csst_label_uses_required_name(self):
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [20, 0, 0], {"name": "WH-1", "load_mbh": 50.0})],
+                  [(10, 1, 2, 20.0, "EHD-23", 50.0)])
+        e = s["edges"]["10"]
+        e["required_size"], e["diameter_in"] = "EHD-25", 0.75
+        self.assertEqual(S.build(s)["segments"]["S1"]["size"], "EHD-25")
+        e["is_new"] = False                         # existing: as modeled
+        self.assertEqual(S.build(s)["segments"]["S1"]["size"], "EHD-23")
+
+    # --- review n47: an elbow straight into a tee sets the incoming way -----
+    def test_elbow_into_tee_run_direction(self):
+        # pipe north 20 ft into elbow 3, which turns east into tee 4 0.3 ft
+        # away; the true run is east (fixture 5), the branch north (6)
+        s = _snap([(1, "meter", [0, -20, 0]),
+                   (3, "fitting", [0, 0, 0], {"is_elbow": True}),
+                   (4, "tee", [0.3, 0, 0]),
+                   (5, "fixture", [10.3, 0, 0], {"name": "RUN", "load_mbh": 50.0}),
+                   (6, "fixture", [0.3, 4, 0], {"name": "BR", "load_mbh": 50.0})],
+                  [(10, 1, 3, 20.0, "1", 100.0),
+                   (11, 4, 5, 10.0, "3/4", 50.0), (12, 4, 6, 4.0, "3/4", 50.0)],
+                  children={"3": [4]})
+        sch = S.build(s)
+        j = sch["root"]["end"]
+        self.assertEqual(j["type"], "junction")
+        self.assertEqual(j["run"]["end"]["name"], "RUN")
+        self.assertEqual([t["end"]["name"] for t in j["taps"]], ["BR"])
+
+    # --- pipe_graph joints (2026-11-20): no element, maybe no location ---
+    def test_joint_mid_run_passes_through(self):
+        s = _snap([(1, "meter", [0, 0, 0]), (10, "joint", None),
+                   (3, "fixture", [30, 0, 0], {"name": "RTU-1", "load_mbh": 90.0})],
+                  [(10, 1, 10, 12.0, "1", 90.0), (11, 10, 3, 18.0, "1", 90.0)])
+        s["longest_path"] = [1, 10, 10, 11, 3]
+        sch = S.build(s)
+        self.assertEqual(sch["warnings"], [])
+        segs = [sch["segments"][x] for x in sch["root"]["segments"]]
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0]["eids"], [10, 11])
+        self.assertAlmostEqual(segs[0]["length_ft"], 30.0)   # no equivalent
+        self.assertEqual(sch["root"]["end"]["name"], "RTU-1")
+
+    def test_tapped_joint_without_location_is_a_junction(self):
+        s = _snap([(1, "meter", [0, 0, 0]), (10, "joint", None),
+                   (3, "fixture", [30, 0, 0], {"name": "A", "load_mbh": 50.0}),
+                   (4, "fixture", [12, 9, 0], {"name": "B", "load_mbh": 40.0})],
+                  [(10, 1, 10, 12.0, "1", 90.0), (11, 10, 3, 18.0, "1", 50.0),
+                   (12, 10, 4, 9.0, "3/4", 40.0)])
+        sch = S.build(s)
+        j = sch["root"]["end"]
+        self.assertEqual(j["type"], "junction")
+        self.assertEqual(j["run"]["end"]["name"], "A")       # longest leg
+        self.assertEqual(sch["segments"][sch["root"]["segments"][0]]["tees"], 0)
+
     def test_unnamed_zero_cap_label(self):
         s = _snap([(1, "meter", [0, 0, 0]), (2, "fixture", [10, 0, 0])],
                   [(10, 1, 2, 10.0, "1", 0.0)])
         end = S.build(s)["root"]["end"]
         self.assertEqual(end["kind"], "cap")
-        self.assertEqual(end["label"], ["FUTURE CONNECTION"])
+        self.assertEqual(end["label"], ["FUTURE", "0 MBH"])   # Colin 2026-11-20
         self.assertFalse(end["equipment_prv"])
+
+
+class DevelopedBreakdown(unittest.TestCase):
+    """The Developed Length Breakdown rows (Colin, 2026-11-20): segment pipe
+    lengths, total pipe, elbows x 5, tees x 3, developed length; every figure
+    adds exactly and the whole feet agree with the notes block."""
+
+    def _bd(self, snap):
+        sch = S.build(snap)
+        return sch, S.developed_breakdown(sch, snap["longest_run_ft"])
+
+    def _check_sums(self, bd, snap):
+        import gas_labels
+        pipe10 = sum(s["tenths"] for s in bd["segments"])
+        self.assertEqual(pipe10, int(round(bd["total_pipe_ft"] * 10)))
+        dev10 = pipe10 + int(round((bd["elbow_ft"] + bd["tee_ft"]) * 10))
+        self.assertEqual(dev10, int(round(bd["developed_ft"] * 10)))
+        self.assertEqual(bd["elbow_ft"], bd["elbows"] * 5.0)
+        self.assertEqual(bd["tee_ft"], bd["tees"] * 3.0)
+        self.assertEqual(bd["developed_whole"],
+                         gas_labels.feet(snap["longest_run_ft"]))
+        self.assertFalse(bd["mismatch"])
+
+    def test_bench_fixtures_add_exactly(self):
+        for snap in (G3C, G2):
+            sch, bd = self._bd(snap)
+            self._check_sums(bd, snap)
+            # one row per trunk segment, in order from the meter
+            self.assertEqual(len(bd["segments"]), len(S.trunk_segments(sch)))
+            self.assertTrue(bd["segments"][0]["item"].startswith("METER TO "))
+
+    def test_g3c_numbers(self):
+        sch, bd = self._bd(G3C)
+        self.assertEqual(bd["elbows"], 5)
+        self.assertEqual(bd["tees"], 4)
+        self.assertEqual(bd["farthest"], "RTU-1")
+        self.assertEqual(bd["developed_whole"], 124)
+        self.assertEqual([r["length"] for r in bd["summary"]],
+                         ["87.3'", "25.0'", "12.0'", "124.3' (124')"])
+        self.assertEqual([r["qty"] for r in bd["summary"]],
+                         ["", "5", "4", ""])
+        self.assertEqual([r["each"] for r in bd["summary"]],
+                         ["", "5'", "3'", ""])
+
+    def test_rows_are_named_from_and_to_with_size(self):
+        sch, bd = self._bd(G3C)
+        items = [s["item"] for s in bd["segments"]]
+        self.assertEqual(items[0], 'METER TO TEE 1, 3"G')
+        self.assertEqual(items[1], 'TEE 1 TO TEE 2, 3"G')
+        self.assertEqual(items[-1], 'TEE 4 TO RTU-1, 1-1/4"G')
+
+    def test_rounding_holds_the_tenth_below_when_notes_block_reads_lower(self):
+        # one pipe of 124.46 ft: plain tenths read 124.5, the notes block
+        # (gas_labels.feet) reads 124, so the table shows 124.4
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [124, 0, 0], {"name": "RTU-1",
+                                                "load_mbh": 100.0})],
+                  [(10, 1, 2, 124.46, "1", 100.0)], run=124.46)
+        s["longest_path"] = [1, 10, 2]
+        sch, bd = self._bd(s)
+        self.assertEqual(bd["summary"][-1]["length"], "124.4' (124')")
+        self.assertEqual(bd["segments"][0]["pipe_text"], "124.4'")
+        self._check_sums(bd, s)
+
+    def test_rounding_without_hold_back(self):
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [124, 0, 0], {"name": "RTU-1",
+                                                "load_mbh": 100.0})],
+                  [(10, 1, 2, 124.54, "1", 100.0)], run=124.54)
+        s["longest_path"] = [1, 10, 2]
+        sch, bd = self._bd(s)
+        self.assertEqual(bd["summary"][-1]["length"], "124.5' (125')")
+        self._check_sums(bd, s)
+
+    def test_tie_in_has_its_own_existing_row(self):
+        s = _snap([(1, "meter", [0, 0, 0]),
+                   (2, "fixture", [20, 0, 0], {"name": "RTU-1",
+                                              "load_mbh": 100.0})],
+                  [(10, 1, 2, 19.7, "1", 100.0)], run=49.7)
+        s["longest_path"] = [1, 10, 2]
+        s["existing"] = {"size_nominal": "2", "length_ft": 30.0,
+                         "load_mbh": 400.0}
+        sch, bd = self._bd(s)
+        first = bd["segments"][0]
+        self.assertEqual(first["item"],
+                         'METER TO NEW CONNECTION, EXISTING, 2"G')
+        self.assertEqual(first["pipe_text"], "30.0'")
+        self.assertEqual(bd["segments"][1]["item"],
+                         'NEW CONNECTION TO RTU-1, 1"G')
+        self.assertEqual(bd["summary"][0]["length"], "49.7'")
+        self._check_sums(bd, s)
+
+    def test_zero_length_stays_zero_and_ties_go_to_the_earlier(self):
+        self.assertEqual(S._tenths_split([0.0, 5.0], 50), [0, 50])
+        # 0.05 + 0.05 + 0.05 = 0.15 -> 2 tenths: earlier two take the extra
+        self.assertEqual(S._tenths_split([0.05, 0.05, 0.05], 2), [1, 1, 0])
+        self.assertEqual(sum(S._tenths_split([1.26, 2.26, 3.28], 68)), 68)
+
+    def test_table_rows_and_no_dashes(self):
+        sch, bd = self._bd(G3C)
+        headers, rows = S.breakdown_table(bd)
+        self.assertEqual(headers, ["ITEM", "QTY", "EQUIV EACH", "LENGTH"])
+        self.assertEqual(len(rows), len(bd["segments"]) + 4)
+        self.assertEqual(rows[-1][0], "DEVELOPED LENGTH")
+        for row in rows:
+            for cell in row:
+                self.assertNotIn(" - ", cell)
+                self.assertNotIn(chr(0x2014), cell)
+
+    def test_mismatch_is_flagged(self):
+        sch = S.build(G3C)
+        bd = S.developed_breakdown(sch, G3C["longest_run_ft"] + 3.0)
+        self.assertTrue(bd["mismatch"])
 
 
 if __name__ == "__main__":

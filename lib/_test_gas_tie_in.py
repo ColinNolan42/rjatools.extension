@@ -3,7 +3,7 @@
 
 Runs in plain CPython on synthetic graphs. Covers the existing length joining
 the developed length, the effect on the sizes, and the existing pipe check.
-It does NOT test the pick, the Existing Conditions box, the phase and cap
+It does NOT test the pick, the gas dialog Scope, the phase and cap
 read against a real model, or the One-Line drawing. Those need a live Revit
 run.
 
@@ -289,7 +289,7 @@ class TestRememberedBetweenTools(unittest.TestCase):
 
 
 class TestNewConstruction(unittest.TestCase):
-    """The New Construction tick in the Existing Conditions box."""
+    """New Construction vs Connect into Existing (the gas dialog Scope)."""
 
     TICKED = {"new_construction": True}
     UNTICKED = {"size_nominal": "2", "length_ft": 40.0, "load_mbh": 640.0,
@@ -318,6 +318,22 @@ class TestNewConstruction(unittest.TestCase):
         text = tie_in.existing_inputs_text(self.UNTICKED)
         self.assertIn('2" pipe, 40.0 ft', text)
         self.assertIn("640.0 MBH existing load", text)
+
+    def test_existing_from_the_dialog_scope(self):
+        # New Construction (dialog "existing" None) on a pipe pick
+        self.assertEqual(tie_in.existing_from_scope(None),
+                         {"new_construction": True})
+        self.assertEqual(tie_in.existing_from_scope({}),
+                         {"new_construction": True})
+        # Connect into Existing: the entered values, not new construction
+        entered = {"size_nominal": "2", "length_ft": 40.0, "load_mbh": 640.0}
+        got = tie_in.existing_from_scope(entered)
+        self.assertEqual(got, self.UNTICKED)
+        self.assertFalse(tie_in.is_new_construction(got))
+        self.assertIs(tie_in.existing_for_sizing(got), got)
+        self.assertNotIn("new_construction", entered)   # a copy
+        self.assertIsNone(tie_in.existing_for_sizing(
+            tie_in.existing_from_scope(None)))
 
     def test_nothing_is_remembered_by_the_helpers(self):
         tie_in.existing_for_sizing(self.TICKED)

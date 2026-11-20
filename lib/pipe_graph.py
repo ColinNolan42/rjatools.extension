@@ -41,10 +41,11 @@ class NetworkNode(object):
         self.fixture_name       = ""
         self.is_gas_fixture     = False
 
-        # Elbow detection  -  True if family name contains "elbow", any case
-        # (F3: a family named "ELBOW" or "elbow" was missed and lost its
-        # 5 ft). Used by _find_longest_run to add 5ft equivalent length.
-        self.is_elbow           = "elbow" in (self.family_name or "").lower()
+        # Elbow detection  -  the fitting's part type first, then the family
+        # name keywords, any case (F3; review n=56: "90 Ell" and "Pipe Bend"
+        # content lost its 5 ft). Used by _find_longest_run to add the 5 ft
+        # equivalent length.
+        self.is_elbow           = revit_helpers.is_elbow(element)
 
         # Transition (reducer): Revit places one where a resized tee meets a
         # smaller pipe. It adds no developed length of its own; the flag is
@@ -90,8 +91,12 @@ class NetworkEdge(object):
         self.length_feet        = revit_helpers.get_pipe_length_feet(pipe) or 0.0
         self.diameter_inches    = revit_helpers.get_pipe_diameter_inches(pipe) or 0.0
 
-        # Start and end XYZ captured for one-line diagram layout (Phase 2)
-        connectors = revit_helpers.get_connectors(pipe)
+        # Start and end XYZ captured for one-line diagram layout (Phase 2).
+        # The pipe's two END connectors: a tap adds a Curve connector along
+        # the pipe, which is not an end (review n=21). A connector whose type
+        # could not be read is kept, so older reads behave as before.
+        connectors = [c for c in revit_helpers.get_connectors(pipe)
+                      if c.get("connector_type") in (None, "End")]
         self.start_xyz = connectors[0]["origin_xyz"] if len(connectors) > 0 else None
         self.end_xyz   = connectors[1]["origin_xyz"] if len(connectors) > 1 else None
 
@@ -138,6 +143,17 @@ class NetworkGraph(object):
         self.non_gas_skipped    = []    # (element_id, classification) of each
                                         # pipe or element on a system that is
                                         # not gas, where the walk stopped (F1)
+        self.data_errors        = []    # dicts {"element_id", "name", "kind",
+                                        # "message"}: a gas fixture whose
+                                        # GAS_LOAD_MBH is 0, unreadable or
+                                        # negative. It carries no load and
+                                        # never ends a longest run (n=11, 57)
+        self.existing_appliances = []   # existing phase gas appliances a
+                                        # tie-in run reached on new piping;
+                                        # their load IS counted (n=26)
+        self.tapped_pipes       = []    # pipe ids carrying a tap (3+
+                                        # connectors in use); each branch
+                                        # is charged the whole pipe (n=21)
 
     def add_node(self, node):
         self.nodes[node.element_id] = node
@@ -237,8 +253,12 @@ def _start_at_new_pipe(graph, doc, pipe, upstream):
         return visited, queue
 
     far_id = downstream[0]
-    graph.add_edge(NetworkEdge(pipe_id, pipe, origin_id, far_id))
     far_element = _get_element(doc, far_id)
+    to_id = far_id
+    if far_element is not None and _is_pipe(far_element):
+        # Pipe joined straight to pipe (n=5): the edge ends at a joint node.
+        to_id = _add_joint(graph, pipe, pipe_id, [far_id])
+    graph.add_edge(NetworkEdge(pipe_id, pipe, origin_id, to_id))
     if far_element is not None:
         queue.append((far_element, pipe_id))
     else:
@@ -278,6 +298,29 @@ def _not_gas_classification(connector):
     return None
 
 
+def not_gas_system_name(name):
+    """None when a piping System Type name reads as gas, else the reason it
+    does not. A pipe counts as gas only when its System Type name contains
+    one of shared_params.GAS_SYSTEM_TYPE_KEYWORDS ("gas", "propane") or has
+    one of GAS_SYSTEM_TYPE_WORDS ("LP") as a whole word, any case (Colin,
+    2026-11-20, review n=55). Pure."""
+    if not name:
+        return "its piping System Type name could not be read"
+    lowered = name.lower()
+    if any(kw in lowered for kw in shared_params.GAS_SYSTEM_TYPE_KEYWORDS):
+        return None
+    words = "".join(ch if ch.isalnum() else " " for ch in lowered).split()
+    if any(w in shared_params.GAS_SYSTEM_TYPE_WORDS for w in words):
+        return None
+    return ("its piping System Type '{}' does not contain {} or the word "
+            "{}".format(
+                name,
+                " or ".join("'{}'".format(k)
+                            for k in shared_params.GAS_SYSTEM_TYPE_KEYWORDS),
+                " or ".join("'{}'".format(w.upper())
+                            for w in shared_params.GAS_SYSTEM_TYPE_WORDS)))
+
+
 def _record_non_gas(graph, element_id, classification):
     """Note where the walk stopped at a system that is not gas (F1), once
     per element."""
@@ -286,12 +329,145 @@ def _record_non_gas(graph, element_id, classification):
     graph.non_gas_skipped.append((element_id, classification))
 
 
+def parse_load_mbh(raw):
+    """GAS_LOAD_MBH as read, to (load_mbh, problem). Pure.
+
+    Double and Integer read as numbers. A Text parameter is parsed ("64.8",
+    "64.8 MBH"). Not set reads 0 with no problem (the zero load data error
+    is raised by the caller). A Yes/No, an unparseable text or a negative
+    value is a problem: load 0 and a sentence for the data error, never an
+    exception that stops the traversal (review n=57).
+    """
+    if raw is None:
+        return 0.0, None
+    if isinstance(raw, bool):
+        return 0.0, "GAS_LOAD_MBH is a Yes/No parameter, not a number"
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+    else:
+        text = str(raw).strip()
+        lowered = text.lower()
+        if lowered.endswith("mbh"):
+            text = text[:-3].strip()
+        try:
+            value = float(text.replace(",", ""))
+        except (TypeError, ValueError):
+            return 0.0, "GAS_LOAD_MBH text '{}' is not a number".format(raw)
+    if value != value or value in (float("inf"), float("-inf")):
+        return 0.0, "GAS_LOAD_MBH '{}' is not a number".format(raw)
+    if value < 0.0:
+        return 0.0, "GAS_LOAD_MBH {} is negative".format(value)
+    return value, None
+
+
+def _record_data_error(graph, node, kind, message):
+    """A gas fixture whose load cannot be used (n=11, n=57). Colin's rule:
+    a 0 MBH fixture is a data error; it is skipped from sizing (it carries no
+    load) and from the longest run (it never ends a path)."""
+    graph.data_errors.append({"element_id": node.element_id,
+                              "name": node.fixture_name,
+                              "kind": kind,
+                              "message": message})
+    graph.log("WARNING: DATA ERROR fixture {} '{}': {}.".format(
+        node.element_id, node.fixture_name, message))
+    revit_helpers._log_entry("WARNING", "pipe_graph.fixture_load",
+                             node.element_id, message)
+
+
+def data_error_ids(graph):
+    """Element ids of the gas fixtures the walk recorded as data errors
+    (graph.data_errors, the one record of a 0, unreadable or negative
+    GAS_LOAD_MBH). Readers use this, never a second load <= 0 test."""
+    return set(d.get("element_id") for d in
+               (getattr(graph, "data_errors", None) or []))
+
+
+def gas_fixtures(graph):
+    """The gas fixture nodes (IS_GAS_FIXTURE = Yes) the walk reached."""
+    return [n for n in graph.nodes.values() if n.is_gas_fixture]
+
+
+def total_connected_mbh(graph):
+    """The total connected load of the walked gas fixtures, MBH (float).
+
+    The existing load entered for Connect into Existing is not included:
+    it is not a fixture the walk reached. A data error fixture carries 0
+    (pipe_graph sets its load to 0), so it adds nothing. Float start: sum([])
+    is int 0, and '{:.1f}'.format(0) raises in IronPython 2.7.
+    """
+    return sum((float(n.gas_load_mbh or 0.0) for n in gas_fixtures(graph)),
+               0.0)
+
+
+def zero_load_stop_message(graph):
+    """The Size Gas stop message when the total connected load is 0 MBH,
+    else None (n=10, Colin 2026-11-20): sizing a 0 MBH system would write
+    the minimum size to every pipe."""
+    if total_connected_mbh(graph) > 0:
+        return None
+    return ("The total connected load is 0 MBH ({} gas fixture(s), every "
+            "GAS_LOAD_MBH is 0 or blank), so there is nothing to size.\n\n"
+            "Nothing was changed. Enter GAS_LOAD_MBH on the appliances and "
+            "run Diagnose before Size Gas.".format(len(gas_fixtures(graph))))
+
+
+def midstream_prv_stop_message(graph, mid_stream_prv):
+    """The stop message when Mid Stream PRV is ticked but the walk found no
+    mid stream regulator, else None. Size Gas and One-Line both stop on it
+    with this text (Colin, 2026-11-20). The PRV keywords named are built
+    from shared_params.PRV_FAMILY_KEYWORDS."""
+    if not mid_stream_prv or graph.midstream_prv_ids:
+        return None
+    prv_count = len(graph.prv_ids or [])
+    if prv_count:
+        why = ("{} regulator(s) were found, but each has {:g} ft of pipe "
+               "or less downstream, so they are treated as equipment "
+               "PRVs and ignored.".format(
+                   prv_count, shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT))
+    else:
+        why = ("No pressure regulating valve was found. A PRV is "
+               "recognised by {} in its family name; check it is connected "
+               "to the piping.".format(shared_params.prv_keywords_text()))
+    return ("Mid Stream PRV is checked, but there is no mid-stream "
+            "regulator in this system.\n\n{}\n\nUncheck Mid Stream PRV "
+            "to size the system as one.".format(why))
+
+
 def non_fixture_ends(graph):
-    """One connector ends that are not gas fixtures (F2): a cap or an
-    appliance with IS_GAS_FIXTURE not set. They carry no load, so the pipe
-    to them is sized at the minimum. Returns the nodes, by element id."""
-    ends = [n for n in graph.nodes.values()
-            if n.node_type == "fixture" and not n.is_gas_fixture]
+    """Ends of the run that are not gas fixtures (F2): a cap or an appliance
+    with IS_GAS_FIXTURE not set. They carry no load, so the pipe to them is
+    sized at the minimum. Returns the nodes, by element id.
+
+    A one connector node is always listed. So is any other node the walk
+    could not go past (review n=20): no pipe leaves it and no fitting hangs
+    off it, for example an RTU with a gas connector and an unconnected or
+    condensate connector and no IS_GAS_FIXTURE, typed "fitting". Not
+    listed: gas fixtures, the origin, joints, and a node whose connector
+    reaches existing phase piping on a tie-in run (that stop is reported as
+    an existing connection).
+    """
+    out = set()
+    for e in graph.edges.values():
+        out.add(e.from_node_id)
+    for parent, kids in graph.node_children.items():
+        if kids:
+            out.add(parent)
+    existing = set(graph.existing_connections or [])
+    ends = []
+    for n in graph.nodes.values():
+        if n.is_gas_fixture or n.element_id == graph.origin_id:
+            continue
+        if n.node_type == "joint":
+            continue
+        if n.node_type == "fixture":
+            ends.append(n)
+            continue
+        if n.element_id in out:
+            continue
+        if any(c.get("connected_element_id") in existing
+               for c in (n.connectors or [])):
+            continue
+        ends.append(n)
     return sorted(ends, key=lambda n: n.element_id)
 
 
@@ -343,14 +519,7 @@ def check_gas_pipe(pipe):
         if c.get("system_type"):
             classifications.add(c["system_type"])
 
-    name = None
-    try:
-        from Autodesk.Revit.DB import BuiltInParameter
-        param = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)
-        if param is not None:
-            name = param.AsValueString()
-    except Exception:
-        name = None
+    name = revit_helpers.get_piping_system_type_name(pipe)
 
     classification = ", ".join(sorted(classifications)) or None
     bad = sorted(classifications.intersection(_NOT_GAS_CLASSIFICATIONS))
@@ -364,6 +533,15 @@ def check_gas_pipe(pipe):
         return {"ok": False, "classification": None, "system_type_name": name,
                 "reason": "the system of the picked pipe could not be read, "
                           "so it cannot be confirmed as gas piping"}
+    # An OtherPipe system (compressed air, condensate, fuel oil) passes the
+    # classification test, so the System Type name decides (n=55).
+    name_problem = not_gas_system_name(name)
+    if name_problem:
+        return {"ok": False, "classification": classification,
+                "system_type_name": name,
+                "reason": "the picked pipe is classified as {} and {}, so "
+                          "it is not a gas piping system".format(
+                              classification, name_problem)}
     return {"ok": True, "classification": classification,
             "system_type_name": name, "reason": ""}
 
@@ -407,7 +585,8 @@ def _start_at_meter(graph, doc, origin_element):
     graph.origin_id = origin_id
 
     origin_node = NetworkNode(origin_id, origin_element, "meter")
-    origin_node.connectors = revit_helpers.get_connectors(origin_element)
+    origin_node.connectors = revit_helpers.piping_connectors(
+        revit_helpers.get_connectors(origin_element), origin_id)
     origin_node.connector_count = len(origin_node.connectors)
     graph.add_node(origin_node)
     graph.log("START: Meter element {} ({})".format(origin_id, origin_node.family_name))
@@ -458,10 +637,24 @@ def _traverse(graph, doc, visited, queue):
         if graph.origin_is_tie_in and graph.origin_phase_id is not None:
             phase = revit_helpers.get_created_phase_id(current_element)
             if phase is not None and phase != graph.origin_phase_id:
-                graph.existing_connections.append(current_id)
-                graph.log("EXISTING: element {} is existing phase. Not "
-                          "followed.".format(current_id))
-                continue
+                if (_is_family_instance(current_element) and
+                        revit_helpers.get_instance_or_type_parameter_value(
+                            current_element,
+                            shared_params.PARAM_IS_GAS_FIXTURE)):
+                    # An existing appliance fed by NEW piping (a reused
+                    # water heater or range): its load is carried by the new
+                    # pipes and its path counts toward the developed length
+                    # (review n=26). It is a terminal, so nothing past it
+                    # is walked, and it is never resized.
+                    graph.existing_appliances.append(current_id)
+                    graph.log("EXISTING APPLIANCE: element {} is existing "
+                              "phase, fed by new piping. Its load is "
+                              "counted.".format(current_id))
+                else:
+                    graph.existing_connections.append(current_id)
+                    graph.log("EXISTING: element {} is existing phase. Not "
+                              "followed.".format(current_id))
+                    continue
 
         element_type = current_element.GetType().Name
         graph.log("VISIT: Element {} type={}".format(current_id, element_type))
@@ -514,23 +707,41 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
             _record_non_gas(graph, pipe_id, not_gas)
             return
 
-    # Identify which connector leads back to parent and which goes forward
-    far_connected_id = None
+    # OtherPipe is not proof of gas: compressed air, condensate and fuel oil
+    # read OtherPipe too. A readable System Type name without "gas" stops
+    # the walk (n=55). An unreadable name is logged and walked, as before,
+    # so a read failure never drops load.
+    system_name = revit_helpers.get_piping_system_type_name(pipe)
+    if system_name is None:
+        graph.log("WARNING: pipe {} System Type name could not be read; "
+                  "walked as gas.".format(pipe_id))
+    elif not_gas_system_name(system_name):
+        graph.log(
+            "SKIP: pipe {} is on System Type '{}', not gas. Not sized, not "
+            "followed.".format(pipe_id, system_name))
+        _record_non_gas(graph, pipe_id, system_name)
+        return
+
+    # Every connected connector that does not lead back to the parent goes
+    # forward. A plain pipe has one; a pipe with a tap on it (a Curve
+    # connector) has two or more (n=21), and all are followed.
+    far_ids = []
     for c in connectors:
-        if c["is_connected"] and c["connected_element_id"] != parent_node_id:
-            far_connected_id = c["connected_element_id"]
-            break
+        cid = c["connected_element_id"]
+        if c["is_connected"] and cid is not None and cid != parent_node_id \
+                and cid not in far_ids:
+            far_ids.append(cid)
 
     graph.log(
         "PIPE {}: length={:.2f}ft, diameter={:.3f}in, far_end={}".format(
             pipe_id,
             revit_helpers.get_pipe_length_feet(pipe) or 0.0,
             revit_helpers.get_pipe_diameter_inches(pipe) or 0.0,
-            far_connected_id
+            ", ".join(str(i) for i in far_ids) or None
         ))
 
     # Open-ended pipe  -  far end has no connected element
-    if far_connected_id is None:
+    if not far_ids:
         graph.log(
             "WARNING: Pipe {} has an unconnected (open) far end.".format(pipe_id))
         graph.disconnected.append(pipe_id)
@@ -538,26 +749,75 @@ def _process_pipe(graph, doc, pipe, parent_node_id, visited, queue):
         graph.add_edge(edge)
         return
 
-    edge = NetworkEdge(pipe_id, pipe, parent_node_id, far_connected_id)
-    graph.add_edge(edge)
-
-    # Queue the far end element
-    if far_connected_id not in visited:
-        far_element = _get_element(doc, far_connected_id)
-        if far_element is not None:
-            queue.append((far_element, pipe_id))
-        else:
+    far_elements = []
+    for far_id in far_ids:
+        if far_id in visited:
+            far_elements.append((far_id, None))
+            continue
+        far_element = _get_element(doc, far_id)
+        if far_element is None:
             graph.log(
                 "WARNING: Could not retrieve far end element {} from pipe {}.".format(
-                    far_connected_id, pipe_id))
-            graph.disconnected.append(far_connected_id)
+                    far_id, pipe_id))
+            graph.disconnected.append(far_id)
+        far_elements.append((far_id, far_element))
+
+    # A pipe joined straight to another pipe (a transition Revit removed,
+    # n=5) or a pipe with a tap (n=21): the edge ends at a joint node keyed
+    # by this pipe's id, and every far element hangs off the joint. Without
+    # it, the next pipe's edge started at a pipe id that is not a node, and
+    # its load and length were lost.
+    single = far_elements[0][1] if len(far_elements) == 1 else None
+    if len(far_ids) == 1 and not (single is not None and _is_pipe(single)):
+        graph.add_edge(NetworkEdge(pipe_id, pipe, parent_node_id, far_ids[0]))
+    else:
+        if len(far_ids) > 1:
+            graph.tapped_pipes.append(pipe_id)
+            graph.log(
+                "WARNING: Pipe {} has a tap: {} connections downstream ({}). "
+                "Each branch is charged the whole pipe length and the pipe "
+                "carries every branch's load (conservative).".format(
+                    pipe_id, len(far_ids), ", ".join(str(i) for i in far_ids)))
+        joint_id = _add_joint(graph, pipe, pipe_id, far_ids)
+        graph.add_edge(NetworkEdge(pipe_id, pipe, parent_node_id, joint_id))
+
+    for far_id, far_element in far_elements:
+        if far_element is not None:
+            queue.append((far_element, pipe_id))
+
+
+def _add_joint(graph, pipe, pipe_id, far_ids):
+    """Add the joint node a pipe ends at when its far side is another pipe
+    or more than one element (n=5, n=21). Keyed by the pipe's own id (nodes
+    and edges are separate dicts), so the next pipe, queued with this pipe
+    as its parent, starts its edge at a node that exists. It has no element:
+    nothing resizes it, it adds no equivalent length and it carries the sum
+    of what hangs off it. Returns the joint id."""
+    node = NetworkNode(pipe_id, pipe, "joint")
+    node.element = None
+    node.family_name = "PIPE JOINT"
+    node.is_elbow = False
+    node.is_transition = False
+    node.location_xyz = None
+    for c in revit_helpers.get_connectors(pipe):
+        if c.get("connected_element_id") == far_ids[0]:
+            node.location_xyz = c.get("origin_xyz")
+            break
+    graph.add_node(node)
+    graph.log("JOINT: pipe {} ends at a joint to {}.".format(
+        pipe_id, ", ".join(str(i) for i in far_ids)))
+    return pipe_id
 
 
 def _process_family_instance(graph, doc, element, parent_node_id, visited, queue):
     """Process a family instance  -  fitting, fixture, or equipment."""
     eid = revit_helpers.eid_int(element.Id)
     family_name = _get_family_name(element)
-    connectors = revit_helpers.get_connectors(element)
+    # Piping connectors only: an electrical connector on a gas solenoid or
+    # Ansul valve made it a "tee" (n=30). They set the node type and are the
+    # only connectors walked.
+    connectors = revit_helpers.piping_connectors(
+        revit_helpers.get_connectors(element), eid)
     connector_count = len(connectors)
 
     # Determine node type
@@ -573,19 +833,37 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
     node.connector_count = connector_count
 
     # --- Check if this is a gas fixture ---
-    is_gas_fixture = revit_helpers.get_parameter_value(
+    # Instance first, then the Type: a manufacturer family may bind these
+    # as Type parameters (n=28).
+    is_gas_fixture = revit_helpers.get_instance_or_type_parameter_value(
         element, shared_params.PARAM_IS_GAS_FIXTURE)
-    gas_load_mbh = revit_helpers.get_parameter_value(
+    gas_load_mbh = revit_helpers.get_instance_or_type_parameter_value(
         element, shared_params.PARAM_GAS_LOAD_MBH)
-    fixture_name = revit_helpers.get_parameter_value(
+    fixture_name = revit_helpers.get_instance_or_type_parameter_value(
         element, shared_params.PARAM_FIXTURE_NAME)
 
     if is_gas_fixture:
         node.node_type          = "fixture"
         node.is_gas_fixture     = True
-        node.gas_load_mbh       = float(gas_load_mbh) if gas_load_mbh is not None else 0.0
         node.fixture_name       = fixture_name if fixture_name else "UNNAMED"
+        load, problem = parse_load_mbh(gas_load_mbh)
+        if problem is None and isinstance(gas_load_mbh, float) and \
+                revit_helpers.parameter_is_plain_number(
+                    element, shared_params.PARAM_GAS_LOAD_MBH) is False:
+            # A Double with units (HVAC Power) reads in internal units,
+            # never MBH (n=57).
+            load, problem = 0.0, (
+                "GAS_LOAD_MBH is not a plain Number parameter, so its value "
+                "({}) is in Revit internal units, not MBH".format(gas_load_mbh))
+        node.gas_load_mbh       = load
         node.cumulative_load_mbh = node.gas_load_mbh
+        if problem is not None:
+            _record_data_error(graph, node, "bad_load", problem)
+        elif load <= 0.0:
+            _record_data_error(
+                graph, node, "zero_load",
+                "GAS_LOAD_MBH is 0. Data error: no load is carried and the "
+                "fixture does not set the developed length")
         graph.log(
             "FIXTURE {}: name='{}', load={} MBH".format(
                 eid, node.fixture_name, node.gas_load_mbh))
@@ -596,10 +874,10 @@ def _process_family_instance(graph, doc, element, parent_node_id, visited, queue
 
     # --- Check if this is a pressure regulating valve ---
     # Auto-detected by family name; whether it is a mid-stream step down is
-    # decided after traversal by _classify_midstream_prvs().
-    lowered_name = (family_name or "").lower()
+    # decided after traversal by _classify_midstream_prvs(). One classifier
+    # (shared_params.accessory_kind) for the walk, Diagnose and One-Line.
     if (not is_gas_fixture and
-            any(kw in lowered_name for kw in shared_params.PRV_FAMILY_KEYWORDS)):
+            shared_params.accessory_kind(family_name) == "prv"):
         node.is_prv = True
         graph.prv_ids.append(eid)
         graph.log("PRV {}: family='{}'".format(eid, family_name))
@@ -772,7 +1050,11 @@ def _longest_run_from(graph, start_id, stop_at_prv):
         "tee_equiv_length_feet":    0.0,
         "path_element_ids":         [],
         "farthest_fixture_id":      None,
-        "farthest_fixture_name":    ""
+        "farthest_fixture_name":    "",
+        # The most actual pipe on ANY path to a terminal, not the pipe of
+        # the longest developed path (n=23). The mid-stream PRV test reads
+        # this.
+        "max_pipe_length_feet":     0.0
     }
 
     def _dfs(node_id, pipe_length, elbow_count, tee_count, current_path):
@@ -793,7 +1075,16 @@ def _longest_run_from(graph, start_id, stop_at_prv):
                         + (local_tee_count * TEE_EQUIV_FT))
 
         ends_at_prv = stop_at_prv and node.is_midstream_prv and node_id != start_id
+        if node.is_gas_fixture and not ends_at_prv and node.gas_load_mbh <= 0.0:
+            # A 0 MBH (or unreadable load) fixture is a data error: it is a
+            # terminal but never sets the developed length (n=11).
+            graph.log(
+                "SKIP: PATH to fixture '{}' ({}) not a run end: 0 MBH data "
+                "error.".format(node.fixture_name, node_id))
+            return
         if node.is_gas_fixture or ends_at_prv:
+            if pipe_length > longest["max_pipe_length_feet"]:
+                longest["max_pipe_length_feet"] = pipe_length
             end_name = node.fixture_name if node.is_gas_fixture else "PRV {}".format(node_id)
             graph.log(
                 "PATH to {} '{}': pipe={:.2f}ft, elbows={} ({:.0f}ft), "
@@ -846,8 +1137,9 @@ def _longest_run_from(graph, start_id, stop_at_prv):
 def _classify_midstream_prvs(graph):
     """Decide which PRVs are a mid-stream step down.
 
-    A PRV is mid-stream when the actual pipe length from it to its farthest
-    fixture is longer than shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT.
+    A PRV is mid-stream when the actual pipe length from it to any fixture
+    (the most pipe on any branch) is longer than
+    shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT.
     A regulator right at its equipment is that equipment's own and is ignored
     for sizing (it stays in graph.prv_ids for reporting). Pipe length only,
     no elbow equivalents: a regulator a few feet from the equipment with a
@@ -859,7 +1151,11 @@ def _classify_midstream_prvs(graph):
         if node is None:
             continue
         run = _longest_run_from(graph, pid, False)
-        node.downstream_pipe_ft = run["pipe_length_feet"]
+        # The most pipe on any branch after the regulator, not the pipe of
+        # the branch with the longest developed length (n=23): a straight
+        # 12 ft branch makes it mid-stream even when a shorter branch with
+        # more elbows wins on developed length.
+        node.downstream_pipe_ft = run["max_pipe_length_feet"]
         node.is_midstream_prv = (
             node.downstream_pipe_ft > shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)
         if node.is_midstream_prv:

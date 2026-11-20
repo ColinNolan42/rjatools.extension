@@ -57,32 +57,27 @@ def _emit(html, md):
     cr.emit(output, html, lambda: output.print_md(md), logger, TITLE)
 
 
-def _pick():
-    """The meter, or the first new gas pipe at an existing building.
+def _pick(connect_existing):
+    """The meter, or the first new gas pipe at an existing building. With
+    Connect into Existing (connect_existing true) only the pipe is taken.
     Returns (element, upstream or None) or (None, None)."""
-    el = ui_helpers.pick_element(uidoc, doc, TITLE, ui_helpers.PICK_GAS)
+    el = ui_helpers.pick_element(
+        uidoc, doc, TITLE,
+        ui_helpers.PICK_GAS_EXISTING if connect_existing
+        else ui_helpers.PICK_GAS)
     if el is None:
+        err = ui_helpers.last_pick_error()
+        if err:
+            _alert("The pick failed: {0}\n\nNothing was drawn.".format(err))
+            return None, None
         output.print_md("Selection cancelled. Nothing drawn.")
         return None, None
-    if revit_helpers.is_pipe(el):
-        chk = pipe_graph.check_gas_pipe(el)
-        if not chk["ok"]:
-            _alert("This is not a gas pipe: {0}.\n\nPick the gas meter, or "
-                   "the first new GAS pipe at the connection to "
-                   "existing.".format(chk["reason"]))
-            return None, None
-        upstream = tie_in.resolve_new_pipe_upstream(el, doc)
-        if upstream["status"] != "ok":
-            _alert("Could not tell which end of the picked pipe connects to "
-                   "the existing gas piping: {0}.".format(upstream["reason"]))
-            return None, None
-        return el, upstream
-    val = revit_helpers.validate_selected_element(el)
-    if not val["is_valid"]:
-        _alert("Pick the gas meter, or the first new gas pipe at the "
-               "connection to existing.\n\n{0}".format(val["reason"]))
+    # the one gas start check, same words as Size Gas and Diagnose
+    start = tie_in.check_gas_start(el, doc, pipe_only=bool(connect_existing))
+    if not start["ok"]:
+        _alert(start["message"] + "\n\nNothing was drawn.")
         return None, None
-    return el, None
+    return el, start["upstream"]
 
 
 def _table(material, label):
@@ -109,8 +104,14 @@ def main():
                       choice.get("downstream_table_label"))
     down_id = down["table_id"] if down else None
     heat = choice["heat_content"]
+    propane = choice.get(
+        "propane_heat_content_btu_per_cf",
+        shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)
+    # Scope, chosen before the pick (Colin, 2026-11-20): None is New
+    # Construction, else the existing gas piping entered in the dialog.
+    connect_existing = choice.get("existing")
 
-    el, upstream = _pick()
+    el, upstream = _pick(connect_existing)
     if el is None:
         return
     is_tie_in = upstream is not None
@@ -124,16 +125,15 @@ def main():
         logger.error(traceback.format_exc())
         return
 
-    # Mid Stream PRV box vs the walk, handled as Size Gas does
+    # Mid Stream PRV box vs the walk: ticked with no mid stream regulator
+    # stops, with the Size Gas message (pipe_graph, one home)
+    prv_stop = pipe_graph.midstream_prv_stop_message(
+        graph, bool(choice.get("mid_stream_prv")))
+    if prv_stop is not None:
+        _alert(prv_stop + "\n\nNothing was drawn.", "warn")
+        return
     prv_notes = []
-    if down_id and not graph.midstream_prv_ids:
-        prv_notes.append(
-            "Mid Stream PRV was ticked but no regulator has more than {0:.0f} "
-            "ft of pipe downstream, so the downstream table was not "
-            "used.".format(
-                float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)))
-        down, down_id = None, None
-    elif graph.midstream_prv_ids and not down_id:
+    if graph.midstream_prv_ids and not down_id:
         prv_notes.append(
             "{0} mid stream PRV(s) found but Mid Stream PRV was not ticked: "
             "the whole system is checked on {1}, as Size Gas sizes it with "
@@ -141,14 +141,8 @@ def main():
 
     existing = None
     if is_tie_in:
-        existing = ui_helpers.show_existing_gas_dialog(
-            "Gas One-Line - Existing Conditions",
-            gas_tables.list_pipe_sizes(table_id), tie_in.recall_existing(el_id))
-        if existing is None:
-            output.print_md("Cancelled at existing conditions. Nothing drawn.")
-            return
-        if not tie_in.is_new_construction(existing):
-            tie_in.remember_existing(el_id, existing)
+        # New Construction from a pipe: full new construction, new meter.
+        existing = tie_in.existing_from_scope(connect_existing)
         if (graph.longest_run is not None
                 and tie_in.existing_for_sizing(existing) is not None):
             pipe_graph.apply_existing_conditions(
@@ -158,7 +152,8 @@ def main():
     info = {"meter": "{0} ({1})".format(
                 "New pipe at existing" if is_tie_in else "Gas meter", el_id),
             "table": opt["label"].split("  [")[0], "table_id": table_id,
-            "heat_content": heat,
+            # gas_console prints the heat content the table used
+            "heat_content": heat, "propane_heat_content": propane,
             "downstream_table": down["label"].split("  [")[0] if down else None,
             "origin_kind": "tie_in" if is_tie_in else "meter"}
     if existing is not None:
@@ -172,7 +167,8 @@ def main():
             result = sizing_engine.size_system(
                 graph, choice["pipe_material"], opt["inlet_pressure_psi"],
                 table_id, heat_content_btu_per_cf=heat,
-                downstream_table_id=down_id)
+                downstream_table_id=down_id,
+                propane_heat_content_btu_per_cf=propane)
         except ValueError as ex:
             sizing_error = str(ex)
     else:
@@ -198,20 +194,29 @@ def main():
     notes = gas_labels.notes_lines(
         table_id, new_mbh, snap["longest_run_ft"], downstream_table_id=down_id,
         existing_mbh=(existing["load_mbh"]
-                      if tie_in.existing_for_sizing(existing) else None))
+                      if tie_in.existing_for_sizing(existing) else None),
+        zones=(snap.get("sizing") or {}).get("zones"))
     lay = oneline_layout.layout(sch, notes=notes)
     if any(l.startswith("LAYOUT FAILED") for l in lay["log"]):
         _emit(gas_console.layout_diagnostic(sch, lay),
               gas_console.layout_diagnostic_text(sch, lay))
-        _alert("The diagram could not be laid out without overlaps. Nothing "
-               "was drawn. The layout diagnostic is in the console.")
+        _alert(oneline_layout.failure_message(lay["log"]))
         return
+
+    # Developed Length Breakdown (Outputs tick box, default off)
+    breakdown = None
+    if choice.get("developed_length_breakdown"):
+        breakdown = oneline_schematic.developed_breakdown(
+            sch, longest_run_ft=snap["longest_run_ft"],
+            elbow_ft=snap.get("elbow_equiv_ft"),
+            tee_ft=snap.get("tee_equiv_ft"))
 
     # draw: one undo
     view_name = "Gas Piping One-Line - {0}".format(
         datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S"))
     tg = TransactionGroup(doc, "RJA Tools - Gas One-Line Diagram")
     tg.Start()
+    t1 = t2 = None
     try:
         t1 = Transaction(doc, "One-Line symbols")
         t1.Start()
@@ -221,13 +226,31 @@ def main():
         t2.Start()
         view = oneline_draw.create_view(doc, view_name)
         counts, draw_errors = oneline_draw.draw(doc, view, lay["prims"], syms)
+        if breakdown is not None:
+            # Developed Length Breakdown under the diagram. Fails soft: a
+            # table that cannot be drawn never costs the diagram.
+            try:
+                oneline_draw.draw_breakdown(doc, view, breakdown,
+                                            lay["bounds"])
+            except Exception as ex:
+                logger.error(traceback.format_exc())
+                draw_errors.append(
+                    "Developed Length Breakdown table not drawn: {0}".format(ex))
         t2.Commit()
         tg.Assimilate()
     except Exception as ex:
+        # an open inner transaction is rolled back before the group
+        # (review n61); a failed rollback is logged, never passed over
+        for t in (t2, t1):
+            try:
+                if t is not None and t.HasStarted() and not t.HasEnded():
+                    t.RollBack()
+            except Exception as rb:
+                logger.error("Transaction rollback failed: {0}".format(rb))
         try:
             tg.RollBack()
-        except Exception:
-            pass
+        except Exception as rb:
+            logger.error("TransactionGroup rollback failed: {0}".format(rb))
         logger.error(traceback.format_exc())
         _alert("Drawing failed, nothing was kept:\n\n{0}".format(ex))
         return
@@ -238,6 +261,9 @@ def main():
     _emit(gas_console.oneline_summary(sch, snap, view_name),
           gas_console.oneline_summary_md(sch, snap, view_name))
     _emit(gas_console.length_check(sch, snap), "")
+    if breakdown is not None:
+        _emit(gas_console.developed_breakdown(breakdown),
+              gas_console.developed_breakdown_md(breakdown))
     warns = prv_notes + list(sch["warnings"])
     warns += [w["text"] for w in res["warnings"]]
     warns += draw_errors
