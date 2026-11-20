@@ -58,6 +58,7 @@ Rules (plan section 4, Colin 2026-11-18):
 """
 
 import math
+import re
 import time
 
 import gas_labels
@@ -97,6 +98,10 @@ LEVEL_TOL_FT = 0.25        # an element this close below a level is on it
 # no level is named ROOF (Colin, 2026-11-20): a ROOF level wins, and a model
 # without one still draws its RTUs hanging up
 ROOF_ABOVE_TOP_FT = 8.0
+# Equipment that is always inside, never a roof unit, by its equipment name
+# (FIXTURE_NAME): unit heaters (UH, GUH) and furnaces (F, FURN) (Colin,
+# 2026-11-20). They take the level they sit on, never a ROOF band.
+INDOOR_NAME_RE = re.compile(r"^\s*(G?UH|FURN(ACE)?|F)\s*-?\s*\d", re.I)
 INLINE_Z_FT = 1.0          # a run end this close to the tee height is inline
 ROOT_RISER_COL = 0.5       # meter outlet riser, in columns from the meter
 EXISTING_COLS = 2          # tie in: existing meter to the new connection
@@ -457,11 +462,18 @@ class _Engine(object):
         self.origin_z = oz
         zs = [oz]
         self.roof_by_height = []      # (name, node id, ft above top level)
+        # elevations of indoor units (unit heaters, furnaces): never a roof
+        # band, whatever their height (Colin, 2026-11-20)
+        self.indoor_z = set()
+        self.non_roof_levels = [e for e, n in lv if "ROOF" not in n.upper()]
+        for t in self._terms(sch.get("root")):
+            if t.get("xyz") and is_indoor_equipment(t.get("name")):
+                self.indoor_z.add(round(float(t["xyz"][2]), 3))
         for t in self._terms(sch.get("root")):
             if t.get("xyz"):
                 z = t["xyz"][2]
                 zs.append(z)
-                if self._above_top(z):
+                if self._above_top(z) and not self._is_indoor_z(z):
                     self.roof_by_height.append(
                         (t.get("name") or "UNNAMED", t.get("node_id"),
                          float(z) - self.top_elev))
@@ -498,10 +510,16 @@ class _Engine(object):
     def _level_key(self, z):
         """Elevation of the level z sits on, or (height rule, no ROOF
         level) the roof band above the top level for units more than
-        ROOF_ABOVE_TOP_FT above it."""
+        ROOF_ABOVE_TOP_FT above it. An indoor unit (unit heater, furnace)
+        always takes the highest non ROOF level at or below it."""
+        if self._is_indoor_z(z):
+            return self._level_of(z, self.non_roof_levels or self.levels)
         if self._above_top(z):
             return self.top_elev + ROOF_ABOVE_TOP_FT
         return self._level_of(z, self.levels)
+
+    def _is_indoor_z(self, z):
+        return round(float(z), 3) in getattr(self, "indoor_z", ())
 
     def _is_roof_key(self, e):
         if e in self.roof_levels:
@@ -986,6 +1004,13 @@ class _Engine(object):
                                     "row".format(end["node_id"]))
                 return res, (1 if cy > y else -1)
         return None, d
+
+
+def is_indoor_equipment(name):
+    """True for equipment that is always inside, never on a roof: a unit
+    heater (UH-1, GUH-7) or a furnace (F-1, FURN-2) by its equipment name
+    (Colin, 2026-11-20). FUTURE and RTU names are not."""
+    return bool(name) and INDOOR_NAME_RE.match(str(name)) is not None
 
 
 def roof_height_note(name, node_id, above_ft, top_name=""):
