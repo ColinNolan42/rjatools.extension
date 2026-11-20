@@ -2,7 +2,7 @@
 """Tests for gas_labels.py (One-Line rebuild step 1, 2026-11-18).
 
 Label rules (Colin): 3"G, 25' with no space before G and no material;
-cumulative MBH on line 2; unnamed cap at 0 MBH reads FUTURE CONNECTION;
+cumulative MBH on line 2; a FUTURE cap shows its planned MBH;
 notes inlet pressure and drop from the table JSON, not the 0.7 placeholder.
 
 Run:  python -I _test_gas_labels.py
@@ -72,9 +72,11 @@ class MbhAndFixtures(unittest.TestCase):
         self.assertEqual(gl.fixture_label("  ", 90), ["UNNAMED", "90 MBH"])
 
     def test_cap_labels(self):
-        self.assertEqual(gl.cap_label(None, 0), ["FUTURE CONNECTION"])
-        self.assertEqual(gl.cap_label("UNNAMED", 0), ["FUTURE CONNECTION"])
-        self.assertEqual(gl.cap_label("FUTURE", 0), ["FUTURE CONNECTION"])
+        # Colin 2026-11-20: a FUTURE cap carries its planned MBH; at 0 it
+        # is a data error the gate refuses, never a FUTURE CONNECTION label
+        self.assertEqual(gl.cap_label(None, 0), ["FUTURE", "0 MBH"])
+        self.assertEqual(gl.cap_label("UNNAMED", 0), ["FUTURE", "0 MBH"])
+        self.assertFalse(hasattr(gl, "FUTURE_CONNECTION"))
         self.assertEqual(gl.cap_label("FUTURE", 120), ["FUTURE", "120 MBH"])
         self.assertEqual(gl.cap_label("", 120), ["FUTURE", "120 MBH"])
         self.assertEqual(gl.cap_label("RTU-9", 0), ["RTU-9", "0 MBH"])
@@ -119,6 +121,29 @@ class Notes(unittest.TestCase):
             with_prv[-1],
             "DOWNSTREAM OF PRV: LESS THAN 2 PSI, MAX PRESSURE LOSS OF "
             "0.5 IN. W.C. PER IFGC TABLE 402.4(2)")
+
+    def test_prv_line_states_each_side_run(self):
+        # n59 (Colin 2026-11-20): the PRV line states the developed length
+        # Size Gas used on each side, rounded like the other notes lengths;
+        # TOTAL DEVELOPED LENGTH stays the whole system
+        zones = [{"label": "Meter to regulator(s)", "run_ft": 84.6},
+                 {"label": "After PRV 7", "run_ft": 139.5}]
+        lines = gl.notes_lines("402.4(5)", 500, 224.1,
+                               downstream_table_id="402.4(2)", zones=zones)
+        self.assertEqual(
+            lines[-1],
+            "DOWNSTREAM OF PRV: LESS THAN 2 PSI, MAX PRESSURE LOSS OF "
+            "0.5 IN. W.C. PER IFGC TABLE 402.4(2), DEVELOPED LENGTH "
+            "METER SIDE 85', PRV SIDE 140'")
+        self.assertIn("TOTAL DEVELOPED LENGTH: 224'", lines)
+
+    def test_zone_runs_text(self):
+        self.assertEqual(gl.zone_runs_text(None), "")
+        self.assertEqual(gl.zone_runs_text([{"run_ft": 120.0}]), "")
+        self.assertEqual(
+            gl.zone_runs_text([{"run_ft": 0.0}, {"run_ft": 140.2},
+                               {"run_ft": 90.4}]),
+            ", DEVELOPED LENGTH METER SIDE 0', PRV SIDE 140', 90'")
 
     def test_tie_in_notes(self):
         lines = gl.notes_lines("402.4(9)", 270, 120, existing_mbh=400)

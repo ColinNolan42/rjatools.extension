@@ -15,11 +15,15 @@ PARAM_FIXTURE_NAME      = "FIXTURE_NAME"        # Text. Equipment tag for one-li
 
 # Pressure regulating valves carry NO custom parameters. A PRV is auto-detected
 # during traversal by a case-insensitive match of these words in its family
-# name. One list, used by pipe_graph, One-Line and Diagnose.
-PRV_FAMILY_KEYWORDS = ("prv", "regulator", "regulating")
+# name. One list, used by pipe_graph, One-Line and Diagnose. It is checked
+# BEFORE ISOLATION_VALVE_KEYWORDS, so a "Gas Pressure Reducing Valve" is a PRV,
+# not an isolation valve (Colin, 2026-11-20). Bare "reducing" is not a keyword:
+# it would catch reducing tees and couplings.
+PRV_FAMILY_KEYWORDS = ("prv", "regulator", "regulating", "pressure reducing",
+                       "pressure reducer", "reducing valve")
 
 # A PRV only counts as a MID-STREAM step down when the pipe run downstream of
-# it, to its farthest fixture, is LONGER than this (feet of actual pipe, no
+# it, on its branch with the most pipe, is LONGER than this (feet of actual pipe, no
 # elbow equivalents). A regulator closer to its equipment than this is that
 # equipment's own regulator: it is ignored for sizing.
 PRV_MIDSTREAM_MIN_DOWNSTREAM_FT = 10.0
@@ -35,6 +39,35 @@ ISOLATION_VALVE_KEYWORDS = ("valve", "ball", "gate", "check", "shutoff")
 # Family: RJA - Gas Shutoff Valve (Ansul).
 ANSUL_VALVE_KEYWORDS = ("ansul",)
 
+
+def accessory_kind(family_name):
+    """The one gas accessory classifier, by family name (case-insensitive):
+    "prv" (PRV_FAMILY_KEYWORDS), "ansul" (ANSUL_VALVE_KEYWORDS), "iso"
+    (ISOLATION_VALVE_KEYWORDS) or None. Checked in that order, so a "Gas
+    Pressure Reducing Valve" is a PRV and an "Ansul Gas Valve" is the Ansul
+    shutoff. Read by pipe_graph (PRV detection), Diagnose (valve counts) and
+    oneline_schematic (valve symbols). Lives here, beside its keywords,
+    because oneline_schematic is pure Python and cannot import pipe_graph
+    (which imports the Revit API)."""
+    name = (family_name or "").lower()
+    if not name:
+        return None
+    for kind, words in (("prv", PRV_FAMILY_KEYWORDS),
+                        ("ansul", ANSUL_VALVE_KEYWORDS),
+                        ("iso", ISOLATION_VALVE_KEYWORDS)):
+        if any(kw in name for kw in words):
+            return kind
+    return None
+
+
+def prv_keywords_text():
+    """The PRV keywords for a message: "'prv', 'regulator', ... or
+    'reducing valve'", built from PRV_FAMILY_KEYWORDS."""
+    words = ["'{0}'".format(k) for k in PRV_FAMILY_KEYWORDS]
+    if len(words) < 2:
+        return "".join(words)
+    return ", ".join(words[:-1]) + " or " + words[-1]
+
 # Equivalent length added to the developed length for each elbow on a path,
 # feet (IFGC Appendix A). Read by pipe_graph, the sizing basis text and the
 # One-Line (snapshot elbow_equiv_ft, tee_equiv_ft).
@@ -43,6 +76,13 @@ ELBOW_EQUIV_LENGTH_FT = 5.0
 # branch (Colin, 2026-11-19). Developed length = pipe + 5 ft per elbow + 3 ft
 # per tee; the length inside fittings is not added.
 TEE_EQUIV_LENGTH_FT = 3.0
+
+# Elbow detection when a fitting's part type cannot be read (the part type,
+# MEPModel.PartType or the family's FAMILY_CONTENT_PART_TYPE, is read first,
+# revit_helpers.is_elbow). Substrings of the family name, any case, plus whole
+# words ("ell" alone would match "shell").
+ELBOW_FAMILY_KEYWORDS = ("elbow", "bend")
+ELBOW_FAMILY_WORDS = ("ell",)
 
 # =============================================================================
 # DOMESTIC WATER FIXTURE SHARED PARAMETERS
@@ -158,6 +198,7 @@ INCHES_PER_FOOT         = 12.0      # Used when converting pipe diameter from fe
 SEA_LEVEL_HEAT_CONTENT_BTU_PER_CF = 1000.0
 
 DEFAULT_HEAT_CONTENT_BTU_PER_CF   = 840.0   # Denver, CO - startup dialog default.
+DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF = 2500.0  # propane CFH Table 402.4(37) only (Colin, 2026-11-20).
 
 # =============================================================================
 # CONNECTOR FLOW DIRECTION
@@ -170,13 +211,21 @@ CONNECTOR_FLOW_IN       = "In"          # Street side  -  traversal skips this d
 CONNECTOR_FLOW_BIDI     = "Bidirectional"   # All non-meter elements expected to be bidirectional.
 
 # =============================================================================
-# MEP SYSTEM TYPE NAME
-# Must match the system type name exactly as defined in the Revit model.
-# If the project uses a different name (e.g. "GAS" or "Natural Gas"),
-# update this constant  -  do not hardcode the string elsewhere.
+# GAS SYSTEM TYPE NAME
+# The tools never match one exact System Type name (the old SYSTEM_TYPE_GAS =
+# "Natural Gas" constant was unused and is removed, 2026-11-20). A pipe is
+# gas by the keyword rule below, read by pipe_graph.not_gas_system_name().
 # =============================================================================
 
-SYSTEM_TYPE_GAS         = "Natural Gas"
+# A pipe counts as gas only when its piping System Type NAME contains one of
+# GAS_SYSTEM_TYPE_KEYWORDS (substring, any case) or has one of
+# GAS_SYSTEM_TYPE_WORDS as a whole word, any case (Colin, 2026-11-20). Revit
+# has no gas classification (gas reads OtherPipe), so compressed air,
+# condensate or fuel oil on OtherPipe would otherwise pass. "Natural Gas",
+# "LP Gas", "LP", "Propane" pass; "Help" and "Pumped Discharge" do not ("lp"
+# is a whole word only).
+GAS_SYSTEM_TYPE_KEYWORDS = ("gas", "propane")
+GAS_SYSTEM_TYPE_WORDS = ("lp",)
 
 # =============================================================================
 # DIAGNOSTIC REPORT METADATA

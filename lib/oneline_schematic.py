@@ -12,6 +12,7 @@ oneline_snapshot dict. Pure Python, no Revit import. ASCII source.
     sch["warnings"]  [str]
 
     Segment  {"id", "eids" [pipe ids], "node_ids" [fittings passed],
+              "trail" [pipe ends and fittings passed, xyz, in order],
               "start_node", "end_node", "size", "sizes_seen",
               "pipe_ft", "elbows", "tees", "length_ft", "mbh",
               "valves" [{"kind": "iso"|"prv", "node_id"}],
@@ -50,11 +51,15 @@ Rules (plan section 3.2, Colin 2026-11-18):
 import math
 
 import gas_labels
+import oneline_gate
 import shared_params
 
 
 COLLINEAR_COS = math.cos(math.radians(10.0))
 MIN_DIR_FT = 0.75
+# the incoming direction at a junction is taken from the last point passed
+# at least this far from it (an elbow can sit 0.3 ft from the tee, review n47)
+MIN_IN_FT = 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +120,6 @@ class _G(object):
                               shared_params.ELBOW_EQUIV_LENGTH_FT)
         self.tee_ft = float(snap.get("tee_equiv_ft") or
                             shared_params.TEE_EQUIV_LENGTH_FT)
-        self.origin_phase = snap.get("origin_phase")
 
     def node(self, nid):
         return self.nodes[str(nid)]
@@ -142,20 +146,27 @@ class _G(object):
         return hid
 
 
+def label_size(edge):
+    """Size printed on a pipe: Size Gas's required size name when the drawn
+    diameter matches it (CSST EHD-25 is not shown as EHD-23, which shares
+    its diameter, Colin 2026-11-20), else the modeled size. Existing pipe
+    always shows its modeled size (review n18)."""
+    if not oneline_gate.is_existing_edge(edge) and             oneline_gate.diameter_matches(edge):
+        return edge.get("required_size")
+    return edge.get("size")
+
+
 def _valve_kind(node):
     if node.get("is_prv"):
         return "prv"
     if node.get("kind") != "fitting" or node.get("is_elbow") or \
             node.get("is_transition"):
         return None
-    fam = (node.get("family") or "").lower()
-    for kw in shared_params.ANSUL_VALVE_KEYWORDS:
-        if kw in fam:
-            return "ansul"
-    for kw in shared_params.ISOLATION_VALVE_KEYWORDS:
-        if kw in fam:
-            return "iso"
-    return None
+    # the one classifier (shared_params.accessory_kind). The walk sets
+    # is_prv by the same rule, so a PRV name here was not taken as a PRV by
+    # the walk: no symbol is invented for it.
+    kind = shared_params.accessory_kind(node.get("family"))
+    return None if kind == "prv" else kind
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +184,8 @@ class _Builder(object):
     def _new_seg(self, start_node, kind):
         self._n += 1
         sid = "S{0}".format(self._n)
-        seg = {"id": sid, "eids": [], "node_ids": [], "start_node": start_node,
+        seg = {"id": sid, "eids": [], "node_ids": [], "trail": [],
+               "start_node": start_node,
                "end_node": None, "size": None, "sizes_seen": [],
                "pipe_ft": 0.0, "elbows": 0, "tees": 0,
                "length_ft": 0.0, "mbh": None, "valves": [],
@@ -206,6 +218,8 @@ class _Builder(object):
         MIN_DIR_FT away (transitions sit right at the tee)."""
         g = self.g
         j = g.node(jid)["xyz"]
+        if not j:
+            return None        # a joint with no location (pipe_graph)
         cur = hop
         for _i in range(6):
             kind, hid = cur
@@ -228,16 +242,20 @@ class _Builder(object):
         return None
 
     def _in_dir(self, seg, jid):
-        """Direction of travel arriving at junction jid along seg."""
+        """Direction of travel arriving at junction jid along seg: from the
+        last pipe end or fitting passed (an elbow after the last pipe
+        counts, review n47), at least MIN_IN_FT from the junction."""
         g = self.g
         j = g.node(jid)["xyz"]
-        if seg["eids"]:
-            p = _far_end(g.edge(seg["eids"][-1]), j)
-        else:
-            p = g.node(seg["start_node"])["xyz"]
-        if not p:
+        if not j:
             return None
-        return _unit(_sub(j, p))
+        start = g.node(seg["start_node"]).get("xyz")
+        for p in reversed(list(seg.get("trail") or [])):
+            if p and _dist(p, j) >= MIN_IN_FT:
+                return _unit(_sub(j, p))
+        if start and _dist(start, j) > 1e-9:
+            return _unit(_sub(j, start))
+        return None
 
     def branch(self, start, hop, kind):
         """Walk one leg from node start along hop to its Junction or
@@ -255,15 +273,17 @@ class _Builder(object):
                 e = g.edge(hid)
                 seg["eids"].append(hid)
                 seg["pipe_ft"] += float(e.get("length_ft") or 0.0)
-                size = e.get("size")
+                _add_trail(seg, e, g.node(prev).get("xyz"))
+                size = label_size(e)
                 if size is not None and size not in seg["sizes_seen"]:
                     seg["sizes_seen"].append(size)
                 if seg["size"] is None:
                     seg["size"] = size
                 if seg["mbh"] is None:
                     seg["mbh"] = float(e.get("cum_mbh") or 0.0)
-                if (g.origin_phase and e.get("phase") and
-                        e.get("phase") != g.origin_phase):
+                # existing = not created in the project's last phase, the
+                # rule Size Gas uses (review n16), not the meter's phase
+                if oneline_gate.is_existing_edge(e):
                     seg["is_existing"] = True
                 y = e["to"]
             else:
@@ -298,13 +318,15 @@ class _Builder(object):
                 return br
 
             # pass through y
+            if node.get("xyz"):
+                seg["trail"].append(node["xyz"])
             vk = _valve_kind(node)
             if vk:
                 seg["valves"].append({"kind": vk, "node_id": y,
                                       "midstream": bool(node.get("is_midstream_prv"))})
             nxt = legs[0]
             if nxt[0] == "edge":
-                nsize = g.edge(nxt[1]).get("size")
+                nsize = label_size(g.edge(nxt[1]))
                 if seg["size"] is not None and nsize is not None and \
                         nsize != seg["size"]:
                     self._close(seg, y)
@@ -366,6 +388,15 @@ class _Builder(object):
         _developed(root, self.segments)
         _mark_inline(root)
         _fold_equipment_prvs(root, self.segments)
+
+
+def _add_trail(seg, edge, from_xyz):
+    """Pipe ends in travel order: the end nearer the node it leaves first."""
+    s, e = edge.get("start"), edge.get("end")
+    ends = [p for p in (s, e) if p]
+    if from_xyz and len(ends) == 2 and _dist(e, from_xyz) < _dist(s, from_xyz):
+        ends = [e, s]
+    seg["trail"].extend(ends)
 
 
 def _tap_key(b, vin):
@@ -457,6 +488,7 @@ def build(snap):
             existing.get("size_nominal"), existing.get("length_ft"),
             float(existing.get("load_mbh") or 0.0) + root_mbh)
     sch = {"origin": origin, "root": root, "segments": b.segments,
+           "origin_kind": snap.get("origin_kind") or "meter",
            "existing": existing,
            "warnings": b.warnings,
            "origin_xyz": b.g.node(origin).get("xyz"),
@@ -481,6 +513,15 @@ def balanced_feet(lengths, target):
     for i, x in enumerate(lengths):
         if out[i] < 1 and float(x) > 0.0:
             out[i] = 1
+    # a 1 ft bump is taken back from the largest label(s), so the labels
+    # still add up to target (review n48); ties give from the later label
+    over = sum(out) - int(target)
+    while over > 0:
+        big = max(range(len(out)), key=lambda i: (out[i], i))
+        if out[big] <= 1:
+            break           # every label is already 1 ft: cannot balance
+        out[big] -= 1
+        over -= 1
     return out
 
 
@@ -488,7 +529,14 @@ def _balance_trunk_labels(sch):
     """The longest run's labels add up to the notes block TOTAL DEVELOPED
     LENGTH. Rounding each segment on its own showed the run 1 ft long
     (G3C 2026-11-20: 26 + 13 + 36 + 23 + 27 = 125 against 124). Branch
-    labels off the longest run keep plain rounding."""
+    labels off the longest run keep plain rounding.
+
+    The target is gas_labels.feet(sch["longest_run_ft"]), the same number
+    the notes print (snap["longest_run_ft"], which on a tie in already holds
+    the entered existing length, pipe_graph.apply_existing_conditions; the
+    existing run is one of the balanced labels). Only with no longest run
+    is the target the rounded trunk sum. A target the labels cannot reach
+    adds a warning to sch["warnings"]."""
     trunk = trunk_segments(sch)
     items = [(s["length_ft"], s) for s in trunk]
     ex = sch.get("existing")
@@ -497,8 +545,17 @@ def _balance_trunk_labels(sch):
     if not items:
         return
     total = sum(float(x) for x, _s in items)
-    target = gas_labels.feet(total) if total > 0 else 0
+    run_ft = float(sch.get("longest_run_ft") or 0.0)
+    if run_ft > 0:
+        target = gas_labels.feet(run_ft)
+    else:
+        target = gas_labels.feet(total) if total > 0 else 0
     feet = balanced_feet([x for x, _s in items], target)
+    if sum(feet) != target:
+        sch.setdefault("warnings", []).append(
+            "Longest run labels add up to {0} ft, not the {1} ft TOTAL "
+            "DEVELOPED LENGTH in the notes (trunk segments sum to {2:.1f} "
+            "ft).".format(sum(feet), target, total))
     for n, (_x, seg) in zip(feet, items):
         if seg is None:
             # the existing run keeps its MBH line, only the length changes

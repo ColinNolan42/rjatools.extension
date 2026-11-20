@@ -103,6 +103,36 @@ class Sections(unittest.TestCase):
         self.assertIn("Downstream of PRV", gc.oneline_inputs(info))
         self.assertIn("**IFGC table:**", gc.oneline_inputs_md(info))
 
+    def test_oneline_inputs_show_the_heat_content_used(self):
+        # item D: the One-Line inputs print what the table used
+        def heat_row(table_id):
+            info = {"meter": "M", "table": "T", "table_id": table_id,
+                    "heat_content": 840.0, "propane_heat_content": 2500.0}
+            rows = dict(gc._input_rows(info))
+            self.assertEqual(rows["Heat content of gas"],
+                             gc.heat_content_text(table_id, 840.0, 2500.0))
+            md = gc.oneline_inputs_md(info)
+            self.assertIn(rows["Heat content of gas"], md)
+            return rows["Heat content of gas"]
+        self.assertEqual(heat_row("402.4(2)"), "840 BTU/CF")
+        self.assertEqual(heat_row("402.4(28)"), "not used (MBH table)")
+        self.assertEqual(heat_row("402.4(37)"), "2500 BTU/CF (propane)")
+
+    def test_heat_content_text_rule(self):
+        self.assertEqual(gc.heat_content_text("402.4(37)", 840.0, None),
+                         "2500 BTU/CF (propane)")      # firm default
+        self.assertEqual(gc.heat_content_text("402.4(37)", 840.0, 2490.0),
+                         "2490 BTU/CF (propane)")
+        self.assertEqual(gc.heat_content_text("402.4(25)", 840.0, 2490.0),
+                         "not used (MBH table)")
+        self.assertEqual(gc.heat_content_text("402.4(5)", 1000.0, 2490.0),
+                         "1000 BTU/CF")
+        # Size Gas inputs and summary use the same rule
+        rows = dict(gc.sizegas_input_rows(
+            {"table_id": "402.4(37)", "heat_content": 840.0,
+             "propane_heat_content": 2500.0}))
+        self.assertEqual(rows["Heat content of gas"], "2500 BTU/CF (propane)")
+
     def test_oneline_existing_row(self):
         info = {"meter": "New pipe at existing (1)", "table": "T",
                 "table_id": "402.4(2)", "heat_content": 840.0,
@@ -172,7 +202,8 @@ class Sections(unittest.TestCase):
         checks = [r for r in rows if len(r) == 3 and r[0] != "Check"]
         self.assertEqual([r[2] for r in checks], ["OK", "OK", "OK"])
         # 87.26 ft pipe + 5 elbows x 5 ft + 4 tees x 3 ft = 124.26 ft
-        self.assertIn("124.26 of 124.26 ft", checks[0][1])
+        # n=8: the printed labels against the printed notes total
+        self.assertIn("124' of 124'", checks[0][1])
         self.assertIn("44 of 44 pipes", checks[1][1])
         text = "".join(p.text)
         self.assertIn("1814 MBH", text)
@@ -184,6 +215,7 @@ class Sections(unittest.TestCase):
         sch = copy.deepcopy(SCH)
         sid = [s for s in sch["segments"].values() if s["on_longest"]][0]["id"]
         sch["segments"][sid]["length_ft"] += 10.0
+        sch["segments"][sid]["label_ft"] += 10
         sch["segments"][sid]["eids"].append(sch["segments"][sid]["eids"][0])
         rows = _cells(gc.oneline_summary(sch, G3C))[1]
         checks = [r for r in rows if len(r) == 3 and r[0] != "Check"]
@@ -201,6 +233,63 @@ class Sections(unittest.TestCase):
         self.assertNotIn("Fittings ft", text)
         self.assertIn("Elbows add 5 ft each, tees 3 ft each.", text)
         self.assertEqual(len(rows), 1 + 5 + 1)
+
+    def test_n8_check_reads_printed_labels_not_unrounded_lengths(self):
+        # balanced_feet bumps a sub 0.5 ft segment to 1 after the remainder
+        # is spread, so the printed labels can add to one foot more than
+        # the notes TOTAL DEVELOPED LENGTH while the unrounded lengths still
+        # match. Simulate that: one label 1 ft high, lengths untouched.
+        sch = copy.deepcopy(SCH)
+        sid = [s for s in sch["segments"].values() if s["on_longest"]][0]["id"]
+        sch["segments"][sid]["label_ft"] += 1
+        rows = _cells(gc.oneline_summary(sch, G3C))[1]
+        checks = [r for r in rows if len(r) == 3 and r[0] != "Check"]
+        self.assertEqual(checks[0][2], "FAIL")
+        self.assertIn("125' of 124'", checks[0][1])
+        self.assertEqual(gc.printed_trunk_feet(SCH), 124)
+        self.assertEqual(gc.printed_total_feet(G3C), 124)
+
+    def test_n59_length_check_zone_rows(self):
+        # Colin 2026-11-20: zoned at a mid stream PRV, the check lists Size
+        # Gas's own run per system and names the whole system run
+        snap = copy.deepcopy(G3C)
+        snap["sizing"]["zones"] = [
+            {"label": "Meter to regulator(s)", "table_id": "402.4(5)",
+             "run_ft": 84.6, "row_ft": 90.0},
+            {"label": "After PRV 7", "table_id": "402.4(2)",
+             "run_ft": 139.5, "row_ft": 150.0}]
+        self.assertEqual(gc.zone_run_rows(snap), [
+            ["Meter to regulator(s)", "402.4(5)", "84.60", "90.00"],
+            ["After PRV 7", "402.4(2)", "139.50", "150.00"]])
+        p, _rows = _cells(gc.length_check(SCH, snap))
+        self.assertEqual(p.errors, [])
+        text = "".join(p.text)
+        self.assertIn("After PRV 7", text)
+        self.assertIn("139.50", text)
+        self.assertIn("whole system (notes TOTAL DEVELOPED LENGTH): 124.26 ft",
+                      text)
+
+    def test_n59_unzoned_keeps_one_line(self):
+        snap = copy.deepcopy(G3C)
+        snap["sizing"]["zones"] = [{"label": "Meter", "table_id": "402.4(2)",
+                                    "run_ft": 124.26, "row_ft": 125.0}]
+        self.assertEqual(gc.zone_run_rows(snap), [])
+        p, _rows = _cells(gc.length_check(SCH, snap))
+        self.assertIn("Longest run (Size Gas): 124.26 ft", "".join(p.text))
+
+    def test_n37_length_check_lists_the_existing_run(self):
+        sch = copy.deepcopy(SCH)
+        sch["existing"] = {"size_nominal": "2", "length_ft": 120.0,
+                           "load_mbh": 300.0, "label_ft": 120,
+                           "label": ["2\"G, 120'", "2114 MBH"]}
+        p, rows = _cells(gc.length_check(sch, G3C))
+        self.assertEqual(p.errors, [])
+        self.assertEqual(rows[1][0], "Existing (entered)")
+        self.assertEqual(rows[1][-1], "120.00")
+        body = rows[1:-1]
+        self.assertAlmostEqual(sum(float(r[-1]) for r in body),
+                               float(rows[-1][-1]), places=1)
+        self.assertEqual(rows[-1][-1], "244.26")
 
     def test_warnings(self):
         self.assertEqual(gc.oneline_warnings([]), "")
@@ -516,20 +605,51 @@ class SizeGasSections(unittest.TestCase):
                 "downstream": False, "longest_run": 117.0, "table_row": 125}
 
     def test_summary_total_row_and_values(self):
-        html = gc.summary(self._summary_info())
+        info = self._summary_info()
+        info["fit"]["failures"] = []
+        html = gc.summary(info)
         p, cells = _cells(html)
         self.assertEqual(p.errors, [])
         self.assertEqual(cells[-1], ["Pipes, stubs and fittings sized", "69"])
         d = dict((r[0], r[1]) for r in cells if len(r) == 2)
         self.assertEqual(d["Transitions left to Revit"], "11")
-        self.assertEqual(d["Fitting failures"], "1")
+        self.assertEqual(d["Fitting failures"], "0")
         self.assertEqual(d["Pipe failures"], "0")
         self.assertEqual(d["Longest run"], "117.0 ft")
         self.assertEqual(d["Table row used"], "125 ft")
         self.assertEqual(d["API approach used"], "RBS_PIPE_DIAMETER_PARAM")
         self.assertIn(cr.CALLOUT_STYLES["ok"][1], html)
         self.assertIn("23 distribution pipes + 12 stub pipes + 34",
-                      gc.summary_md(self._summary_info()))
+                      gc.summary_md(info))
+
+    def test_n7_fitting_failure_is_not_a_green_summary(self):
+        info = self._summary_info()          # sample_fit has 1 failure
+        html = gc.summary(info)
+        self.assertNotIn(cr.CALLOUT_STYLES["ok"][1], html)
+        self.assertIn(cr.CALLOUT_STYLES["warn"][1], html)
+        self.assertIn("1 fitting(s) or cap(s) failed", html)
+        self.assertIn("Not everything was sized", gc.summary_md(info))
+
+    def test_n7_stub_failure_and_rollback_are_named(self):
+        info = self._summary_info()
+        info["fit"]["failures"] = []
+        info["stub_fail"] = 3
+        html = gc.summary(info)
+        self.assertNotIn(cr.CALLOUT_STYLES["ok"][1], html)
+        self.assertIn("3 fixture stub pipe(s) failed", html)
+
+        info["stub_fail"] = 0
+        info["stub_success"] = 0
+        html = gc.summary(info, rolled_back=["fixture stub pipes"])
+        self.assertNotIn(cr.CALLOUT_STYLES["ok"][1], html)
+        self.assertIn("the fixture stub pipes transaction was rolled back",
+                      html)
+        d = dict((r[0], r[1]) for r in _cells(html)[1] if len(r) == 2)
+        self.assertEqual(d["Transactions rolled back"], "fixture stub pipes")
+        # the same through the info dict, the old one argument call
+        info["stub_rolled_back"] = True
+        self.assertIn("rolled back", gc.summary(info))
+        self.assertIn("rolled back", gc.summary_md(info))
 
     def test_summary_failure_and_zoned(self):
         info = self._summary_info(fail_count=2)
@@ -557,8 +677,146 @@ class SizeGasSections(unittest.TestCase):
         for html in (gc.sizegas_inputs(self.INFO),
                      gc.sizing_basis(res, 1.0, 1, "CFH"),
                      gc.sizing_tables(sample_rows(), res),
-                     gc.summary(self._summary_info())):
+                     gc.summary(self._summary_info()),
+                     gc.summary(self._summary_info(), ["fittings"])):
             self.assertEqual(shape(html).errors, [])
+
+
+class SizeGasReviewItems(unittest.TestCase):
+    """Coordinator items after the Size Gas fixes (2026-11-20): rollbacks
+    in the summary callout, the heat content each system used, the 0 MBH
+    data error wording, the PRV write count, the data errors section and
+    the One-Line gate code texts."""
+
+    def _info(self):
+        return {"success": 23, "stub_success": 12, "stub_fail": 0,
+                "existing_skip": 0, "existing_overloaded": 0,
+                "existing_unchecked": 0,
+                "fit": dict(sample_fit(), failures=[]),
+                "fail_count": 0, "approach": "RBS_PIPE_DIAMETER_PARAM",
+                "table_id": "402.4(2)", "heat_content": 840.0,
+                "existing_check": None, "zones": sample_result()["zones"],
+                "downstream": False, "longest_run": 117.0, "table_row": 125,
+                "rolled_back": [], "stub_rolled_back": False}
+
+    # item 2 -----------------------------------------------------------
+    def test_rolled_back_steps_from_the_script_stop_the_green_callout(self):
+        info = self._info()
+        self.assertIn(cr.CALLOUT_STYLES["ok"][1], gc.summary(info))
+        info["rolled_back"] = ["fittings", "fixture stub pipes"]
+        info["stub_rolled_back"] = True
+        html = gc.summary(info)
+        self.assertNotIn(cr.CALLOUT_STYLES["ok"][1], html)
+        self.assertIn("the fittings transaction was rolled back", html)
+        # named once even though both keys report the stub rollback
+        self.assertEqual(html.count("fixture stub pipes transaction"), 1)
+        info["rolled_back"] = ["pipe sizes"]
+        info["stub_rolled_back"] = False
+        self.assertIn("the pipe sizes transaction was rolled back",
+                      gc.summary_md(info))
+
+    # item 3 -----------------------------------------------------------
+    def test_basis_shows_the_heat_content_each_system_used(self):
+        res = sample_result()
+        res["propane_heat_content_btu_per_cf"] = 2500.0
+        text = "".join(shape(gc.sizing_basis(res, 1.0, 1, "CFH")).text)
+        self.assertIn("840 BTU/CF", text)
+        self.assertNotIn("2500", text)
+        # propane in CFH: the propane value, not the natural gas one
+        res["table_id"] = "402.4(37)"
+        text = "".join(shape(gc.sizing_basis(res, 1.0, 1, "CFH")).text)
+        self.assertIn("2500 BTU/CF (propane)", text)
+        self.assertNotIn("840 BTU/CF", text)
+        # an MBH table shows no heat content
+        res["table_id"] = "402.4(36)"
+        text = "".join(shape(gc.sizing_basis(res, 1.0, 1, "MBH")).text)
+        self.assertIn("not used", text)
+        self.assertNotIn("BTU/CF", text)
+
+    def test_zone_heat_content_per_system(self):
+        res = sample_result()
+        res["table_id"] = "402.4(36)"
+        res["downstream_table_id"] = "402.4(37)"
+        res["propane_heat_content_btu_per_cf"] = 2490.0
+        res["zones"] = [
+            {"label": "Meter", "table_id": "402.4(36)", "run_ft": 50.0,
+             "row_ft": 50, "farthest_name": "PRV-1",
+             "heat_content_btu_per_cf": None},
+            {"label": "After PRV 3", "table_id": "402.4(37)", "run_ft": 40.0,
+             "row_ft": 40, "farthest_name": "GUH-1",
+             "heat_content_btu_per_cf": 2490.0}]
+        text = "".join(shape(gc.sizing_basis(res, 1.0, 2, "MBH")).text)
+        self.assertIn("heat content not used (MBH table)", text)
+        self.assertIn("heat content 2490 BTU/CF", text)
+        info = self._info()
+        info["table_id"] = "402.4(36)"
+        info["downstream"] = True
+        info["zones"] = res["zones"]
+        d = dict((r[0], r[1]) for r in _cells(gc.summary(info))[1]
+                 if len(r) == 2)
+        self.assertEqual(d["Heat Content of Gas"], "not used (MBH table)")
+        self.assertIn("2490 BTU/CF", d["After PRV 3"])
+
+    # item 4 -----------------------------------------------------------
+    def test_zero_load_text_is_a_data_error_not_minimum_size(self):
+        g = gc.build_warning_groups(no_load=[("WH-1", 11)], n_fixtures=3)
+        text = g[0]["text"]
+        self.assertIn("data error", text)
+        self.assertIn("does not set the developed length", text)
+        self.assertIn("left unsized", text)
+        self.assertNotIn("3/4", text)
+        self.assertNotIn("minimum", text)
+
+    def test_data_error_status_is_red(self):
+        self.assertEqual(cr.status_key("DATA ERROR"), "RED")
+
+    # item 1 -----------------------------------------------------------
+    def test_prv_count_in_write_results(self):
+        fit = dict(sample_fit(), prv=2)
+        d = dict(gc._write_counts({"pipes_sized": 1, "stubs_sized": 0,
+                                   "fit": fit}))
+        self.assertEqual(d["Meter / PRVs left as drawn"], "2")
+        d = dict(gc._write_counts({"pipes_sized": 1, "stubs_sized": 0,
+                                   "fit": sample_fit()}))
+        self.assertNotIn("Meter / PRVs left as drawn", d)
+
+    # item 5 -----------------------------------------------------------
+    def test_data_errors_section(self):
+        self.assertEqual(gc.data_errors_section(), "")
+        errs = [{"element_id": 11, "name": "WH-1", "kind": "zero_load",
+                 "message": "GAS_LOAD_MBH is 0"}]
+        html = gc.data_errors_section(
+            errs, [{"pipe_id": 501, "fixture_ids": [11]}], [777])
+        p, cells = _cells(html)
+        self.assertEqual(p.errors, [])
+        self.assertIn(["11", "WH-1", "GAS_LOAD_MBH is 0"], cells)
+        self.assertIn(["501", "11"], cells)
+        self.assertIn(cr.CALLOUT_STYLES["error"][1], html)
+        self.assertIn("777", html)
+        md = gc.data_errors_section_md(errs, [{"pipe_id": 501,
+                                               "fixture_ids": [11]}], [777])
+        self.assertIn("DATA ERROR, fixture 11 (WH-1)", md)
+        self.assertIn("Pipe 501", md)
+
+    # One-Line gate codes ----------------------------------------------
+    def test_every_gate_code_has_a_display_text(self):
+        import re
+        src = open(os.path.join(HERE, "oneline_gate.py")).read()
+        codes = set(re.findall(r'_err\(\s*\w+,\s*"([a-z_]+)"', src))
+        codes |= set(re.findall(r'"code":\s*"([a-z_]+)"', src))
+        # data error kinds pass through as codes (d.get("kind"))
+        pg = open(os.path.join(HERE, "pipe_graph.py")).read()
+        codes |= set(re.findall(
+            r'_record_data_error\(\s*graph,\s*\w+,\s*"([a-z_]+)"', pg))
+        codes.add("zero_load")
+        for c in ("edge_to_missing", "origin_legs", "zero_load_pipe",
+                  "existing_small", "existing_unreadable"):
+            self.assertIn(c, codes)
+        missing = sorted(c for c in codes if c not in gc._CODE_TEXT)
+        self.assertEqual(missing, [])
+        self.assertNotIn("prv_no_table", gc._CODE_TEXT)
+        for c in codes:
+            self.assertNotEqual(gc._code_text(c), c)
 
 
 if __name__ == "__main__":

@@ -35,8 +35,9 @@ def _ft(v):
 # ---------------------------------------------------------------------------
 
 def oneline_inputs(info):
-    """info: {'meter', 'table', 'table_id', 'heat_content', 'downstream_table'
-    (or None), 'origin_kind' ('meter' or 'tie_in')}"""
+    """info: {'meter', 'table', 'table_id', 'heat_content' (natural gas, as
+    entered), 'propane_heat_content', 'downstream_table' (or None),
+    'origin_kind' ('meter' or 'tie_in')}"""
     rows = _input_rows(info)
     return cr.section("Gas One-Line", "inputs") + cr.keyvalue(rows)
 
@@ -45,8 +46,9 @@ def _input_rows(info):
     rows = [("Start", info.get("meter") or ""),
             ("IFGC table", "{0}  [{1}]".format(info.get("table") or "",
                                                info.get("table_id") or "")),
-            ("Heat content of gas", "{0:.0f} BTU/CF".format(
-                float(info.get("heat_content") or 0.0)))]
+            ("Heat content of gas", heat_content_text(
+                info.get("table_id"), info.get("heat_content"),
+                info.get("propane_heat_content")))]
     if info.get("downstream_table"):
         rows.append(("Downstream of PRV", info["downstream_table"]))
     if info.get("origin_kind") == "tie_in":
@@ -97,10 +99,21 @@ _CODE_TEXT = {
     "no_piping": "No piping", "disconnected": "Disconnected",
     "open_pipe": "Open pipe end", "open_fitting": "Open fitting",
     "end_not_fixture": "Not a gas fixture", "no_fixtures": "No fixtures",
-    "zero_load": "0 MBH fixture", "no_name": "No FIXTURE_NAME",
-    "nested_prv": "Nested PRV", "prv_no_table": "PRV table",
+    "zero_load": "0 MBH fixture, data error",
+    "bad_load": "Load not readable, data error",
+    "no_name": "No FIXTURE_NAME",
+    "nested_prv": "Nested PRV",
     "sizing_error": "Size Gas error", "unsized": "Not sized",
     "size_unreadable": "Size not in table", "size_mismatch": "Size differs",
+    # One-Line gate codes added 2026-11-20 (review fixes)
+    "edge_to_missing": "Pipe leads to an element not read, fix the model",
+    "origin_legs": "More than one main leaves the meter, fix the model",
+    "zero_load_pipe": "Pipe to 0 MBH fixtures only, data error",
+    # warnings (printed as callouts, named here for completeness)
+    "existing_small": "Existing pipe smaller than Size Gas requires",
+    "existing_unreadable": "Existing pipe size not readable",
+    "model_read": "Model read", "existing_pipe": "Existing pipe entered",
+    "non_gas": "Not a gas system",
 }
 
 
@@ -138,18 +151,45 @@ def symbols_table_md(rows):
 # summary and length check
 # ---------------------------------------------------------------------------
 
-def _checks(sch, snap):
-    trunk = S.trunk_sum_ft(sch)
+def _label_feet(seg):
+    """The whole feet a trunk label prints: label_ft when the schematic
+    balanced it, else the plain rounding the label would use."""
+    n = seg.get("label_ft")
+    if n is None:
+        n = gas_labels.feet(seg.get("length_ft") or 0.0) or 0
+    return int(n)
+
+
+def printed_trunk_feet(sch):
+    """Sum of the PRINTED (rounded) trunk labels, the existing run included
+    on a tie in."""
+    total = sum(_label_feet(s) for s in S.trunk_segments(sch))
+    if sch.get("existing"):
+        total += _label_feet(sch["existing"])
+    return total
+
+
+def printed_total_feet(snap):
+    """The notes block TOTAL DEVELOPED LENGTH as printed (gas_labels.feet of
+    the longest run, 0 when there is none)."""
     run = float(snap.get("longest_run_ft") or 0.0)
+    return gas_labels.feet(run) if run > 0 else 0
+
+
+def _checks(sch, snap):
+    # n=8: compare what is PRINTED. The unrounded sum always matched, so the
+    # check said OK when the rounded labels did not add up to the notes.
+    trunk = printed_trunk_feet(sch)
+    run = printed_total_feet(snap)
     counts = S.eid_counts(sch)
     edges = set(int(k) for k in (snap.get("edges") or {}))
     once = (set(counts.keys()) == edges and
             all(v == 1 for v in counts.values()))
     mbh_bad = S.mbh_violations(sch)
     return [
-        ("Trunk labels sum to the longest run",
-         "{0} of {1} ft".format(_ft(trunk), _ft(run)),
-         "OK" if abs(trunk - run) <= 0.05 else "FAIL"),
+        ("Trunk labels sum to the TOTAL DEVELOPED LENGTH",
+         "{0}' of {1}'".format(trunk, run),
+         "OK" if trunk == run else "FAIL"),
         ("Every pipe drawn exactly once",
          "{0} of {1} pipes".format(len(counts), len(edges)),
          "OK" if once else "FAIL"),
@@ -191,6 +231,13 @@ def length_check(sch, snap):
     """The trunk Segments with their unrounded parts and the total against
     the longest run (the rounded labels can differ by a foot)."""
     rows = []
+    ex = sch.get("existing")
+    if ex:
+        # n=37: the entered existing run is part of the Total, so it is
+        # listed as its own row and the rows add up.
+        rows.append(["Existing (entered)", (ex.get("label") or [""])[0],
+                     _ft(ex.get("length_ft")), "", "",
+                     _ft(ex.get("length_ft"))])
     for s in S.trunk_segments(sch):
         rows.append([s["id"], s["label"][0], _ft(s["pipe_ft"]),
                      str(s["elbows"]), str(s["tees"]), _ft(s["length_ft"])])
@@ -200,11 +247,35 @@ def length_check(sch, snap):
                      "Length ft"], rows, align=["l", "l", "r", "r", "r", "r"],
                     total_row=["Total", "", "", "", "",
                                _ft(total)], widths=W_LENGTH)
-    out += cr.note("Longest run (Size Gas): {0} ft. Elbows add {1:.0f} ft each, tees {2:.0f} ft each.".format(
-        _ft(snap.get("longest_run_ft")),
+    equiv = "Elbows add {0:.0f} ft each, tees {1:.0f} ft each.".format(
         float(snap.get("elbow_equiv_ft") or shared_params.ELBOW_EQUIV_LENGTH_FT),
-        float(snap.get("tee_equiv_ft") or shared_params.TEE_EQUIV_LENGTH_FT)))
+        float(snap.get("tee_equiv_ft") or shared_params.TEE_EQUIV_LENGTH_FT))
+    zones = zone_run_rows(snap)
+    if not zones:
+        out += cr.note("Longest run (Size Gas): {0} ft. {1}".format(
+            _ft(snap.get("longest_run_ft")), equiv))
+        return out
+    # zoned at a mid stream PRV (Colin, 2026-11-20): Size Gas read each
+    # table at its own system's run; the Total above is the whole system
+    out += cr.table(["System", "Table", "Longest run ft", "Table row ft"],
+                    zones, align=["l", "l", "r", "r"])
+    out += cr.note("Longest run, whole system (notes TOTAL DEVELOPED "
+                   "LENGTH): {0} ft. Size Gas sized each system at its own "
+                   "run above. {1}".format(_ft(snap.get("longest_run_ft")),
+                                           equiv))
     return out
+
+
+def zone_run_rows(snap):
+    """[[system, table, run ft, row ft]] from Size Gas's zones when the
+    system is split at a mid stream PRV, else []."""
+    zones = (snap.get("sizing") or {}).get("zones") or []
+    if len(zones) < 2:
+        return []
+    return [[z.get("label") or "", str(z.get("table_id") or ""),
+             _ft(z.get("run_ft")),
+             _ft(z.get("row_ft")) if z.get("row_ft") is not None else ""]
+            for z in zones]
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +375,9 @@ def sizegas_input_rows(info):
             ("Gas", info.get("gas") or ""),
             ("IFGC table", "{0}  [{1}]".format(info.get("table") or "",
                                                info.get("table_id") or "")),
-            ("Heat content of gas", "{0} BTU/CF".format(
-                _f0(info.get("heat_content"))))]
+            ("Heat content of gas", heat_content_text(
+                info.get("table_id"), info.get("heat_content"),
+                info.get("propane_heat_content")))]
     if info.get("downstream_table"):
         rows.append(("Downstream of PRV", "{0}  [{1}]".format(
             info["downstream_table"], info.get("downstream_table_id") or "")))
@@ -327,6 +399,66 @@ def sizegas_inputs_md(info):
         sizegas_input_rows(info))
 
 
+def heat_content_used(result, table_id):
+    """The heat content a table's demand was converted with, BTU/CF, or
+    None for a table in MBH (no conversion). The propane value on a propane
+    CFH table (402.4(37)), else the natural gas value
+    (sizing_engine.heat_content_for_table, the one rule)."""
+    import sizing_engine
+    try:
+        return sizing_engine.heat_content_for_table(
+            table_id, result.get("heat_content_btu_per_cf"),
+            result.get("propane_heat_content_btu_per_cf"))
+    except ValueError:
+        return result.get("heat_content_btu_per_cf")
+
+
+def heat_content_text(table_id, heat_content, propane_heat_content=None):
+    """The heat content a table actually used, for an inputs or summary row:
+    'not used (MBH table)' on 402.4(25) to (36), '2500 BTU/CF (propane)' on
+    402.4(37), else the natural gas value, '840 BTU/CF'. The rule is
+    heat_content_used (sizing_engine.heat_content_for_table)."""
+    if _is_mbh_table(table_id):
+        return "not used (MBH table)"
+    heat = heat_content_used(
+        {"heat_content_btu_per_cf": heat_content,
+         "propane_heat_content_btu_per_cf": propane_heat_content}, table_id)
+    import gas_tables
+    try:
+        propane = gas_tables.is_propane_table(table_id)
+    except (AttributeError, ValueError):
+        propane = False
+    return "{0} BTU/CF{1}".format(_f0(heat), " (propane)" if propane else "")
+
+
+def _is_mbh_table(table_id):
+    import gas_tables
+    try:
+        return gas_tables.table_units(table_id) == "MBH"
+    except ValueError:
+        return False
+
+
+def _heat_text(heat, table_id):
+    if heat is None:
+        return ("not used. Table {0} is in MBH, so the MBH load is compared "
+                "directly.".format(table_id))
+    import gas_tables
+    try:
+        propane = gas_tables.is_propane_table(table_id)
+    except (AttributeError, ValueError):
+        propane = False
+    return "{0} BTU/CF{1}".format(_f0(heat), " (propane)" if propane else "")
+
+
+def _zone_heat(result, z):
+    """The heat content the zone's system used: the system entry's own
+    heat_content_btu_per_cf when the engine gave one, else the rule."""
+    if "heat_content_btu_per_cf" in z:
+        return z["heat_content_btu_per_cf"]
+    return heat_content_used(result, z["table_id"])
+
+
 def _basis_rows(result, total_mbh, n_fixtures, units):
     rows = [("Table", result["table_id"]),
             ("Table row", "{0} ft  (longest run {1} ft rounded up)".format(
@@ -337,19 +469,21 @@ def _basis_rows(result, total_mbh, n_fixtures, units):
         rows.append(("Downstream", "{0}  (after each PRV)".format(
             result["downstream_table_id"])))
         for z in result.get("zones") or []:
+            heat = _zone_heat(result, z)
             rows.append(("  " + z["label"],
                          "Table {0}, longest run {1} ft (row {2} ft), "
-                         "farthest {3}".format(
+                         "farthest {3}, heat content {4}".format(
                              z["table_id"], _f1(z["run_ft"]), z["row_ft"],
-                             z.get("farthest_name") or "-")))
+                             z.get("farthest_name") or "-",
+                             "not used (MBH table)" if heat is None
+                             else "{0} BTU/CF".format(_f0(heat)))))
     rows.append(("Capacity in", "{0}  (Table {1} as published)".format(
         units, result["table_id"])))
-    if units == "MBH":
-        rows.append(("Heat content", "not used. The table is in MBH, so the "
-                                     "MBH load is compared directly."))
-    else:
-        rows.append(("Heat content", "{0} BTU/CF".format(
-            _f0(result.get("heat_content_btu_per_cf")))))
+    # The heat content each system actually used (n=24): the propane value
+    # on 402.4(37), none on an MBH table.
+    heat = (None if units == "MBH" else
+            heat_content_used(result, result["table_id"]))
+    rows.append(("Heat content", _heat_text(heat, result["table_id"])))
     rows.append(("Total load", "{0} MBH, {1} fixtures".format(
         _f1(total_mbh), n_fixtures)))
     return rows
@@ -526,11 +660,14 @@ def existing_check_md(check):
 
 def build_warning_groups(existing=(), prv=(), table_limit=(), no_load=(),
                          unnamed=(), non_gas=(), bare_end=(), disconnected=(),
-                         n_fixtures=0):
+                         n_fixtures=0, data_errors=(), tapped=()):
     """The Pre-Sizing Warnings as groups, one callout each. Plain data in:
     no_load [(name, id)], unnamed [(id, mbh)], non_gas [(id, class)],
-    bare_end [(id, family)], disconnected [id]. Returns [{'title', 'text',
-    'headers', 'rows'}], empty when nothing warns."""
+    bare_end [(id, family)], disconnected [id], data_errors (the walk's
+    graph.data_errors dicts: element_id, name, kind, message), tapped [pipe
+    id]. A fixture in data_errors is not listed again under no_load.
+    Returns [{'title', 'text', 'headers', 'rows'}], empty when nothing
+    warns."""
     groups = []
     for w in existing:
         groups.append({"title": "Existing gas pipe", "text": w})
@@ -538,12 +675,38 @@ def build_warning_groups(existing=(), prv=(), table_limit=(), no_load=(),
         groups.append({"title": "PRV", "text": w})
     for w in table_limit:
         groups.append({"title": "IFGC table limit", "text": w})
+    if data_errors:
+        # n=10/11: a 0 MBH or unreadable load is a data error
+        groups.append({
+            "title": "Data errors",
+            "text": "{0} gas fixture(s) have a load of 0 MBH or one that "
+                    "cannot be read. Each carries no load and does not set "
+                    "the longest run. Enter the load and run Size Gas "
+                    "again.".format(len(data_errors)),
+            "headers": ["Element ID", "Fixture", "Problem"],
+            "rows": [[str(d.get("element_id")), d.get("name") or "UNNAMED",
+                      str(d.get("message") or d.get("kind") or "")]
+                     for d in data_errors]})
+        flagged = set(d.get("element_id") for d in data_errors)
+        no_load = [(n, i) for n, i in no_load if i not in flagged]
+    if tapped:
+        groups.append({
+            "title": "Tapped pipes",
+            "text": "{0} pipe(s) carry a tap (more than one connection "
+                    "downstream). Each branch is charged the whole pipe "
+                    "length and the pipe carries every branch's load "
+                    "(conservative). Break the pipe at the tap with a "
+                    "tee.".format(len(tapped)),
+            "headers": ["Element ID"],
+            "rows": [[str(i)] for i in tapped]})
     if no_load:
         groups.append({
             "title": "0 MBH fixtures",
-            "text": "{0}/{1} fixture(s) have 0 MBH load. Connected pipes "
-                    "will be sized at minimum (3/4\").".format(
-                        len(no_load), n_fixtures),
+            "text": "{0}/{1} fixture(s) have 0 MBH load. This is a data "
+                    "error: the fixture does not set the developed length "
+                    "and a pipe that leads only to 0 MBH fixtures is left "
+                    "unsized (status DATA ERROR). Enter the load and run "
+                    "Size Gas again.".format(len(no_load), n_fixtures),
             "headers": ["Element ID", "Fixture"],
             "rows": [[str(i), n or "UNNAMED"] for n, i in no_load]})
     if unnamed:
@@ -587,9 +750,33 @@ def presize_warnings(groups):
         out += cr.callout("{0}: {1}".format(g["title"], g["text"]), "warn")
         if g.get("rows"):
             ncol = len(g["headers"])
-            out += cr.table(g["headers"], g["rows"], width="50%",
-                            widths=[30, 70] if ncol == 2 else [100])
+            widths = {1: [100], 2: [30, 70]}.get(ncol, [20, 30, 50])
+            out += cr.table(g["headers"], g["rows"],
+                            width="50%" if ncol < 3 else "80%",
+                            widths=widths)
     return out
+
+
+def existing_appliances(rows):
+    """rows [(element id, name)]: existing phase gas appliances a tie in
+    run reached on new piping. Their load is counted, never resized."""
+    if not rows:
+        return ""
+    out = cr.section("Existing Appliances on New Piping",
+                     "{0} found".format(len(rows)))
+    out += cr.note("Existing phase gas appliances fed by the new piping. "
+                   "Their load is counted and they are never resized.")
+    out += cr.table(["Element ID", "Name"],
+                    [[str(i), n or "-"] for i, n in rows],
+                    width="50%", widths=[30, 70])
+    return out
+
+
+def existing_appliances_md(rows):
+    if not rows:
+        return ""
+    return "**Existing appliances on new piping (load counted):** " + ", ".join(
+        "{0} ({1})".format(i, n or "-") for i, n in rows)
 
 
 def presize_warnings_md(groups):
@@ -622,6 +809,8 @@ def _write_counts(info):
             ("Fittings with no new pipe sized", fit.get("no_sized_pipe", 0)),
             ("Appliances with no size parameter", fit.get("appliance", 0)),
             ("Transitions left to Revit", fit.get("transitions", 0))]
+    if "prv" in fit:
+        rows.append(("Meter / PRVs left as drawn", fit.get("prv", 0)))
     if fit.get("transitions_removed"):
         rows.append(("Transitions removed by Revit (pipes now the same "
                      "size)", fit["transitions_removed"]))
@@ -629,6 +818,71 @@ def _write_counts(info):
         rows.append(("Fittings replaced by Revit, replacement sized",
                      fit["replaced"]))
     return [(k, str(v)) for k, v in rows]
+
+
+# -- data errors (0 MBH or unreadable fixture loads) -------------------------
+
+def _data_error_rows(data_errors):
+    return [[str(d.get("element_id")), d.get("name") or "UNNAMED",
+             str(d.get("message") or d.get("kind") or "")]
+            for d in data_errors or []]
+
+
+def data_errors_section(data_errors=(), unsized_zero_load=(), tapped=()):
+    """The Size Gas data errors section, for the script in place of its own
+    _graph_notices callouts.
+
+    data_errors: graph.data_errors dicts (element_id, name, kind, message).
+    unsized_zero_load: result['unsized_zero_load'] dicts (pipe_id,
+        fixture_ids), pipes left unsized because they lead only to 0 MBH
+        fixtures.
+    tapped: graph.tapped_pipes, pipe ids carrying a tap (a warning).
+    Returns "" when there is nothing to say."""
+    out = ""
+    if data_errors:
+        out += cr.section("Data Errors", "{0} fixture(s)".format(
+            len(data_errors)))
+        out += cr.callout(
+            "{0} gas fixture(s) have a load of 0 MBH or one that cannot be "
+            "read. Each carries no load and does not set the developed "
+            "length. Enter the load and run Size Gas again.".format(
+                len(data_errors)), "error")
+        out += cr.table(["Element ID", "Fixture", "Problem"],
+                        _data_error_rows(data_errors),
+                        widths=[20, 30, 50], width="80%")
+    if unsized_zero_load:
+        if not data_errors:
+            out += cr.section("Data Errors")
+        out += cr.callout(
+            "{0} pipe(s) lead only to 0 MBH fixtures and were NOT sized or "
+            "written.".format(len(unsized_zero_load)), "error")
+        out += cr.table(["Pipe ID", "0 MBH fixture(s)"],
+                        [[str(z.get("pipe_id")),
+                          ", ".join(str(i) for i in z.get("fixture_ids") or [])]
+                         for z in unsized_zero_load],
+                        widths=[30, 70], width="60%")
+    if tapped:
+        out += cr.callout(
+            "{0} pipe(s) carry a tap ({1}). Each branch is charged the whole "
+            "pipe length and the pipe carries every branch load "
+            "(conservative). Split the pipe at the tap with a tee for an "
+            "exact developed length.".format(
+                len(tapped), ", ".join(str(i) for i in tapped)), "warn")
+    return out
+
+
+def data_errors_section_md(data_errors=(), unsized_zero_load=(), tapped=()):
+    lines = []
+    for r in _data_error_rows(data_errors):
+        lines.append("- DATA ERROR, fixture {0} ({1}): {2}".format(*r))
+    for z in unsized_zero_load or []:
+        lines.append("- Pipe {0} leads only to 0 MBH fixture(s) {1}, not "
+                     "sized.".format(z.get("pipe_id"), ", ".join(
+                         str(i) for i in z.get("fixture_ids") or [])))
+    if tapped:
+        lines.append("- {0} pipe(s) carry a tap: {1}".format(
+            len(tapped), ", ".join(str(i) for i in tapped)))
+    return "\n".join(lines)
 
 
 def write_start(approaches):
@@ -730,7 +984,7 @@ def existing_audit_md(skip_count, overloaded, unchecked):
 
 # -- summary ----------------------------------------------------------------
 
-def _summary_rows(info):
+def _summary_rows(info, rolled_back=None):
     fit = info["fit"]
     rows = [("Distribution pipes sized", info["success"]),
             ("Fixture stub pipes sized", info["stub_success"])]
@@ -752,9 +1006,11 @@ def _summary_rows(info):
                      fit["transitions_removed"]))
     rows.append(("Fitting failures", len(fit.get("failures") or [])))
     rows.append(("Pipe failures", info["fail_count"]))
+    rolled = _rolled_back(info, rolled_back)
+    if rolled:
+        rows.append(("Transactions rolled back", ", ".join(rolled)))
     rows = [(k, str(v)) for k, v in rows]
-    rows.append(("API approach used", info.get("approach") or
-                 "None, all failed"))
+    rows.append(("API approach used", _approach_text(info, rolled)))
     rows.append(("IFGC table", info["table_id"]))
     ec = info.get("existing_check")
     if ec is not None:
@@ -763,24 +1019,90 @@ def _summary_rows(info):
                          ec["size_nominal"], _f1(ec["length_ft"]),
                          _f1(ec["existing_load_mbh"]),
                          "adequate" if ec["adequate"] else "NOT ADEQUATE")))
-    rows.append(("Heat Content of Gas", "{0} BTU/CF".format(
-        _f0(info["heat_content"]))))
+    # n=24: the heat content the meter table used (none on an MBH table,
+    # the propane value on 402.4(37))
+    rows.append(("Heat Content of Gas", heat_content_text(
+        info["table_id"], info["heat_content"],
+        info.get("propane_heat_content"))))
     if info.get("downstream"):
         for z in info.get("zones") or []:
-            rows.append((z["label"], "Table {0}, run {1} ft (row {2} ft)".format(
-                z["table_id"], _f1(z["run_ft"]), z["row_ft"])))
+            text = "Table {0}, run {1} ft (row {2} ft)".format(
+                z["table_id"], _f1(z["run_ft"]), z["row_ft"])
+            if "heat_content_btu_per_cf" in z:
+                heat = z["heat_content_btu_per_cf"]
+                text += (", heat content not used (MBH table)" if heat is None
+                         else ", {0} BTU/CF".format(_f0(heat)))
+            rows.append((z["label"], text))
     else:
         rows.append(("Longest run", "{0} ft".format(_f1(info["longest_run"]))))
         rows.append(("Table row used", "{0} ft".format(info["table_row"])))
     return rows
 
 
-def summary(info):
+def _approach_text(info, rolled):
+    """The pipe write approach for the summary. None is named after the pipe
+    step rolled back: Revit undid every write, so no approach stands."""
+    if "pipe sizes" in (rolled or []):
+        return "None, the pipe sizes were rolled back"
+    return info.get("approach") or "None, all failed"
+
+
+def _rolled_back(info, rolled_back=None):
+    """Names of the write transactions that were rolled back, from the
+    rolled_back argument or info["rolled_back"] (a list of names), plus
+    "fixture stub pipes" when info["stub_rolled_back"] is set."""
+    names = rolled_back
+    if names is None:
+        names = info.get("rolled_back")
+    if names is None or names is False:
+        names = []
+    elif names is True:
+        names = ["a write"]
+    elif not isinstance(names, (list, tuple)):
+        names = [names]
+    names = [str(n) for n in names]
+    if info.get("stub_rolled_back") and "fixture stub pipes" not in names:
+        names.append("fixture stub pipes")
+    return names
+
+
+def _failure_parts(info, rolled_back=None):
+    """Plain sentences naming what failed in the write (n=7/49): pipes,
+    stubs, fittings and any rolled back transaction. [] when everything
+    reported zero failures."""
+    parts = []
+    pipe_fail = int(info.get("fail_count") or 0)
+    if pipe_fail:
+        parts.append("{0}/{1} pipes failed".format(
+            pipe_fail, int(info.get("success") or 0) + pipe_fail))
+    stub_fail = int(info.get("stub_fail") or 0)
+    if stub_fail:
+        parts.append("{0} fixture stub pipe(s) failed".format(stub_fail))
+    fit_fail = len((info.get("fit") or {}).get("failures") or [])
+    if fit_fail:
+        parts.append("{0} fitting(s) or cap(s) failed".format(fit_fail))
+    for name in _rolled_back(info, rolled_back):
+        parts.append("the {0} transaction was rolled back".format(name))
+    return parts
+
+
+def _sized_text(info):
+    return ("{0} distribution pipes + {1} stub pipes + {2} fittings/caps "
+            "sized.".format(info["success"], info["stub_success"],
+                            info["fit"].get("resized", 0)))
+
+
+def summary(info, rolled_back=None):
     """info: success, stub_success, stub_fail, existing_skip,
     existing_overloaded (count), existing_unchecked (count), fit, fail_count,
     approach, table_id, heat_content, existing_check, zones, downstream,
-    longest_run, table_row."""
-    rows = _summary_rows(info)
+    longest_run, table_row. Optional: rolled_back (list of transaction
+    names), stub_rolled_back (bool).
+
+    The green callout shows only when pipes, stubs and fittings all report
+    zero failures and nothing was rolled back; otherwise a warning callout
+    names what failed (n=7/49)."""
+    rows = _summary_rows(info, rolled_back)
     fit = info["fit"]
     total = (int(info["success"]) + int(info["stub_success"]) +
              int(fit.get("resized", 0)))
@@ -789,29 +1111,24 @@ def summary(info):
                     align=["l", "r"],
                     total_row=["Pipes, stubs and fittings sized", str(total)],
                     widths=W_PAIR, width="70%")
-    if info["fail_count"] == 0:
-        out += cr.callout(
-            "{0} distribution pipes + {1} stub pipes + {2} fittings/caps "
-            "sized.".format(info["success"], info["stub_success"],
-                            fit.get("resized", 0)), "ok")
+    parts = _failure_parts(info, rolled_back)
+    if not parts:
+        out += cr.callout(_sized_text(info), "ok")
     else:
         out += cr.callout(
-            "{0}/{1} pipes failed. Check the failures above.".format(
-                info["fail_count"],
-                int(info["success"]) + int(info["fail_count"])), "warn")
+            "Not everything was sized: {0}. Check the failures above.".format(
+                ", ".join(parts)), "warn")
     return out
 
 
-def summary_md(info):
-    rows = _summary_rows(info)
+def summary_md(info, rolled_back=None):
+    rows = _summary_rows(info, rolled_back)
     out = "**Summary**\n\n" + cr.markdown_table(
         ["Item", "Value"], [list(r) for r in rows])
-    if info["fail_count"] == 0:
-        out += ("\n\n{0} distribution pipes + {1} stub pipes + {2} "
-                "fittings/caps sized.".format(
-                    info["success"], info["stub_success"],
-                    info["fit"].get("resized", 0)))
+    parts = _failure_parts(info, rolled_back)
+    if not parts:
+        out += "\n\n" + _sized_text(info)
     else:
-        out += "\n\n{0} pipe(s) failed. Check the failures above.".format(
-            info["fail_count"])
+        out += ("\n\nNot everything was sized: {0}. Check the failures "
+                "above.".format(", ".join(parts)))
     return out

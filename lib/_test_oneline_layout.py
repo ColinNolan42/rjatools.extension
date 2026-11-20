@@ -3,7 +3,9 @@
 
 Checks (plan section 8): no two primitives clash on either bench; elevation
 by level band, first floor equipment on the meter row, roof units higher,
-no header along the meter row (item 9, Colin 2026-11-18); every Segment has one label,
+the meter outlet rises to its header and nothing else runs along the meter
+row at the meter (a sub-header away from the meter may, Colin 2026-11-20);
+every Segment has one label,
 centered on its last drawn line (item 4); every unit turns up or down,
 roof units up and the rest down, the last unit on a header included (Colin
 2026-11-19, supersedes item 7); every equipment end has its PRV symbol; a forced
@@ -158,12 +160,17 @@ class Benches(unittest.TestCase):
         eq_prvs = [p for p in prims if p["t"] == "symbol" and
                    p["role"] == "prv" and p.get("equipment_prv")]
         self.assertEqual(len(eq_prvs), n_eq)
-        # meter row: no header runs along it, only the meter outlet stub
+        # meter row at the meter: only the meter outlet stub runs there and
+        # it rises to its header (a sub-header further right may use the
+        # row, Colin 2026-11-20)
         meter = _of(out, t="symbol", role="meter")[0]
         root_first = sch["root"]["segments"][0]
+        riser_x = L.X(L.ROOT_RISER_COL)
         for l in _of(out, t="line"):
             if abs(l["y0"] - meter["y"]) < 1e-6 and \
-                    abs(l["y1"] - meter["y"]) < 1e-6 and l["seg"] is not None:
+                    abs(l["y1"] - meter["y"]) < 1e-6 and \
+                    l["seg"] is not None and \
+                    min(l["x0"], l["x1"]) < riser_x - 1e-6:
                 self.assertEqual(l["seg"], root_first)
         # notes block top left, above everything else
         notes = _of(out, t="text", role="notes")[0]
@@ -336,7 +343,8 @@ class Benches(unittest.TestCase):
             sym = self._eq_sym(G3C_SCH, G3C, name)
             self.assertAlmostEqual(sym["box"][3], meter["y"], places=6, msg=name)
 
-    def test_item9_kitchen_header_above_meter_row(self):
+    def test_g3c_kitchen_header_on_ceiling_row(self):
+        # G3C: the kitchen header runs at the first floor ceiling row
         segs = [s for s in G3C_SCH["segments"].values()
                 if s["mbh"] in (855.0, 755.0, 665.0, 450.0, 330.0, 210.0)
                 and s["branch_kind"] == "run"]
@@ -365,6 +373,24 @@ class Benches(unittest.TestCase):
             lines = _of(G3C, t="line", seg=br["segments"][0])
             for l in lines:
                 self.assertAlmostEqual(l["x0"], l["x1"])
+
+
+class MeterRowSubHeader(unittest.TestCase):
+    """n13 (Colin 2026-11-20): approved layouts win. The G3C cookline
+    manifold's sub-header sits on the meter row, away from the meter."""
+
+    def test_g3c_manifold_sub_header_on_meter_row(self):
+        sch = S.build(_load("oneline_g3c_manifold.json"))
+        out = L.layout(sch, notes=["x"] * 6)
+        self.assertNotIn("LAYOUT FAILED", " ".join(out["log"]))
+        meter = _of(out, t="symbol", role="meter")[0]
+        root_first = sch["root"]["segments"][0]
+        on_row = [l for l in _of(out, t="line") if l["seg"] not in
+                  (None, root_first) and abs(l["y0"] - meter["y"]) < 1e-6
+                  and abs(l["y1"] - meter["y"]) < 1e-6]
+        self.assertTrue(on_row)
+        self.assertGreater(min(min(l["x0"], l["x1"]) for l in on_row),
+                           L.X(L.ROOT_RISER_COL))
 
 
 class ForcedCollision(unittest.TestCase):
@@ -469,6 +495,36 @@ class Squiggle(unittest.TestCase):
                    and p["seg"] is None]
         self.assertTrue(service)
         self.assertTrue(all(p["new"] for p in service))
+
+
+class NodeLineStyle(unittest.TestCase):
+    """Item K (2026-11-20): a junction's node line takes new or existing
+    from the Segment arriving at the junction, not always new."""
+
+    def _sch(self, existing):
+        import copy
+        sch = S.build(copy.deepcopy(_load("oneline_g3c.json")))
+        jid = sch["segments"]["S3"]["end_node"]      # a tee: S4, S5 leave it
+        sch["segments"]["S3"]["is_existing"] = existing
+        return sch, jid
+
+    def test_existing_incoming_segment_gives_existing_node_line(self):
+        sch, jid = self._sch(True)
+        lines = L._Engine(sch)._node_lines(jid, 0, 0.0, 0, 2)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual([p["new"] for p in lines], [False, False])
+
+    def test_new_incoming_segment_gives_new_node_line(self):
+        sch, jid = self._sch(False)
+        lines = L._Engine(sch)._node_lines(jid, 0, 0.0, 0, 2)
+        self.assertEqual([p["new"] for p in lines], [True, True])
+        # no junction id or no incoming Segment: new, as before
+        self.assertEqual([p["new"] for p in
+                          L._Engine(sch)._node_lines(None, 0, 0.0, 0, 1)],
+                         [True])
+        self.assertEqual([p["new"] for p in
+                          L._Engine(sch)._node_lines(-5, 0, 0.0, 0, 1)],
+                         [True])
 
 
 if __name__ == "__main__":

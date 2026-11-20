@@ -8,7 +8,7 @@ The one home for gas One-Line label text (rebuild plan step 1, 2026-11-18).
     pipe_label("1-1/4 K&L", 6.4)       -> '1-1/4"G, 6\''   (material stripped)
     mbh_text(1615)                     -> '1615 MBH'
     fixture_label("RTU-1", 64.8)       -> ['RTU-1', '64.8 MBH']
-    cap_label(None, 0)                 -> ['FUTURE CONNECTION']
+    cap_label("FUTURE", 120)           -> ['FUTURE', '120 MBH']
     notes_lines("402.4(2)", 1814, 117) -> notes block lines
 
 Rules (Colin):
@@ -17,7 +17,8 @@ Rules (Colin):
 - Copper "K&L" and any other material word after the size is stripped; the
   material is stated once in the notes block instead.
 - Line 2 is the cumulative MBH.
-- An unnamed cap at 0 MBH reads FUTURE CONNECTION, no MBH line.
+- A FUTURE cap carries its planned MBH; at 0 MBH it is a data error the
+  One-Line gate refuses (Colin, 2026-11-20).
 - The notes wording lives only in NOTES_TEMPLATE (firm wording pending).
 
 Pure Python, no Revit import. IronPython 2.7 and CPython 3. ASCII source.
@@ -63,8 +64,11 @@ ANSUL_LABEL = ["ANSUL VALVE"]
 
 NOTES_PRV_LINE = ("DOWNSTREAM OF PRV: {inlet_text}, MAX PRESSURE LOSS OF "
                   "{drop_text} PER IFGC TABLE {table_id}")
+# the developed length Size Gas used on each side of the mid stream PRV
+# (Colin, 2026-11-20), added to the PRV line; TOTAL DEVELOPED LENGTH stays
+# the whole system, which the trunk labels add up to
+NOTES_PRV_RUNS = ", DEVELOPED LENGTH METER SIDE {meter_ft}', PRV SIDE {prv_ft}"
 
-FUTURE_CONNECTION = "FUTURE CONNECTION"
 UNNAMED = "UNNAMED"
 
 # Words that may follow a nominal size in the table names or the model.
@@ -164,17 +168,14 @@ def is_future_name(name):
 
 
 def cap_label(name, mbh):
-    """Label for a cap drawn with the cap symbol.
-
-    Unnamed or FUTURE at 0 MBH: FUTURE CONNECTION, no MBH line (Colin,
-    2026-11-18). FUTURE with a load: FUTURE and its MBH. A named, non FUTURE
-    cap at 0 MBH is a data error the gate rejects; it is labelled by name.
+    """Label for a cap drawn with the cap symbol: FUTURE (or its name) and
+    its planned MBH. A FUTURE cap at 0 MBH is a data error (Colin,
+    2026-11-20); the gate refuses it, so it is never drawn. A named, non
+    FUTURE cap is labelled by name.
     """
     load = float(mbh or 0.0)
     n = (name or "").strip()
     if is_future_name(n):
-        if load <= 0.0:
-            return [FUTURE_CONNECTION]
         if not n or n.upper() == UNNAMED:
             n = "FUTURE"
         return [n, mbh_text(load)]
@@ -193,14 +194,30 @@ def _table_texts(table_id):
     return inlet, drop, material
 
 
+def zone_runs_text(zones):
+    """', DEVELOPED LENGTH METER SIDE 85', PRV SIDE 140'' from Size Gas's
+    zones (sizing_engine result["zones"]: meter first, then each system
+    after a mid stream PRV), each rounded with feet(). Several PRVs list
+    each side in order: PRV SIDE 140', 90'. Empty when not zoned."""
+    zones = list(zones or [])
+    if len(zones) < 2:
+        return ""
+    def _ft(z):
+        return "{0}".format(feet(float(z.get("run_ft") or 0.0)))
+    prv = "', ".join(_ft(z) for z in zones[1:])
+    return NOTES_PRV_RUNS.format(meter_ft=_ft(zones[0]), prv_ft=prv) + "'"
+
+
 def notes_lines(table_id, total_mbh, developed_ft, downstream_table_id=None,
-                template=None, existing_mbh=None):
+                template=None, existing_mbh=None, zones=None):
     """Notes block lines from NOTES_TEMPLATE and the table's own text.
 
     Inlet pressure and drop come from the table JSON (402.4(2): LESS THAN
     2 PSI, 0.5 IN. W.C.), never from the TABLE_OPTIONS 0.7 placeholder.
     With existing_mbh (a tie in), total_mbh is the NEW load and the tie in
     template states existing, new and total.
+    zones (Size Gas's result["zones"]) adds the developed length used on
+    each side of a mid stream PRV to the PRV line.
     """
     inlet, drop, material = _table_texts(table_id)
     new_mbh = float(total_mbh or 0.0)
@@ -223,5 +240,5 @@ def notes_lines(table_id, total_mbh, developed_ft, downstream_table_id=None,
         d_inlet, d_drop, _m = _table_texts(downstream_table_id)
         lines.append(NOTES_PRV_LINE.format(
             inlet_text=d_inlet, drop_text=d_drop,
-            table_id=downstream_table_id))
+            table_id=downstream_table_id) + zone_runs_text(zones))
     return lines

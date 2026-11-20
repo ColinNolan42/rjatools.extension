@@ -52,6 +52,96 @@ class TextType(unittest.TestCase):
         self.assertIsNone(D.pick_text_type([]))
 
 
+class TextTypeWarning(unittest.TestCase):
+    """Review n44: a non 3/32 in. label type is reported, not silent."""
+
+    def test_no_note_for_3_32(self):
+        t = [(1, "Schedule Default", 0.125 / 12), (3, '3/32" Arial', 0.09375 / 12)]
+        self.assertIsNone(D.text_type_note(t, D.pick_text_type(t)))
+        t = [(2, "Other 3/32", 0.09375 / 12)]
+        self.assertIsNone(D.text_type_note(t, D.pick_text_type(t)))
+
+    def test_note_when_only_larger_text(self):
+        t = [(1, '1/8" Arial', 0.125 / 12)]
+        note = D.text_type_note(t, D.pick_text_type(t))
+        self.assertIn("No 3/32 in. text type", note)
+        self.assertIn('1/8" Arial', note)
+
+    def test_note_when_no_types(self):
+        self.assertIn("No text type", D.text_type_note([], None))
+
+
+class _FakeStyleType(object):
+    Projection = "P"
+    Cut = "C"
+
+
+class _FakeStyle(object):
+    def __init__(self, name, kind):
+        self.name = name
+        self.GraphicsStyleType = kind
+
+
+class _FakeDB(object):
+    GraphicsStyle = "GraphicsStyle"
+    GraphicsStyleType = _FakeStyleType
+
+    class Element(object):
+        class Name(object):
+            @staticmethod
+            def GetValue(el):
+                return el.name
+
+    styles = []
+
+    @classmethod
+    def FilteredElementCollector(cls, _doc):
+        class _C(object):
+            def OfClass(self, _k):
+                return list(cls.styles)
+        return _C()
+
+
+class _RejectingCurve(object):
+    def __setattr__(self, k, v):
+        raise RuntimeError("style rejected")
+
+
+class LineStyles(unittest.TestCase):
+    """Review n12 and n45: line style choice and failures are reported."""
+
+    def setUp(self):
+        self._old = D._db
+        D._db = lambda: _FakeDB
+
+    def tearDown(self):
+        D._db = self._old
+
+    def test_projection_style_chosen_over_cut(self):
+        cut = _FakeStyle("Line 4", "C")
+        proj = _FakeStyle("Line 4", "P")
+        _FakeDB.styles = [cut, proj]
+        self.assertIs(D.line_style(None, "Line 4"), proj)
+        _FakeDB.styles = [cut]
+        self.assertIs(D.line_style(None, "Line 4"), cut)
+        self.assertIsNone(D.line_style(None, "Line 9"))
+
+    def test_rejected_style_is_counted_and_reported(self):
+        d = D._Drawer(None, None, {}, None, _FakeStyle("Line 4", "P"))
+        d._set_style(_RejectingCurve(), d.new_style)
+        d._set_style(_RejectingCurve(), d.new_style)
+        self.assertEqual(d.style_failures["Line 4"][0], 2)
+        notes = D.style_notes(True, True, d.style_failures)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("could not be set on 2 line(s)", notes[0])
+
+    def test_missing_line_2_is_reported(self):
+        notes = D.style_notes(True, False, {})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("'Line 2' not found", notes[0])
+        self.assertEqual(D.style_notes(True, True, {}), [])
+
+
 class BorderAndCentering(unittest.TestCase):
 
     def test_border_type_name(self):

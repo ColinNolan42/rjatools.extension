@@ -55,6 +55,8 @@ STATUS_ALIASES = {
     'FALLBACK': 'YELLOW',
     # Size Gas pipe status: OVER TABLE (unsized) and MIN SIZE (zero load).
     'OVER': 'RED', 'MIN': 'YELLOW',
+    # Size Gas pipe status DATA ERROR: leads only to 0 MBH fixtures, unsized.
+    'DATA': 'RED',
 }
 
 # (border, background, text) per callout kind.

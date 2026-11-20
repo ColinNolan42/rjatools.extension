@@ -376,9 +376,11 @@ class TestGasHeatContentOnMbhTables(unittest.TestCase):
             tid = "402.4(%d)" % n
             self.assertEqual(sizer_dialogs.heat_content_note(tid),
                              "Not used: Table %s is published in MBH." % tid)
-        for tid in ("402.4(1)", "402.4(10)", "402.4(15)", "402.4(24)",
-                    "402.4(37)"):
+        for tid in ("402.4(1)", "402.4(10)", "402.4(15)", "402.4(24)"):
             self.assertEqual(sizer_dialogs.heat_content_note(tid), "", tid)
+        # n=25: 402.4(37) is propane in CFH, it takes the propane box
+        self.assertIn("is propane",
+                      sizer_dialogs.heat_content_note("402.4(37)"))
         self.assertEqual(sizer_dialogs.heat_content_note(None), "")
         self.assertEqual(sizer_dialogs.heat_content_note("402.4(99)"), "")
 
@@ -406,6 +408,231 @@ class TestGasCalculationBasis(unittest.TestCase):
         self.assertIn("5 ft per elbow", joined)
         self.assertIn("3/4", joined)
         self.assertIn("Heat Content of Gas", joined)
+
+
+class TestGasPropaneHeatContent(unittest.TestCase):
+    """Table 402.4(37) is undiluted propane published in CFH (2024 IFGC p.176,
+    n=24/25): its own Propane heat content box, default 2500 BTU/CF,
+    shown when 402.4(37) is the table above or after a mid-stream PRV. The
+    natural gas box is greyed whenever no natural gas CFH table is in use.
+    Heat content is checked 500 to 3000 BTU/CF, nan and inf rejected
+    (n=34, 39), and a box not in use is never validated (n=40)."""
+
+    def _root(self):
+        return ET.fromstring("<Root %s>%s</Root>"
+                             % (NS, sizer_dialogs._GAS_BODY))
+
+    def _by_name(self, name):
+        found = [el for el in self._root().iter() if el.get(X_NAME) == name]
+        self.assertEqual(len(found), 1, name)
+        return found[0]
+
+    def _src(self, module, function_name):
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                module)).read()
+        body = src[src.index("def %s(" % function_name):]
+        return body[:body.index("\ndef ")]
+
+    def test_propane_box_in_the_themed_body_starts_collapsed(self):
+        pnl = self._by_name("pnl_propane")
+        self.assertEqual(pnl.get("Visibility"), "Collapsed")
+        inside = set(el.get(X_NAME) for el in pnl.iter() if el.get(X_NAME))
+        self.assertEqual(inside, set(["pnl_propane", "tb_propane_heat"]))
+        self.assertIn('Text="Propane heat content"', sizer_dialogs._GAS_BODY)
+        body = sizer_dialogs._GAS_BODY
+        self.assertTrue(body.index('x:Name="tb_heat"')
+                        < body.index('x:Name="tb_propane_heat"')
+                        < body.index('x:Name="cb_prv"'))
+
+    def test_propane_box_in_the_fallback(self):
+        root = ET.fromstring(ui_helpers._PICKER_XAML)
+        names = [el.get("Name") for el in root.iter() if el.get("Name")]
+        for n in ("tbHeatNote", "pnlPropane", "tbPropaneHeat", "tbHeatError"):
+            self.assertIn(n, names)
+        self.assertTrue(names.index("tbHeatContent")
+                        < names.index("tbPropaneHeat") < names.index("cbPrv"))
+        legacy = self._src("ui_helpers.py", "_show_picker_legacy")
+        for n in ("tbHeatNote", "pnlPropane", "tbPropaneHeat", "tbHeatError"):
+            self.assertIn("FindName('%s')" % n, legacy)
+        self.assertIn("sizer_dialogs.gas_heat_contents(", legacy)
+        self.assertIn('"propane_heat_content_btu_per_cf": propane_heat,',
+                      legacy)
+        self.assertNotIn("float(tb_heat_content.Text", legacy)
+
+    def test_themed_collect_reads_both_boxes(self):
+        body = self._src("sizer_dialogs.py", "_gas_picker")
+        self.assertIn("gas_heat_contents(", body)
+        self.assertIn('"propane_heat_content_btu_per_cf": propane_heat,', body)
+        self.assertNotIn("_number(tb_heat,", body)
+        # the PRV tick and the downstream table both refresh the boxes
+        self.assertIn("cb_downstream.SelectionChanged += on_downstream_changed",
+                      body)
+
+    def test_default_is_the_shared_constant(self):
+        # item C: no literal 2500 fallback, shared_params is the one value
+        self.assertEqual(sizer_dialogs.default_propane_heat_content(),
+                         float(shared_params
+                               .DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF))
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "sizer_dialogs.py")).read()
+        self.assertNotIn("2500.0", src)
+
+    def test_heat_rule_lives_in_gas_tables(self):
+        # item C: the range, read_heat_content and the table kind are
+        # imported from gas_tables (no WPF), never copied
+        import gas_tables
+        self.assertIs(sizer_dialogs.read_heat_content,
+                      gas_tables.read_heat_content)
+        self.assertIs(sizer_dialogs._gas_table_kind, gas_tables.table_kind)
+        self.assertEqual((sizer_dialogs.HEAT_CONTENT_MIN_BTU_PER_CF,
+                          sizer_dialogs.HEAT_CONTENT_MAX_BTU_PER_CF),
+                         (gas_tables.HEAT_CONTENT_MIN_BTU_PER_CF,
+                          gas_tables.HEAT_CONTENT_MAX_BTU_PER_CF))
+        self.assertEqual(gas_tables.table_kind("402.4(2)"), "natural")
+        self.assertEqual(gas_tables.table_kind("402.4(30)"), "mbh")
+        self.assertEqual(gas_tables.table_kind("402.4(37)"), "propane")
+        self.assertIsNone(gas_tables.table_kind("402.4(99)"))
+        self.assertIsNone(gas_tables.table_kind(None))
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "sizer_dialogs.py")).read()
+        self.assertNotIn("def read_heat_content", src)
+        self.assertNotIn("def _gas_table_kind", src)
+
+    def test_which_boxes_per_table(self):
+        boxes = sizer_dialogs.gas_heat_boxes
+        self.assertEqual(boxes("402.4(2)"), ("", False))
+        self.assertEqual(boxes("402.4(25)"),
+                         ("Not used: Table 402.4(25) is published in MBH.",
+                          False))
+        note, propane = boxes("402.4(37)")
+        self.assertTrue(propane)
+        self.assertIn("402.4(37) is propane", note)
+        # n=24: MBH table above, 402.4(37) after the PRV
+        note, propane = boxes("402.4(36)", "402.4(37)")
+        self.assertTrue(propane)
+        self.assertIn("402.4(36) is published in MBH", note)
+        self.assertIn("402.4(37) is propane", note)
+        self.assertEqual(boxes("402.4(36)", None)[1], False)
+        self.assertEqual(boxes(None), ("", False))
+
+    def test_propane_value_is_read_on_402_4_37(self):
+        nat, prop, problems = sizer_dialogs.gas_heat_contents(
+            "840", "2490", "402.4(36)", "402.4(37)")
+        self.assertEqual(problems, [])
+        self.assertEqual(prop, 2490.0)
+        nat, prop, problems = sizer_dialogs.gas_heat_contents(
+            "840", "84", "402.4(37)")
+        self.assertEqual([k for k, _m in problems], ["propane"])
+        self.assertIn("Propane heat content", problems[0][1])
+
+    def test_range_and_non_finite_rejected(self):
+        read = sizer_dialogs.read_heat_content
+        self.assertEqual(read("840", "x"), (840.0, None))
+        self.assertEqual(read(" 500 ", "x"), (500.0, None))
+        self.assertEqual(read("3000", "x"), (3000.0, None))
+        for bad in ("8400", "84", "0.84", "499.9", "3000.1", "0", "-840"):
+            value, message = read(bad, "Heat content of gas")
+            self.assertIsNone(value, bad)
+            self.assertIn("between 500 and 3000 BTU/CF", message, bad)
+        for bad in ("nan", "inf", "-inf", "1e999", "", "abc"):
+            value, message = read(bad, "Heat content of gas")
+            self.assertIsNone(value, bad)
+            self.assertEqual(message, "Heat content of gas shall be a number.")
+        nat, prop, problems = sizer_dialogs.gas_heat_contents(
+            "8400", "2500", "402.4(2)")
+        self.assertIsNone(nat)
+        self.assertEqual([k for k, _m in problems], ["natural"])
+
+    def test_box_not_in_use_is_not_validated(self):
+        # n=40: a cleared natural gas box on an MBH table does not block OK
+        nat, prop, problems = sizer_dialogs.gas_heat_contents(
+            "", "", "402.4(25)")
+        self.assertEqual(problems, [])
+        self.assertEqual(nat, float(
+            shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+        self.assertEqual(prop, sizer_dialogs.default_propane_heat_content())
+        # the hidden propane box on a natural gas table is not validated
+        nat, prop, problems = sizer_dialogs.gas_heat_contents(
+            "1000", "garbage", "402.4(2)")
+        self.assertEqual((nat, problems), (1000.0, []))
+
+
+class TestPickElementFailure(unittest.TestCase):
+    """n=38: pick_element logs any exception other than the user's cancel and
+    tells the user the pick failed."""
+
+    class _OCE(Exception):
+        pass
+
+    def setUp(self):
+        ui = types.ModuleType("Autodesk.Revit.UI")
+        sel = types.ModuleType("Autodesk.Revit.UI.Selection")
+
+        class _ObjectType(object):
+            Element = "Element"
+        sel.ObjectType = _ObjectType
+        exc = types.ModuleType("Autodesk.Revit.Exceptions")
+        exc.OperationCanceledException = self._OCE
+        self._mods = {}
+        for name, mod in (("Autodesk.Revit.UI", ui),
+                          ("Autodesk.Revit.UI.Selection", sel),
+                          ("Autodesk.Revit.Exceptions", exc)):
+            self._mods[name] = sys.modules.get(name)
+            sys.modules[name] = mod
+        self.logged = []
+        logged = self.logged
+
+        class _Logger(object):
+            def error(self, text):
+                logged.append(text)
+        script = types.ModuleType("pyrevit.script")
+        script.get_logger = lambda: _Logger()
+        self._pyrevit_script = getattr(sys.modules["pyrevit"], "script", None)
+        sys.modules["pyrevit"].script = script
+        self.alerts = []
+        self._alert = ui_helpers.rja_alert
+        alerts = self.alerts
+        ui_helpers.rja_alert = lambda *a, **k: alerts.append(a)
+
+    def tearDown(self):
+        for name, mod in self._mods.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+        if self._pyrevit_script is None:
+            del sys.modules["pyrevit"].script
+        else:
+            sys.modules["pyrevit"].script = self._pyrevit_script
+        ui_helpers.rja_alert = self._alert
+
+    def _uidoc(self, ex):
+        class _Sel(object):
+            def PickObject(self, *args):
+                raise ex
+
+        class _UiDoc(object):
+            Selection = _Sel()
+        return _UiDoc()
+
+    def test_real_failure_is_logged_and_reported(self):
+        res = ui_helpers.pick_element(
+            self._uidoc(RuntimeError("view does not allow picking")), None,
+            "Size Gas", "Select", popup=False)
+        self.assertIsNone(res)
+        self.assertEqual(len(self.logged), 1)
+        self.assertIn("view does not allow picking", self.logged[0])
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0][2], "error")
+        self.assertIn("RuntimeError", ui_helpers.last_pick_error())
+
+    def test_cancel_stays_silent(self):
+        res = ui_helpers.pick_element(self._uidoc(self._OCE("Esc")), None,
+                                      "Size Gas", "Select", popup=False)
+        self.assertIsNone(res)
+        self.assertEqual(self.logged, [])
+        self.assertEqual(self.alerts, [])
+        self.assertIsNone(ui_helpers.last_pick_error())
 
 
 def _run():

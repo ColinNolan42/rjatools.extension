@@ -263,15 +263,25 @@ class MidstreamClassification(unittest.TestCase):
         self.assertAlmostEqual(g.nodes[3].downstream_pipe_ft, 8.0)
 
     def test_regulator_keywords_are_shared(self):
-        self.assertEqual(shared_params.PRV_FAMILY_KEYWORDS,
-                         ("prv", "regulator", "regulating"))
+        # The original three are kept (n=51 adds to them, never replaces).
+        for kw in ("prv", "regulator", "regulating"):
+            self.assertIn(kw, shared_params.PRV_FAMILY_KEYWORDS)
         name = "RJA - Pressure Regulating Valve".lower()
         self.assertTrue(any(k in name for k in
                             shared_params.PRV_FAMILY_KEYWORDS))
         for other in ("rja - gas meter", "rja- gas equipment cap",
-                      "elbow - generic"):
+                      "elbow - generic", "reducing tee - generic",
+                      "reducing coupling - threaded", "ball valve"):
             self.assertFalse(any(k in other for k in
                                  shared_params.PRV_FAMILY_KEYWORDS), other)
+
+    def test_pressure_reducing_valve_is_a_prv(self):
+        # Review n=51: the usual plumbing name was missed and drawn as an
+        # isolation valve. Fails on the old three keywords.
+        for name in ("Gas Pressure Reducing Valve", "Pressure Reducer - 2 psi",
+                     "Line Pressure Regulator", "Maxitrol Reducing Valve"):
+            self.assertTrue(any(k in name.lower() for k in
+                                shared_params.PRV_FAMILY_KEYWORDS), name)
 
 
 class ZoneSizing(unittest.TestCase):

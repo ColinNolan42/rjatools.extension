@@ -59,6 +59,17 @@ _PICKER_XAML = (
     '<TextBlock Text="RJA standard: CFH = BTUH / Heat Content of Gas. Get this value from the'
     ' utility (default: Denver, 840 BTU/CF). Sea level = 1000 BTU/CF."'
     ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,12"/>'
+    '<TextBlock Name="tbHeatNote" FontWeight="SemiBold" FontSize="11" TextWrapping="Wrap"'
+    ' Visibility="Collapsed" Margin="0,0,0,4"/>'
+    '<StackPanel Name="pnlPropane" Visibility="Collapsed" Margin="0,4,0,0">'
+    '<TextBlock Text="Propane Heat Content (BTU/CF)" FontWeight="SemiBold" Margin="0,0,0,4"/>'
+    '<TextBox Name="tbPropaneHeat" Margin="0,0,0,4"/>'
+    '<TextBlock Text="Table 402.4(37) is undiluted propane published in CFH. CFH = BTUH /'
+    ' propane heat content. Get this value from the propane supplier."'
+    ' FontStyle="Italic" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,4"/>'
+    '</StackPanel>'
+    '<TextBlock Name="tbHeatError" Foreground="Firebrick" FontSize="11"'
+    ' TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8"/>'
     '<CheckBox Name="cbPrv" Content="Mid Stream PRV" FontWeight="SemiBold"'
     ' Visibility="Collapsed" Margin="0,0,0,8"/>'
     '<StackPanel Name="pnlPrv" Visibility="Collapsed" Margin="18,0,0,8">'
@@ -556,11 +567,37 @@ PICK_GAS_EXISTING = ("Select the first new gas pipe at the connection to the "
                      "existing gas piping")
 
 
+_LAST_PICK_ERROR = [None]
+
+
+def last_pick_error():
+    """Why the last pick_element() call failed, or None when it succeeded or
+    the user cancelled. Lets a caller tell a failed pick from a cancel."""
+    return _LAST_PICK_ERROR[0]
+
+
+def _is_pick_cancel(ex):
+    """True when ex is the user's Esc: Revit's OperationCanceledException
+    (Autodesk.Revit.Exceptions, raised by PickObject on Esc). Matched by
+    class, and by type name when the class cannot be imported."""
+    try:
+        from Autodesk.Revit.Exceptions import OperationCanceledException
+        if isinstance(ex, OperationCanceledException):
+            return True
+    except ImportError:
+        pass
+    return type(ex).__name__ == 'OperationCanceledException'
+
+
 def pick_element(uidoc, doc, title, prompt, sel_filter=None, popup=True):
     """Themed prompt, then one PickObject. sel_filter: an ISelectionFilter
     or None. Returns the picked element, or None when the pick is cancelled
-    (Esc) or the element cannot be read. The caller reports the cancel."""
+    (Esc) or fails. The caller reports the cancel.
+
+    Any exception other than the user's cancel is logged and the user is
+    told the pick failed (n=38, Rule 6); last_pick_error() then says why."""
     from Autodesk.Revit.UI.Selection import ObjectType
+    _LAST_PICK_ERROR[0] = None
     if popup:
         rja_alert(title, prompt + ".", "info")
     try:
@@ -573,7 +610,22 @@ def pick_element(uidoc, doc, title, prompt, sel_filter=None, popup=True):
                 ref = None
         if ref is None:
             ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
-    except Exception:
+    except Exception as ex:
+        if _is_pick_cancel(ex):
+            return None
+        reason = '{}: {}'.format(type(ex).__name__, ex)
+        _LAST_PICK_ERROR[0] = reason
+        try:
+            from pyrevit import script
+            script.get_logger().error('{}: the pick failed ({}).'.format(
+                title, reason))
+        except Exception:
+            pass
+        try:
+            rja_alert(title, 'The pick failed, so nothing was selected.\n\n'
+                             '{}'.format(reason), 'error')
+        except Exception:
+            pass
         return None
     return doc.GetElement(ref.ElementId)
 
@@ -601,7 +653,9 @@ def show_size_gas_dialog(title):
         "mid_stream_prv" (bool), "downstream_table_label" (short label, or
         None when the box is off) and "existing" (None for New
         Construction, else a dict with "size_nominal" (str), "length_ft" and
-        "load_mbh" (floats)), or None if cancelled.
+        "load_mbh" (floats)), and "propane_heat_content_btu_per_cf" (the
+        propane heat content when Table 402.4(37) is picked above or after
+        the PRV, else the default, unused), or None if cancelled.
     """
     return _show_picker(title, True)
 
@@ -634,6 +688,10 @@ def _show_picker_legacy(title, prv_option):
     cb_downstream   = window.FindName('cbDownstream')
     tb_prv_error    = window.FindName('tbPrvError')
     tb_heat_content = window.FindName('tbHeatContent')
+    tb_heat_note    = window.FindName('tbHeatNote')
+    pnl_propane     = window.FindName('pnlPropane')
+    tb_propane_heat = window.FindName('tbPropaneHeat')
+    tb_heat_error   = window.FindName('tbHeatError')
     pnl_scope       = window.FindName('pnlScope')
     rb_existing     = window.FindName('rbScopeExisting')
     rb_new          = window.FindName('rbScopeNew')
@@ -707,8 +765,37 @@ def _show_picker_legacy(title, prv_option):
                 keep = i
         cb_size.SelectedIndex = keep
 
+    import sizer_dialogs     # heat content rules, one home (n=24/25, 34, 39)
+
+    def _table_ids():
+        """(table above, table after the PRV while Mid Stream PRV is
+        ticked, else None)."""
+        up = _upstream_option()
+        up_id = up["table_id"] if up else None
+        down_id = None
+        if (up is not None and prv_option and bool(cb_prv.IsChecked) and
+                cb_downstream.SelectedItem is not None):
+            try:
+                down_id = gas_tables.get_table_option_by_material_and_short_label(
+                    up["material"], cb_downstream.SelectedItem)["table_id"]
+            except ValueError:
+                down_id = None
+        return up_id, down_id
+
+    def update_heat_boxes():
+        """Grey the natural gas box when no natural gas CFH table is picked;
+        show the propane box for Table 402.4(37)."""
+        note, propane_used = sizer_dialogs.gas_heat_boxes(*_table_ids())
+        tb_heat_content.IsEnabled = not note
+        tb_heat_note.Text = note
+        tb_heat_note.Visibility = (Visibility.Visible if note
+                                   else Visibility.Collapsed)
+        pnl_propane.Visibility = (Visibility.Visible if propane_used
+                                  else Visibility.Collapsed)
+
     populate_table(materials[0])
     tb_heat_content.Text = str(int(shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+    tb_propane_heat.Text = str(int(sizer_dialogs.default_propane_heat_content()))
     populate_sizes()
 
     if not scope_option:
@@ -717,15 +804,21 @@ def _show_picker_legacy(title, prv_option):
     if prv_option:
         cb_prv.Visibility = Visibility.Visible
         populate_downstream()
+    update_heat_boxes()
 
     def on_material_changed(sender, e):
         if cb_material.SelectedItem is not None:
             populate_table(cb_material.SelectedItem)
+        update_heat_boxes()
 
     def on_table_changed(sender, e):
         populate_sizes()
         if prv_option:
             populate_downstream()
+        update_heat_boxes()
+
+    def on_downstream_changed(sender, e):
+        update_heat_boxes()
 
     def on_scope_changed(sender, e):
         on = bool(rb_existing.IsChecked)
@@ -742,11 +835,13 @@ def _show_picker_legacy(title, prv_option):
         on = bool(cb_prv.IsChecked)
         pnl_prv.Visibility = Visibility.Visible if on else Visibility.Collapsed
         tb_prv_error.Visibility = Visibility.Collapsed
+        update_heat_boxes()
 
     cb_material.SelectionChanged += on_material_changed
     cb_table.SelectionChanged    += on_table_changed
     cb_prv.Checked               += on_prv_toggled
     cb_prv.Unchecked             += on_prv_toggled
+    cb_downstream.SelectionChanged += on_downstream_changed
 
     result = [None]
 
@@ -783,14 +878,20 @@ def _show_picker_legacy(title, prv_option):
                 "length_ft":    length,
                 "load_mbh":     load,
             }
-        try:
-            heat_content = float(tb_heat_content.Text.strip())
-            if heat_content <= 0:
-                raise ValueError
-        except ValueError:
-            tb_heat_content.Background = Brushes.LightPink
-            return
+        # n=34, 39, 40: nan, inf and values outside 500 to 3000 BTU/CF are
+        # rejected; a greyed or hidden box is not checked.
+        heat_content, propane_heat, problems = sizer_dialogs.gas_heat_contents(
+            tb_heat_content.Text, tb_propane_heat.Text, *_table_ids())
         tb_heat_content.Background = Brushes.White
+        tb_propane_heat.Background = Brushes.White
+        if problems:
+            for key, _message in problems:
+                box = tb_heat_content if key == "natural" else tb_propane_heat
+                box.Background = Brushes.LightPink
+            tb_heat_error.Text = problems[0][1]
+            tb_heat_error.Visibility = Visibility.Visible
+            return
+        tb_heat_error.Visibility = Visibility.Collapsed
 
         use_prv = bool(cb_prv.IsChecked) if prv_option else False
         downstream_label = None
@@ -814,6 +915,7 @@ def _show_picker_legacy(title, prv_option):
             "pipe_material":          cb_material.SelectedItem,
             "table_label":            cb_table.SelectedItem,
             "heat_content":           heat_content,
+            "propane_heat_content_btu_per_cf": propane_heat,
             "mid_stream_prv":         use_prv,
             "downstream_table_label": downstream_label,
             "existing":               existing,

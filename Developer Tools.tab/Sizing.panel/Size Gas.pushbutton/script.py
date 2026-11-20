@@ -10,7 +10,7 @@ import os
 import sys
 
 from pyrevit import script
-from Autodesk.Revit.DB import BuiltInParameter, ElementId, Transaction
+from Autodesk.Revit.DB import BuiltInParameter, ElementId
 
 doc   = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
@@ -28,6 +28,7 @@ import gas_console
 import shared_params
 import revit_helpers
 import pipe_graph
+import report_generator
 import gas_tables
 import sizing_engine
 import tie_in
@@ -94,7 +95,7 @@ def _new_fit_counts():
     failure_rows the same failures as data for the console table."""
     return {"resized": 0, "no_sized_pipe": 0, "existing": 0,
             "no_element": 0, "appliance": 0, "replaced": 0,
-            "transitions": 0, "transitions_removed": 0,
+            "transitions": 0, "transitions_removed": 0, "prv": 0,
             "failures": [], "failure_rows": []}
 
 
@@ -122,15 +123,19 @@ def _transition_ids(graph):
     return ids
 
 
-def _resize_fittings(graph, new_sizes, doc, transition_ids=None):
+def _resize_fittings(graph, new_sizes, doc, transition_ids=None,
+                     existing_sizes=None):
     """Resize the new construction fittings to the pipes sized this run.
 
     For each fitting the target size is the highest-load connected pipe in
     new_sizes, which corresponds to the main run size at that fitting
-    location. new_sizes holds new construction pipes only, so an existing
-    pipe never sets a fitting's size. An existing phase fitting is never
-    resized: existing stays the size it is, and the existing pipe audit
-    reports a shortfall (Colin, 2026-11-02).
+    location. A new fitting that also joins existing phase pipes takes the
+    largest of all its pipes, the existing ones at their modeled size from
+    existing_sizes, so a new tee on an existing main never shrinks the main
+    (n=3, Colin 2026-11-20). An existing phase fitting is never resized:
+    existing stays the size it is, and the existing pipe audit reports a
+    shortfall (Colin, 2026-11-02). The meter and every PRV are never
+    resized (n=29).
 
     The write goes through revit_helpers.set_fitting_size with no
     per-connector map, so only the 'Nominal Radius' parameter is used.
@@ -162,11 +167,13 @@ def _resize_fittings(graph, new_sizes, doc, transition_ids=None):
     # One guard per fitting: an exception on one fitting is one failure
     # line, never the rollback of every fitting (G7C, 2026-11-04).
     for node in graph.nodes.values():
+        # A "joint" (two pipes end to end, no Revit element, keyed by a pipe
+        # id) is never in this list, so it is never resized or looked up.
         if node.node_type not in ("tee", "fitting", "elbow", "fixture"):
             continue
         try:
             _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
-                                transition_ids)
+                                transition_ids, existing_sizes)
         except Exception as e:
             _fit_fail(counts, node, node.family_name, str(e))
             revit_helpers._log_entry(
@@ -177,7 +184,7 @@ def _resize_fittings(graph, new_sizes, doc, transition_ids=None):
 
 
 def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
-                        transition_ids=()):
+                        transition_ids=(), existing_sizes=None):
     """Resize one fitting node. See _resize_fittings for the rules.
 
     The node's element is re-read first. Revit may have deleted it when the
@@ -186,6 +193,15 @@ def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
     """
     if node.element is None:
         counts["no_element"] += 1
+        return
+
+    # The meter and every PRV keep the size drawn (n=29).
+    exempt = sizing_engine.fitting_resize_exempt(node, graph)
+    if exempt:
+        counts["prv"] += 1
+        revit_helpers._log_entry(
+            "INFO", "_resize_fittings", node.element_id,
+            "Not resized: {}.".format(exempt))
         return
 
     element  = node.element
@@ -236,10 +252,11 @@ def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
             "Existing phase (or phase unreadable): not resized.")
         return
 
-    # The highest-load new pipe that touches it sets the size; a valve with
-    # a transition on each side reads the pipes past them (Horse Creek).
+    # The highest-load new pipe that touches it sets the size, never below
+    # an existing pipe it joins; a valve with a transition on each side
+    # reads the pipes past them (Horse Creek).
     target_size, via_transition = sizing_engine.fitting_target_size(
-        node.element_id, graph, new_sizes, transition_ids)
+        node.element_id, graph, new_sizes, transition_ids, existing_sizes)
     if via_transition:
         revit_helpers._log_entry(
             "INFO", "_resize_fittings", node.element_id,
@@ -271,7 +288,10 @@ def _resize_one_fitting(node, graph, new_sizes, doc, counts, done_ids,
                   "unrecognised nominal size '{}'.".format(target_size))
         return
 
-    ok, approach = revit_helpers.set_fitting_size(element, nominal_inches)
+    # piping connectors only on a Type swap (n=30): no pipe end is moved
+    # onto an electrical connector of a gas valve
+    ok, approach = revit_helpers.set_fitting_size(element, nominal_inches,
+                                                  piping_only=True)
     if ok:
         counts["resized"] += 1
         if replaced:
@@ -378,11 +398,14 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result,
         unchecked_list.append({"pipe_id": pipe_id, "table_id": table_id})
         return
 
-    # Demand in the table's units: CFH via heat content, or the MBH load
-    # itself on a propane table 402.4(25) to (36) (Colin, 2026-11-04).
+    # Demand in the table's units: CFH via heat content (the propane value
+    # on 402.4(37)), or the MBH load itself on a propane table 402.4(25) to
+    # (36) (Colin, 2026-11-04, 2026-11-20).
     demand_cfh, units = sizing_engine.demand_in_table_units(
-        demand, table_id, result.get("heat_content_btu_per_cf",
-                                     shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF))
+        demand, table_id,
+        result.get("heat_content_btu_per_cf",
+                   shared_params.DEFAULT_HEAT_CONTENT_BTU_PER_CF),
+        result.get("propane_heat_content_btu_per_cf"))
     try:
         current_cap = float(gas_tables.get_capacity(
             table_id, run_ft, current_nom))
@@ -408,6 +431,275 @@ def _audit_existing_pipe(pipe_id, edge, recommended_nom, result,
 
 
 # ---------------------------------------------------------------------------
+# Run checks (small functions so they port to lib/gas_run.py on headless)
+# ---------------------------------------------------------------------------
+
+def _propane_heat_content(choice):
+    """The propane heat content from the dialog choice, BTU/CF. The key is
+    'propane_heat_content_btu_per_cf'; a dialog without the box gives the
+    firm default (Colin, 2026-11-20)."""
+    value = choice.get("propane_heat_content_btu_per_cf")
+    if value is None:
+        return shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF
+    return float(value)
+
+
+def _table_limit_check(table_id, graph, heat_content, propane_heat_content):
+    """Table Intended Use load limit warnings (2024 IFGC Table 402.4(13):
+    150 CFH through the house line regulator). The meter carries the whole
+    system, so the total is the new fixtures plus the existing load entered
+    for Connect into Existing (n=35/52, Colin 2026-11-20)."""
+    total_mbh = pipe_graph.total_connected_mbh(graph)
+    existing = getattr(graph, "existing", None) or {}
+    total_mbh += float(existing.get("load_mbh") or 0.0)
+    demand, _units = sizing_engine.demand_in_table_units(
+        total_mbh, table_id, heat_content, propane_heat_content)
+    return sizing_engine.table_limit_warnings(table_id, demand, total_mbh)
+
+
+def _existing_pipe_sizes(graph, new_sizes, result, doc):
+    """{pipe id: modeled nominal size or None} for the existing phase pipes
+    in the graph, read from the drawn diameter on the table of each pipe's
+    own system (sizing_engine.edge_table_id, by its run_key). A new fitting
+    is never sized below these (n=3). An open ended pipe has no system table
+    and is skipped (logged), never read on the meter table."""
+    sizes = {}
+    for pipe_id, edge in graph.edges.items():
+        if pipe_id in new_sizes or edge.pipe is None:
+            continue
+        if not revit_helpers.is_valid_element(edge.pipe):
+            continue
+        if revit_helpers.is_new_construction(edge.pipe, doc):
+            continue    # a new pipe with no size this run (open end)
+        table_id = sizing_engine.edge_table_id(result, edge)
+        if table_id is None:
+            revit_helpers._log_entry(
+                "INFO", "_existing_pipe_sizes", pipe_id,
+                "Existing pipe with no downstream node (or no system "
+                "table): its size is not read.")
+            continue
+        sizes[pipe_id] = _get_pipe_nominal_size(edge.pipe, table_id)
+    return sizes
+
+
+def _graph_notices(graph, result):
+    """(text, kind) lines for the pipes left unsized because they lead only
+    to 0 MBH (data error) fixtures. The data errors and tapped pipes
+    themselves print in the pre-sizing warnings (gas_console)."""
+    lines = []
+    for z in result.get("unsized_zero_load") or []:
+        lines.append((
+            "Pipe {} leads only to 0 MBH fixture(s) {} and was NOT sized or "
+            "written. Fix the fixture load and run Size Gas again.".format(
+                z["pipe_id"], ", ".join(str(i) for i in z["fixture_ids"])),
+            "error"))
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Writes. Each step is one transaction through revit_helpers.
+# run_in_transaction: warnings deleted, an error rolls the step back with no
+# Revit dialog, and the Commit status is checked (n=4). A step that did not
+# commit reports zero successes, and the steps that depend on it do not run.
+# ---------------------------------------------------------------------------
+
+PIPE_STEP = "pipe sizes"
+FITTING_STEP = "fittings"
+STUB_STEP = "fixture stub pipes"
+
+
+def _new_pipe_writes():
+    return {"success_count": 0, "fail_count": 0, "fail_rows": [],
+            "skipped_stubs": [], "existing_skip_count": 0,
+            "existing_overloaded": [], "existing_unchecked": [],
+            "new_sizes": {}, "committed": False, "error": None}
+
+
+def _write_one_pipe(w, pipe_id, nominal_size, graph, result, doc):
+    """Write or queue one pipe of result["sizes"] (STEP 7)."""
+    edge = graph.edges.get(pipe_id)
+    if edge is None or edge.pipe is None:
+        w["fail_rows"].append({
+            "id": pipe_id, "family": "Pipe",
+            "reason": "edge or pipe element not found in graph."})
+        w["fail_count"] += 1
+        return
+
+    # Determine phase before anything else. One test for new construction,
+    # failing closed: an unreadable phase is existing and is never resized
+    # (Colin, 2026-11-02).
+    is_new = revit_helpers.is_new_construction(edge.pipe, doc)
+
+    to_node = graph.nodes.get(edge.to_node_id)
+    if to_node is not None and to_node.is_gas_fixture:
+        # An existing phase appliance fed by new piping keeps its stub pipe
+        # as drawn: it is audited, never resized (review n=26), so it is
+        # not in new_sizes either (no fitting is sized from it).
+        existing_appliance = to_node.element_id in (
+            getattr(graph, "existing_appliances", None) or [])
+        if is_new and not existing_appliance:
+            w["new_sizes"][pipe_id] = nominal_size
+            # New-construction stub: queued for STEP 9 (cap-first resize)
+            w["skipped_stubs"].append({
+                "pipe_id":          pipe_id,
+                "fixture_name":     to_node.fixture_name or "UNNAMED",
+                "demand_mbh":       edge.cumulative_load_mbh,
+                "recommended_size": nominal_size,
+            })
+        else:
+            # Existing stub, or the stub of an existing appliance: skip
+            # entirely, run capacity audit only
+            w["existing_skip_count"] += 1
+            _audit_existing_pipe(pipe_id, edge, nominal_size, result,
+                                 w["existing_overloaded"],
+                                 w["existing_unchecked"])
+        return
+
+    if not is_new:
+        # Existing distribution pipe: skip resize, audit capacity
+        w["existing_skip_count"] += 1
+        _audit_existing_pipe(pipe_id, edge, nominal_size, result,
+                             w["existing_overloaded"], w["existing_unchecked"])
+        return
+    w["new_sizes"][pipe_id] = nominal_size
+
+    nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
+    if nominal_inches is None:
+        w["fail_rows"].append({
+            "id": pipe_id, "family": "Pipe",
+            "reason": "unrecognised nominal size '{}'.".format(nominal_size)})
+        w["fail_count"] += 1
+        return
+
+    ok, _approach = _set_pipe_diameter(edge.pipe, nominal_inches)
+    if ok:
+        w["success_count"] += 1
+    else:
+        w["fail_count"] += 1
+        w["fail_rows"].append({
+            "id": pipe_id, "family": "Pipe",
+            "reason": "all API approaches failed ({}\").".format(
+                nominal_size)})
+
+
+def _write_pipe_sizes(doc, graph, result):
+    """STEP 7: write the new construction pipe sizes in one transaction.
+    Returns the _new_pipe_writes() dict, with committed False and zero
+    successes when Revit rolled the transaction back."""
+    w = _new_pipe_writes()
+
+    def action():
+        for pipe_id, nominal_size in result["sizes"].items():
+            _write_one_pipe(w, pipe_id, nominal_size, graph, result, doc)
+
+    err = revit_helpers.run_in_transaction(
+        doc, "RJA Tools - Size Gas Pipes", action)
+    if err is None:
+        w["committed"] = True
+        return w
+    revit_helpers._log_entry("ERROR", "_write_pipe_sizes", None,
+                             "Pipe transaction rolled back: {}".format(err))
+    attempted = w["success_count"] + w["fail_count"]
+    w["success_count"] = 0
+    w["fail_count"] = attempted
+    w["error"] = err
+    w["fail_rows"].append({
+        "id": "-", "family": "All pipes",
+        "reason": "transaction rolled back, no pipe size was written: "
+                  "{}".format(err)})
+    return w
+
+
+def _write_fitting_sizes(doc, graph, new_sizes, transition_ids,
+                         existing_sizes, pipes_committed):
+    """STEP 8: resize the fittings in one transaction, only when the pipe
+    sizes committed. Returns (fit counts, committed)."""
+    if not pipes_committed:
+        fit = _new_fit_counts()
+        fit["failures"].append(
+            "Fittings not resized: the pipe sizes were rolled back.")
+        fit["failure_rows"].append({
+            "id": "-", "family": "All fittings",
+            "reason": "not run, the pipe sizes were rolled back."})
+        return fit, False
+
+    holder = {"fit": _new_fit_counts()}
+
+    def action():
+        holder["fit"] = _resize_fittings(graph, new_sizes, doc,
+                                         transition_ids, existing_sizes)
+
+    err = revit_helpers.run_in_transaction(
+        doc, "RJA Tools - Resize Pipe Fittings", action)
+    if err is None:
+        return holder["fit"], True
+    revit_helpers._log_entry("ERROR", "_write_fitting_sizes", None,
+                             "Fitting transaction rolled back: {}".format(err))
+    fit = _new_fit_counts()
+    fit["failures"].append("Fitting transaction rolled back: {}".format(err))
+    fit["failure_rows"].append({
+        "id": "-", "family": "All fittings",
+        "reason": "transaction rolled back: {}".format(err)})
+    return fit, False
+
+
+def _write_stub_sizes(doc, graph, skipped_stubs, fittings_committed):
+    """STEP 9: size the fixture stub pipes in one transaction, after their
+    caps were sized in STEP 8, so only when STEP 8 committed.
+
+    Returns {"success", "fail", "rows", "rolled_back"}. A rolled back or
+    skipped step counts every stub as failed (n=49)."""
+    st = {"success": 0, "fail": 0, "rows": [], "rolled_back": False}
+    if not skipped_stubs:
+        return st
+    if not fittings_committed:
+        st["fail"] = len(skipped_stubs)
+        st["rows"].append({
+            "id": "-", "family": "Fixture stub pipes",
+            "reason": "not run: the fittings and caps were not sized first "
+                      "(their transaction did not commit)."})
+        return st
+
+    def action():
+        for s in skipped_stubs:
+            # One guard per stub: one bad stub never rolls back the rest.
+            try:
+                if _size_one_stub(s, graph):
+                    st["success"] += 1
+                else:
+                    st["fail"] += 1
+                    st["rows"].append({
+                        "id": s["pipe_id"], "family": "Fixture stub pipe",
+                        "reason": "size {}\" not written (see log)".format(
+                            s["recommended_size"])})
+            except Exception as e:
+                st["fail"] += 1
+                revit_helpers._log_entry(
+                    "ERROR", "size_gas_stubs", s["pipe_id"],
+                    "Stub resize raised: {}".format(str(e)))
+                st["rows"].append({
+                    "id": s["pipe_id"], "family": "Fixture stub pipe",
+                    "reason": str(e)})
+
+    err = revit_helpers.run_in_transaction(
+        doc, "RJA Tools - Size Fixture Stub Pipes", action)
+    if err is None:
+        return st
+    revit_helpers._log_entry("ERROR", "_write_stub_sizes", None,
+                             "Stub transaction rolled back: {}".format(err))
+    st["success"] = 0
+    st["fail"] = len(skipped_stubs)
+    st["rolled_back"] = True
+    # the per-stub rows describe writes Revit undid: only the rollback row
+    # stands
+    st["rows"] = []
+    st["rows"].append({
+        "id": "-", "family": "Fixture stub pipes",
+        "reason": "transaction rolled back: {}".format(err)})
+    return st
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -429,6 +721,7 @@ def main():
     pipe_material           = choice["pipe_material"]
     selected_table_label    = choice["table_label"]
     heat_content_btu_per_cf = choice["heat_content"]
+    propane_heat_content    = _propane_heat_content(choice)
     mid_stream_prv          = choice["mid_stream_prv"]
 
     selected_opt       = gas_tables.get_table_option_by_material_and_short_label(
@@ -451,7 +744,10 @@ def main():
         "table": selected_opt["label"].split("  [")[0],
         "table_id": table_id,
         "gas": selected_opt["gas"],
+        # gas_console.heat_content_text prints what the table used: the
+        # propane value on 402.4(37), none on an MBH table (n=24)
         "heat_content": heat_content_btu_per_cf,
+        "propane_heat_content": propane_heat_content,
         "downstream_table": (downstream_opt["label"].split("  [")[0]
                              if downstream_opt is not None else None),
         "downstream_table_id": downstream_table_id,
@@ -473,7 +769,13 @@ def main():
         ui_helpers.PICK_GAS_EXISTING if connect_existing
         else ui_helpers.PICK_GAS)
     if selected_element is None:
-        _say("Selection cancelled. No changes were made to the model.")
+        pick_error = ui_helpers.last_pick_error()
+        if pick_error:
+            _say("The pick failed: {}. No changes were made to the "
+                 "model.".format(pick_error), "error")
+        else:
+            _say("Selection cancelled. No changes were made to the "
+                 "model.")
         return
 
     inputs["selected"] = "Element ID {}".format(
@@ -483,53 +785,19 @@ def main():
     # STEP 3 - Validate the pick. For a pipe, find its existing side. The
     # existing conditions, assumed not modeled, came from the dialog.
     # ------------------------------------------------------------------
-    upstream = None
+    # One check for Size Gas, One-Line and Diagnose (tie_in.check_gas_start).
     existing = None
-    if connect_existing and not revit_helpers.is_pipe(selected_element):
-        _alert(
-            "Connect into Existing was chosen, so the pick shall be the first "
-            "new gas pipe at the connection to existing, not the gas meter "
-            "or other equipment.\n\nNothing was changed. Run Size Gas again "
-            "and pick that pipe, or choose New Construction to start at the "
-            "meter.",
-            "error")
+    start = tie_in.check_gas_start(selected_element, doc,
+                                   pipe_only=bool(connect_existing))
+    if not start["ok"]:
+        _alert(start["message"] + "\n\nNothing was changed.", "error")
         return
-    if revit_helpers.is_pipe(selected_element):
-        gas_check = pipe_graph.check_gas_pipe(selected_element)
-        if not gas_check["ok"]:
-            _alert(
-                "This is not a gas pipe: {}.\n\nPick the gas meter, or the "
-                "first new GAS pipe at the connection to existing.".format(
-                    gas_check["reason"]),
-                "error")
-            return
-        upstream = tie_in.resolve_new_pipe_upstream(selected_element, doc)
-        if upstream["status"] != "ok":
-            _alert(
-                "Could not tell which end of the picked pipe connects to the "
-                "existing gas piping: {}.\n\nPick the first new gas pipe, the "
-                "one with one end at the existing connection (open, capped, "
-                "or joined to existing phase piping) and the other end on "
-                "new construction.".format(upstream["reason"]),
-                "error")
-            return
-        inputs["check"] = ("New gas piping connection. Upstream end found "
-                           "because {}.".format(upstream["reason"]))
-
+    upstream = start["upstream"]
+    inputs["check"] = start["message"]
+    if start["kind"] == "tie_in":
         # New Construction from a pipe: full new construction, new meter.
         existing = tie_in.existing_from_scope(connect_existing)
         inputs["existing"] = tie_in.existing_inputs_text(existing)
-    else:
-        validation = revit_helpers.validate_selected_element(selected_element)
-        if not validation["is_valid"]:
-            _alert(
-                "Please select the gas meter element, or the first new gas "
-                "pipe at the connection to existing.\n\n{}".format(
-                    validation["reason"]),
-                "error")
-            return
-
-        inputs["check"] = "Meter validation passed."
 
     _emit(gas_console.sizegas_inputs(inputs),
           gas_console.sizegas_inputs_md(inputs))
@@ -547,8 +815,12 @@ def main():
     trav = {"nodes": len(graph.nodes), "segments": len(graph.edges),
             "existing_connections": list(graph.existing_connections or [])}
     _emit(gas_console.traversal(trav), gas_console.traversal_md(trav))
+    if getattr(graph, "existing_appliances", None):
+        appliance_rows = report_generator.existing_appliance_rows(graph)
+        _emit(gas_console.existing_appliances(appliance_rows),
+              gas_console.existing_appliances_md(appliance_rows))
 
-    fixture_nodes = [n for n in graph.nodes.values() if n.is_gas_fixture]
+    fixture_nodes = pipe_graph.gas_fixtures(graph)
     if len(fixture_nodes) == 0:
         _alert(
             "No gas fixtures found (IS_GAS_FIXTURE = Yes).\n\n"
@@ -560,6 +832,13 @@ def main():
             "  3. IS_GAS_FIXTURE parameter is not set to Yes on the appliances.\n\n"
             "Run Diagnose to see which terminal elements were found.",
             "error")
+        return
+
+    zero_load = pipe_graph.zero_load_stop_message(graph)
+    if zero_load is not None:
+        _alert(zero_load, "error")
+        _say("Stopped: total connected load is 0 MBH. No changes were made "
+             "to the model.", "error")
         return
 
     if graph.longest_run is None:
@@ -589,20 +868,11 @@ def main():
     midstream_prvs = [graph.nodes[i] for i in graph.midstream_prv_ids]
     prv_warnings   = []
 
-    if mid_stream_prv and not midstream_prvs:
-        if prv_nodes:
-            why = ("{} regulator(s) were found, but each has {:g} ft of pipe "
-                   "or less downstream, so they are treated as equipment "
-                   "PRVs and ignored.".format(len(prv_nodes), min_ft))
-        else:
-            why = ("No pressure regulating valve was found. A PRV is "
-                   "recognised by 'PRV', 'regulator' or 'regulating' in its "
-                   "family name; check it is connected to the piping.")
-        _alert(
-            "Mid Stream PRV is checked, but there is no mid-stream "
-            "regulator in this system.\n\n{}\n\nUncheck Mid Stream PRV "
-            "to size the system as one.".format(why),
-            "warn")
+    # the same stop and words as One-Line (pipe_graph; the PRV keywords come
+    # from shared_params.PRV_FAMILY_KEYWORDS)
+    prv_stop = pipe_graph.midstream_prv_stop_message(graph, mid_stream_prv)
+    if prv_stop is not None:
+        _alert(prv_stop, "warn")
         return
 
     if mid_stream_prv and graph.nested_prv_ids:
@@ -637,14 +907,15 @@ def main():
         result = sizing_engine.size_system(
             graph, pipe_material, inlet_pressure_psi, table_id,
             heat_content_btu_per_cf=heat_content_btu_per_cf,
-            downstream_table_id=downstream_table_id)
+            downstream_table_id=downstream_table_id,
+            propane_heat_content_btu_per_cf=propane_heat_content)
     except ValueError as e:
         _alert("Sizing failed:\n\n{}".format(str(e)), "error")
         _say("Sizing ERROR: {}".format(str(e)), "error")
         return
 
     # Sizing results: the basis, then one table per system.
-    total_load = sum(n.gas_load_mbh for n in fixture_nodes)
+    total_load = pipe_graph.total_connected_mbh(graph)
     units = gas_tables.table_units(result["table_id"])
     _emit(gas_console.sizing_basis(result, total_load, len(fixture_nodes),
                                    units),
@@ -653,6 +924,8 @@ def main():
     rows = sizing_engine.sizing_rows(result, graph)
     _emit(gas_console.sizing_tables(rows, result),
           gas_console.sizing_tables_md(rows, result))
+    for text, kind in _graph_notices(graph, result):
+        _say(text, kind)
 
     # Existing pipe from the meter to the new connection: checked, never
     # sized. A shortfall is a warning the designer has to accept below.
@@ -693,18 +966,16 @@ def main():
     # ------------------------------------------------------------------
     # STEP 6 - Pre-sizing validation warning
     # ------------------------------------------------------------------
-    fixture_nodes  = [n for n in graph.nodes.values() if n.is_gas_fixture]
-    no_load        = [n for n in fixture_nodes if n.gas_load_mbh <= 0]
+    # 0 MBH fixtures are listed from graph.data_errors only (the walk's
+    # one record), not tested again here
+    fixture_nodes  = pipe_graph.gas_fixtures(graph)
     unnamed        = [n for n in fixture_nodes
                       if n.fixture_name in ("", "UNNAMED", None)]
 
-    # Table Intended Use load limits (2024 IFGC Table 402.4(13): 150 CFH).
-    # The meter carries the whole system, so the total load is checked.
-    total_mbh = sum(n.gas_load_mbh for n in fixture_nodes)
-    table_warnings = sizing_engine.table_limit_warnings(
-        table_id,
-        sizing_engine.mbh_to_cfh(total_mbh, heat_content_btu_per_cf),
-        total_mbh)
+    # Table Intended Use load limits (2024 IFGC Table 402.4(13): 150 CFH),
+    # on the new load plus any existing load entered (n=35/52).
+    table_warnings = _table_limit_check(
+        table_id, graph, heat_content_btu_per_cf, propane_heat_content)
 
     non_gas  = list(graph.non_gas_skipped)              # F1
     bare_end = pipe_graph.non_fixture_ends(graph)       # F2
@@ -712,12 +983,13 @@ def main():
     groups = gas_console.build_warning_groups(
         existing=existing_warnings, prv=prv_warnings,
         table_limit=table_warnings,
-        no_load=[(n.fixture_name, n.element_id) for n in no_load],
         unnamed=[(n.element_id, n.gas_load_mbh) for n in unnamed],
         non_gas=list(non_gas),
         bare_end=[(n.element_id, n.family_name) for n in bare_end],
         disconnected=list(graph.disconnected),
-        n_fixtures=len(fixture_nodes))
+        n_fixtures=len(fixture_nodes),
+        data_errors=list(getattr(graph, "data_errors", None) or []),
+        tapped=list(getattr(graph, "tapped_pipes", None) or []))
     if groups:
         _emit(gas_console.presize_warnings(groups),
               gas_console.presize_warnings_md(groups))
@@ -739,102 +1011,20 @@ def main():
         gas_console.write_start_md(
             "RBS_PIPE_NOMINAL_DIAMETER, RBS_PIPE_DIAMETER_PARAM, "
             "LookupParameter(Diameter)"))
-    success_count       = 0
-    fail_count          = 0
-    fail_rows           = []   # pipe failures, {"id", "family", "reason"}
-    skip_count          = 0
-    skipped_stubs       = []
-    existing_skip_count = 0
-    existing_overloaded = []  # pipes that are Existing but undersized for new load
-    existing_unchecked  = []  # existing pipes whose size is not in the table
-    new_sizes           = {}  # new construction pipes only, for the fittings
-
     # Transitions are identified now, before the resize: Revit may delete one
     # while the pipes change size (Colin, 2026-11-19).
     transition_ids = _transition_ids(graph)
 
-    t = Transaction(doc, "RJA Tools - Size Gas Pipes")
-    t.Start()
-
-    try:
-        for pipe_id, nominal_size in result["sizes"].items():
-            edge = graph.edges.get(pipe_id)
-            if edge is None or edge.pipe is None:
-                fail_rows.append({
-                    "id": pipe_id, "family": "Pipe",
-                    "reason": "edge or pipe element not found in graph."})
-                fail_count += 1
-                continue
-
-            # Determine phase before anything else. One test for new
-            # construction, failing closed: an unreadable phase is existing
-            # and is never resized (Colin, 2026-11-02).
-            is_new = revit_helpers.is_new_construction(edge.pipe, doc)
-            if is_new:
-                new_sizes[pipe_id] = nominal_size
-
-            to_node = graph.nodes.get(edge.to_node_id)
-            is_stub = (to_node is not None and to_node.is_gas_fixture)
-
-            if is_stub:
-                if is_new:
-                    # New-construction stub: queue for STEP 9 (cap-first resize)
-                    skip_count += 1
-                    skipped_stubs.append({
-                        "pipe_id":          pipe_id,
-                        "fixture_name":     to_node.fixture_name or "UNNAMED",
-                        "demand_mbh":       edge.cumulative_load_mbh,
-                        "recommended_size": nominal_size,
-                    })
-                else:
-                    # Existing stub: skip entirely, run capacity audit only
-                    existing_skip_count += 1
-                    _audit_existing_pipe(
-                        pipe_id, edge, nominal_size, result,
-                        existing_overloaded, existing_unchecked)
-                continue
-
-            if not is_new:
-                # Existing distribution pipe: skip resize, audit capacity
-                existing_skip_count += 1
-                _audit_existing_pipe(
-                    pipe_id, edge, nominal_size, result,
-                    existing_overloaded, existing_unchecked)
-                continue
-
-            nominal_inches = sizing_engine.NOMINAL_TO_INCHES.get(nominal_size)
-            if nominal_inches is None:
-                fail_rows.append({
-                    "id": pipe_id, "family": "Pipe",
-                    "reason": "unrecognised nominal size '{}'.".format(
-                        nominal_size)})
-                fail_count += 1
-                continue
-
-            ok, approach = _set_pipe_diameter(edge.pipe, nominal_inches)
-
-            if ok:
-                success_count += 1
-            else:
-                fail_count += 1
-                fail_rows.append({
-                    "id": pipe_id, "family": "Pipe",
-                    "reason": "all API approaches failed ({}\").".format(
-                        nominal_size)})
-
-        # Regenerate inside the transaction so Revit propagates pipe size
-        # changes to connected fittings (elbows, tees) before committing.
-        doc.Regenerate()
-        t.Commit()
-
-    except Exception as e:
-        t.RollBack()
+    w = _write_pipe_sizes(doc, graph, result)
+    rolled_back = []
+    if not w["committed"]:
+        rolled_back.append(PIPE_STEP)
         _alert(
-            "Transaction failed - no sizes were written to the model.\n\n"
-            "{}".format(str(e)),
+            "The pipe sizes could not be committed and Revit rolled them "
+            "back. No size was written to the model.\n\n{}".format(
+                w["error"]),
             "error")
-        _say("Transaction ERROR: {}".format(str(e)), "error")
-        return
+        _say("Pipe transaction rolled back: {}".format(w["error"]), "error")
 
     # ------------------------------------------------------------------
     # Existing pipe audit results. Printing is guarded so a formatting
@@ -843,119 +1033,90 @@ def main():
     try:
         # new construction: print only if the walk still met existing phase
         # pipes, so a skip is never silent
-        if not new_construction or existing_skip_count:
-            _emit(gas_console.existing_audit(existing_skip_count,
-                                             existing_overloaded,
-                                             existing_unchecked),
-                  gas_console.existing_audit_md(existing_skip_count,
-                                                existing_overloaded,
-                                                existing_unchecked))
+        if not new_construction or w["existing_skip_count"]:
+            _emit(gas_console.existing_audit(w["existing_skip_count"],
+                                             w["existing_overloaded"],
+                                             w["existing_unchecked"]),
+                  gas_console.existing_audit_md(w["existing_skip_count"],
+                                                w["existing_overloaded"],
+                                                w["existing_unchecked"]))
     except Exception as e:
         _say("Existing pipe audit could not be printed: {}".format(str(e)),
              "warn")
 
     # ------------------------------------------------------------------
-    # STEP 8 - Resize fittings (separate transaction). New construction
-    # fittings only, sized from new construction pipes only. Transitions
-    # are counted and left to Revit.
+    # STEP 8 - Resize fittings (separate transaction), only when the pipe
+    # sizes committed. New construction fittings only; one that joins an
+    # existing pipe is never sized below it. Transitions are counted and
+    # left to Revit; the meter and PRVs are never resized.
     # ------------------------------------------------------------------
-    fit = _new_fit_counts()
-
-    t2 = Transaction(doc, "RJA Tools - Resize Pipe Fittings")
-    t2.Start()
-    try:
-        fit = _resize_fittings(graph, new_sizes, doc, transition_ids)
-        doc.Regenerate()
-        t2.Commit()
-    except Exception as e:
-        t2.RollBack()
-        fit = _new_fit_counts()
-        fit["failures"].append(
-            "Fitting transaction rolled back: {}".format(str(e)))
-        fit["failure_rows"].append({
-            "id": "-", "family": "All fittings",
-            "reason": "transaction rolled back: {}".format(str(e))})
+    existing_sizes = {}
+    if w["committed"]:
+        existing_sizes = _existing_pipe_sizes(graph, w["new_sizes"], result,
+                                              doc)
+    fit, fit_committed = _write_fitting_sizes(
+        doc, graph, w["new_sizes"], transition_ids, existing_sizes,
+        w["committed"])
+    if w["committed"] and not fit_committed:
+        rolled_back.append(FITTING_STEP)
 
     # ------------------------------------------------------------------
-    # STEP 9 - Resize fixture stub pipes (after cap Nominal Radius is set)
-    # Cap Nominal Radius was updated in the fitting transaction above.
-    # Revit may now see no size conflict and skip the family replacement.
+    # STEP 9 - Resize fixture stub pipes (after cap Nominal Radius is set
+    # in STEP 8, so Revit sees no size conflict and skips the family
+    # replacement). Not run when STEP 8 did not commit.
     # ------------------------------------------------------------------
-    stub_success = 0
-    stub_fail    = 0
-    stub_rows    = []
-
-    if skipped_stubs:
-        t3 = Transaction(doc, "RJA Tools - Size Fixture Stub Pipes")
-        t3.Start()
-        try:
-            for s in skipped_stubs:
-                # One guard per stub: one bad stub never rolls back the rest.
-                try:
-                    if _size_one_stub(s, graph):
-                        stub_success += 1
-                    else:
-                        stub_fail += 1
-                        stub_rows.append({
-                            "id": s["pipe_id"], "family": "Fixture stub pipe",
-                            "reason": "size {}\" not written (see log)".format(
-                                s["recommended_size"])})
-                except Exception as e:
-                    stub_fail += 1
-                    revit_helpers._log_entry(
-                        "ERROR", "size_gas_stubs", s["pipe_id"],
-                        "Stub resize raised: {}".format(str(e)))
-                    stub_rows.append({
-                        "id": s["pipe_id"], "family": "Fixture stub pipe",
-                        "reason": str(e)})
-            doc.Regenerate()
-            t3.Commit()
-        except Exception as e:
-            t3.RollBack()
-            stub_success = 0
-            stub_rows.append({
-                "id": "-", "family": "Fixture stub pipes",
-                "reason": "transaction rolled back: {}".format(str(e))})
+    st = _write_stub_sizes(doc, graph, w["skipped_stubs"], fit_committed)
+    if st["rolled_back"]:
+        rolled_back.append(STUB_STEP)
 
     try:
         failures = gas_console.failure_rows(
-            fail_rows, fit.get("failure_rows") or [], stub_rows)
-        wr = {"pipes_sized": success_count, "stubs_sized": stub_success,
+            w["fail_rows"], fit.get("failure_rows") or [], st["rows"])
+        wr = {"pipes_sized": w["success_count"], "stubs_sized": st["success"],
               "fit": fit, "failures": failures}
         _emit(gas_console.write_results(wr), gas_console.write_results_md(wr))
     except Exception as e:
-        _say("Write results could not be printed: {}. The sizes were "
-             "written.".format(str(e)), "warn")
+        _say("Write results could not be printed: {}. See the summary "
+             "below.".format(str(e)), "warn")
 
     try:
-        _print_summary(result, existing_check, success_count, stub_success,
-                       stub_fail, existing_skip_count, existing_overloaded,
-                       existing_unchecked, fit, fail_count)
+        _print_summary(result, existing_check, w, st, fit, rolled_back)
     except Exception as e:
-        _say("Summary could not be printed: {}. The sizes above were "
-             "written.".format(str(e)), "warn")
+        _say("Summary could not be printed: {}. Check the write results "
+             "above.".format(str(e)), "warn")
 
 
-def _print_summary(result, existing_check, success_count, stub_success,
-                   stub_fail, existing_skip_count, existing_overloaded,
-                   existing_unchecked, fit, fail_count):
-    """The run summary table for the output window."""
-    info = {
-        "success": success_count, "stub_success": stub_success,
-        "stub_fail": stub_fail, "existing_skip": existing_skip_count,
-        "existing_overloaded": len(existing_overloaded),
-        "existing_unchecked": len(existing_unchecked),
-        "fit": fit, "fail_count": fail_count,
-        "approach": _confirmed_approach[0],
+def _summary_info(result, existing_check, w, st, fit, rolled_back):
+    """The info dict gas_console.summary reads. Counts come from the
+    transactions as committed: a rolled back step has zero successes and is
+    named in rolled_back (n=4/49)."""
+    return {
+        "success": w["success_count"], "stub_success": st["success"],
+        "stub_fail": st["fail"], "existing_skip": w["existing_skip_count"],
+        "existing_overloaded": len(w["existing_overloaded"]),
+        "existing_unchecked": len(w["existing_unchecked"]),
+        "fit": fit, "fail_count": w["fail_count"],
+        # no approach stands when Revit rolled the pipe sizes back
+        "approach": (_confirmed_approach[0] if w.get("committed")
+                     else None),
         "table_id": result["table_id"],
+        # gas_console.heat_content_text prints what the table used (n=24)
         "heat_content": result["heat_content_btu_per_cf"],
+        "propane_heat_content": result.get(
+            "propane_heat_content_btu_per_cf"),
         "existing_check": existing_check,
         "zones": result.get("zones") or [],
         "downstream": bool(result.get("downstream_table_id")),
         "longest_run": result["longest_run_ft"],
         "table_row": result["table_length_used_ft"],
+        "rolled_back": list(rolled_back),
+        "stub_rolled_back": bool(st.get("rolled_back")),
     }
-    _emit(gas_console.summary(info), gas_console.summary_md(info))
 
+
+def _print_summary(result, existing_check, w, st, fit, rolled_back):
+    """The run summary table for the output window."""
+    info = _summary_info(result, existing_check, w, st, fit, rolled_back)
+    _emit(gas_console.summary(info), gas_console.summary_md(info))
 
 main()

@@ -66,34 +66,18 @@ def _pick(connect_existing):
         ui_helpers.PICK_GAS_EXISTING if connect_existing
         else ui_helpers.PICK_GAS)
     if el is None:
+        err = ui_helpers.last_pick_error()
+        if err:
+            _alert("The pick failed: {0}\n\nNothing was drawn.".format(err))
+            return None, None
         output.print_md("Selection cancelled. Nothing drawn.")
         return None, None
-    if connect_existing and not revit_helpers.is_pipe(el):
-        _alert("Connect into Existing was chosen, so the pick shall be the "
-               "first new gas pipe at the connection to existing, not the "
-               "gas meter or other equipment.\n\nNothing was drawn. Run "
-               "One-Line again and pick that pipe, or choose New "
-               "Construction to start at the meter.")
+    # the one gas start check, same words as Size Gas and Diagnose
+    start = tie_in.check_gas_start(el, doc, pipe_only=bool(connect_existing))
+    if not start["ok"]:
+        _alert(start["message"] + "\n\nNothing was drawn.")
         return None, None
-    if revit_helpers.is_pipe(el):
-        chk = pipe_graph.check_gas_pipe(el)
-        if not chk["ok"]:
-            _alert("This is not a gas pipe: {0}.\n\nPick the gas meter, or "
-                   "the first new GAS pipe at the connection to "
-                   "existing.".format(chk["reason"]))
-            return None, None
-        upstream = tie_in.resolve_new_pipe_upstream(el, doc)
-        if upstream["status"] != "ok":
-            _alert("Could not tell which end of the picked pipe connects to "
-                   "the existing gas piping: {0}.".format(upstream["reason"]))
-            return None, None
-        return el, upstream
-    val = revit_helpers.validate_selected_element(el)
-    if not val["is_valid"]:
-        _alert("Pick the gas meter, or the first new gas pipe at the "
-               "connection to existing.\n\n{0}".format(val["reason"]))
-        return None, None
-    return el, None
+    return el, start["upstream"]
 
 
 def _table(material, label):
@@ -120,6 +104,9 @@ def main():
                       choice.get("downstream_table_label"))
     down_id = down["table_id"] if down else None
     heat = choice["heat_content"]
+    propane = choice.get(
+        "propane_heat_content_btu_per_cf",
+        shared_params.DEFAULT_PROPANE_HEAT_CONTENT_BTU_PER_CF)
     # Scope, chosen before the pick (Colin, 2026-11-20): None is New
     # Construction, else the existing gas piping entered in the dialog.
     connect_existing = choice.get("existing")
@@ -138,16 +125,15 @@ def main():
         logger.error(traceback.format_exc())
         return
 
-    # Mid Stream PRV box vs the walk, handled as Size Gas does
+    # Mid Stream PRV box vs the walk: ticked with no mid stream regulator
+    # stops, with the Size Gas message (pipe_graph, one home)
+    prv_stop = pipe_graph.midstream_prv_stop_message(
+        graph, bool(choice.get("mid_stream_prv")))
+    if prv_stop is not None:
+        _alert(prv_stop + "\n\nNothing was drawn.", "warn")
+        return
     prv_notes = []
-    if down_id and not graph.midstream_prv_ids:
-        prv_notes.append(
-            "Mid Stream PRV was ticked but no regulator has more than {0:.0f} "
-            "ft of pipe downstream, so the downstream table was not "
-            "used.".format(
-                float(shared_params.PRV_MIDSTREAM_MIN_DOWNSTREAM_FT)))
-        down, down_id = None, None
-    elif graph.midstream_prv_ids and not down_id:
+    if graph.midstream_prv_ids and not down_id:
         prv_notes.append(
             "{0} mid stream PRV(s) found but Mid Stream PRV was not ticked: "
             "the whole system is checked on {1}, as Size Gas sizes it with "
@@ -166,7 +152,8 @@ def main():
     info = {"meter": "{0} ({1})".format(
                 "New pipe at existing" if is_tie_in else "Gas meter", el_id),
             "table": opt["label"].split("  [")[0], "table_id": table_id,
-            "heat_content": heat,
+            # gas_console prints the heat content the table used
+            "heat_content": heat, "propane_heat_content": propane,
             "downstream_table": down["label"].split("  [")[0] if down else None,
             "origin_kind": "tie_in" if is_tie_in else "meter"}
     if existing is not None:
@@ -180,7 +167,8 @@ def main():
             result = sizing_engine.size_system(
                 graph, choice["pipe_material"], opt["inlet_pressure_psi"],
                 table_id, heat_content_btu_per_cf=heat,
-                downstream_table_id=down_id)
+                downstream_table_id=down_id,
+                propane_heat_content_btu_per_cf=propane)
         except ValueError as ex:
             sizing_error = str(ex)
     else:
@@ -206,13 +194,13 @@ def main():
     notes = gas_labels.notes_lines(
         table_id, new_mbh, snap["longest_run_ft"], downstream_table_id=down_id,
         existing_mbh=(existing["load_mbh"]
-                      if tie_in.existing_for_sizing(existing) else None))
+                      if tie_in.existing_for_sizing(existing) else None),
+        zones=(snap.get("sizing") or {}).get("zones"))
     lay = oneline_layout.layout(sch, notes=notes)
     if any(l.startswith("LAYOUT FAILED") for l in lay["log"]):
         _emit(gas_console.layout_diagnostic(sch, lay),
               gas_console.layout_diagnostic_text(sch, lay))
-        _alert("The diagram could not be laid out without overlaps. Nothing "
-               "was drawn. The layout diagnostic is in the console.")
+        _alert(oneline_layout.failure_message(lay["log"]))
         return
 
     # draw: one undo
@@ -220,6 +208,7 @@ def main():
         datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S"))
     tg = TransactionGroup(doc, "RJA Tools - Gas One-Line Diagram")
     tg.Start()
+    t1 = t2 = None
     try:
         t1 = Transaction(doc, "One-Line symbols")
         t1.Start()
@@ -232,10 +221,18 @@ def main():
         t2.Commit()
         tg.Assimilate()
     except Exception as ex:
+        # an open inner transaction is rolled back before the group
+        # (review n61); a failed rollback is logged, never passed over
+        for t in (t2, t1):
+            try:
+                if t is not None and t.HasStarted() and not t.HasEnded():
+                    t.RollBack()
+            except Exception as rb:
+                logger.error("Transaction rollback failed: {0}".format(rb))
         try:
             tg.RollBack()
-        except Exception:
-            pass
+        except Exception as rb:
+            logger.error("TransactionGroup rollback failed: {0}".format(rb))
         logger.error(traceback.format_exc())
         _alert("Drawing failed, nothing was kept:\n\n{0}".format(ex))
         return
