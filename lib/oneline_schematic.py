@@ -456,12 +456,59 @@ def build(snap):
         existing["label"] = gas_labels.segment_label(
             existing.get("size_nominal"), existing.get("length_ft"),
             float(existing.get("load_mbh") or 0.0) + root_mbh)
-    return {"origin": origin, "root": root, "segments": b.segments,
-            "existing": existing,
-            "warnings": b.warnings,
-            "origin_xyz": b.g.node(origin).get("xyz"),
-            "levels": list(snap.get("levels") or []),
-            "longest_run_ft": float(snap.get("longest_run_ft") or 0.0)}
+    sch = {"origin": origin, "root": root, "segments": b.segments,
+           "existing": existing,
+           "warnings": b.warnings,
+           "origin_xyz": b.g.node(origin).get("xyz"),
+           "levels": list(snap.get("levels") or []),
+           "longest_run_ft": float(snap.get("longest_run_ft") or 0.0)}
+    _balance_trunk_labels(sch)
+    return sch
+
+
+def balanced_feet(lengths, target):
+    """Whole feet for each length, summing exactly to target (largest
+    remainder: every length rounds down, the feet left over go to the
+    largest fractions, ties to the earlier one). A real length never shows
+    as 0."""
+    floors = [int(math.floor(float(x))) for x in lengths]
+    extra = int(target) - sum(floors)
+    order = sorted(range(len(lengths)),
+                   key=lambda i: (-(float(lengths[i]) - floors[i]), i))
+    out = list(floors)
+    for i in order[:max(0, extra)]:
+        out[i] += 1
+    for i, x in enumerate(lengths):
+        if out[i] < 1 and float(x) > 0.0:
+            out[i] = 1
+    return out
+
+
+def _balance_trunk_labels(sch):
+    """The longest run's labels add up to the notes block TOTAL DEVELOPED
+    LENGTH. Rounding each segment on its own showed the run 1 ft long
+    (G3C 2026-11-20: 26 + 13 + 36 + 23 + 27 = 125 against 124). Branch
+    labels off the longest run keep plain rounding."""
+    trunk = trunk_segments(sch)
+    items = [(s["length_ft"], s) for s in trunk]
+    ex = sch.get("existing")
+    if ex and ex.get("length_ft") is not None:
+        items.insert(0, (float(ex["length_ft"]), None))
+    if not items:
+        return
+    total = sum(float(x) for x, _s in items)
+    target = gas_labels.feet(total) if total > 0 else 0
+    feet = balanced_feet([x for x, _s in items], target)
+    for n, (_x, seg) in zip(feet, items):
+        if seg is None:
+            # the existing run keeps its MBH line, only the length changes
+            ex["label_ft"] = n
+            ex["label"] = [gas_labels.pipe_label(ex.get("size_nominal"), n),
+                           ex["label"][1]]
+        else:
+            seg["label_ft"] = n
+            seg["label"] = gas_labels.segment_label(seg["size"], n,
+                                                    seg["mbh"])
 
 
 # ---------------------------------------------------------------------------
