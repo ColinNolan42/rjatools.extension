@@ -59,6 +59,45 @@ class Invariants(unittest.TestCase):
         self._check(G2)
 
 
+class LabelsSumToTotal(unittest.TestCase):
+    """Colin 2026-11-20: the longest run's labels showed 1 ft more than the
+    notes TOTAL DEVELOPED LENGTH, each segment rounded on its own."""
+
+    def test_g3c_numbers(self):
+        # 26.17 + 13.44 + 35.60 + 22.56 + 26.50 = 124.27 -> 124; rounding
+        # each gives 26 + 13 + 36 + 23 + 27 = 125. Largest remainder: floors
+        # 26 13 35 22 26 = 122, the 2 ft left go to .60 and .56.
+        self.assertEqual(
+            S.balanced_feet([26.17, 13.44, 35.60, 22.56, 26.50], 124),
+            [26, 13, 36, 23, 26])
+
+    def test_small_and_tie(self):
+        self.assertEqual(S.balanced_feet([0.3, 10.2], 11), [1, 10])
+        self.assertEqual(S.balanced_feet([2.5, 2.5], 5), [3, 2])
+        self.assertEqual(S.balanced_feet([], 0), [])
+
+    def _label_ft(self, seg):
+        return int(seg["label"][0].split(", ")[-1].rstrip("'"))
+
+    def _check(self, snap):
+        import gas_labels
+        sch = S.build(snap)
+        total = gas_labels.feet(snap["longest_run_ft"])
+        labels = [self._label_ft(s) for s in S.trunk_segments(sch)]
+        self.assertEqual(sum(labels), total, labels)
+        for s in S.trunk_segments(sch):
+            self.assertLessEqual(abs(self._label_ft(s) - s["length_ft"]), 1.0)
+
+    def test_g3c(self):
+        self._check(G3C)
+
+    def test_g2(self):
+        self._check(G2)
+
+    def test_g3c_manifold(self):
+        self._check(_load("oneline_g3c_manifold.json"))
+
+
 class G3CLabels(unittest.TestCase):
     """Handoff visual pass, G3C (402.4(2), heat 840, row 125)."""
 
