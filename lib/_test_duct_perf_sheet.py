@@ -478,14 +478,16 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertIn('1 duct(s)', vals)
         self.assertNotIn('DUCTS NEEDING ATTENTION', vals)
         self.assertIn('RED', vals)
-        a, n = vals.index('ACTION REQUIRED'), vals.index('NOTES')
+        # plain sentences only on the sheet (Colin, 2026-11-23)
+        a = vals.index('FIX THE MODEL')
         self.assertLess(vals.index('Velocity'), a)
-        self.assertLess(a, n)
+        self.assertNotIn('FOR INFORMATION', vals)       # no estimated loss
         joined = ' '.join(vals)
-        self.assertEqual(joined.count('UNPRICED: Fitting 777'), 1)       # deduped
-        self.assertIn('WARNING: Parallel units', joined)
-        self.assertNotIn('RTU-1 (id 123456):', joined)   # one unit, no prefix
-        self.assertIn('NOTE: oval duct 8', ' '.join(vals[n:]))
+        self.assertEqual(joined.count('One item needs a check'), 1)   # deduped
+        self.assertIn('Two units share this ductwork', joined)
+        self.assertNotIn('777', joined)
+        self.assertNotIn('RTU-1', joined)                # one unit, no prefix
+        self.assertNotIn('oval', joined.lower())         # information stays in the console
         self.assertLess(y, 0.0)
 
     def test_system_corrections_empty(self):
@@ -493,10 +495,12 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertEqual(vals, ['SYSTEM CORRECTIONS', dpc.NO_CORRECTIONS])
 
     def test_system_corrections_without_ducts(self):
-        _y, vals = self._corrections_block([], _corrections()[2:3])
+        _y, vals = self._corrections_block([], _corrections()[1:2])
         self.assertIn(dpc.NO_FLAGGED, vals)
-        self.assertNotIn('ACTION REQUIRED', vals)
-        self.assertIn('NOTES', vals)
+        self.assertIn('FIX THE MODEL', vals)
+        # information only: nothing to fix on the sheet
+        _y, vals = self._corrections_block([], _corrections()[2:3])
+        self.assertEqual(vals[-1], dpc.NO_CORRECTIONS)
 
     def test_vav_without_boxes_draws_nothing(self):
         y = DRAW['_draw_vav_boxes'](None, None, -1.0, TOTAL_W, {'units': []})

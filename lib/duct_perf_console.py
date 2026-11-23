@@ -781,54 +781,378 @@ def _callout_kind(kind):
     return kind if kind in ('gray', 'red', 'error') else 'warn'
 
 
+# ── plain language System Corrections (Colin, 2026-11-23) ───────────────────
+# The engine's lines name element ids, ASHRAE table codes and ratios: right
+# for tracing, hard to act on. Each line is shown as one plain sentence
+# (what is wrong, then what to do) in one of three groups:
+#   Fix the model   the tool could not read something (Flow, a size, a link)
+#   Fix the design  something fails the RJA standard
+#   For information an estimate or assumption, no change needed
+# The SHEET shows only the plain sentences, no ids or table codes (the
+# colored plan shows where), repeats said once, and For information as one
+# line. The CONSOLE shows each sentence with the engine's own lines under it
+# as the details. The engine's text is unchanged, so its tests still hold.
+
+MODEL = 'model'
+DESIGN = 'design'
+INFO = 'info'
+PLAIN_TITLES = ((MODEL, 'Fix the model'), (DESIGN, 'Fix the design'),
+                (INFO, 'For information'))
+ESTIMATE_SHEET_LINE = ('Some fitting losses are estimated or read at the edge of the '
+                       'ASHRAE tables. No change needed; see the console for each one.')
+_LEAD_RE = re.compile(r'^(?:WARNING|FALLBACK|UNPRICED|NOTE|GRAY|RED|LOW|CHECK FAILED|'
+                      r'CHECK|CLEARANCE|ERROR|ASSUMPTION)\s*:\s*')
+_UNIT_ID_RE = re.compile(r'\s*\(id \d+\)')
+_WHERE_NOISE = re.compile(r'\s+at element \d+|, [\d.]+ in\. roof curb included')
+_NUM = r'([\d.]+)'
+
+
+def _strip_leads(text):
+    """The text without its lead words, 'UNPRICED: WARNING: x' -> 'x'."""
+    t = (text or '').strip()
+    while True:
+        m = _LEAD_RE.match(t)
+        if not m:
+            return t
+        t = t[m.end():]
+
+
+def _count(n, one, many):
+    return '1 {}'.format(one) if int(n) == 1 else '{} {}'.format(n, many)
+
+
+def _gray_headline(reason):
+    """(group, sentence) for a GRAY duct by its reason."""
+    r = reason.strip().lower()
+    if r.startswith('no airflow'):
+        return MODEL, ('Some ducts could not be checked (gray) because no airflow reaches '
+                       'them. Enter Flow on every diffuser and grille, check the ductwork '
+                       'connects, then rerun.')
+    if r.startswith('no duct size'):
+        return MODEL, ('Some ducts could not be checked (gray) because they have no size. '
+                       'Give them a size and rerun.')
+    if r.startswith('no table for') and r.endswith(('outside air', 'transfer air')):
+        return INFO, ('Outside air and transfer air terminals are not checked (gray); '
+                      'there is no RJA table for them.')
+    if r.startswith(('cannot classify', 'no table for')):
+        return MODEL, ('Some branches could not be checked (gray) because their diffuser '
+                       'or grille could not be identified. Check the terminal\'s duct '
+                       'connector and System Classification.')
+    if r.startswith('cannot check') and 'not in table' in r:
+        return MODEL, ('Some branches could not be checked (gray) because the diffuser or '
+                       'grille size is not in the RJA sizing table. Check the terminal\'s '
+                       'Type size.')
+    if r.startswith('cannot check') and 'unreadable' in r:
+        return MODEL, ('Some branches could not be checked (gray) because a branch duct or '
+                       'diffuser size could not be read. Check the branch duct and the '
+                       'diffuser connection sizes.')
+    if r.startswith('cannot check') and (' on round' in r or ' on rect' in r):
+        return MODEL, ('Some branches could not be checked (gray) because the branch duct '
+                       'shape does not match the diffuser connection. Match the branch duct '
+                       'shape to the diffuser neck.')
+    return MODEL, ('Some ducts could not be checked (gray). Check their connections and '
+                   'sizes, then rerun.')
+
+
+# (pattern on the text without its leads, group, sentence or function of the
+# match, estimate). First match wins, so specific patterns come first. Every
+# engine template is covered by lib/_test_plain_corrections.py.
+_PLAIN_RULES = [
+    # ── Fix the design ──
+    (r'^branch duct .+? leaves main .+? with only [\d.]+" of height, ' + _NUM +
+     r'" min\. Raise the main to ' + _NUM + r'" tall, or make the branch ' + _NUM + '"',
+     DESIGN, 'Ducts need a {0} in. minimum height difference where a branch leaves a '
+             'main. Increase the main to {1} in. or reduce the branch to {2} in.', False),
+    (r'^diffuser .+? neck is within [\d.]+" of the height of duct .+?, ' + _NUM +
+     r'" min\. Raise the duct to ' + _NUM + r'" tall, or reduce the neck to ' + _NUM + '"',
+     DESIGN, 'A diffuser neck needs to be at least {0} in. smaller than the duct feeding '
+             'it. Increase the duct to {1} in. or reduce the neck to {2} in.', False),
+    (r'^(?:main|branch) duct .+? steps down to duct .+? by only [\d.]+" of height, ' + _NUM +
+     r'" min\. Make duct \S+ ' + _NUM + r'" tall or less, or keep it ' + _NUM + '"',
+     DESIGN, 'Ducts need a {0} in. minimum height change where a duct steps down. Reduce '
+             'the smaller duct to {1} in. or keep it at {2} in.', False),
+    (r'^(?:Inlet swirl|Close-coupled elbows) at the (.+?):', DESIGN,
+     'Two elbows at the {0} turn different ways too close to the fan. Add straight duct '
+     'or turning vanes.', False),
+    (r'^Double bend at the (.+?):', DESIGN,
+     'Two elbows in a row are too close to the fan at the {0}. Add straight duct between '
+     'the fan and the elbows.', False),
+    (r'^Damper in the fan clearance at the (.+?): .+? inside .+? \(' + _NUM + r' ft\)',
+     DESIGN, 'A damper is too close to the fan at the {0}. Move it at least {1} ft from the '
+             'fan.', False),
+    (r'^Elbow \S+ is [\d.]+ ft from the ([^,;]+)[^;]*?; recommended: at least ' + _NUM +
+     ' ft of straight duct', DESIGN,
+     'Elbow close to the {0}. At least {1} ft of straight duct is recommended between the '
+     '{0} and the elbow; the fan loss may be higher than shown.', False),
+    (r'^Elbow \S+ is [\d.]+ ft from the ([^,]+),.*?Recommended: at least ' + _NUM +
+     ' ft of straight duct', DESIGN,
+     'Elbow too close to the {0}. Provide at least {1} ft of straight duct between the {0} '
+     'and the elbow.', False),
+    (r'^System Effect Pressure Loss too high at \S+ \S+, [\d.]+ ft from the ([^,]+),.*?'
+     r'recommended: increase length of duct to ' + _NUM + ' ft', DESIGN,
+     'Fan connection loss is too high at the {0}. Increase the straight duct to {1} ft.',
+     False),
+    (r'^System Effect Pressure Loss too high at \S+ \S+, [\d.]+ ft from the ([^,]+),',
+     DESIGN, 'Fan connection loss is too high at the {0}, and more straight duct will not '
+             'fix it. Rework the duct connection at the fan.', False),
+    (r'^Tap \S+ is [\d.]+ ft from the ([^,]+),.*?Recommended: at least ' + _NUM +
+     ' ft of straight duct to the tap', DESIGN,
+     'A tap is too close to the {0}. Provide at least {1} ft of straight duct between the '
+     '{0} and the tap.', False),
+    (r'^.+?, [\d.]+ ft from the (.+?), inside .+? \(' + _NUM + r' ft\)\. A fan system '
+     r'effect disruption', DESIGN,
+     'A fitting is too close to the fan at the {0}; its extra loss is not in the external '
+     'static. Keep fittings at least {1} ft from the fan.', False),
+    (r'flex duct .+? on the exhaust discharge', DESIGN,
+     'Flex duct is used on the exhaust discharge. Exhaust ductwork shall be rigid.', False),
+    (r'diffuser\(s\) on an MP main', DESIGN,
+     'Diffusers are connected to the medium pressure main with no VAV box. Connect them '
+     'downstream of a VAV box.', False),
+    (r'^VAV box .+?, pressure left', DESIGN,
+     'A VAV box gets less pressure than the minimum entered. Reduce the duct losses to the '
+     'box or raise the unit\'s external static.', False),
+    (r'^Unit max external static .+EXCEEDS IT', DESIGN,
+     'The external static pressure is above the unit\'s maximum. Reduce the duct losses or '
+     'select a unit with more static.', False),
+    # ── Fix the model ──
+    (r'^(\d+) terminal\(s\) have Flow = 0', MODEL,
+     lambda m: '{} no airflow (Flow is 0). Enter the cfm and rerun.'.format(
+         _count(m.group(1), 'diffuser or grille has', 'diffusers or grilles have')), False),
+    (r'^(\d+) terminal\(s\) are missing the "Flow" parameter', MODEL,
+     lambda m: '{} no Flow parameter. Use a family with Flow, enter the cfm and rerun.'.format(
+         _count(m.group(1), 'diffuser or grille has', 'diffusers or grilles have')), False),
+    (r'^(\d+) duct\(s\) have no dimension data', MODEL,
+     lambda m: '{} no size. Give them a size and rerun.'.format(
+         _count(m.group(1), 'duct has', 'ducts have')), False),
+    (r'^No elements found in traversal', MODEL,
+     'Nothing is connected to this unit. Connect the ductwork to the unit and rerun.', False),
+    (r'^Ceiling exhaust fan discharge has', MODEL,
+     'The ceiling exhaust fan discharge shall be one duct run to one wall or roof cap. Fix '
+     'the discharge ductwork and rerun.', False),
+    (r'^No air terminals', MODEL,
+     'No diffusers or grilles are connected to this unit. Connect them to the ductwork and '
+     'rerun.', False),
+    (r'^No duct segments found', MODEL,
+     'No ductwork is connected to this unit. Connect it and rerun.', False),
+    (r'inlet connector direction could not be read', MODEL,
+     'A piece of equipment\'s connector direction could not be read, so it was treated as '
+     'a VAV box. Check that equipment\'s duct connectors.', False),
+    (r'^No base equipment', MODEL,
+     'The run did not start at a unit, so the airflow direction may be wrong. Pick the unit '
+     'and rerun.', False),
+    (r'^VAV System is ticked but no VAV box', MODEL,
+     'VAV System was chosen but no VAV box is connected to this unit. Choose Rooftop Unit, '
+     'or connect the VAV boxes, and rerun.', False),
+    (r'^Parallel units on one main', MODEL,
+     'Two units share this ductwork, so the external static is not reliable. Check it by '
+     'hand.', False),
+    (r'Take-off rows add to', MODEL,
+     'The external static take-off does not add up. Send this run to Colin Nolan.', False),
+    (r'Path search hit its step limit', MODEL,
+     'The system is too large to search fully, so the external static may be low. Check the '
+     'worst run by hand.', False),
+    (r'but no index run was traced', MODEL,
+     'Airflow was found but no run from the unit could be traced, so there is no external '
+     'static for it. Check the ductwork connects from the unit to every diffuser and '
+     'grille.', False),
+    (r'^no mechanical floor plan on .+? could not be created', MODEL,
+     'A level has no mechanical floor plan and one could not be made, so its ductwork is not '
+     'on the sheet. Create a mechanical floor plan for that level and rerun.', False),
+    (r'no connection reaches a grille or diffuser', MODEL,
+     'The exhaust fan\'s intake is not connected to any grille. Connect its intake ductwork '
+     'and rerun.', False),
+    (r'size unreadable; fan system effect not checked|no size could be read', MODEL,
+     'A fitting near the unit has no readable size, so the fan connection was not checked. '
+     'Check the duct and fitting sizes at the unit.', False),
+    (r'^duct \S+ \(.*?\) not judged: (.+?)\.?$', None,
+     lambda m: _gray_headline(m.group(1)), False),
+    (r'^[^:,]+: unrecognised fitting', MODEL,
+     'A fitting on the worst run was not recognised, so its loss is not in the external '
+     'static. Check the fitting family.', False),
+    (r'transition, size change unreadable', MODEL,
+     'A transition\'s sizes could not be read, so its loss is not in the external static. '
+     'Check the transition.', False),
+    (r'accessory on the (?:run|discharge), not priced', MODEL,
+     'An accessory on the worst run was not recognised, so its loss is not in the external '
+     'static. Check the accessory family.', False),
+    (r'is a single diffuser main', MODEL,
+     'A unit connection feeds only one diffuser. This is rare; if it is not intended, check '
+     'the model for a disconnected run.', False),
+    # ── For information ──
+    (r'RJA worksheet C', INFO,
+     'Some fitting losses use the RJA worksheet value because the ASHRAE tables do not '
+     'cover them. No change needed.', True),
+    (r'^read at the table edge', INFO,
+     'Some fittings are outside the ASHRAE table range and use the nearest table value. '
+     'No change needed.', True),
+    (r'^read next to a blank cell', INFO,
+     'Some fittings fall on a blank cell of an ASHRAE table and use the nearest printed '
+     'value. No change needed.', True),
+    (r'tap (?:\S+ )?positions? on duct .+? unreadable', INFO,
+     'Some tap positions could not be read, so the full duct airflow was used there '
+     '(conservative). No change needed.', True),
+    (r'unit (?:inlet|.+? connection size) unreadable|inlet elbow geometry unreadable|'
+     r'is mitered: ER7-1', INFO,
+     'Some unit connection or elbow sizes could not be read, so the nearest duct size was '
+     'used. No change needed.', True),
+    (r'rank \d+ is above the', INFO,
+     'The ranked run asked for is past the number of diffusers and grilles, so the last one '
+     'is shown.', False),
+    (r'(?:most restrictive run|run \d+) \(', INFO,
+     'How the fan connection on the worst run was priced. No change needed.', False),
+    (r'not checked for fan system effect|fan system effect at the .+? not checked', INFO,
+     'A unit connection that feeds equipment directly, or has no duct or airflow past it, '
+     'is not checked for fan loss.', False),
+    (r'fan system effect not priced at a VAV box', INFO,
+     'Fan loss is not checked at a VAV box.', False),
+    (r'exhaust fan read as|inline exhaust fan with|^exhaust fan \S+, connection|'
+     r'read as a ceiling exhaust fan', INFO,
+     'How the exhaust fan type was read from its connections. No change needed.', False),
+    (r'Outside Air branch\(es\) not traversed', INFO,
+     'Outside air ductwork is not checked yet.', False),
+    (r'upstream Supply Air branch\(es\) not traversed', INFO,
+     'Ductwork upstream of the picked unit is not checked.', False),
+    (r'^oval duct', INFO,
+     'Oval ducts are checked as rectangular; oval sizing is not supported.', False),
+    (r'one was created from the active view', INFO,
+     'A mechanical floor plan was created for a level to show its ductwork on the sheet.',
+     False),
+    (r'discharge splits at element', INFO,
+     'The exhaust discharge splits; only its first leg is priced.', False),
+    (r'duct pick|fitting\(s\) between the picked duct|More than one system was selected',
+     INFO, 'A note on the duct pick. No change needed.', False),
+    (r'^(?:elbow|transition|tap|tee|cross|wye|split|fitting|offset|takeoff)\b.*?: ', INFO,
+     'Some fitting losses use an ASHRAE table assumption. No change needed.', True),
+]
+_PLAIN_RULES = [(re.compile(p), g, s, est) for p, g, s, est in _PLAIN_RULES]
+
+
+def plain(kind, text):
+    """(group, sentence, estimate) for one correction line. group MODEL,
+    DESIGN or INFO; estimate True for an estimated loss (one sheet line for
+    all of them). A line no rule knows keeps a generic sentence in the group
+    its kind and lead give it."""
+    body = _strip_leads(text)
+    for rx, group, sentence, est in _PLAIN_RULES:
+        m = rx.search(body)
+        if not m:
+            continue
+        if callable(sentence):
+            out = sentence(m)
+            if isinstance(out, tuple):
+                group, out = out
+            return group, out, est
+        # the sheet names the place, never an element: 'exhaust inlet at
+        # element 123' (two connections of one class) and the roof curb
+        # clause read as 'exhaust inlet'
+        args = [_WHERE_NOISE.sub('', a) if a else a for a in m.groups()]
+        return group, sentence.format(*args), est
+    if correction_group(kind, text) == ACTION:
+        return ((DESIGN if kind == 'red' else MODEL),
+                'One item needs a check; see the console for the details.', False)
+    return INFO, 'See the console for the details.', False
+
+
+def plain_groups(entries):
+    """{MODEL, DESIGN, INFO: [(callout kind, sentence, [detail lines])]}.
+
+    The engine's lines are grouped first (group_lines: one per tap table and
+    reason, one per table edge and blank cell), then each becomes a plain
+    sentence; lines with the same sentence (and unit, in a run of more than
+    one unit) are one item, their engine lines kept as its details. The
+    sentence carries the unit's mark, without its id, when the run has more
+    than one unit."""
+    raw = correction_lines(entries)
+    units = []
+    for _g, unit, _k, _t in entries:
+        if unit and unit not in units:
+            units.append(unit)
+    multi = len(units) > 1
+    out = {MODEL: [], DESIGN: [], INFO: []}
+    index = {}
+    for group in (ACTION, NOTES):
+        for kind, line in raw[group]:
+            unit = None
+            detail = line
+            if multi:
+                for u in units:
+                    if line.startswith(u + ': '):
+                        unit, detail = u, line[len(u) + 2:]
+                        break
+            pgroup, sentence, est = plain(kind, detail)
+            if unit:
+                sentence = '{}: {}'.format(_UNIT_ID_RE.sub('', unit), sentence)
+            key = (pgroup, sentence)
+            if key not in index:
+                ckind = ('red' if pgroup == DESIGN else 'gray' if pgroup == MODEL
+                         else 'info')
+                index[key] = (ckind, sentence, [], est)
+                out[pgroup].append(index[key])
+            index[key][2].append(_strip_leads(detail) or detail)
+    return out
+
+
 def system_corrections(headers, rows, entries, status_col=None, align=None,
                        widths=None, subtitle=None):
     """Section e: System Corrections. The duct table (when any duct is
-    listed), then every correction line, Action required (gray, error or
-    warn callouts) then Notes (muted lines). Nothing at all: one
-    NO_CORRECTIONS line, so the section is always there."""
-    groups = correction_lines(entries)
+    listed), then each plain sentence (Fix the model, Fix the design as
+    callouts; For information as lines), the engine's own lines under it as
+    the details. Nothing at all: one NO_CORRECTIONS line."""
+    groups = plain_groups(entries)
     if subtitle is None:
         subtitle = '{} duct(s)'.format(len(rows))
     out = [cr.section('System Corrections', subtitle)]
+    anything = any(groups[g] for g in groups)
     if rows:
         out.append(cr.table(headers, rows, align=align, status_col=status_col,
                             widths=widths))
-    elif groups[ACTION] or groups[NOTES]:
+    elif anything:
         out.append(cr.note(NO_FLAGGED))
     else:
         out.append(cr.callout(NO_CORRECTIONS, 'ok'))
         return ''.join(out)
-    for group, title in GROUP_TITLES:
+    for group, title in PLAIN_TITLES:
         if not groups[group]:
             continue
         out.append(cr.subsection(title))
-        for kind, line in groups[group]:
-            out.append(cr.callout(line, _callout_kind(kind)) if group == ACTION
-                       else cr.note(line))
+        for ckind, sentence, details, _est in groups[group]:
+            out.append(cr.callout(sentence, ckind))
+            for d in details:
+                out.append(cr.note('Details: ' + d))
     return ''.join(out)
 
 
 def corrections_text(entries, any_rows=False):
-    """The correction lines as markdown lines, for the print_md fallback
-    under the duct table text."""
-    groups = correction_lines(entries)
-    if not (groups[ACTION] or groups[NOTES]):
+    """The plain sentences and their details as markdown lines, for the
+    print_md fallback under the duct table text."""
+    groups = plain_groups(entries)
+    if not any(groups[g] for g in groups):
         return [] if any_rows else [NO_CORRECTIONS]
     out = [] if any_rows else [NO_FLAGGED]
-    for group, title in GROUP_TITLES:
+    for group, title in PLAIN_TITLES:
         if groups[group]:
             out.append('**{}**'.format(title))
-            out.extend('- ' + line for _k, line in groups[group])
+            for _c, sentence, details, _e in groups[group]:
+                out.append('- ' + sentence)
+                out.extend('    - Details: ' + d for d in details)
     return out
 
 
 def corrections_sheet(entries):
-    """[(heading, [line])] for the drafting view's System Corrections block,
-    Action required then Notes, empty groups left out."""
-    groups = correction_lines(entries)
-    return [(title.upper(), [line for _k, line in groups[group]])
-            for group, title in GROUP_TITLES if groups[group]]
+    """[(heading, [line])] for the drafting view's System Corrections block:
+    FIX THE MODEL and FIX THE DESIGN with each plain sentence once, no ids
+    or table codes; FOR INFORMATION as the one ESTIMATE_SHEET_LINE when any
+    loss was estimated. Empty groups left out."""
+    groups = plain_groups(entries)
+    out = []
+    for group, title in PLAIN_TITLES:
+        if group == INFO:
+            if any(item[3] for item in groups[INFO]):
+                out.append((title.upper(), [ESTIMATE_SHEET_LINE]))
+            continue
+        if groups[group]:
+            out.append((title.upper(), [item[1] for item in groups[group]]))
+    return out
 
 
 def summary_band_text(rec):

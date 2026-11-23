@@ -208,7 +208,8 @@ def _emit_html(html, fallback):
 def _emit_corrections(corrections, headers=(), rows=(), status_col=None,
                       align=None, widths=None, subtitle=None, rows_text=None):
     """Print the System Corrections section: the duct table (rows may be
-    empty) and every gathered correction line, Action required then Notes.
+    empty) and every gathered correction line in plain language, Fix the
+    model, Fix the design, For information, each with its details.
     rows_text: the padded monospace duct table lines for the plain text
     fallback, or None."""
     rows = list(rows)
@@ -4152,10 +4153,10 @@ def _draw_vav_boxes(st, view, y, total_w, vav_rep):
 def _draw_system_corrections(st, view, y, total_w, columns, rows, left_cols,
                              corrections):
     """SYSTEM CORRECTIONS: the flagged duct table (columns [(header,
-    width)], rows already in keynote order), then every correction of the
-    run in one block per group, ACTION REQUIRED then NOTES (Colin,
-    2026-11-02). Nothing at all: one 'No corrections' line. Returns the y
-    under it."""
+    width)], rows already in keynote order), then the plain sentences of the
+    run, FIX THE MODEL, FIX THE DESIGN and FOR INFORMATION (one line), no
+    ids or table codes (Colin, 2026-11-23). Nothing to fix: one 'No
+    corrections' line. Returns the y under it."""
     draft = rja_drafting
     y = draft._band(st, view, 0.0, y, total_w, 'SYSTEM CORRECTIONS',
                     '{} duct(s)'.format(len(rows)) if rows else None,

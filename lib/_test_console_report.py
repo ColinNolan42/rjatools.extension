@@ -715,16 +715,19 @@ class SystemCorrectionsTests(unittest.TestCase):
         self.assertEqual(p.errors, [])
         self.assertIn('System Corrections', html)
         self.assertNotIn('Flagged Ducts', html)
-        self.assertLess(html.index('Action required'), html.index('>Notes<'))
-        self.assertLess(html.index('<table'), html.index('Action required'))
+        # plain groups in order (Colin, 2026-11-23), after the duct table
+        m, d, i = (html.index('>Fix the model<'), html.index('>Fix the design<'),
+                   html.index('>For information<'))
+        self.assertLess(html.index('<table'), m)
+        self.assertLess(m, d)
+        self.assertLess(d, i)
         self.assertEqual(html.count('elbow 921'), 1)
         self.assertEqual(html.count('worksheet C 0.20'), 1)
         self.assertIn(cr.CALLOUT_STYLES['gray'][1], html)
-        self.assertIn(cr.CALLOUT_STYLES['warn'][1], html)
-        self.assertIn(cr.CALLOUT_STYLES['error'][1], html)
-        # Notes are muted lines, not callouts
-        i = html.index('single diffuser main')
-        self.assertIn(cr.MUTED, html[html.rindex('<div', 0, i):i])
+        self.assertIn(cr.CALLOUT_STYLES['red'][1], html)
+        # the engine's own line is a muted Details line under its sentence
+        j = html.index('Details: unit 1 connection at element 9')
+        self.assertIn(cr.MUTED, html[html.rindex('<div', 0, j):j])
 
     def test_no_corrections(self):
         html = dpc.system_corrections(['#'], [], [])
@@ -738,18 +741,20 @@ class SystemCorrectionsTests(unittest.TestCase):
         html = dpc.system_corrections(['#'], [], _entries()[:1])
         self.assertIn(dpc.NO_FLAGGED, html)
         self.assertNotIn(dpc.NO_CORRECTIONS, html)
-        self.assertIn('Action required', html)
-        self.assertNotIn('>Notes<', html)
+        self.assertIn('Fix the model', html)
+        self.assertNotIn('For information', html)
 
     def test_text_fallback_and_sheet(self):
         text = dpc.corrections_text(_entries(), any_rows=True)
-        self.assertEqual(text[0], '**Action required**')
-        self.assertIn('**Notes**', text)
-        self.assertTrue(all(t.startswith(('**', '- ')) for t in text))
+        self.assertEqual(text[0], '**Fix the model**')
+        self.assertIn('**For information**', text)
+        self.assertTrue(all(t.startswith(('**', '- ', '    - Details: ')) for t in text))
         sheet = dpc.corrections_sheet(_entries())
-        self.assertEqual([h for h, _l in sheet], ['ACTION REQUIRED', 'NOTES'])
-        self.assertEqual(len(sheet[0][1]), 7)
-        self.assertEqual(len(sheet[1][1]), 3)
+        self.assertEqual([h for h, _l in sheet],
+                         ['FIX THE MODEL', 'FIX THE DESIGN', 'FOR INFORMATION'])
+        self.assertEqual(sheet[2][1], [dpc.ESTIMATE_SHEET_LINE])
+        # the sheet names a unit by its mark, never its id
+        self.assertNotIn('(id', ' '.join(l for _h, ls in sheet for l in ls))
 
     def test_vav_corrections(self):
         rep = {'minimum': 0.75, 'units': [
