@@ -166,7 +166,7 @@ _SETTINGS_XAML = '''
 
                 <!-- Scope -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,10,0,6">
-                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Scope"/>
+                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="System"/>
                 </Border>
                 <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"
                            Text="One unit per run. The scope sets which equipment the next list shows."/>
@@ -234,7 +234,7 @@ _SETTINGS_XAML = '''
 
                 <!-- Main duct limits -->
                 <Border Style="{DynamicResource RjaSectionHeader}" Margin="0,14,0,6">
-                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Main duct limits"/>
+                    <TextBlock Style="{DynamicResource RjaSectionTitle}" FontSize="13" FontWeight="SemiBold" Text="Air Design Limits"/>
                 </Border>
                 <Grid x:Name="grid_limits">
                     <Grid.ColumnDefinitions>
@@ -287,9 +287,9 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Fan type" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <RadioButton x:Name="rb_fan_swsi" GroupName="fan_type" Content="SWSI" VerticalAlignment="Center" Margin="0,0,14,0"
-                                             ToolTip="Outlet tables SR7-5 to SR7-8. Set by the Scope: Exhaust System."/>
+                                             ToolTip="Outlet tables SR7-5 to SR7-8. Set by the System: Exhaust System."/>
                                 <RadioButton x:Name="rb_fan_dwdi" GroupName="fan_type" Content="DWDI" VerticalAlignment="Center"
-                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the Scope: Rooftop Unit and VAV System."/>
+                                             ToolTip="Outlet tables SR7-9 to SR7-12. Set by the System: Rooftop Unit and VAV System."/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
                                        Text="SWSI, single width single inlet: air enters one side of the wheel (exhaust fans, utility sets). DWDI, double width double inlet: air enters both sides (most RTU and AHU blowers)."/>
@@ -304,11 +304,11 @@ _SETTINGS_XAML = '''
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Fan velocity" VerticalAlignment="Center"/>
                                 <TextBox x:Name="tb_fan_fpm" Width="56" Margin="8,0,6,0"
-                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the Scope: 1000 fpm Exhaust System, 1500 fpm Rooftop Unit, VAV System, VAV Box and Indoor System."/>
+                                         ToolTip="Fan velocity, fpm, greater than 0. Set by the System: 1000 fpm Exhaust System, 1500 fpm Rooftop Unit, VAV System, VAV Box and Indoor System."/>
                                 <TextBlock Text="fpm" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Style="{DynamicResource RjaHint}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Set by the Scope: 1000 fpm Exhaust System, 1500 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
+                                       Text="Set by the System: 1000 fpm Exhaust System, 1500 fpm otherwise. The unit connection velocity (cfm over the connector area) is used when it is higher."/>
                         </StackPanel>
                         <!-- Ranked run (Colin, 2026-11-10) -->
                         <CheckBox x:Name="cb_rank" Content="Ranked run" Margin="0,10,0,0"
@@ -913,7 +913,7 @@ def _show_velocity_settings_xaml(use_theme):
                               'elbow are charged once, the larger of the fan system '
                               'effect and their own losses. Velocity at an outlet, '
                               'and at an inline or roof exhaust fan inlet: the larger '
-                              'of the fan velocity (default by the Scope, 1000 fpm '
+                              'of the fan velocity (default by the System, 1000 fpm '
                               'Exhaust System, 1500 fpm otherwise) '
                               'and the connection '
                               'velocity; at a cabinet unit inlet (RTU, AHU, furnace, '
@@ -1994,7 +1994,7 @@ def _show_system_picker_xaml(display_names, scope_label, use_theme):
         win.MaxHeight = 800.0
 
     result = [None]
-    tb_hint.Text = ('Scope: {}. Select one unit found in this view, or Select unit '
+    tb_hint.Text = ('System: {}. Select one unit found in this view, or Select unit '
                     'in model to click it. One unit per run.'.format(scope_label))
 
     # First entry: click the unit in the view (Colin, 2026-11-03).
@@ -2098,7 +2098,7 @@ def _show_system_picker_legacy(display_names, scope_label):
     outer.Margin = Thickness(14)
 
     head = TextBlock()
-    head.Text = ('Scope: {}. Equipment found in the active view. Select one unit; '
+    head.Text = ('System: {}. Equipment found in the active view. Select one unit; '
                  'one unit per run.'.format(scope_label))
     head.TextWrapping = TextWrapping.Wrap
     head.Margin = Thickness(0, 0, 0, 10)
@@ -2228,7 +2228,7 @@ def _pick_unit(scope, scope_label):
         output.print_md('The picked element is not mechanical equipment.')
         return None
     if _equip_kind(elem) not in _SCOPE_LISTS.get(scope, ('unit',)):
-        output.print_md('{} is a {}, not listed under the {} Scope.'.format(
+        output.print_md('{} is a {}, not listed under System: {}.'.format(
             _elem_name(elem), _equip_kind(elem), scope_label))
         return None
     output.print_md('Unit picked: **{}** (id {})'.format(_elem_name(elem),
@@ -2313,7 +2313,7 @@ def main():
             listed.append(eq)
         else:
             hidden[kind] += 1
-    _hid = ['{} {}{} (choose {} in Scope)'.format(
+    _hid = ['{} {}{} (choose {} under System)'.format(
         n, k, '' if n == 1 else 'es' if k.endswith('x') else 's', _KIND_SCOPE[k])
         for k, n in sorted(hidden.items()) if n]
     if _hid:
@@ -2322,7 +2322,7 @@ def main():
 
     if not equip_in_view:
         output.print_md('No {} equipment found in the active view. Open a plan that '
-                        'shows the unit, or choose another Scope.'.format(scope_label))
+                        'shows the unit, or choose another System.'.format(scope_label))
         return
 
     # Build display name → element map (deduplicate names)
