@@ -2325,23 +2325,22 @@ def main():
                         'shows the unit, or choose another System.'.format(scope_label))
         return
 
-    # Build display name → element map (deduplicate names). The unit's Mark,
-    # the name its tag shows, leads the entry: 'RTU-1 - Family : Type'
-    # (Colin, 2026-11-23). No Mark, the family and type alone.
+    # Build display name → element map (deduplicate names). Each entry is the
+    # unit's Mark, the name its tag shows, and its family: 'RTU-1 - Family'.
+    # No type name (Colin, 2026-11-23). No Mark reads 'N/A - Family'.
     name_to_elem = {}
     for eq in equip_in_view:
         try:
-            name = eq.Symbol.Family.Name + ' : ' + eq.Name
+            fam = eq.Symbol.Family.Name
         except Exception:
-            name = _elem_name(eq)
+            fam = _elem_name(eq)
         mark = None
         try:
             p = eq.LookupParameter('Mark')
             mark = p.AsString() if p is not None else None
         except Exception:
             script.get_logger().info('equipment %s Mark NOT FOUND', eid_int(eq.Id))
-        if mark and mark.strip():
-            name = '{} - {}'.format(mark.strip(), name)
+        name = '{} - {}'.format(mark.strip() if mark and mark.strip() else 'N/A', fam)
         key = name
         suffix = 2
         while key in name_to_elem:
